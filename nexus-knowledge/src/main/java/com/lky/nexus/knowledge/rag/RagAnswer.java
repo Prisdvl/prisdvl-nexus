@@ -13,6 +13,7 @@ import java.util.List;
  * @param costMillis   端到端耗时
  */
 public record RagAnswer(
+        Long recordId,
         String answer,
         List<RagCitation> citations,
         int contextTokens,

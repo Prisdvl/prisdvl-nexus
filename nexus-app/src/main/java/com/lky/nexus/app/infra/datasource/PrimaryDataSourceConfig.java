@@ -1,29 +1,29 @@
 package com.lky.nexus.app.infra.datasource;
 
 import com.zaxxer.hikari.HikariDataSource;
+import org.flywaydb.core.Flyway;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.flyway.autoconfigure.FlywayMigrationInitializer;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 
 /**
- * 主数据源（业务库，MySQL）的显式声明。
+ * 主数据源（业务库，MySQL）与它的 Flyway 的显式声明。
  *
- * <p><b>为什么需要这个类</b>（真实踩坑）：Boot 的 {@code DataSourceAutoConfiguration}
- * 用 {@code @ConditionalOnMissingBean(DataSource.class)} 决定"要不要自动建主数据源"。
- * 一旦应用里出现了<b>任何</b> DataSource 类型的 bean（本项目为向量库新增了 PostgreSQL 数据源），
- * 它就会整体退让——表现是：<b>MySQL 连接池根本没创建</b>，
- * 而应用要么连到错误的数据源上、要么以各种莫名其妙的缺连接失败。
- *
- * <p>标准解法是把主数据源也显式声明出来，并用 {@code @Primary} 标明它是默认注入目标，
- * 这样"两个数据源"这件事从隐式猜测变成显式契约：
- * <ul>
- *   <li>{@code spring.datasource.*} 与 {@code spring.datasource.hikari.*} 的绑定行为保持不变
- *       （由 Boot 的 {@link DataSourceProperties} 负责，迁移到本项目没有改变配置语义）；</li>
- *   <li>按类型注入 DataSource 的组件（MyBatis、Flyway、DatasourceGuard）拿到的都是业务库，
- *       向量库必须显式 {@code @Qualifier("vectorDataSource")} 才能拿到。</li>
- * </ul>
+ * <p><b>为什么需要这个类</b>（两个真实踩坑，都是"Boot 悄悄退让"）：
+ * <ol>
+ *   <li>业务数据源：{@code DataSourceAutoConfiguration} 的内层带
+ *       {@code @ConditionalOnMissingBean(DataSource.class)}，应用里一旦出现<b>任何</b>
+ *       DataSource bean（本项目为向量库新增了 PostgreSQL 数据源），它就不再创建主数据源——
+ *       表现是"MySQL 连接池根本没建、应用连到了错误的数据源上"；</li>
+ *   <li>业务库迁移：{@code FlywayAutoConfiguration} 同样是
+ *       {@code @ConditionalOnMissingBean(Flyway.class)}。我声明了向量库的 Flyway 之后，
+ *       <b>MySQL 的迁移从此再没执行过</b>——而且没有任何报错，只是新迁移静默不生效
+ *       （表现是"表不存在"，排查方向很容易跑偏到 SQL 上）。</li>
+ * </ol>
+ * 结论：多数据源场景下，主数据源与主库迁移都必须显式声明，不能依赖自动配置。
  */
 @Configuration
 public class PrimaryDataSourceConfig {
@@ -36,4 +36,21 @@ public class PrimaryDataSourceConfig {
                 .type(HikariDataSource.class)
                 .build();
     }
+
+    /** 业务库（MySQL）的迁移，脚本目录 {@code classpath:db/migration}。 */
+    @Bean(name = "primaryFlyway")
+    @Primary
+    public Flyway primaryFlyway(javax.sql.DataSource dataSource) {
+        return Flyway.configure()
+                .dataSource(dataSource)
+                .locations("classpath:db/migration")
+                .baselineOnMigrate(true)
+                .load();
+    }
+
+    @Bean
+    public FlywayMigrationInitializer primaryFlywayInitializer(Flyway primaryFlyway) {
+        return new FlywayMigrationInitializer(primaryFlyway);
+    }
 }
+

@@ -1,5 +1,6 @@
 package com.lky.nexus.knowledge.rag;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.knowledge.search.SearchMode;
@@ -10,7 +11,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -54,6 +58,8 @@ public class RagAnswerServiceImpl implements RagAnswerService {
     private final Reranker reranker;
     private final ContextAssembler contextAssembler;
     private final ChatClientFactory chatClientFactory;
+    private final QaRecordMapper qaRecordMapper;
+    private final JsonMapper jsonMapper;
     private final int contextTokenBudget;
 
     public RagAnswerServiceImpl(KnowledgeBaseService knowledgeBaseService,
@@ -61,13 +67,29 @@ public class RagAnswerServiceImpl implements RagAnswerService {
                                 Reranker reranker,
                                 ContextAssembler contextAssembler,
                                 ChatClientFactory chatClientFactory,
+                                QaRecordMapper qaRecordMapper,
+                                JsonMapper jsonMapper,
                                 @Value("${nexus.rag.context-token-budget:2000}") int contextTokenBudget) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.chunkSearchService = chunkSearchService;
         this.reranker = reranker;
         this.contextAssembler = contextAssembler;
         this.chatClientFactory = chatClientFactory;
+        this.qaRecordMapper = qaRecordMapper;
+        this.jsonMapper = jsonMapper;
         this.contextTokenBudget = contextTokenBudget;
+    }
+
+    @Override
+    public List<RagAnswer> listHistory(Long userId, Long knowledgeBaseId, int limit) {
+        knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
+        return qaRecordMapper.selectList(Wrappers.<QaRecordPO>lambdaQuery()
+                        .eq(QaRecordPO::getKbId, knowledgeBaseId)
+                        .orderByDesc(QaRecordPO::getCreatedAt)
+                        .last("LIMIT " + Math.clamp(limit, 1, 50)))
+                .stream()
+                .map(this::toAnswer)
+                .toList();
     }
 
     @Override
@@ -75,7 +97,7 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         long start = System.currentTimeMillis();
         knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
         if (question == null || question.isBlank()) {
-            return new RagAnswer("请先输入问题。", List.of(), 0, 0, false, 0);
+            return new RagAnswer(null, "请先输入问题。", List.of(), 0, 0, false, 0);
         }
 
         // ① 混合检索（RRF 融合）
@@ -83,7 +105,7 @@ public class RagAnswerServiceImpl implements RagAnswerService {
                 chunkSearchService.search(userId, knowledgeBaseId, question, topK, SearchMode.HYBRID);
         if (hits.isEmpty()) {
             return finish("资料中没有相关内容（知识库尚未导入或未建立索引）。",
-                    List.of(), 0, 0, false, start);
+                    List.of(), 0, 0, false, start, knowledgeBaseId, userId, question);
         }
 
         // ② 重排（失败即降级）
@@ -104,7 +126,8 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         // ③ 组装上下文
         ContextAssembler.AssembledContext context = contextAssembler.assemble(ordered, contextTokenBudget);
         if (context.isEmpty()) {
-            return finish("资料中没有相关内容。", List.of(), 0, context.truncated(), reranked, start);
+            return finish("资料中没有相关内容。", List.of(), 0, context.truncated(), reranked, start,
+                    knowledgeBaseId, userId, question);
         }
 
         // ④ 生成
@@ -116,7 +139,8 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         log.info("RAG 回答 kbId={} 问题「{}」：召回 {} 条 → 重排 {} → 资料 {} 段（{} tok）→ 引用 {} 条，耗时 {} ms",
                 knowledgeBaseId, question, hits.size(), reranked, context.used().size(), context.tokens(),
                 citations.size(), System.currentTimeMillis() - start);
-        return finish(answer, citations, context.tokens(), context.truncated(), reranked, start);
+        return finish(answer, citations, context.tokens(), context.truncated(), reranked, start,
+                knowledgeBaseId, userId, question);
     }
 
     private String generate(String question, String contextText) {
@@ -182,9 +206,49 @@ public class RagAnswerServiceImpl implements RagAnswerService {
     }
 
     private RagAnswer finish(String answer, List<RagAnswer.RagCitation> citations, int contextTokens,
-                             int truncated, boolean reranked, long start) {
-        return new RagAnswer(answer, citations, contextTokens, truncated, reranked,
+                             int truncated, boolean reranked, long start, Long kbId, Long userId,
+                             String question) {
+        RagAnswer result = new RagAnswer(null, answer, citations, contextTokens, truncated, reranked,
                 System.currentTimeMillis() - start);
+        // 留档：只记录成功的问答（含"资料中没有相关内容"——它同样是有效回答）
+        try {
+            QaRecordPO record = new QaRecordPO();
+            record.setKbId(kbId);
+            record.setUserId(userId);
+            record.setQuestion(question.length() > 1000 ? question.substring(0, 1000) : question);
+            record.setAnswer(answer);
+            record.setCitations(jsonMapper.writeValueAsString(citations));
+            record.setContextTokens(contextTokens);
+            record.setTruncated(truncated);
+            record.setReranked(reranked ? 1 : 0);
+            record.setCostMs(result.costMillis());
+            record.setCreatedAt(LocalDateTime.now());
+            qaRecordMapper.insert(record);
+            return new RagAnswer(record.getId(), answer, citations, contextTokens, truncated, reranked,
+                    result.costMillis());
+        } catch (Exception ex) {
+            // 留档失败不该影响用户拿到回答
+            log.warn("问答记录写入失败（忽略）：{}", ex.getMessage());
+            return result;
+        }
+    }
+
+    private RagAnswer toAnswer(QaRecordPO record) {
+        List<RagAnswer.RagCitation> citations = List.of();
+        if (record.getCitations() != null && !record.getCitations().isBlank()) {
+            try {
+                citations = jsonMapper.readValue(record.getCitations(),
+                        new TypeReference<List<RagAnswer.RagCitation>>() {
+                        });
+            } catch (Exception ex) {
+                log.debug("引用解析失败，按空处理：{}", ex.getMessage());
+            }
+        }
+        return new RagAnswer(record.getId(), record.getAnswer(), citations,
+                record.getContextTokens() == null ? 0 : record.getContextTokens(),
+                record.getTruncated() == null ? 0 : record.getTruncated(),
+                record.getReranked() != null && record.getReranked() == 1,
+                record.getCostMs() == null ? 0 : record.getCostMs());
     }
 
     private record ScoredHit(ChunkSearchService.SearchHit hit, double score) {

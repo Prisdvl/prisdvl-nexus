@@ -234,3 +234,20 @@ CREATE TABLE IF NOT EXISTS kb_import_task_item (
 );
 
 CREATE INDEX IF NOT EXISTS idx_item_task ON kb_import_task_item (task_id, action);
+
+-- ---------- 问答记录（Phase 3.9 收尾）----------
+CREATE TABLE IF NOT EXISTS kb_qa_record (
+    id             BIGINT        NOT NULL PRIMARY KEY,
+    kb_id          BIGINT        NOT NULL,
+    user_id        BIGINT        NOT NULL,
+    question       VARCHAR(1000) NOT NULL,
+    answer         VARCHAR(20000) NOT NULL,
+    citations      VARCHAR(20000),
+    context_tokens INT           NOT NULL DEFAULT 0,
+    truncated      INT           NOT NULL DEFAULT 0,
+    reranked       TINYINT       NOT NULL DEFAULT 0,
+    cost_ms        BIGINT        NOT NULL DEFAULT 0,
+    created_at     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_qa_kb_time ON kb_qa_record (kb_id, created_at);

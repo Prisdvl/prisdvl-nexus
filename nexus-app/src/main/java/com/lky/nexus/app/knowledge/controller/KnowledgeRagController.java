@@ -42,4 +42,12 @@ public class KnowledgeRagController {
 
     public record AskRequest(@NotBlank String question, Integer topK) {
     }
+
+    /** 最近的问答记录（含引用），用于回看"当时依据了哪些资料"。 */
+    @org.springframework.web.bind.annotation.GetMapping("/{knowledgeBaseId}/qa-history")
+    public Result<java.util.List<RagAnswer>> history(
+            @PathVariable Long knowledgeBaseId,
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "10") int limit) {
+        return Result.ok(ragAnswerService.listHistory(CurrentUser.requireId(), knowledgeBaseId, limit));
+    }
 }

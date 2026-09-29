@@ -1131,6 +1131,31 @@ ollama 镜像与 bge-m3 模型（1.08 GB）最终都拉取成功，因此**真�
 **已知缺口**：① 引用尚未落库（`chat_message_citation` 表待建，前端引用当前来自本次响应）；
 ② 回答是非流式的；③ 暂无"同一会话内多轮追问"的上下文（会话与记忆在 Phase 1 已具备，需接上）。
 
+### B.27 收尾：问答留档 + 一个潜伏了很久的 Flyway 坑
+
+**新增**：`kb_qa_record`（V7）+ `POST /{id}/ask` 留档 + `GET /{id}/qa-history`。
+引用以 JSON 整体存储——历史是整体读取、不会按引用单独查询，
+等真正做多轮 RAG 时再把引用挂到 `chat_message` 上。
+
+**⚠️ 发现的严重问题：自 pgvector 那一步起，MySQL 的迁移就再没执行过**
+
+`FlywayAutoConfiguration` 与 `DataSourceAutoConfiguration` 是同一类设计：
+内层带 `@ConditionalOnMissingBean(Flyway.class)`。我在 Phase 3.2 为向量库声明了
+`vectorFlyway` 之后，**Boot 就整体放弃了 MySQL 的迁移配置**——而且完全没有任何报错，
+表现只是"新迁移静默不生效、表不存在"。
+
+更值得警惕的是：这个坑**潜伏了整整一个阶段才被发现**（V6 是最后一个成功应用的迁移，
+之后新增的 V7 一直没跑）。之所以拖了这么久，是因为落库代码是<b>容错</b>的
+（写记录失败只打 warn、不影响用户拿到回答），于是"表不存在"被优雅地吞掉了——
+只有主动去查 `flyway_schema_history` 才看得见。
+
+**两条教训**：
+1. **多数据源场景下，主数据源与主库迁移都必须显式声明**，不能依赖自动配置的"缺失即创建"策略。
+   已把 MySQL 的 Flyway 也放进 `PrimaryDataSourceConfig`（`@Primary` + 显式 initializer）。
+2. **容错设计要配一个"可观测的失败信号"**。容错本身是对的（留档失败不该让用户拿不到回答），
+   但只在日志里 warn 就等于让问题隐身。凡是"被吞掉的异常"，都应该有对应的计数或健康指标
+   （Phase 10 的观测里补：留档失败计数 + Flyway 版本校验）。
+
 **测试总览（Phase 3.7/3.8/3.9）**：`nexus-common` 10 + `nexus-ai` 14 + `nexus-knowledge` 66 + `nexus-app` 79（16 跳过）= **169 通过 / 0 失败**。
 
 **又两个踩坑（本轮修复）**
