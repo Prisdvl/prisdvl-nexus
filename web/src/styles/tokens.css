@@ -133,3 +133,128 @@ a {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================================================
+ * 动效层（参考 ReactBits 的设计语言，用 CSS/Vue 自己实现）
+ *
+ * 三条自我约束：
+ * 1. **只动 transform 与 opacity**：改 width/height/top 会触发重排，动效一多就掉帧；
+ * 2. **克制**：这是开发者控制台，动效只用来"提示状态变化"（进入、切换、加载），
+ *    不做炫技式的持续动画——持续动画会一直吃 GPU，也会干扰阅读；
+ * 3. **尊重 prefers-reduced-motion**（上面已全局处理）。
+ * ============================================================ */
+:root {
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  /* 进入 240ms、退出 160ms（退出要比进入快，约 70%）：这是"手感干脆"的关键 */
+  --dur-fast: 120ms;
+  --dur-base: 240ms;
+  --dur-exit: 160ms;
+}
+
+/* 进入：淡入 + 轻微上移。配合 --i 做错落（列表里最见效也最省成本的一招） */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.fade-up {
+  animation: fade-up var(--dur-base) var(--ease-out-expo) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+/* 数字滚动只在数值变化时轻微强调一次（不是循环动画，不会一直吃 GPU） */
+@keyframes tick {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.tick {
+  animation: tick var(--dur-base) var(--ease-out-expo);
+}
+
+/* 渐变扫光文字：品牌名用，一次性播放，不循环 */
+@keyframes shine {
+  from {
+    background-position: 200% center;
+  }
+  to {
+    background-position: -200% center;
+  }
+}
+
+.shine {
+  background: linear-gradient(
+    100deg,
+    var(--neutral-900) 20%,
+    var(--accent-500) 45%,
+    var(--neutral-900) 70%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shine 2.4s var(--ease-out-expo) 1 both;
+}
+
+/* 背景纹理：细点阵 + 一条强调细线。
+ *
+ * 为什么不用"模糊光斑/极光"：那是 AI 生成页面的头号特征（soft blurry gradient orbs），
+ * 而且大范围 blur 在低端设备上是实打实的性能负担。点阵是"精确、可复现"的视觉语言，
+ * 更贴合一个面向工程的工具，且只用一张 repeating 图，几乎零成本。 */
+.grid-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: radial-gradient(var(--neutral-200) 1px, transparent 1px);
+  background-size: 22px 22px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, #000 35%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, #000 35%, transparent 100%);
+}
+
+.grid-backdrop::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: min(560px, 60vw);
+  height: 1px;
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, transparent, var(--accent-400), transparent);
+}
+
+/* 卡片跟随指针的高光（ReactBits 的 SpotlightCard 效果）。
+   由 JS 写入 --mx / --my（百分比），默认高光在左上、悬停时才可见。
+   只用 opacity 与 background（不触发重排），并且指针离开即淡出。 */
+.spotlight {
+  position: relative;
+  overflow: hidden;
+}
+
+.spotlight::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity var(--dur-base) ease-out;
+  background: radial-gradient(
+    280px circle at var(--mx, 20%) var(--my, 0%),
+    var(--accent-50),
+    transparent 62%
+  );
+  pointer-events: none;
+}
+
+.spotlight:hover::before {
+  opacity: 1;
+}

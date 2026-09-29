@@ -111,9 +111,12 @@ async function selectDocument(documentId: string) {
     activeTab.value = activeTab.value === 'content' ? 'content' : activeTab.value
     return
   }
-  selectedId.value = documentId
   detailLoading.value = true
+  const previousId = selectedId.value
   try {
+    // 先把三份数据都拿到，再切换选中态。
+    // 之前的写法是"先改 selectedId 再拉数据"，任何一步失败就留下
+    // "左侧高亮已切、右侧还是旧文档"的不一致状态（截图里就是这么暴露的）。
     const [doc, chunkList, linkList] = await Promise.all([
       getDocument(kbId, documentId),
       listChunks(kbId, documentId),
@@ -122,10 +125,15 @@ async function selectDocument(documentId: string) {
     detail.value = doc
     chunks.value = chunkList
     links.value = linkList
+    selectedId.value = documentId
     renderedHtml.value = renderMarkdown(doc.content)
     await nextTick()
     applyHeadingAnchors(articleRef.value)
     highlightWithin(articleRef.value)
+  } catch (error) {
+    // 失败时不改变选中态，并明确告知——保持"高亮与内容一致"这个不变量
+    selectedId.value = previousId
+    ElMessage.error('文档加载失败：' + (error instanceof Error ? error.message : String(error)))
   } finally {
     detailLoading.value = false
   }

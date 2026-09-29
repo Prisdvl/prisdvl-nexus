@@ -152,7 +152,12 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
       </el-empty>
 
       <div v-else class="grid">
-        <article v-for="kb in items" :key="kb.id" class="card">
+        <article
+          v-for="(kb, index) in items"
+          :key="kb.id"
+          class="card fade-up spotlight"
+          :style="{ '--i': index }"
+        >
           <div class="card-head">
             <div class="title-row">
               <h2 class="name" @click="router.push(`/kb/${kb.id}`)">{{ kb.name }}</h2>
@@ -247,6 +252,19 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
 </template>
 
 <style scoped>
+/* 列表卡片的动效（参考 ReactBits 的入场与 SpotlightCard，但按开发者工具的语境收敛）：
+ * - 入场：错落淡入上移，每张延迟 40ms。只播一次，且只动 transform/opacity；
+ * - 悬停：整体轻微上浮 + 一层跟随卡片的浅色高光。
+ * 列表是高频访问的界面（每次回列表都触发），所以入场必须短、不能有持续动画。 */
+.card {
+  transition:
+    transform var(--dur-base) var(--ease-out-expo),
+    box-shadow var(--dur-base) var(--ease-out-expo);
+}
+
+.card:hover {
+  transform: translate3d(0, -2px, 0);
+}
 .page-head {
   display: flex;
   align-items: flex-start;
