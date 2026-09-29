@@ -251,3 +251,19 @@ CREATE TABLE IF NOT EXISTS kb_qa_record (
 );
 
 CREATE INDEX IF NOT EXISTS idx_qa_kb_time ON kb_qa_record (kb_id, created_at);
+
+-- ---------- 文档关联边（Phase 4）----------
+CREATE TABLE IF NOT EXISTS kb_document_link (
+    id               BIGINT       NOT NULL PRIMARY KEY,
+    kb_id            BIGINT       NOT NULL,
+    from_document_id BIGINT       NOT NULL,
+    link_type        VARCHAR(16)  NOT NULL,
+    target           VARCHAR(512) NOT NULL,
+    display          VARCHAR(512),
+    start_offset     INT          NOT NULL DEFAULT 0,
+    is_external      TINYINT      NOT NULL DEFAULT 0,
+    created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_link_from ON kb_document_link (from_document_id);
+CREATE INDEX IF NOT EXISTS idx_link_kb_target ON kb_document_link (kb_id, target);

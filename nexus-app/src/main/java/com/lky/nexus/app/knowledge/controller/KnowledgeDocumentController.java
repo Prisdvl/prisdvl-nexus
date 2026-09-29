@@ -6,6 +6,7 @@ import com.lky.nexus.common.api.Result;
 import com.lky.nexus.knowledge.model.dto.ChunkView;
 import com.lky.nexus.knowledge.model.dto.DocumentDetail;
 import com.lky.nexus.knowledge.model.dto.DocumentSummary;
+import com.lky.nexus.knowledge.service.DocumentLinkService;
 import com.lky.nexus.knowledge.service.DocumentQueryService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,9 +24,12 @@ import java.util.List;
 public class KnowledgeDocumentController {
 
     private final DocumentQueryService documentQueryService;
+    private final DocumentLinkService documentLinkService;
 
-    public KnowledgeDocumentController(DocumentQueryService documentQueryService) {
+    public KnowledgeDocumentController(DocumentQueryService documentQueryService,
+                                       DocumentLinkService documentLinkService) {
         this.documentQueryService = documentQueryService;
+        this.documentLinkService = documentLinkService;
     }
 
     /** 文档列表。 */
@@ -51,6 +55,14 @@ public class KnowledgeDocumentController {
     public Result<DocumentDetail> getDocument(@PathVariable Long knowledgeBaseId,
                                              @PathVariable Long documentId) {
         return Result.ok(documentQueryService.getDocument(
+                CurrentUser.requireId(), knowledgeBaseId, documentId));
+    }
+
+    /** 文档关联（Phase 4）：出链 + 反向链接 + 待创建的引用数。 */
+    @GetMapping("/documents/{documentId}/links")
+    public Result<DocumentLinkService.DocumentLinks> links(@PathVariable Long knowledgeBaseId,
+                                                          @PathVariable Long documentId) {
+        return Result.ok(documentLinkService.links(
                 CurrentUser.requireId(), knowledgeBaseId, documentId));
     }
 }

@@ -7,12 +7,14 @@ import com.lky.nexus.knowledge.chunk.TextChunk;
 import com.lky.nexus.knowledge.imports.VaultFile;
 import com.lky.nexus.knowledge.imports.VaultPackageExtractor;
 import com.lky.nexus.knowledge.mapper.ChunkMapper;
+import com.lky.nexus.knowledge.mapper.DocumentLinkMapper;
 import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.DocumentTagMapper;
 import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;
 import com.lky.nexus.knowledge.model.DocumentStatus;
 import com.lky.nexus.knowledge.model.KnowledgeSourceType;
 import com.lky.nexus.knowledge.model.entity.ChunkPO;
+import com.lky.nexus.knowledge.model.entity.DocumentLinkPO;
 import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.DocumentTagPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
@@ -60,6 +62,7 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
 
     private final DocumentMapper documentMapper;
     private final DocumentTagMapper documentTagMapper;
+    private final DocumentLinkMapper documentLinkMapper;
     private final ChunkMapper chunkMapper;
     private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final DocumentStorage documentStorage;
@@ -67,12 +70,14 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
 
     public DocumentPersistServiceImpl(DocumentMapper documentMapper,
                                       DocumentTagMapper documentTagMapper,
+                                      DocumentLinkMapper documentLinkMapper,
                                       ChunkMapper chunkMapper,
                                       KnowledgeBaseMapper knowledgeBaseMapper,
                                       DocumentStorage documentStorage,
                                       JsonMapper jsonMapper) {
         this.documentMapper = documentMapper;
         this.documentTagMapper = documentTagMapper;
+        this.documentLinkMapper = documentLinkMapper;
         this.chunkMapper = chunkMapper;
         this.knowledgeBaseMapper = knowledgeBaseMapper;
         this.documentStorage = documentStorage;
@@ -112,6 +117,9 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
         documentTagMapper.delete(Wrappers.<DocumentTagPO>lambdaQuery()
                 .eq(DocumentTagPO::getDocumentId, document.getId()));
         insertTags(knowledgeBase.getId(), document.getId(), parsed.tags());
+        // 关联边只在"正文可能变化"的路径上重建：save 是唯一会改正文的入口
+        // （updateMetadataOnly / relocate 保持正文不变，因此链接也不变）
+        replaceLinks(knowledgeBase.getId(), document.getId(), parsed);
         insertChunks(userId, knowledgeBase.getId(), document.getId(), chunks);
 
         log.debug("文档落库 path={}, created={}, chunks={}", file.sourcePath(), created, chunks.size());
@@ -249,8 +257,55 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
         document.setErrorMsg(null);
     }
 
-    private void insertTags(Long knowledgeBaseId, Long documentId, List<String> tags) {
-        if (tags == null || tags.isEmpty()) {
+    /**
+     * 重建文档的关联边（Phase 4）。
+     *
+     * <p>外链（http/https/mailto）也记下来但标记 {@code is_external}：
+     * 界面上可以展示"引用了哪些外部资料"，而关联图与反向链接只用内部链接——
+     * 否则图谱里会塞满互联网。
+     */
+    private void replaceLinks(Long knowledgeBaseId, Long documentId, ParsedDocument parsed) {
+        documentLinkMapper.delete(Wrappers.<DocumentLinkPO>lambdaQuery()
+                .eq(DocumentLinkPO::getFromDocumentId, documentId));
+        List<ParsedDocument.Link> links = parsed.links();
+        if (links == null || links.isEmpty()) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int inserted = 0;
+        for (ParsedDocument.Link link : links) {
+            String target = link.target() == null ? "" : link.target().trim();
+            if (target.isEmpty()) {
+                continue;
+            }
+            DocumentLinkPO entity = new DocumentLinkPO();
+            entity.setKbId(knowledgeBaseId);
+            entity.setFromDocumentId(documentId);
+            entity.setLinkType(link.type().name());
+            entity.setTarget(clip(target, 500));
+            entity.setDisplay(clip(link.display(), 500));
+            entity.setStartOffset(link.startOffset());
+            entity.setIsExternal(isExternal(target) ? 1 : 0);
+            entity.setCreatedAt(now);
+            documentLinkMapper.insert(entity);
+            inserted++;
+        }
+        log.debug("文档关联边已重建 documentId={}, links={}", documentId, inserted);
+    }
+
+    private boolean isExternal(String target) {
+        String lower = target.toLowerCase(java.util.Locale.ROOT);
+        return lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("mailto:");
+    }
+
+    private String clip(String text, int max) {
+        if (text == null) {
+            return null;
+        }
+        return text.length() <= max ? text : text.substring(0, max);
+    }
+
+    private void insertTags(Long knowledgeBaseId, Long documentId, List<String> tags) {        if (tags == null || tags.isEmpty()) {
             return;
         }
         for (String tag : tags) {
