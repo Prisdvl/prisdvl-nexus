@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { MagicStick, Refresh, Search, UploadFilled } from '@element-plus/icons-vue'
 import {
   askQuestion,
+  askQuestionStream,
   buildIndex,
   embedChunks,
   getDocument,
@@ -63,6 +64,11 @@ const answerRef = ref<HTMLElement | null>(null)
 const qaTurns = ref<Array<{ question: string; answer: string }>>([])
 /** 服务端留档的历史记录 */
 const qaHistory = ref<RagAnswer[]>([])
+/** 流式开关：默认开——用户立刻看到字，而不是对着白屏等半分钟到三分钟 */
+const useStream = ref(true)
+/** 流式进行中的原文。先纯文本、结束后再渲染 Markdown：每来一个字就重新渲染 Markdown 太贵 */
+const streamedText = ref('')
+const streamingNow = ref(false)
 
 const filteredDocuments = computed(() => {
   const keyword = docFilter.value.trim().toLowerCase()
@@ -175,23 +181,85 @@ async function doAsk() {
   }
   asking.value = true
   const asked = question.value.trim()
+  // 带上最近两轮问答：让"那它有什么缺点？"这类省略主语的追问能被理解
+  const history = qaTurns.value.slice(-2).map((turn) => ({
+    question: turn.question,
+    answer: turn.answer
+  }))
   try {
-    // 带上最近两轮问答：让"那它有什么缺点？"这类省略主语的追问能被理解
-    const history = qaTurns.value.slice(-2).map((turn) => ({
-      question: turn.question,
-      answer: turn.answer
-    }))
-    const answer = await askQuestion(kbId, asked, topK.value, history)
-    ragAnswer.value = answer
-    answerHtml.value = renderMarkdown(answer.answer)
-    qaTurns.value.push({ question: asked, answer: answer.answer })
     activeTab.value = 'ask'
-    await nextTick()
-    highlightWithin(answerRef.value)
+    if (useStream.value) {
+      await askStreaming(asked, history)
+    } else {
+      const answer = await askQuestion(kbId, asked, topK.value, history)
+      ragAnswer.value = answer
+      answerHtml.value = renderMarkdown(answer.answer)
+      await nextTick()
+      highlightWithin(answerRef.value)
+    }
+    qaTurns.value.push({ question: asked, answer: ragAnswer.value?.answer ?? '' })
     await loadQaHistory()
   } finally {
     asking.value = false
+    streamingNow.value = false
   }
+}
+
+/** 流式路径：逐字渲染，结束后用完整事件里的引用构造与同步路径一致的对象（复用同一套引用 UI）。 */
+async function askStreaming(asked: string, history: Array<{ question: string; answer: string }>) {
+  ragAnswer.value = null
+  answerHtml.value = ''
+  streamedText.value = ''
+  streamingNow.value = true
+
+  let citations: RagAnswer['citations'] = []
+  let recordId: string | null = null
+  let contextTokens = 0
+  let truncated = 0
+  let reranked = false
+
+  await askQuestionStream(kbId, asked, topK.value, history, {
+    onMeta: (meta) => {
+      citations = meta.citations.map((item, index) => ({
+        index: index + 1,
+        chunkId: item.chunkId,
+        documentId: item.documentId,
+        documentTitle: item.documentTitle,
+        headingPath: item.headingPath,
+        snippet: '',
+        score: 0,
+        referenced: false
+      }))
+      contextTokens = meta.contextTokens
+      truncated = meta.truncated
+      reranked = meta.reranked
+    },
+    onDelta: (text) => {
+      streamedText.value += text
+    },
+    onDone: (done) => {
+      if (done.citations?.length) {
+        citations = done.citations
+      }
+      recordId = done.recordId ?? null
+      if (done.error) {
+        ElMessage.error('生成失败：' + done.error)
+      }
+    }
+  })
+
+  ragAnswer.value = {
+    recordId,
+    answer: streamedText.value,
+    citations,
+    contextTokens,
+    truncated,
+    reranked,
+    costMillis: 0
+  }
+  answerHtml.value = renderMarkdown(streamedText.value)
+  await nextTick()
+  highlightWithin(answerRef.value)
 }
 
 async function loadQaHistory() {
@@ -494,25 +562,33 @@ watch(activeTab, () => {
               <el-button type="primary" :icon="MagicStick" :loading="asking" @click="doAsk">
                 提问
               </el-button>
+              <el-switch v-model="useStream" size="small" active-text="流式" inline-prompt />
             </div>
             <p class="hint">
               链路：混合检索（RRF）→ LLM 重排 → 上下文组装（Token 预算 + 去重 + 编号）→ 生成。
+              流式模式下几百毫秒内就能看到第一个字（非流式要等整段生成完）。
               回答里的 [n] 对应下方引用，点引用可跳到原文小节。
             </p>
 
-            <div v-if="ragAnswer" class="answer-block">
+            <div v-if="ragAnswer || streamingNow" class="answer-block">
               <div class="answer-meta">
-                <span class="num">资料 {{ ragAnswer.citations.length }} 段 / {{ ragAnswer.contextTokens }} tok</span>
-                <span class="num" v-if="ragAnswer.truncated">被预算截断 {{ ragAnswer.truncated }} 段</span>
-                <el-tag size="small" effect="plain" :type="ragAnswer.reranked ? 'success' : 'info'">
-                  {{ ragAnswer.reranked ? '已重排' : '未重排（保持召回顺序）' }}
-                </el-tag>
-                <span class="num">{{ ragAnswer.costMillis }} ms</span>
+                <span class="num" v-if="streamingNow">生成中…</span>
+                <template v-else>
+                  <span class="num">资料 {{ ragAnswer?.citations.length ?? 0 }} 段 / {{ ragAnswer?.contextTokens }} tok</span>
+                  <span class="num" v-if="ragAnswer?.truncated">被预算截断 {{ ragAnswer?.truncated }} 段</span>
+                  <el-tag size="small" effect="plain" :type="ragAnswer?.reranked ? 'success' : 'info'">
+                    {{ ragAnswer?.reranked ? '已重排' : '未重排（保持召回顺序）' }}
+                  </el-tag>
+                </template>
               </div>
+              <!-- 流式进行中先显示纯文本（逐字重渲染 Markdown 太贵），结束后再渲染 -->
+              <article v-if="streamingNow" class="markdown answer stream-text">
+                {{ streamedText }}<span class="caret" />
+              </article>
               <!-- eslint-disable-next-line vue/no-v-html -- 内容经 marked + DOMPurify 处理 -->
-              <article ref="answerRef" class="markdown answer" v-html="answerHtml" />
+              <article v-else ref="answerRef" class="markdown answer" v-html="answerHtml" />
 
-              <div v-if="ragAnswer.citations.length" class="citations">
+              <div v-if="ragAnswer?.citations?.length" class="citations">
                 <div class="outline-head">引用</div>
                 <ol>
                   <li v-for="citation in ragAnswer.citations" :key="citation.chunkId" @click="openCitation(citation)">
@@ -1037,6 +1113,27 @@ watch(activeTab, () => {
   border-left: 2px solid var(--accent-400);
   border-radius: var(--radius-input);
   max-width: 80ch;
+}
+
+/* 流式进行中：保留换行按原文显示，并在末尾给一个光标，让"还在生成"可见 */
+.stream-text {
+  white-space: pre-wrap;
+}
+
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent-500);
+  animation: caret-blink 1s steps(2) infinite;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 .citations {
