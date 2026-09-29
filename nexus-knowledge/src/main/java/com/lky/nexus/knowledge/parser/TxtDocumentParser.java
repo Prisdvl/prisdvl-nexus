@@ -2,6 +2,7 @@ package com.lky.nexus.knowledge.parser;
 
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -15,18 +16,19 @@ import java.util.Set;
 @Component
 public class TxtDocumentParser implements DocumentParser {
 
-    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of("txt", "text", "log");
+    private static final List<String> EXTENSIONS = List.of("txt", "text", "log");
 
     @Override
-    public boolean supports(String fileName) {
-        return SUPPORTED_EXTENSIONS.contains(ParserRegistry.extensionOf(fileName));
+    public List<String> extensions() {
+        return EXTENSIONS;
     }
 
     @Override
-    public ParsedDocument parse(String fileName, String rawContent) {
-        String content = rawContent == null ? "" : rawContent.replace("\r\n", "\n").replace('\r', '\n');
+    public ParsedDocument parse(String fileName, byte[] content) {
+        String text = content == null ? "" : new String(content, StandardCharsets.UTF_8)
+                .replace("\r\n", "\n").replace('\r', '\n');
         String title = fileName == null ? "untitled"
                 : (fileName.lastIndexOf('.') < 0 ? fileName : fileName.substring(0, fileName.lastIndexOf('.')));
-        return new ParsedDocument(title, content, Map.of(), List.of(), List.of(), List.of(), List.of());
+        return new ParsedDocument(title, text, Map.of(), List.of(), List.of(), List.of(), List.of());
     }
 }

@@ -5,6 +5,7 @@ import com.lky.nexus.common.exception.BusinessException;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -39,7 +40,7 @@ import java.util.regex.Pattern;
 @Component
 public class MarkdownDocumentParser implements DocumentParser {
 
-    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of("md", "markdown");
+    private static final List<String> EXTENSIONS = List.of("md", "markdown");
 
     /** 标题：# ~ ######，后跟空白与文本；结尾的 # 会被去掉。 */
     private static final Pattern HEADING = Pattern.compile("^(#{1,6})\\s+(.+?)\\s*#*\\s*$");
@@ -69,12 +70,13 @@ public class MarkdownDocumentParser implements DocumentParser {
     private static final List<String> FRONTMATTER_END = List.of("---", "...");
 
     @Override
-    public boolean supports(String fileName) {
-        return SUPPORTED_EXTENSIONS.contains(ParserRegistry.extensionOf(fileName));
+    public List<String> extensions() {
+        return EXTENSIONS;
     }
 
     @Override
-    public ParsedDocument parse(String fileName, String rawContent) {
+    public ParsedDocument parse(String fileName, byte[] content) {
+        String rawContent = content == null ? "" : new String(content, StandardCharsets.UTF_8);
         String normalized = normalize(rawContent);
         FrontmatterExtraction frontmatter = extractFrontmatter(normalized);
 

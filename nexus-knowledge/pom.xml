@@ -66,6 +66,24 @@
             <artifactId>snakeyaml</artifactId>
         </dependency>
 
+        <!-- PDF 解析：PDFBox。
+             注意 Boot 4 的 BOM 托管的可能是 3.x，而 3.x 把入口从 PDDocument.load 改成了
+             Loader.loadPDF —— 这类破坏性变化必须先确认实际版本再写代码（本次已核实）。 -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>${pdfbox.version}</version>
+        </dependency>
+
+        <!-- DOCX 解析：Apache POI（ooxml 变体才支持 .docx）。
+             DOCX 与 PDF 的关键差别：DOCX 里标题是有样式的（Heading1/2…），
+             因此能抽出真正的标题层级，而不必靠字号猜。 -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

@@ -36,9 +36,18 @@ public class ParserRegistry {
                         "暂不支持的文件类型：" + fileName + "（当前支持 " + supportedExtensions() + "）"));
     }
 
-    /** 当前支持的扩展名，用于接口文档与错误提示。 */
+    /**
+     * 当前支持的全部扩展名。
+     *
+     * <p>由各解析器声明汇总而来（而不是在这里硬编码）：
+     * 新增解析器时自动生效，不会再出现"实现已加、清单忘改"的不一致。
+     */
     public List<String> supportedExtensions() {
-        return List.of("md", "markdown", "txt", "pdf", "docx");
+        return parsers.stream()
+                .flatMap(parser -> parser.extensions().stream())
+                .distinct()
+                .sorted()
+                .toList();
     }
 
     /** 扩展名小写化（无扩展名返回空串）。 */

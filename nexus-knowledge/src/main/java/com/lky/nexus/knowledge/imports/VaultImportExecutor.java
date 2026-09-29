@@ -340,9 +340,9 @@ public class VaultImportExecutor {
     }
 
     private ParsedDocument parse(VaultFile file) {
-        // 第一版按 UTF-8 解码；非 UTF-8 文件会出现替换字符（已记录为已知限制）
-        return parserRegistry.requireParser(file.fileName())
-                .parse(file.fileName(), new String(file.content(), StandardCharsets.UTF_8));
+        // 统一传字节：文本格式由解析器内部按 UTF-8 解码，PDF/DOCX 直接消费二进制，
+        // 调用方因此不需要按格式分支（见 DocumentParser 的接口说明）
+        return parserRegistry.requireParser(file.fileName()).parse(file.fileName(), file.content());
     }
 
     private int totalFiles(VaultSyncPlan plan, VaultScanResult scan) {

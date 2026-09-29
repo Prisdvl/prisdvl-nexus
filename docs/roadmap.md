@@ -59,7 +59,7 @@
 | --- | --- |
 | 2.1 | 知识库 CRUD + `kb_document` 表 + 原始文件存储 —— ✅ **已完成**（建库即冻结嵌入模型；租户隔离；见 decisions.md B.17） |
 | 2.2 | 解析器接口 `DocumentParser` + TXT / Markdown 实现（Frontmatter、标题树、WikiLink、Markdown Link、代码块、图片引用）—— ✅ **已完成**（12 个解析器用例，含"代码块内不识别结构"等易错点） |
-| 2.3 | PDF 解析（PDFBox）+ DOCX 解析（POI），统一输出"结构化正文 + 元数据" |
+| 2.3 | PDF 解析（PDFBox）+ DOCX 解析（POI），统一输出"结构化正文 + 元数据" —— ✅ **已完成**（PDF 保留分页偏移供引用反查页码；DOCX 抽出真标题层级；见 decisions.md B.22） |
 | 2.4 | 结构化 Chunk 策略（标题层级切分 + 段落递归 + 代码块保护 + offset 记录）—— ✅ **已完成**（13 个切分用例；见 decisions.md B.18） |
 | 2.5 | ZIP / Obsidian Vault 导入（安全解压、目录识别、忽略 `.obsidian/`、附件处理）—— ✅ **已完成**（安全限额 + 端到端真实 MySQL 验证；见 decisions.md B.19） |
 | 2.6 | SHA-256 增量同步（跳过/更新/删除/改名）+ `kb_import_task` 进度 —— ✅ **已完成**（含"零写入"与"保留向量"的可观测断言；见 decisions.md B.20） |

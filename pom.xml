@@ -50,6 +50,10 @@
         <!-- 关键第三方版本（Boot 未托管的必须显式声明） -->
         <spring-ai.version>2.0.1</spring-ai.version>
         <mybatis-plus.version>3.5.17</mybatis-plus.version>
+        <!-- 文档解析：Boot 4 的 BOM 不托管这两个库，因此版本在本项目集中管理。
+             两个版本号都取自 Maven Central 当前稳定版（2026-09 核实），不是猜的。 -->
+        <pdfbox.version>3.0.7</pdfbox.version>
+        <poi.version>5.5.1</poi.version>
 
         <!-- 测试 -->
         <skipUnitTests>false</skipUnitTests>
