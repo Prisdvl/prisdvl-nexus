@@ -163,7 +163,33 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
 > 三个 profile 的分工：`local`（真实 MySQL，日常开发）、`standalone`（H2 内存，无 Docker 时应急）、`test`（H2，跑测试）。
 > **新增 profile 配置或迁移脚本后必须重新 `package`**，否则 jar 里还是旧的。
 
-## 10. 开发约定（重要）
+## 10. 前端控制台（Vue 3 + Vite + Element Plus）
+
+```powershell
+# 先按上一节把后端跑起来，然后：
+cd web
+npm install
+npm run dev            # http://localhost:5173（/api 由 Vite 代理到后端 8080，因此不涉及 CORS）
+```
+
+**已有功能**：注册/登录（JWT，刷新保持登录）、知识库列表与新建、上传 Obsidian Vault
+（显示队列/处理中/完成进度）、向量化 / 建索引 / 重建索引、文档与切片浏览
+（切片带标题路径、Token 数，以及**向量与索引状态**——排查"为什么搜不到"的第一手信息）、
+关键词检索（每条命中显示来源标签与相关性得分）。
+
+**界面验证（不下载浏览器，复用系统 Edge/Chrome）**：
+
+```powershell
+cd web
+node scripts/screenshot.mjs      # 生成 docs/screenshots/{login,kb-list,kb-detail,kb-search}.png
+node scripts/verify-login.mjs    # 真实走一遍登录表单，确认跳转与刷新后仍保持登录
+```
+
+> 这两个脚本的意义不只是截图：**"服务返回了 HTML"不等于"页面渲染正常"**。
+> 本项目就是靠它发现了一个真实问题（前端 `@` 别名只配了 tsconfig、没配 Vite，
+> 页面直接白屏报错），以及一个后端问题（新增接口后忘了重新打包，请求落到了静态资源处理器）。
+
+## 11. 开发约定（重要）
 
 1. **一次只做一个 Step**：需求 → 设计 → 实现 → 运行 → 测试 → 总结，完成后再进入下一步。
 2. **分层不可跨越**：`Controller → Service → Domain/Mapper`；Controller 不碰数据库、不直接调 LLM。

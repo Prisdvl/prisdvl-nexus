@@ -77,9 +77,15 @@ deploy/**/data/
 site/
 *.exec
 
-# ---- ������־ ----
+# ---------- 前端本地临时文件 ----------
+# 截图/验证脚本会写入演示账号的 JWT 与知识库 id，绝不入库
+web/.demo-token
+web/.demo-kb-id
+web/login-flow-failure.png
+
+# ---- 构建日志 ----
 build.log
 
-# ---- ������Կ��������⣩----
+# ---- 密钥文件（绝不入库）----
 .secrets/
 *.key.txt

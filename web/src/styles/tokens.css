@@ -1,0 +1,135 @@
+/*
+ * 设计令牌（Minimal Clean）
+ *
+ * 规则来自 ui-craft：90% 中性色 + 单一强调色；圆角按元素递进（不要全站一个值）；
+ * 阴影用"环境光 + 直射光"两层而不是单一边框；数字一律 tabular-nums。
+ * 强调色刻意不用默认蓝——这里取低饱和的青色（青=知识/检索的语义联想，且在浅色底上对比度足够）。
+ */
+:root {
+  /* 中性色阶（偏暖的灰，避免纯灰的冷硬感） */
+  --neutral-0: #ffffff;
+  --neutral-50: #fafaf9;
+  --neutral-100: #f4f4f2;
+  --neutral-200: #e7e6e3;
+  --neutral-300: #d6d4d0;
+  --neutral-400: #a8a5a0;
+  --neutral-500: #78756f;
+  --neutral-600: #57544f;
+  --neutral-700: #3d3b37;
+  --neutral-800: #262421;
+  --neutral-900: #171614;
+
+  /* 唯一强调色：低饱和青 */
+  --accent-50: #eef7f6;
+  --accent-100: #d6ecea;
+  --accent-400: #4fa39c;
+  --accent-500: #35857f;
+  --accent-600: #2a6b66;
+
+  /* 功能色：只用于状态点，不做装饰 */
+  --ok: #3f8f5f;
+  --warn: #b4801f;
+  --danger: #b4483f;
+
+  /* 圆角按元素递进：输入 6 / 卡片 10 / 浮层 14 */
+  --radius-input: 6px;
+  --radius-card: 10px;
+  --radius-overlay: 14px;
+
+  /* 两层阴影：环境光铺底 + 直射光收边 */
+  --shadow-card: 0 1px 2px rgb(23 22 20 / 4%), 0 1px 1px rgb(23 22 20 / 3%);
+  --shadow-raised: 0 2px 4px rgb(23 22 20 / 5%), 0 8px 24px -8px rgb(23 22 20 / 10%);
+
+  /* 字体：系统栈，不引入外部字体（内网/离线可用） */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'Cascadia Mono', Consolas, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--neutral-800);
+  background: var(--neutral-50);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 数字一律等宽，避免表格里数字跳动 */
+.num,
+.el-table .cell,
+.score {
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--neutral-900);
+}
+
+/* 大标题收紧字距（>24px 时视觉才不松散） */
+h1 {
+  font-size: 22px;
+}
+
+h2 {
+  font-size: 17px;
+}
+
+h3 {
+  font-size: 15px;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Element Plus 的主色对齐到我们的强调色，避免出现"框架蓝 + 自定青"两个强调色 */
+:root {
+  --el-color-primary: var(--accent-500);
+  --el-color-primary-light-3: var(--accent-400);
+  --el-color-primary-light-5: #7fb8b3;
+  --el-color-primary-light-7: #b3d6d3;
+  --el-color-primary-light-8: var(--accent-100);
+  --el-color-primary-light-9: var(--accent-50);
+  --el-color-primary-dark-2: var(--accent-600);
+  --el-border-radius-base: var(--radius-input);
+  --el-font-family: var(--font-sans);
+}
+
+/* 键盘可见焦点：所有可交互元素都要有 */
+:focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

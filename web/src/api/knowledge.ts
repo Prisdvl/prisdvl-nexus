@@ -1,0 +1,189 @@
+import client, { type PageResult } from './client'
+
+/*
+ * 说明：所有 id 都是 string。
+ * 后端按 ADR-017 把 Long 序列化成字符串（雪花 id 超出 JS 安全整数范围，
+ * 用 number 会在前端悄悄丢精度——这类 bug 极难发现，所以类型上就不给机会）。
+ */
+
+export interface KnowledgeBase {
+  id: string
+  name: string
+  description: string | null
+  sourceType: string
+  embeddingProvider: string
+  embeddingModel: string
+  embeddingDim: number
+  chunkStrategy: string
+  chunkSize: number
+  chunkOverlap: number
+  docCount: number
+  chunkCount: number
+  totalTokens: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DocumentSummary {
+  id: string
+  sourcePath: string
+  fileName: string
+  fileExt: string
+  folder: string | null
+  title: string | null
+  fileSizeKb: number | null
+  status: string
+  chunkCount: number
+  tokenCount: number
+  version: number
+  tags: string[]
+  updatedAt: string
+}
+
+export interface ChunkView {
+  id: string
+  chunkIndex: number
+  chunkType: string
+  headingPath: string | null
+  content: string
+  tokenCount: number
+  charCount: number
+  vectorStatus: string
+  esStatus: string
+}
+
+export interface ImportTask {
+  id: string
+  knowledgeBaseId: string
+  taskType: string
+  status: string
+  totalFiles: number
+  createdCount: number
+  updatedCount: number
+  skippedCount: number
+  deletedCount: number
+  failedCount: number
+  totalChunks: number
+  totalTokens: number
+  progress: number
+  startedAt: string | null
+  finishedAt: string | null
+  errorMsg: string | null
+}
+
+export interface EmbedResult {
+  total: number
+  embedded: number
+  cacheHits: number
+  failed: number
+  costMillis: number
+}
+
+export interface IndexResult {
+  total: number
+  indexed: number
+  costMillis: number
+}
+
+export interface SearchHit {
+  chunkId: string
+  documentId: string
+  documentTitle: string | null
+  headingPath: string | null
+  content: string
+  score: number
+  source: string
+}
+
+// ---------- 认证 ----------
+
+export function register(username: string, password: string) {
+  return client.post<never, void>('/auth/register', { username, password })
+}
+
+export interface LoginResponse {
+  accessToken: string
+  tokenType: string
+  expiresIn: number
+  username: string
+}
+
+export function login(username: string, password: string) {
+  return client.post<never, LoginResponse>('/auth/login', { username, password })
+}
+
+export interface CurrentUser {
+  id: string
+  username: string
+  roles: string[]
+}
+
+export function me() {
+  return client.get<never, CurrentUser>('/users/me')
+}
+
+// ---------- 知识库 ----------
+
+export function listKnowledgeBases(pageNum = 1, pageSize = 50) {
+  return client.get<never, PageResult<KnowledgeBase>>('/knowledge-bases', {
+    params: { pageNum, pageSize }
+  })
+}
+
+export function createKnowledgeBase(name: string, description?: string) {
+  return client.post<never, KnowledgeBase>('/knowledge-bases', { name, description })
+}
+
+export function deleteKnowledgeBase(id: string) {
+  return client.delete<never, void>(`/knowledge-bases/${id}`)
+}
+
+// ---------- 导入 ----------
+
+export function uploadVault(id: string, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return client.post<never, ImportTask>(`/knowledge-bases/${id}/vault`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
+export function getImportTask(taskId: string) {
+  return client.get<never, ImportTask>(`/import-tasks/${taskId}`)
+}
+
+// ---------- 向量化 / 索引 ----------
+
+export function embedChunks(id: string, batchLimit = 200) {
+  return client.post<never, EmbedResult>(`/knowledge-bases/${id}/embed`, null, {
+    params: { batchLimit }
+  })
+}
+
+export function buildIndex(id: string, batchLimit = 500) {
+  return client.post<never, IndexResult>(`/knowledge-bases/${id}/index`, null, {
+    params: { batchLimit }
+  })
+}
+
+export function recreateIndex(id: string) {
+  return client.post<never, void>(`/knowledge-bases/${id}/index/recreate`)
+}
+
+// ---------- 浏览 / 检索 ----------
+
+export function listDocuments(id: string, pageNum = 1, pageSize = 50) {
+  return client.get<never, PageResult<DocumentSummary>>(`/knowledge-bases/${id}/documents`, {
+    params: { pageNum, pageSize }
+  })
+}
+
+export function listChunks(id: string, documentId: string) {
+  return client.get<never, ChunkView[]>(`/knowledge-bases/${id}/documents/${documentId}/chunks`)
+}
+
+export function search(id: string, q: string, topK = 10) {
+  return client.get<never, SearchHit[]>(`/knowledge-bases/${id}/search`, {
+    params: { q, topK }
+  })
+}
