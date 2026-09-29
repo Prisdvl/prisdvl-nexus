@@ -124,11 +124,17 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <configuration>
-                        <skipTests>${skipUnitTests}</skipTests>
+                        <!-- 刻意不在 POM 里硬编码 skipTests：一旦写了 <skipTests>false</skipTests>，
+                             它会**覆盖**命令行的 -DskipTests，导致"想跳过测试却仍在跑全量测试"
+                             （本机内存紧张时这会直接把构建搞崩）。留空即可让 Maven 内建的
+                             -DskipTests / -Dmaven.test.skip 正常工作。 -->
+
                         <!-- 让「被 fork 出来的测试 JVM」用 UTF-8 输出到控制台。
                              Java 19 起决定 stdout 编码的是 stdout.encoding（不是 file.encoding），
-                             中文 Windows 上默认是 GBK，会导致测试日志里的中文变成乱码。 -->
-                        <argLine>-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -Dfile.encoding=UTF-8</argLine>
+                             中文 Windows 上默认是 GBK，会导致测试日志里的中文变成乱码。
+                             同时给 fork 出来的 JVM 限定堆上限：本机 15.6GB 而 Docker VM 占 7.6GB，
+                             默认堆（1/4 物理内存）会让多个 JVM 一起把内存吃光。 -->
+                        <argLine>-Xmx512m -XX:MaxMetaspaceSize=256m -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -Dfile.encoding=UTF-8</argLine>
                     </configuration>
                 </plugin>
             </plugins>

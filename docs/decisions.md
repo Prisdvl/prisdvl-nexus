@@ -657,6 +657,44 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 **新增可运行性**：`localhost:8080/actuator/health = UP`，`local` profile 全程走真实 MySQL；
 `standalone` profile 仍可在没有 Docker 时用 H2 跑通全链路（见 B.15）。
 
+### B.17 Step 2.1 / 2.2 实测验证记录（知识库 CRUD + Markdown/TXT 解析）
+
+| 验证项 | 结论 |
+| --- | --- |
+| 建库即冻结嵌入模型与维度（ADR-008） | ✅ 从 `embedding.default` 角色解析出 `ollama / bge-m3 / 1024` 并写入记录；配置缺失则报 4006，不让维度不一致的向量悄悄入库 |
+| 切分参数（策略/大小/重叠）落库并校验 | ✅ `overlap >= size` 直接 400（否则切片会无限重叠） |
+| 知识库 CRUD + 租户隔离 | ✅ 别人的知识库一律 404 + 3001；列表看不到；改名不影响已冻结的嵌入模型 |
+| Markdown 解析：frontmatter / 标题树 / 标签 / WikiLink / Markdown 链接 / 图片 / 偏移量 | ✅ 12 个解析器用例 |
+| **代码块内的 `# 标题`、`#标签`、`[[链接]]` 一律不识别** | ✅ 单独用例覆盖（Markdown 解析最典型的坑） |
+| 容错：只有开头 `---` 没有结束符、CRLF、无标题回退文件名 | ✅ |
+| frontmatter YAML 语法错误 | ✅ 报 3004 并带可定位信息，而不是静默丢弃 |
+
+**四个真实踩坑**
+
+1. **MyBatis 的 Mapper 自动扫描只覆盖启动类所在包**。`kb_*` 的 Mapper 按分层放在
+   `com.lky.nexus.knowledge.mapper`，于是出现"应用能启动、一注入就报
+   `No qualifying bean of type ...Mapper`"。已改为 `@MapperScan(basePackages = "com.lky.nexus",
+   annotationClass = Mapper.class)`（扫全树 + 只认注解），后续新增模块无需再改。
+2. **MySQL 索引键长度上限 3072 字节**。`source_path VARCHAR(1024)` 参与唯一键时
+   utf8mb4 下 1024×4 = 4096 字节 → 迁移直接失败：
+   `Error Code 1071: Specified key was too long; max key length is 3072 bytes`。
+   已把 `source_path` 改为 `VARCHAR(512)`（512×4+8+1 = 2057，安全；
+   Windows `MAX_PATH` 才 260，足够容纳任何实际 Vault 路径）。
+3. **失败的 Flyway 迁移会留下 `success=0` 记录并阻塞后续迁移**。
+   修复方式：清掉该记录与半成品表（生产环境应使用 `flyway repair`）。
+   这条也说明：迁移脚本一旦发布就不该改，本次因为是开发库且 V4 尚未成功过，直接修正即可。
+4. **POM 里硬编码 `<skipTests>` 会覆盖命令行的 `-DskipTests`**，
+   表现为"想跳过测试却仍在跑全量测试"（本机内存紧张时直接把构建搞崩）。
+   已移除该配置，让 Maven 内建的 `-DskipTests` / `-Dmaven.test.skip` 正常工作。
+
+**环境约束（已适配）**：本机 15.6GB 内存、Docker VM 占 7.6GB，可用常低于 2GB。
+因此 surefire 的 fork JVM 限定 `-Xmx512m`，应用自身也以 `-Xmx512m` 启动；
+构建时先停应用，避免多 JVM 叠加触发 `Native memory allocation (malloc) failed`。
+
+**测试总览（Step 2.1/2.2）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-knowledge` 12 + `nexus-app` 51（含 5 个需 API Key 的用例跳过）= **82 通过 / 0 失败**。
+真实 MySQL 上：Flyway V1–V4 全部 `success=1`，`kb_*` 三张表与唯一键 `uk_doc_kb_path` 就位，
+建库接口落库记录中 `embedding_provider=ollama / embedding_model=bge-m3 / embedding_dim=1024 / chunk_size=600`。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）

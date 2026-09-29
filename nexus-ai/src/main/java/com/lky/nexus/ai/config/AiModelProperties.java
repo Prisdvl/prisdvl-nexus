@@ -1,5 +1,6 @@
 package com.lky.nexus.ai.config;
 
+import com.lky.nexus.ai.model.ModelRef;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -8,6 +9,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 模型配置（{@code ai.*}），模型可替换层的唯一配置入口（ADR-003）。
@@ -101,6 +103,14 @@ public class AiModelProperties {
         private String name;
         /** 上下文窗口（token），供上下文裁剪与观测使用。 */
         private Integer contextWindow;
+        /**
+         * 嵌入维度（仅嵌入模型需要）。
+         *
+         * <p>它必须在知识库创建时被**冻结**（ADR-008）：向量库的列宽、HNSW 索引上限
+         * 都依赖这个数字，中途改维度会让已入库的向量全部失效——而且不会报错，
+         * 只会表现得"检索结果莫名其妙"。
+         */
+        private Integer dimensions;
         /** 能力标签，决定该模型能否承担某类角色。 */
         private List<ModelCapability> capabilities = new ArrayList<>();
 
@@ -118,6 +128,23 @@ public class AiModelProperties {
         OPENAI_COMPATIBLE,
         /** Ollama 原生协议（/api/chat），用于本地模型与嵌入。 */
         OLLAMA
+    }
+
+    /** 按名字查供应商。 */
+    public Optional<Provider> findProvider(String name) {
+        return providers.stream().filter(provider -> name.equals(provider.getName())).findFirst();
+    }
+
+    /**
+     * 按 {@code provider:model} 引用查模型条目。
+     *
+     * <p>知识库创建时用它把 {@code embedding.default} 角色解析成具体模型名与维度并冻结（ADR-008）。
+     */
+    public Optional<ModelEntry> findModel(ModelRef ref) {
+        return findProvider(ref.provider())
+                .flatMap(provider -> provider.getModels().stream()
+                        .filter(entry -> ref.model().equals(entry.getName()))
+                        .findFirst());
     }
 
     /** 模型能力标签。 */

@@ -29,6 +29,12 @@
             <groupId>com.lky.nexus</groupId>
             <artifactId>nexus-common</artifactId>
         </dependency>
+        <!-- 知识域要用到模型配置：建库时要解析 embedding.default 角色并冻结维度（ADR-008），
+             Phase 3 的嵌入与重排也在这里。依赖方向保持单向：common <- ai <- knowledge <- app -->
+        <dependency>
+            <groupId>com.lky.nexus</groupId>
+            <artifactId>nexus-ai</artifactId>
+        </dependency>
 
         <!-- Spring 容器与 Boot 基础设施（配置绑定、@Service 等） -->
         <dependency>
@@ -44,6 +50,20 @@
         <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser</artifactId>
+        </dependency>
+
+        <!-- YAML 解析：用于 Markdown frontmatter。
+             解析器刻意手写（而不是引入 CommonMark 等渲染库），
+             因为我们要的不是 HTML，而是"忠实提取结构 + 字符偏移"：
+             frontmatter / 标题层级 / WikiLink / 代码块边界 / 图片引用。
+             渲染库会把 WikiLink 这类 Obsidian 语法当普通文本消化掉。 -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
         </dependency>
 
         <dependency>

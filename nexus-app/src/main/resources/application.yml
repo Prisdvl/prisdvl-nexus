@@ -113,6 +113,10 @@ ai:
           context-window: 32768
           capabilities: [CHAT, TOOL_CALLING]
         - name: bge-m3
+          # 嵌入维度必须声明：知识库创建时要把它冻结进 kb_knowledge_base（ADR-008）。
+          # 缺失时建库会直接报 4006 —— 这是刻意的"提前失败"，
+          # 避免一批维度不一致的向量悄悄入库（那种错误不会报错，只会让检索结果莫名其妙）。
+          dimensions: 1024
           capabilities: [EMBEDDING]
   roles:
     chat.default: "opencode:${AI_CHAT_MODEL:deepseek-v4-flash}"

@@ -98,3 +98,71 @@ CREATE INDEX IF NOT EXISTS SPRING_AI_CHAT_MEMORY_CONVERSATION_ID_TIMESTAMP_IDX
 
 CREATE INDEX IF NOT EXISTS SPRING_AI_CHAT_MEMORY_CONVERSATION_ID_SEQUENCE_ID_IDX
     ON SPRING_AI_CHAT_MEMORY (conversation_id, sequence_id);
+
+-- ---------- 知识库与文档（Phase 2）----------
+-- 与 Flyway V4 保持语义一致（H2 无 ENGINE/COLLATE/ON UPDATE，故各自书写）
+CREATE TABLE IF NOT EXISTS kb_knowledge_base (
+    id                 BIGINT       NOT NULL PRIMARY KEY,
+    user_id            BIGINT       NOT NULL,
+    name               VARCHAR(128) NOT NULL,
+    description        VARCHAR(512),
+    source_type        VARCHAR(16)  NOT NULL DEFAULT 'MANUAL',
+    embedding_provider VARCHAR(32)  NOT NULL,
+    embedding_model    VARCHAR(64)  NOT NULL,
+    embedding_dim      INT          NOT NULL,
+    chunk_strategy     VARCHAR(32)  NOT NULL DEFAULT 'MARKDOWN_HEADING',
+    chunk_size         INT          NOT NULL DEFAULT 400,
+    chunk_overlap      INT          NOT NULL DEFAULT 50,
+    doc_count          INT          NOT NULL DEFAULT 0,
+    chunk_count        INT          NOT NULL DEFAULT 0,
+    total_tokens       BIGINT       NOT NULL DEFAULT 0,
+    created_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted            TINYINT      NOT NULL DEFAULT 0,
+    CONSTRAINT uk_kb_user_name UNIQUE (user_id, name, deleted)
+);
+
+CREATE TABLE IF NOT EXISTS kb_document (
+    id             BIGINT        NOT NULL PRIMARY KEY,
+    kb_id          BIGINT        NOT NULL,
+    user_id        BIGINT        NOT NULL,
+    file_name      VARCHAR(512)  NOT NULL,
+    file_ext       VARCHAR(16)   NOT NULL,
+    source_type    VARCHAR(16)   NOT NULL,
+    source_path    VARCHAR(512)  NOT NULL,
+    folder         VARCHAR(512),
+    title          VARCHAR(512),
+    file_size      BIGINT        NOT NULL DEFAULT 0,
+    file_hash      VARCHAR(64)   NOT NULL,
+    content_hash   VARCHAR(64),
+    frontmatter    VARCHAR(8000),
+    tags           VARCHAR(4000),
+    heading_tree   VARCHAR(8000),
+    doc_created_at TIMESTAMP,
+    doc_updated_at TIMESTAMP,
+    status         VARCHAR(16)   NOT NULL DEFAULT 'PENDING',
+    error_msg      VARCHAR(2000),
+    chunk_count    INT           NOT NULL DEFAULT 0,
+    token_count    INT           NOT NULL DEFAULT 0,
+    version        INT           NOT NULL DEFAULT 1,
+    indexed_at     TIMESTAMP,
+    created_at     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted        TINYINT       NOT NULL DEFAULT 0,
+    CONSTRAINT uk_doc_kb_path UNIQUE (kb_id, source_path, deleted)
+);
+
+CREATE INDEX IF NOT EXISTS idx_doc_kb_status ON kb_document (kb_id, status, deleted);
+CREATE INDEX IF NOT EXISTS idx_doc_kb_folder ON kb_document (kb_id, folder, deleted);
+CREATE INDEX IF NOT EXISTS idx_doc_kb_hash ON kb_document (kb_id, file_hash);
+
+CREATE TABLE IF NOT EXISTS kb_document_tag (
+    id          BIGINT       NOT NULL PRIMARY KEY,
+    kb_id       BIGINT       NOT NULL,
+    document_id BIGINT       NOT NULL,
+    tag         VARCHAR(128) NOT NULL,
+    tag_source  VARCHAR(16)  NOT NULL,
+    CONSTRAINT uk_doc_tag UNIQUE (document_id, tag)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tag_kb ON kb_document_tag (kb_id, tag);
