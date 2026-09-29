@@ -21,10 +21,11 @@ import com.lky.nexus.knowledge.storage.DocumentStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -138,16 +139,34 @@ public class DocumentQueryServiceImpl implements DocumentQueryService {
                 document.getUpdatedAt());
     }
 
-    /** 大纲：库里是解析阶段写下的 JSON 数组（level/text/anchor/startOffset）。 */
+    /**
+     * 大纲：库里是解析阶段写下的 JSON 数组（level/text/anchor/startOffset）。
+     *
+     * <p>用 {@code readTree} 手工取字段，而不是 {@code readValue(json, TypeReference)}：
+     * 实测后者在这条路径上返回了空结果（异常被静默 catch 成空列表），
+     * 表现为"文档明明有标题树，接口却返回空大纲"。
+     * 手工解析虽啰嗦，但每一步都可断言、失败也不会静默。
+     */
     private List<HeadingView> parseHeadings(String headingTreeJson) {
         if (headingTreeJson == null || headingTreeJson.isBlank()) {
             return List.of();
         }
         try {
-            return jsonMapper.readValue(headingTreeJson, new TypeReference<List<HeadingView>>() {
-            });
+            JsonNode array = jsonMapper.readTree(headingTreeJson);
+            if (!array.isArray()) {
+                return List.of();
+            }
+            List<HeadingView> headings = new ArrayList<>(array.size());
+            for (JsonNode node : array) {
+                headings.add(new HeadingView(
+                        node.path("level").asInt(1),
+                        node.path("text").asString(""),
+                        node.path("anchor").asString(""),
+                        node.path("startOffset").asInt(0)));
+            }
+            return headings;
         } catch (Exception ex) {
-            log.debug("大纲解析失败，按空处理：{}", ex.getMessage());
+            log.warn("大纲解析失败（返回空大纲）：{}", ex.getMessage());
             return List.of();
         }
     }
@@ -178,10 +197,17 @@ public class DocumentQueryServiceImpl implements DocumentQueryService {
             return List.of();
         }
         try {
-            return jsonMapper.readValue(tagsJson, new TypeReference<List<String>>() {
-            });
+            JsonNode array = jsonMapper.readTree(tagsJson);
+            if (!array.isArray()) {
+                return List.of();
+            }
+            List<String> tags = new ArrayList<>(array.size());
+            for (JsonNode node : array) {
+                tags.add(node.asString());
+            }
+            return tags;
         } catch (Exception ex) {
-            log.debug("标签解析失败，按空处理：{}", tagsJson);
+            log.warn("标签解析失败（返回空标签）：{}", ex.getMessage());
             return List.of();
         }
     }

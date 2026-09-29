@@ -66,6 +66,13 @@ class DocumentQueryTest {
         String listJson = JsonPath.read(body, "$.data.list").toString();
         assertThat(listJson).contains("java", "springboot", "jvm");
 
+        // 诊断：区分"写入时没存"与"读取时没解析"——直接看数据库行
+        DocumentPO stored = documentMapper.selectList(Wrappers.<DocumentPO>lambdaQuery()
+                .eq(DocumentPO::getKbId, kbId)).get(0);
+        assertThat(stored.getTags())
+                .as("数据库里的 tags 应为 JSON 数组（若为空说明写入侧丢了标签）")
+                .isNotNull();
+
         Long documentId = Long.valueOf(JsonPath.read(body, "$.data.list[0].id").toString());
 
         mockMvc.perform(get("/api/knowledge-bases/" + kbId + "/documents/" + documentId + "/chunks")
