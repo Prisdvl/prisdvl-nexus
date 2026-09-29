@@ -106,13 +106,21 @@ public class AiModelRegistry {
     private ChatModel buildOpenAiCompatibleChatModel(AiModelProperties properties,
                                                      AiModelProperties.Provider provider,
                                                      AiModelProperties.ModelEntry entry) {
-        OpenAiChatOptions options = OpenAiChatOptions.builder()
+        OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder()
                 .baseUrl(provider.getBaseUrl())
                 .apiKey(provider.getApiKey())
                 .model(entry.getName())
-                .temperature(properties.getDefaults().getTemperature())
-                .build();
-        return OpenAiChatModel.builder().options(options).build();
+                .temperature(properties.getDefaults().getTemperature());
+
+        if (properties.getDefaults().getMaxTokens() != null) {
+            optionsBuilder.maxTokens(properties.getDefaults().getMaxTokens());
+        }
+        // 网关要求的附加请求头（例如 OpenCode Zen 的 x-opencode-session 与自定义 User-Agent）
+        if (provider.getHeaders() != null && !provider.getHeaders().isEmpty()) {
+            optionsBuilder.customHeaders(provider.getHeaders());
+        }
+
+        return OpenAiChatModel.builder().options(optionsBuilder.build()).build();
     }
 
     /** Ollama 原生协议：模型名可带冒号（如 {@code qwen3:7b}），base-url 由 {@link OllamaApi} 承载。 */

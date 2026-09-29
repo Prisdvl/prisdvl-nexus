@@ -264,6 +264,28 @@
 
 ---
 
+## ADR-019 网关特有的请求要求一律收敛到配置（额外头 / 会话标识 / 协议端点）
+
+**背景**：接入真实网关（OpenCode Zen）时发现，所谓"OpenAI 兼容"并不等于"只兼容路径"：
+缺 `x-opencode-session` 直接 400；官方还要求客户端使用自有 User-Agent。
+更麻烦的是同一网关内不同模型走**不同协议端点**（`/chat/completions`、`/responses`、`/messages`）。
+
+**决策**
+1. `ai.providers[].headers` 支持任意附加请求头，经 `OpenAiChatOptions.customHeaders(Map)` 下发；
+   业务代码与注册表逻辑完全不感知具体网关。
+2. 会话标识（如 `x-opencode-session`）同样走配置，为 Phase 1.6 的"按会话注入"预留：
+   届时用 per-request options 把 `conversationId` 映射成 session id，从而吃到网关的 prompt 缓存。
+3. **协议差异显式记录在配置注释与本文档中**：选模型时必须先确认它属于哪种协议；
+   若选到 Anthropic 协议的模型（如 qwen3.8 / minimax），要换 Spring AI 的 Anthropic 接入模块。
+4. 不把 `max_tokens` 当作成本控制手段（实测传入后被忽略），成本控制交给 Phase 10 的用量看板。
+
+**理由**：把"某个网关的特殊规矩"写进 Java 代码，等于把可替换性重新钉死。
+配置化之后，换网关只是改几行 yaml；出问题时（400/401）日志里也能直接看出是哪个头没发。
+
+**代价**：配置项变多，且头名称是字符串（无编译期检查）→ 用 `LiveModelCallTest` 这类真实调用测试兜底。
+
+---
+
 ## Appendix A. 版本与 API 核对结果（2026-09-24）
 
 > 规则：**不确定的一律不写进代码**。下表 `✅ 已核对` 项可直接使用；`⚠️ 待核对` 项在动手前必须现场验证（Phase 0 Step 0.3）。
@@ -469,6 +491,30 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 
 **测试总览（Step 1.2）**：`prisma-common` 10 + `prisma-ai` 9 + `prisma-app` 22 = **41 通过 / 0 失败**。
 
+### B.11 Step 1.3 真实模型调用实测记录（2026-09-29）
+
+首次让项目真正与大模型对话，全程走 `ChatClientFactory` 的逻辑角色（而非直连 SDK）。
+
+| 项 | 实测值 |
+| --- | --- |
+| 网关 / 模型 | OpenCode Zen `https://opencode.ai/zen/go/v1` → `opencode:deepseek-v4-flash` |
+| 非流式调用 | content=`收到指令`；prompt=91，completion=13，**total=104**（访问器计算正确），latency=**1624ms** |
+| 流式调用 | 分片数 > 0，拼接内容非空，首 Token 延迟 ≤ 总耗时（断言通过） |
+| Token 用量访问器 | ✅ 运行时验证（此前只从 `Usage.java` 源码读出） |
+| 附加请求头是否真的下发 | ✅ 未下发时网关会返回 400 MissingSessionID，实测通过 |
+| 测试守卫 | ✅ 未配置 `AI_CHAT_API_KEY` 时自动跳过（`@EnabledIfEnvironmentVariable`），CI 与无网环境不失败、不消耗 Token |
+
+**测试总览（Step 1.3）**：`prisma-common` 10 + `prisma-ai` 9 + `prisma-app` 24 = **43 通过 / 0 失败 / 0 跳过**。
+
+**顺带修掉一个工程问题**：测试日志里的中文一直是乱码，排查后发现是两处叠加：
+
+1. Java 19 起决定 stdout 编码的是 `stdout.encoding`（**不是** `file.encoding`），中文 Windows 上默认 GBK；
+2. 用管道捕获子进程输出时，PowerShell 5.1 会按 OEM 代码页解码，于是 UTF-8 字节被当 GBK 读。
+
+工程上的正确修法是**显式声明**而不是依赖默认值：surefire 增加
+`-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8`，应用侧设置 `logging.charset.console: UTF-8`。
+（终端本身也需为 UTF-8：Windows Terminal 默认即是，旧 conhost 需先 `chcp 65001`。）
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
@@ -612,3 +658,31 @@ At least one credential source must be specified: credential (apiKey), workloadI
 | Ollama 对话模型 | `OllamaChatModel.builder().ollamaApi(OllamaApi).options(OllamaChatOptions).build()` |
 | Ollama API | `OllamaApi.builder().baseUrl(String).build()` |
 | ChatClient | `ChatClient.builder(ChatModel).defaultSystem(...).defaultAdvisors(...).defaultTools(...).build()` |
+
+### D.10 接入真实网关时的三个"兼容性陷阱"（2026-09-29 实测）
+
+以 OpenCode Zen（`https://opencode.ai/zen/go/v1`）为例——它是标准 OpenAI 兼容网关，但仍有三点必须处理：
+
+1. **要求额外请求头**。缺少时直接 400：
+   ```json
+   {"type":"error","error":{"type":"MissingSessionID",
+    "message":"Request is missing x-opencode-session and cannot be routed efficiently."}}
+   ```
+   官方要求：客户端"用自己的 User-Agent 标识自己，而不是通用 SDK / HTTP 库的名字"，
+   并且"为每个会话发送稳定的 `x-opencode-session`"（用于路由优化与 prompt 缓存）。
+   → 已为 provider 增加 `headers` 配置，经 `customHeaders(Map)` 下发（ADR-019）。
+
+2. **同一网关内不同模型走不同协议端点**（官方 Endpoints 表）：
+
+   | 端点 | 协议 | 代表模型 |
+   | --- | --- | --- |
+   | `/chat/completions` | OpenAI 兼容 | `deepseek-v4-flash`、`glm-5.3`、`kimi-k2.6`、`longcat-2.0`、`mimo-v2.6-flash` |
+   | `/responses` | OpenAI Responses API | `grok-4.7`、`gpt-6-luna`、`muse-spark-*` |
+   | `/messages` | **Anthropic 协议** | `qwen3.8-flash`、`qwen3.8-max`、`minimax-m3` |
+
+   → 选模型前必须先确认协议。选到 Anthropic 协议的模型，就要换成 Spring AI 的 Anthropic 接入模块，
+   而不是我们当前的 OpenAI 兼容模块。**这正是"模型可替换"必须连协议一起抽象的原因。**
+
+3. **`max_tokens` 可能不生效**。实测传 `max_tokens=32` 却返回了 684 个 completion token
+   （推测是推理型模型的隐藏思考 token 计入）。结论：**不能把 max_tokens 当成本控制手段**，
+   成本控制要靠 Phase 10 的使用量看板与配额。

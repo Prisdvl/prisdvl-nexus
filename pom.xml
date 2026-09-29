@@ -115,6 +115,10 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <configuration>
                         <skipTests>${skipUnitTests}</skipTests>
+                        <!-- 让「被 fork 出来的测试 JVM」用 UTF-8 输出到控制台。
+                             Java 19 起决定 stdout 编码的是 stdout.encoding（不是 file.encoding），
+                             中文 Windows 上默认是 GBK，会导致测试日志里的中文变成乱码。 -->
+                        <argLine>-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -Dfile.encoding=UTF-8</argLine>
                     </configuration>
                 </plugin>
             </plugins>

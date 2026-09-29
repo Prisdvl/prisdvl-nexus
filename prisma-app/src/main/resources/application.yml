@@ -61,15 +61,33 @@ ai:
   defaults:
     temperature: 0.7
   providers:
-    # OpenAI 兼容协议：DeepSeek / 阿里云百炼兼容模式 / 智谱 / SiliconFlow / vLLM 都是改 base-url 即可
-    - name: deepseek
+    # 当前接入 OpenCode Zen（OpenAI 兼容网关）。换供应商只需改 base-url 与 model，
+    # 例如 DeepSeek 官方：base-url=https://api.deepseek.com + model=deepseek-chat。
+    #
+    # 重要：同一个网关内不同模型可能走不同协议端点（官方文档 "Endpoints" 表）：
+    #   /chat/completions → OpenAI 兼容（GLM / Kimi / DeepSeek / MiMo / Hy3 …）
+    #   /responses        → OpenAI Responses API（Grok / GPT-Luna / Muse Spark）
+    #   /messages         → Anthropic 协议（Qwen3.8 / MiniMax）
+    # 选模型不能只看效果，必须确认它属于哪种协议，否则要换 Spring AI 的 Anthropic 接入模块。
+    - name: opencode
       type: OPENAI_COMPATIBLE
-      base-url: ${AI_CHAT_BASE_URL:https://api.deepseek.com}
+      base-url: ${AI_CHAT_BASE_URL:https://opencode.ai/zen/go/v1}
       api-key: ${AI_CHAT_API_KEY:}
+      # 该网关的两条额外要求（官方文档 "Where can I use it?"）：
+      #   1) 客户端用自己的 User-Agent 标识自己，而不是通用 SDK / HTTP 库的名字；
+      #   2) 每个会话发送稳定的 x-opencode-session，用于路由优化与 prompt 缓存。
+      # 其它网关也在这里加各自的头（OpenRouter 的 HTTP-Referer、Azure 的 api-version）。
+      headers:
+        User-Agent: ${AI_CHAT_USER_AGENT:prisma-knowledge-hub/0.1}
+        x-opencode-session: ${AI_CHAT_SESSION_ID:prisma-local-session}
       models:
-        - name: ${AI_CHAT_MODEL:deepseek-chat}
+        - name: ${AI_CHAT_MODEL:deepseek-v4-flash}
           context-window: 65536
           capabilities: [CHAT, TOOL_CALLING, JSON]
+        # 评测裁判用另一家的模型：既省钱，又降低"自己评自己"的偏好偏差（Phase 9）
+        - name: ${AI_JUDGE_MODEL:glm-5.3-flash}
+          context-window: 65536
+          capabilities: [CHAT, JSON]
     # 本地 Ollama：嵌入模型（bge-m3，1024 维）在 Phase 3 使用；这里同时预留一个本地对话模型
     - name: ollama
       type: OLLAMA
@@ -81,9 +99,9 @@ ai:
         - name: bge-m3
           capabilities: [EMBEDDING]
   roles:
-    chat.default: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"
-    chat.agent: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"
-    chat.judge: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"
+    chat.default: "opencode:${AI_CHAT_MODEL:deepseek-v4-flash}"
+    chat.agent: "opencode:${AI_CHAT_MODEL:deepseek-v4-flash}"
+    chat.judge: "opencode:${AI_JUDGE_MODEL:glm-5.3-flash}"
     embedding.default: "ollama:bge-m3"
 
 logging:
@@ -91,6 +109,13 @@ logging:
   # 排查问题时只需用户提供响应头 X-Request-Id，即可捞出该请求的全部日志
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{requestId:-no-request}] %logger{40} - %msg%n"
+  charset:
+    # 显式声明编码，不依赖 JVM 默认值：
+    # Java 19 起决定 stdout 编码的是 stdout.encoding（中文 Windows 默认 GBK），
+    # 而不是 file.encoding，因此中文日志容易变成乱码。
+    # 注意：终端也需要是 UTF-8（Windows Terminal 默认即是；旧 conhost 需先 chcp 65001）。
+    console: UTF-8
+    file: UTF-8
   level:
     root: INFO
     com.lky.prisma: DEBUG

@@ -48,7 +48,7 @@ class AiModelWiringTest {
     @Test
     @DisplayName("配置绑定生效：注册表按 ai.providers 构建出模型")
     void registryIsBuiltFromConfiguration() {
-        assertThat(aiModelRegistry.registeredChatModels()).contains("deepseek:deepseek-chat");
+        assertThat(aiModelRegistry.registeredChatModels()).contains("opencode:deepseek-v4-flash");
     }
 
     @Test

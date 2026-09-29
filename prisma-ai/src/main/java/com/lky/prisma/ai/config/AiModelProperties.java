@@ -78,6 +78,19 @@ public class AiModelProperties {
         private String baseUrl;
         /** API Key；Ollama 本地服务留空。 */
         private String apiKey;
+        /**
+         * 附加请求头（随每次调用发送）。
+         *
+         * <p>为什么需要它：很多"OpenAI 兼容"网关并非只兼容路径，还要求额外的头。真实例子：
+         * <ul>
+         *   <li>OpenCode Zen：要求 {@code x-opencode-session}（会话路由与 prompt 缓存）
+         *       与自定义 {@code User-Agent}；</li>
+         *   <li>OpenRouter：要求 {@code HTTP-Referer} / {@code X-Title}；</li>
+         *   <li>Azure OpenAI：要求 {@code api-version}。</li>
+         * </ul>
+         * 把这类差异收敛进配置，业务代码与注册表逻辑都不需要感知具体网关。
+         */
+        private Map<String, String> headers = new LinkedHashMap<>();
         private List<ModelEntry> models = new ArrayList<>();
     }
 

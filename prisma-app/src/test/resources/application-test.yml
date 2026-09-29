@@ -31,14 +31,17 @@ ai:
   defaults:
     temperature: 0.7
   providers:
-    - name: deepseek
+    - name: opencode
       type: OPENAI_COMPATIBLE
       # 支持用环境变量切供应商：AI_CHAT_BASE_URL / AI_CHAT_MODEL / AI_CHAT_API_KEY
       # 未设置时用假 Key（构建模型不发请求，所以测试照常通过；真实调用由 LiveModelCallTest 守卫）
-      base-url: ${AI_CHAT_BASE_URL:https://api.deepseek.com}
+      base-url: ${AI_CHAT_BASE_URL:https://opencode.ai/zen/go/v1}
       api-key: ${AI_CHAT_API_KEY:sk-test-dummy-key-not-a-real-credential-0123456789}
+      headers:
+        User-Agent: ${AI_CHAT_USER_AGENT:prisma-knowledge-hub/0.1}
+        x-opencode-session: ${AI_CHAT_SESSION_ID:prisma-test-session}
       models:
-        - name: ${AI_CHAT_MODEL:deepseek-chat}
+        - name: ${AI_CHAT_MODEL:deepseek-v4-flash}
           context-window: 65536
           capabilities: [CHAT, TOOL_CALLING, JSON]
 
