@@ -31,6 +31,7 @@
 
     <modules>
         <module>akh-common</module>
+        <module>akh-ai</module>
         <module>akh-knowledge</module>
         <module>akh-app</module>
         <!-- Phase 7 加入：<module>akh-mcp-server</module> -->
@@ -74,6 +75,11 @@
             <dependency>
                 <groupId>com.lky.akh</groupId>
                 <artifactId>akh-knowledge</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.lky.akh</groupId>
+                <artifactId>akh-ai</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

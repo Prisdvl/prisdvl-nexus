@@ -24,6 +24,24 @@ akh:
     issuer: ai-knowledge-hub-test
     access-token-ttl: 30m
 
+# 测试用模型配置：
+# 覆盖 providers 列表（Spring Boot 中 profile 的 list 会整体替换，不是合并），
+# 用一个明显是假值的 api-key，让注册表能够构建模型对象（构建不发起网络请求）。
+ai:
+  defaults:
+    temperature: 0.7
+  providers:
+    - name: deepseek
+      type: OPENAI_COMPATIBLE
+      # 支持用环境变量切供应商：AI_CHAT_BASE_URL / AI_CHAT_MODEL / AI_CHAT_API_KEY
+      # 未设置时用假 Key（构建模型不发请求，所以测试照常通过；真实调用由 LiveModelCallTest 守卫）
+      base-url: ${AI_CHAT_BASE_URL:https://api.deepseek.com}
+      api-key: ${AI_CHAT_API_KEY:sk-test-dummy-key-not-a-real-credential-0123456789}
+      models:
+        - name: ${AI_CHAT_MODEL:deepseek-chat}
+          context-window: 65536
+          capabilities: [CHAT, TOOL_CALLING, JSON]
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true

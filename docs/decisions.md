@@ -454,6 +454,21 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 
 **测试总览（Step 1.1）**：`akh-common` 10 + `akh-app` 18 = **28 通过 / 0 失败**。
 
+### B.10 Step 1.2 实测验证记录（模型可替换层）
+
+| 验证项 | 结论 |
+| --- | --- |
+| `spring.ai.model.chat=none` 是否真能关掉自动配置 | ✅ `AiModelWiringTest` 断言"容器内 `ChatModel` bean 数为 0"通过 |
+| 仅关 `chat` 是否足够 | ⚠️ **不够**：`OpenAiAudioSpeechAutoConfiguration` 仍会因缺凭证让上下文启动失败（`At least one credential source must be specified`）→ 六个能力全部关闭，清单见 **D.9** |
+| 多 provider 配置绑定 | ✅ `deepseek:deepseek-chat` 被注册；Ollama 的 `qwen3:7b` 按第一个冒号解析、模型名不被截断 |
+| 逻辑角色 → ChatClient | ✅ `chat.default` / `chat.agent` / `chat.judge` / `embedding.default` 均可解析，同一引用共享同一实例（惰性缓存） |
+| 缺 API Key 的行为 | ✅ 该 provider 被跳过并打 WARN，用到对应角色时抛 4006（而不是拿空 Key 去请求、最后收到供应商晦涩的 401） |
+| 能力标签隔离 | ✅ 仅声明 `EMBEDDING` 的模型不会被注册成对话模型 |
+| builder 方法名 | ✅ 全部用 `javap` 从 2.0.1 的 jar 读出（见 D.9 表格），无一处凭记忆 |
+| 真实模型调用（Step 1.3） | ⏳ `LiveModelCallTest` 已就绪：设置 `AI_CHAT_API_KEY` 后运行，验证内容、**真实 Token 用量**与首 Token 延迟；未设置时自动跳过 |
+
+**测试总览（Step 1.2）**：`akh-common` 10 + `akh-ai` 9 + `akh-app` 22 = **41 通过 / 0 失败**。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
@@ -564,3 +579,36 @@ default Long getCacheWriteInputTokens();  // 2.0 新增
 - `FactCheckingEvaluator` 的确切 FQCN（推测 `org.springframework.ai.chat.evaluation`）
 - `@ToolParam` 的确切 FQCN（同 `org.springframework.ai.tool.annotation` 包）
 - Elasticsearch **Docker Hub 官方**镜像 tag 字符串（本项目用 `docker.elastic.co/...` 官方仓库，不受影响）
+
+### D.9 关闭模型自动配置的**完整**开关清单（实测补充，2026-09-29）
+
+ADR-003 要求关掉 Spring AI 的模型自动配置、由 `AiModelRegistry` 手工构建多 provider 模型。
+**只关 `chat` 是不够的**——实测启动报错：
+
+```
+Error creating bean with name 'openAiSdkAudioSpeechModel' defined in class path resource
+[org/springframework/ai/model/openai/autoconfigure/OpenAiAudioSpeechAutoConfiguration.class]:
+At least one credential source must be specified: credential (apiKey), workloadIdentity, or adminApiKey
+```
+
+完整清单（由 `spring-ai-autoconfigure-model-openai-2.0.1.jar` 中各 `AutoConfiguration` 的
+`@ConditionalOnProperty` 读出，六个都必须显式设为 `none`）：
+
+| 属性 | 对应自动配置类 |
+| --- | --- |
+| `spring.ai.model.chat` | `OpenAiChatAutoConfiguration` |
+| `spring.ai.model.embedding` | `OpenAiEmbeddingAutoConfiguration` |
+| `spring.ai.model.image` | `OpenAiImageAutoConfiguration` |
+| `spring.ai.model.audio.speech` | `OpenAiAudioSpeechAutoConfiguration` |
+| `spring.ai.model.audio.transcription` | `OpenAiAudioTranscriptionAutoConfiguration` |
+| `spring.ai.model.moderation` | `OpenAiModerationAutoConfiguration` |
+
+**builder 方法名核对结果**（用 `javap` 从 2.0.1 的 jar 直接读出，不凭记忆）：
+
+| 用途 | 确切签名 |
+| --- | --- |
+| OpenAI 兼容对话模型 | `OpenAiChatModel.builder().options(OpenAiChatOptions).build()` |
+| OpenAI 兼容选项 | `OpenAiChatOptions.builder().baseUrl(String).apiKey(String).model(String).temperature(Double).build()` |
+| Ollama 对话模型 | `OllamaChatModel.builder().ollamaApi(OllamaApi).options(OllamaChatOptions).build()` |
+| Ollama API | `OllamaApi.builder().baseUrl(String).build()` |
+| ChatClient | `ChatClient.builder(ChatModel).defaultSystem(...).defaultAdvisors(...).defaultTools(...).build()` |

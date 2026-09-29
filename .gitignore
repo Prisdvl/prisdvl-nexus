@@ -78,3 +78,7 @@ site/
 
 # ---- 构建日志 ----
 build.log
+
+# ---- 本地密钥（绝不入库）----
+.secrets/
+*.key.txt
