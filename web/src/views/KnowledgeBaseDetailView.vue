@@ -115,18 +115,19 @@ async function selectDocument(documentId: string) {
   const previousId = selectedId.value
   try {
     // 先把三份数据都拿到，再切换选中态。
-    // 之前的写法是"先改 selectedId 再拉数据"，任何一步失败就留下
-    // "左侧高亮已切、右侧还是旧文档"的不一致状态（截图里就是这么暴露的）。
-    const [doc, chunkList, linkList] = await Promise.all([
+    // 上一版我在这里把解构变量改名成 loadedDoc，却漏改了下方 renderMarkdown(doc.content)，
+    // 还凭空加了一行 doc.value —— 脚本里根本没有 doc 这个 ref，
+    // 于是整个 selectDocument 运行时直接抛 "doc is not defined"，页面打不开。
+    const [loadedDoc, chunkList, linkList] = await Promise.all([
       getDocument(kbId, documentId),
       listChunks(kbId, documentId),
       getDocumentLinks(kbId, documentId)
     ])
-    detail.value = doc
+    detail.value = loadedDoc
     chunks.value = chunkList
     links.value = linkList
     selectedId.value = documentId
-    renderedHtml.value = renderMarkdown(doc.content)
+    renderedHtml.value = renderMarkdown(loadedDoc.content)
     await nextTick()
     applyHeadingAnchors(articleRef.value)
     highlightWithin(articleRef.value)

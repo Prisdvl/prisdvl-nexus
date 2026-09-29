@@ -46,7 +46,10 @@ try {
 
   // 选中带链接的那篇（SpringBoot.md 出链到 [[JVM 笔记]] 与 [[SpringMVC]]）
   await page.locator('.docs li:has-text("SpringBoot")').click()
-  await page.waitForSelector('.links', { timeout: 15000 })
+  // 等待顶部标题栏与"待创建"引用真正出现——第一版脚本在这里有竞态：
+  // 切换还没完成就去读关联面板，读到的是上一篇文档的旧值，误判成"没有切换"
+  await page.waitForSelector('.doc-title:has-text("Spring Boot")', { timeout: 15000 })
+  await page.waitForSelector('.link-group li.unresolved', { timeout: 15000 })
   const linkSummary = (await page.locator('.links-head .num').innerText()).replace(/\s+/g, ' ').trim()
   const outlinks = await page.locator('.link-group li').count()
   console.log(`关联面板：${linkSummary}（条目 ${outlinks}）`)
