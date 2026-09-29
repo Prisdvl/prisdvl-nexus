@@ -62,16 +62,17 @@ class DocumentQueryTest {
                 .andExpect(jsonPath("$.data.total").value(2))
                 .andReturn().getResponse().getContentAsString();
 
-        // 标签以数组返回（库里存的是 JSON 字符串，解析是服务端的事）
-        String listJson = JsonPath.read(body, "$.data.list").toString();
-        assertThat(listJson).contains("java", "springboot", "jvm");
-
-        // 诊断：区分"写入时没存"与"读取时没解析"——直接看数据库行
+        // 诊断：区分"写入时没存"与"读取时没解析"——直接看数据库行（必须在响应断言之前执行）
         DocumentPO stored = documentMapper.selectList(Wrappers.<DocumentPO>lambdaQuery()
                 .eq(DocumentPO::getKbId, kbId)).get(0);
         assertThat(stored.getTags())
-                .as("数据库里的 tags 应为 JSON 数组（若为空说明写入侧丢了标签）")
+                .as("数据库里的 tags 应为 JSON 数组（若为 null 说明读取侧没取到该列）")
                 .isNotNull();
+        assertThat(stored.getHeadingTree()).as("数据库里的 heading_tree 不应为空").isNotNull();
+
+        // 标签以数组返回（库里存的是 JSON 字符串，解析是服务端的事）
+        String listJson = JsonPath.read(body, "$.data.list").toString();
+        assertThat(listJson).contains("java", "springboot", "jvm");
 
         Long documentId = Long.valueOf(JsonPath.read(body, "$.data.list[0].id").toString());
 
