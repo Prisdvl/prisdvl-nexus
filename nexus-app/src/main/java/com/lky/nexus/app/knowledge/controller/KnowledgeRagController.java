@@ -5,6 +5,7 @@ import com.lky.nexus.common.api.Result;
 import com.lky.nexus.knowledge.rag.RagAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswerService;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,9 +29,12 @@ public class KnowledgeRagController {
     private static final int MAX_TOP_K = 30;
 
     private final RagAnswerService ragAnswerService;
+    private final com.lky.nexus.app.knowledge.service.RagStreamService ragStreamService;
 
-    public KnowledgeRagController(RagAnswerService ragAnswerService) {
+    public KnowledgeRagController(RagAnswerService ragAnswerService,
+                                  com.lky.nexus.app.knowledge.service.RagStreamService ragStreamService) {
         this.ragAnswerService = ragAnswerService;
+        this.ragStreamService = ragStreamService;
     }
 
     /** 基于知识库回答问题，返回回答与引用。 */
@@ -61,6 +65,16 @@ public class KnowledgeRagController {
         }
         String flat = answer.replaceAll("\\s+", " ").trim();
         return flat.length() <= 300 ? flat : flat.substring(0, 300) + "…";
+    }
+
+    /** 流式问答（SSE）：事件顺序 meta → delta… → done（done 里带引用与留档 id）。 */
+    @PostMapping(value = "/{knowledgeBaseId}/ask/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public org.springframework.web.servlet.mvc.method.annotation.SseEmitter askStream(
+            @PathVariable Long knowledgeBaseId,
+            @RequestBody AskRequest request) {
+        int topK = request.topK() == null ? 12 : Math.clamp(request.topK(), 1, MAX_TOP_K);
+        return ragStreamService.stream(CurrentUser.requireId(), knowledgeBaseId,
+                request.question(), topK, toTurns(request.history()));
     }
 
     public record AskRequest(@NotBlank String question, Integer topK, List<HistoryTurn> history) {

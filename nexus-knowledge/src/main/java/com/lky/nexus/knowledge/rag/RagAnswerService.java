@@ -20,6 +20,28 @@ public interface RagAnswerService {
     List<RagAnswer> listHistory(Long userId, Long knowledgeBaseId, int limit);
 
     /**
+     * 准备阶段：检索 + 重排 + 上下文组装（同步与流式两条路径共用）。
+     *
+     * <p>流式回答必须先拿到资料块才能开始推流，因此这一半要能单独调用。
+     */
+    PreparedAnswer prepare(Long userId, Long knowledgeBaseId, String question, int topK, List<RagTurn> history);
+
+    /**
+     * 把一次问答留档（流式回答在结束后调用）。
+     *
+     * @param usedHits 资料块里的命中项（用于生成引用编号）
+     */
+    RagAnswer recordAnswer(Long userId, Long knowledgeBaseId, String question, String answer,
+                           List<com.lky.nexus.knowledge.service.ChunkSearchService.SearchHit> usedHits,
+                           int contextTokens, int truncated, boolean reranked, long costMillis);
+
+    /** 系统提示（同步与流式共用，保证两条路径的约束完全一致）。 */
+    String systemPrompt();
+
+    /** 用户消息（历史 + 资料 + 问题）。 */
+    String userMessage(String question, PreparedAnswer prepared, List<RagTurn> history);
+
+    /**
      * 一轮历史问答。
      *
      * @param answerSummary 上一轮回答的摘要（只取开头一段，避免把上下文撑爆）

@@ -139,8 +139,10 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         }
 
         // ④ 生成（带历史，支持省略主语的追问）
+        PreparedAnswer prepared = new PreparedAnswer(context.text(), context.used(), context.tokens(),
+                context.truncated(), reranked, false);
         long generateStart = System.currentTimeMillis();
-        String answer = generate(question, context.text(), history);
+        String answer = generate(question, prepared, history);
         long generateMs = System.currentTimeMillis() - generateStart;
 
         // ⑤ 引用归位：编号 ↔ 资料块顺序一致
@@ -185,7 +187,44 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         return ordered;
     }
 
-    private String generate(String question, String contextText, List<RagTurn> history) {
+    @Override
+    public PreparedAnswer prepare(Long userId, Long knowledgeBaseId, String question, int topK,
+                                  List<RagTurn> history) {
+        knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
+        if (question == null || question.isBlank()) {
+            return PreparedAnswer.none();
+        }
+        String retrievalQuery = buildRetrievalQuery(question, history);
+        List<ChunkSearchService.SearchHit> hits = chunkSearchService.search(
+                userId, knowledgeBaseId, retrievalQuery, topK, SearchMode.HYBRID);
+        if (hits.isEmpty()) {
+            return PreparedAnswer.none();
+        }
+        List<Double> scores = reranker.score(question, candidatesOf(headWithin(hits)));
+        boolean reranked = scores.size() == RERANK_CANDIDATES;
+        List<ChunkSearchService.SearchHit> ordered = reranked ? reorder(hits, scores) : hits;
+
+        ContextAssembler.AssembledContext context = contextAssembler.assemble(ordered, contextTokenBudget);
+        return new PreparedAnswer(context.text(), context.used(), context.tokens(),
+                context.truncated(), reranked, context.isEmpty());
+    }
+
+    @Override
+    public RagAnswer recordAnswer(Long userId, Long knowledgeBaseId, String question, String answer,
+                                  List<ChunkSearchService.SearchHit> usedHits, int contextTokens,
+                                  int truncated, boolean reranked, long costMillis) {
+        List<RagAnswer.RagCitation> citations = Citations.build(usedHits, answer);
+        return finish(answer, citations, contextTokens, truncated, reranked,
+                System.currentTimeMillis() - costMillis, knowledgeBaseId, userId, question);
+    }
+
+    @Override
+    public String systemPrompt() {
+        return SYSTEM_PROMPT;
+    }
+
+    @Override
+    public String userMessage(String question, PreparedAnswer prepared, List<RagTurn> history) {
         StringBuilder user = new StringBuilder();
         if (history != null && !history.isEmpty()) {
             user.append("【之前的问答（仅用于理解指代，不要重复回答）】\n");
@@ -197,13 +236,18 @@ public class RagAnswerServiceImpl implements RagAnswerService {
             }
             user.append('\n');
         }
-        user.append("【资料】\n").append(contextText).append("\n\n【问题】\n").append(question);
+        user.append("【资料】\n").append(prepared.contextText())
+                .append("\n\n【问题】\n").append(question);
+        return user.toString();
+    }
 
+    /** 生成（同步路径）。流式路径由 RagStreamService 复用同样的提示词与用户消息。 */
+    private String generate(String question, PreparedAnswer prepared, List<RagTurn> history) {
         try {
             ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_DEFAULT);
             return client.prompt()
-                    .system(SYSTEM_PROMPT)
-                    .user(user.toString())
+                    .system(systemPrompt())
+                    .user(userMessage(question, prepared, history))
                     .call()
                     .content();
         } catch (Exception ex) {
@@ -212,24 +256,9 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         }
     }
 
-    /** 把资料块里的片段转成引用项，并标出回答中真正引用到的编号。 */
+    /** 引用构建交给 Citations（同步与流式共用同一套编号规则）。 */
     private List<RagAnswer.RagCitation> toCitations(ContextAssembler.AssembledContext context, String answer) {
-        List<Integer> referencedIndexes = parseCitedIndexes(answer);
-        List<RagAnswer.RagCitation> citations = new ArrayList<>(context.used().size());
-        for (int i = 0; i < context.used().size(); i++) {
-            ChunkSearchService.SearchHit hit = context.used().get(i);
-            int index = i + 1;
-            citations.add(new RagAnswer.RagCitation(
-                    index,
-                    hit.chunkId(),
-                    hit.documentId(),
-                    hit.documentTitle(),
-                    hit.headingPath(),
-                    hit.content(),
-                    hit.score(),
-                    referencedIndexes.contains(index)));
-        }
-        return citations;
+        return Citations.build(context.used(), answer);
     }
 
     /** 解析回答里的 [n] 标记（支持 [1]、[1,2]、[1][2] 三种写法）。 */

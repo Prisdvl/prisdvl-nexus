@@ -118,8 +118,10 @@ nexus:
   rag:
     # LLM 重排开关：关掉后保持召回顺序（重排失败时也会自动走这条路径）
     rerank-enabled: ${NEXUS_RAG_RERANK:true}
-    # 重排超时：网关退化时（实测单次调用可能上百秒）宁可降级为召回顺序，也不让用户干等
-    rerank-timeout-ms: ${NEXUS_RAG_RERANK_TIMEOUT_MS:12000}
+    # 重排超时：网关退化时（实测单次调用可能上百秒）宁可降级为召回顺序，也不让用户干等。
+    # 5 秒的依据：实测重排一旦超过这个量级，等它的收益远小于等待成本
+    # （它只是把顺序调得更好一点，而用户面对的是"白等"）。
+    rerank-timeout-ms: ${NEXUS_RAG_RERANK_TIMEOUT_MS:5000}
     # 送进模型的资料块 Token 预算：超出时从最低分开始丢，并如实告知被截断的段数
     context-token-budget: ${NEXUS_RAG_CONTEXT_BUDGET:2000}
 
