@@ -38,7 +38,7 @@
 | 1.3 | 第一次真正的模型调用：`ChatClient` 同步 + 流式 | 控制台能打印流式输出 |
 | 1.4 | 会话与消息持久化（`chat_conversation` / `chat_message`）+ CRUD | ✅ **已完成**（6 用例全绿，含多租户隔离与分页生效断言；见 decisions.md B.12） |
 | 1.5 | ChatMemory：`MessageWindowChatMemory` + `JdbcChatMemoryRepository` 接入多轮对话 | ✅ **已完成**（真实调用验证"第二轮记住第一轮"；见 decisions.md B.13） |
-| 1.6 | SSE 流式接口（自定义事件协议）+ 停止生成 | 前端逐字显示；停止后服务端落库部分内容 |
+| 1.6 | SSE 流式接口（自定义事件协议）+ 停止生成 | ✅ **已完成**（真实 HTTP 逐行验证；停止后落库 STOPPED；见 decisions.md B.14） |
 | 1.7 | Conversation 与 Message 前端页面（Markdown 渲染 + 代码高亮） | 能真实对话 |
 | 1.8 | 测试：Controller 集成测试（含 SSE）+ Memory 窗口测试 | `mvn test` 通过 |
 | 1.9 | 文档与总结：`docs/observability.md` 初稿（埋点设计）、面试回答 | — |

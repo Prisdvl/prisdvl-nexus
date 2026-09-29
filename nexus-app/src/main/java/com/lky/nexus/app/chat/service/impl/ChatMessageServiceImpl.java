@@ -80,7 +80,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     @Transactional
     public ChatMessagePO appendAssistantMessage(Long userId, Long conversationId, AssistantReplyDraft draft) {
         ChatConversationPO conversation = conversationService.requireOwned(userId, conversationId);
-        if (!StringUtils.hasText(draft.content()) && !StringUtils.hasText(draft.errorMsg())) {
+        // 流式场景下先落一条 STREAMING 骨架（此时还没有内容），因此这种状态不校验内容非空
+        boolean streaming = MessageStatus.STREAMING.name().equals(draft.status());
+        if (!streaming && !StringUtils.hasText(draft.content()) && !StringUtils.hasText(draft.errorMsg())) {
             throw new BusinessException(ErrorCode.PARAM_INVALID, "助手消息既没有内容也没有错误信息");
         }
 
@@ -104,6 +106,56 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         messageMapper.insert(message);
 
         touchConversation(conversation, null);
+        return message;
+    }
+
+    @Override
+    @Transactional
+    public ChatMessagePO updateAssistantMessage(Long userId, Long messageId, AssistantReplyDraft draft) {
+        ChatMessagePO message = messageMapper.selectOne(Wrappers.<ChatMessagePO>lambdaQuery()
+                .eq(ChatMessagePO::getId, messageId)
+                .eq(ChatMessagePO::getUserId, userId));
+        if (message == null) {
+            throw new BusinessException(ErrorCode.MESSAGE_NOT_FOUND);
+        }
+        // 局部更新：只覆盖草稿里给了值的字段。
+        // 流式场景下第一次调用可能只有部分内容与状态，后续再补齐 Token / 延迟。
+        if (draft.content() != null) {
+            message.setContent(draft.content());
+        }
+        if (draft.model() != null) {
+            message.setModel(draft.model());
+        }
+        if (draft.provider() != null) {
+            message.setProvider(draft.provider());
+        }
+        if (draft.promptTokens() != null) {
+            message.setPromptTokens(draft.promptTokens());
+        }
+        if (draft.completionTokens() != null) {
+            message.setCompletionTokens(draft.completionTokens());
+        }
+        if (draft.totalTokens() != null) {
+            message.setTotalTokens(draft.totalTokens());
+        }
+        if (draft.latencyMs() != null) {
+            message.setLatencyMs(draft.latencyMs());
+        }
+        if (draft.firstTokenMs() != null) {
+            message.setFirstTokenMs(draft.firstTokenMs());
+        }
+        if (draft.finishReason() != null) {
+            message.setFinishReason(draft.finishReason());
+        }
+        if (draft.status() != null) {
+            message.setStatus(draft.status());
+        }
+        if (draft.errorMsg() != null) {
+            message.setErrorMsg(draft.errorMsg());
+        }
+        // 刻意不调用 touchConversation：这条消息在流开始时已经计入 messageCount，
+        // 否则"先插 STREAMING 再更新"会让计数翻倍。
+        messageMapper.updateById(message);
         return message;
     }
 

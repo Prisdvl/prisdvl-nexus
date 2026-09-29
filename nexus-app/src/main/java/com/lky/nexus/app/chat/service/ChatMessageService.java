@@ -17,6 +17,14 @@ public interface ChatMessageService {
     ChatMessagePO appendAssistantMessage(Long userId, Long conversationId, AssistantReplyDraft draft);
 
     /**
+     * 更新一条助手消息（流式生成过程中与结束时调用）。
+     *
+     * <p>与追加的区别：<b>不会</b>再次增加会话的 messageCount —— 那条消息在流开始时就已经计入。
+     * 若这里也自增，会话计数会随分片多次膨胀。
+     */
+    ChatMessagePO updateAssistantMessage(Long userId, Long messageId, AssistantReplyDraft draft);
+
+    /**
      * 分页查询某会话的消息。
      *
      * <p>按时间正序返回（最早在前）：聊天界面渲染需要这个顺序，

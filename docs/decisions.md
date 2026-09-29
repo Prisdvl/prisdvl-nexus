@@ -574,6 +574,28 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 
 **测试总览（Step 1.5）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-app` 35 = **54 通过 / 0 失败**。
 
+### B.14 Step 1.6 实测验证记录（SSE 流式与停止生成）
+
+| 验证项 | 结论 |
+| --- | --- |
+| SSE 事件顺序：`meta` → `delta`* → `usage` → `done` | ✅ |
+| 流式内容拼接与落库（`DONE`、内容非空、`latencyMs` 已写入） | ✅ |
+| **流式也能拿到 Token 用量**（Phase 10 的关键指标） | ✅ 实测 `prompt=94 / completion=76 / total=170`（=94+76）、`firstTokenMs=2269ms`、`latencyMs=2385ms`；共 12 个分片。**无需**额外开启 `streamUsage`，兼容网关默认就回传 usage |
+| **停止生成**：收到 3 个分片后调用停止接口 | ✅ 上游订阅被 `dispose()`（不是只关连接，否则 Token 继续烧）、部分内容以 `STOPPED` 落库、`done` 事件带 `"stopped":true` |
+| 先插 `STREAMING` 再更新不会让消息计数翻倍 | ✅ 一轮问答始终是 2 条消息 |
+| 未认证 → 401 / 空内容 → 400+1001 / 会话不存在或非本人 → 404+8001 | ✅ 错误走统一 JSON，**不会"开一条 SSE 再报错"** |
+| 越权停止他人的流 / 停止不存在的流 | ✅ 分别返回 `false`（越权被拒）与 `false`（幂等，不算错误） |
+
+**一个刻意的取舍**：停止信号目前是**单实例内存实现**
+（`InMemoryStreamCancellationRegistry`），因为 Redis 尚未接入（依赖 Docker，见 Step 0.4）。
+接口已抽出，将来加 Redis 实现可支持多实例部署，业务代码零改动。
+
+**已知未做（留待 Phase 11）**：SSE 心跳（每 15 秒注释行）与反向代理侧的
+`proxy_buffering off` / `proxy_read_timeout` 配套配置。当前只有 5 分钟的 emitter 超时，
+无反向代理时不影响使用。
+
+**测试总览（Step 1.6）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-app` 45 = **64 通过 / 0 失败**。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
