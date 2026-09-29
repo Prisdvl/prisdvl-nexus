@@ -1,4 +1,4 @@
-# 数据库设计（Prisma）
+# 数据库设计（Prisdvl-Nexus）
 
 > STEP 1 设计稿。核心表（Phase 0–3）为定稿设计；Phase 5–10 的表为**预留结构**，实现到对应阶段时再细化字段并出 Flyway 脚本。
 
@@ -239,7 +239,7 @@ CREATE TABLE kb_chunk (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
-> **为什么 `content_hash` 单独一列**：Embedding 是按内容计费的。相同内容（重复笔记片段、模板段落）在全局缓存里命中即可复用向量，见 Redis `prisma:embed:v1:{sha256}`。
+> **为什么 `content_hash` 单独一列**：Embedding 是按内容计费的。相同内容（重复笔记片段、模板段落）在全局缓存里命中即可复用向量，见 Redis `nexus:embed:v1:{sha256}`。
 
 ### 4.4 标签与关联
 
@@ -377,7 +377,7 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
 
 ## 11. Elasticsearch
 
-**索引（带版本号 + 别名，方便重建不中断）**：`prisma_chunk_v1` → 别名 `prisma_chunk`
+**索引（带版本号 + 别名，方便重建不中断）**：`nexus_chunk_v1` → 别名 `nexus_chunk`
 
 ```json
 {
@@ -386,8 +386,8 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
     "number_of_replicas": 0,
     "analysis": {
       "analyzer": {
-        "prisma_ik": { "type": "custom", "tokenizer": "ik_max_word", "filter": ["lowercase"] },
-        "prisma_ik_search": { "type": "custom", "tokenizer": "ik_smart", "filter": ["lowercase"] }
+        "nexus_ik": { "type": "custom", "tokenizer": "ik_max_word", "filter": ["lowercase"] },
+        "nexus_ik_search": { "type": "custom", "tokenizer": "ik_smart", "filter": ["lowercase"] }
       }
     }
   },
@@ -398,9 +398,9 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
       "kb_id":        { "type": "long" },
       "user_id":      { "type": "long" },
       "chunk_index":  { "type": "integer" },
-      "content":      { "type": "text", "analyzer": "prisma_ik", "search_analyzer": "prisma_ik_search" },
-      "title":        { "type": "text", "analyzer": "prisma_ik", "fields": { "raw": { "type": "keyword" } } },
-      "heading_path": { "type": "text", "analyzer": "prisma_ik" },
+      "content":      { "type": "text", "analyzer": "nexus_ik", "search_analyzer": "nexus_ik_search" },
+      "title":        { "type": "text", "analyzer": "nexus_ik", "fields": { "raw": { "type": "keyword" } } },
+      "heading_path": { "type": "text", "analyzer": "nexus_ik" },
       "tags":         { "type": "keyword" },
       "folder":       { "type": "keyword" },
       "source_path":  { "type": "keyword" },
@@ -422,17 +422,17 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
 
 | Key | 类型 | TTL | 用途 |
 | --- | --- | --- | --- |
-| `prisma:auth:refresh:{jti}` | String | 7d | Refresh Token 白名单/吊销 |
-| `prisma:auth:blacklist:{jti}` | String | 与 token 同寿命 | 主动登出 |
-| `prisma:sse:ticket:{ticket}` | String | 60s | SSE 一次性鉴权票据（EventSource/fetch 无法带 Header 的替代方案） |
-| `prisma:ratelimit:{scope}:{userId}` | String(计数) | 1m | 令牌桶/滑动窗口限流 |
-| `prisma:import:lock:{kbId}` | String | 30m | 同一知识库导入互斥（分布式锁） |
-| `prisma:import:progress:{taskId}` | Hash | 1d | 导入进度（与 DB 双写，前端读缓存更快） |
-| `prisma:embed:v1:{sha256(content)}` | String(JSON float[]) | 30d | **Embedding 缓存**：同内容不重复调用、不重复付费 |
-| `prisma:search:v1:{sha256(query+filters)}` | String(JSON) | 5m | 检索结果缓存（仅用于评测/幂等重放） |
-| `prisma:chat:window:{conversationId}` | List | 2h | 会话窗口热缓存（Memory 的加速层，非真源） |
-| `prisma:stream:cancel:{requestId}` | String | 10m | "停止生成"信号，流式循环每 chunk 检查 |
-| `prisma:agent:approval:{runId}` | Hash | 1h | 待人工确认的工具调用快照 |
+| `nexus:auth:refresh:{jti}` | String | 7d | Refresh Token 白名单/吊销 |
+| `nexus:auth:blacklist:{jti}` | String | 与 token 同寿命 | 主动登出 |
+| `nexus:sse:ticket:{ticket}` | String | 60s | SSE 一次性鉴权票据（EventSource/fetch 无法带 Header 的替代方案） |
+| `nexus:ratelimit:{scope}:{userId}` | String(计数) | 1m | 令牌桶/滑动窗口限流 |
+| `nexus:import:lock:{kbId}` | String | 30m | 同一知识库导入互斥（分布式锁） |
+| `nexus:import:progress:{taskId}` | Hash | 1d | 导入进度（与 DB 双写，前端读缓存更快） |
+| `nexus:embed:v1:{sha256(content)}` | String(JSON float[]) | 30d | **Embedding 缓存**：同内容不重复调用、不重复付费 |
+| `nexus:search:v1:{sha256(query+filters)}` | String(JSON) | 5m | 检索结果缓存（仅用于评测/幂等重放） |
+| `nexus:chat:window:{conversationId}` | List | 2h | 会话窗口热缓存（Memory 的加速层，非真源） |
+| `nexus:stream:cancel:{requestId}` | String | 10m | "停止生成"信号，流式循环每 chunk 检查 |
+| `nexus:agent:approval:{runId}` | Hash | 1h | 待人工确认的工具调用快照 |
 
 ---
 

@@ -9,11 +9,11 @@
 
 **背景**：功能域有 auth / chat / knowledge / rag / agent / tool / evaluation / observability 八个。需求明确第一版不要微服务化，但 Phase 7 需要一个**独立进程**的 MCP Server。
 
-**决策**：单仓库 Maven 多模块（`prisma-common` + `prisma-knowledge` + `prisma-app`，Phase 7 增加 `prisma-mcp-server`），业务按包分模块，部署仍是一个应用。
+**决策**：单仓库 Maven 多模块（`nexus-common` + `nexus-knowledge` + `nexus-app`，Phase 7 增加 `nexus-mcp-server`），业务按包分模块，部署仍是一个应用。
 
 **理由**
-1. MCP Server 必须是独立进程，且要复用知识检索逻辑 —— 如果全在一个模块里，只能靠"复制代码"或"把整个单体也打进 MCP Server"（会带上 Security/JWT/Chat 等无关依赖）。拆模块后 `prisma-mcp-server` 依赖 `prisma-knowledge` 即可，**拆服务成本≈0**。
-2. 模块边界由**编译器**保证，而不是靠代码评审时的自觉。`prisma-knowledge` 里根本 import 不到 `SecurityContextHolder`，租户隔离只能通过显式 `userId` 参数实现 —— 这恰好是未来拆服务必须的形态。
+1. MCP Server 必须是独立进程，且要复用知识检索逻辑 —— 如果全在一个模块里，只能靠"复制代码"或"把整个单体也打进 MCP Server"（会带上 Security/JWT/Chat 等无关依赖）。拆模块后 `nexus-mcp-server` 依赖 `nexus-knowledge` 即可，**拆服务成本≈0**。
+2. 模块边界由**编译器**保证，而不是靠代码评审时的自觉。`nexus-knowledge` 里根本 import 不到 `SecurityContextHolder`，租户隔离只能通过显式 `userId` 参数实现 —— 这恰好是未来拆服务必须的形态。
 3. 现在项目小，多模块的维护成本低；等 8 个域都写满了再拆，重构成本高得多。
 
 **代价**：每个模块都要单独 `mvn install`；IDE 里跨模块改动需要先安装依赖模块；不能像单模块那样随手 import。
@@ -97,11 +97,11 @@
 
 **背景**：混合检索需要 BM25。核对官方文档确认：Spring AI 2.0.1 的 Elasticsearch VectorStore **只支持 kNN 向量相似度**，没有任何 BM25 / 关键词 / 混合检索 API，其非向量路径只有 metadata 过滤。
 
-**决策**：`prisma-knowledge` 内自建 ES 索引（IK 分词、字段与向量 metadata 对齐）与查询（`multi_match` + `bool.filter`），用官方 `ElasticsearchClient`。
+**决策**：`nexus-knowledge` 内自建 ES 索引（IK 分词、字段与向量 metadata 对齐）与查询（`multi_match` + `bool.filter`），用官方 `ElasticsearchClient`。
 
 **理由**：需求要求真正的 BM25 与混合检索；用原生客户端才能控制分词器、字段权重、filter 下推与打分解释（面试可展示 `explain`）。
 
-**代价**：多一套客户端与索引映射维护；索引重建需要别名切换（`prisma_chunk_v1` → 别名 `prisma_chunk`）。
+**代价**：多一套客户端与索引映射维护；索引重建需要别名切换（`nexus_chunk_v1` → 别名 `nexus_chunk`）。
 
 **被否方案**：给 `spring-ai-elasticsearch-store` 提 issue 等官方支持（不可行）；用 ES 的向量检索替换 pgvector（则失去"pgvector 专项经验"，且与 ADR-002 冲突）。
 
@@ -214,7 +214,7 @@
 
 ## ADR-016 MCP Server 独立进程且第一版只读
 
-**决策**：`prisma-mcp-server` 独立 Spring Boot 进程（Streamable HTTP），只暴露 4 个只读工具，内部 API Key 鉴权。
+**决策**：`nexus-mcp-server` 独立 Spring Boot 进程（Streamable HTTP），只暴露 4 个只读工具，内部 API Key 鉴权。
 
 **理由**：体现 MCP 的本意（能力提供方与调用方解耦、可被任意 MCP 客户端复用）；只读能规避"外部客户端通过 MCP 改我的数据"的风险；写工具等到权限与确认机制成熟后再评估。
 
@@ -225,7 +225,7 @@
 **背景**：需要统一 `{code, message, data}` 返回体、统一异常处理与请求追踪；同时主键是 64 位雪花 ID。
 
 **决策**
-1. `Result<T>` / `PageResult<T>` 用 **Java 21 record** 实现，放在 **prisma-common**（零框架依赖，Jackson 2/3 都能序列化）；HTTP 状态码映射放在 Web 层 `ErrorCodeHttpStatusMapper`。
+1. `Result<T>` / `PageResult<T>` 用 **Java 21 record** 实现，放在 **nexus-common**（零框架依赖，Jackson 2/3 都能序列化）；HTTP 状态码映射放在 Web 层 `ErrorCodeHttpStatusMapper`。
 2. 错误码分段：`0` 成功 / `1xxx` 通用参数 / `2xxx` 认证授权 / `3xxx` 知识库文档 / **`4xxx` AI 模型与向量** / `5xxx` 工具与 Agent / `6xxx` 工作流与评测 / `7xxx` 限流 / `9999` 兜底。
 3. 业务码 → HTTP 状态码用 **switch 表达式穷举枚举**：将来给 `ErrorCode` 加常量却忘了映射，**编译就会失败**，而不是悄悄返回 500。
 4. 请求 ID 用 **MDC + `OncePerRequestFilter`**：上游 `X-Request-Id` 必须通过 `[A-Za-z0-9_-]{1,64}` 白名单校验后才透传（**防日志注入**），否则重新生成；响应头回写同一 ID，日志模板用 `%X{requestId}` 自动携带。
@@ -255,7 +255,7 @@
 4. **权限来自 Token 的 `roles` 声明**（`JwtAuthenticationConverter` + `ROLE_` 前缀）：无状态鉴权不在每个请求上查库。
 5. **不使用 `AuthenticationManager` / `UserDetailsService`**：手工 `passwordEncoder.matches()` 校验，语义更直接可控（那套机制的默认异常链与我们要的业务码语义冲突）。接入第三方 OAuth2 登录时再引入 `AuthenticationProvider`。
 6. **账号枚举防护**：用户不存在与密码错误返回**完全相同**的 2006 提示（已用测试断言两者 message 相等）；"账号被禁用"只在密码校验通过之后才提示。
-7. **密钥 fail-fast**：`prisma.jwt.secret` 不设默认值，缺失或不足 32 字节直接启动失败——避免开发期弱密钥被带进生产。
+7. **密钥 fail-fast**：`nexus.jwt.secret` 不设默认值，缺失或不足 32 字节直接启动失败——避免开发期弱密钥被带进生产。
 8. **userId 只从 JWT 的 `sub` 取**（`CurrentUser.requireId()`），任何接口都不得从请求参数接收 userId（水平越权的典型来源）。
 
 **代价 / 后续**
@@ -338,7 +338,7 @@
 | Java | ⚠️ 仅 JDK 17（`C:\Program Files\Java\jdk-17`）→ **需装 JDK 21** |
 | Docker | ⚠️ 客户端 29.5.2 / Compose v5.1.3 已装，**守护进程未启动** |
 | Node.js | ✅ v22.22.0 |
-| 工作目录 | `D:\develop\Prisma`（NTFS，属主 `LKY-PC\LKY`） |
+| 工作目录 | `D:\develop\Prisdvl-Nexus`（NTFS，属主 `LKY-PC\LKY`） |
 | 文件沙箱 | ✅ 已解除：会话切换为 `danger-full-access`，`pwsh` 可直接执行（此前 `SetNamedSecurityInfoW failed (Win32 5)` 的问题消失） |
 
 ---
@@ -428,7 +428,7 @@
 | **MyBatis-Plus 3.5.17 boot4-starter 在 Boot 4.1.1 + Java 21** | ✅ **可用（最大风险关闭）** | `MybatisPlusCompatibilityTest` 通过（1/1，0 失败） |
 | Flyway 12.4.0 的 `flyway-mysql` / `flyway-database-postgresql` 由 Boot 托管版本 | ✅ 无需手写版本 | 依赖解析成功 |
 
-MyBatis-Plus 实测 SQL 证据（来自 `prisma-app` 测试日志，一字未改）：
+MyBatis-Plus 实测 SQL 证据（来自 `nexus-app` 测试日志，一字未改）：
 
 ```sql
 -- 1) 雪花 ID 回填（IdType.ASSIGN_ID）
@@ -457,7 +457,7 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 | Boot 4 的 Web 测试模块拆分 | ⚠️ **踩坑记录** | `@AutoConfigureMockMvc` 已移到独立模块 `spring-boot-webmvc-test`，包名改为 `org.springframework.boot.webmvc.test.autoconfigure`，**不再随 `spring-boot-starter-test` 提供** |
 | Spring 7 废弃常量 | ⚠️ **踩坑记录** | `HttpStatus.PAYLOAD_TOO_LARGE → CONTENT_TOO_LARGE`、`UNPROCESSABLE_ENTITY → UNPROCESSABLE_CONTENT`；测试断言 `isPayloadTooLarge() → isContentTooLarge()` |
 
-**测试总览（`mvn -B clean test`）**：`prisma-common` 10 通过 / `prisma-app` 9 通过，**0 失败**。
+**测试总览（`mvn -B clean test`）**：`nexus-common` 10 通过 / `nexus-app` 9 通过，**0 失败**。
 
 ### B.9 Step 1.1 实测验证记录（认证与 JWT）
 
@@ -474,7 +474,7 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 | **真实 HTTP 冒烟**（真实 Tomcat + JDK 原生 `HttpClient`） | ✅ 日志出现 `Tomcat started on port 50388`；中文提示经真实 HTTP 编解码正确 |
 | 测试专用安全链隔离 | ✅ `@TestConfiguration` 嵌套类只放行 `/test-only/**`，不会进入生产 jar |
 
-**测试总览（Step 1.1）**：`prisma-common` 10 + `prisma-app` 18 = **28 通过 / 0 失败**。
+**测试总览（Step 1.1）**：`nexus-common` 10 + `nexus-app` 18 = **28 通过 / 0 失败**。
 
 ### B.10 Step 1.2 实测验证记录（模型可替换层）
 
@@ -489,7 +489,7 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 | builder 方法名 | ✅ 全部用 `javap` 从 2.0.1 的 jar 读出（见 D.9 表格），无一处凭记忆 |
 | 真实模型调用（Step 1.3） | ⏳ `LiveModelCallTest` 已就绪：设置 `AI_CHAT_API_KEY` 后运行，验证内容、**真实 Token 用量**与首 Token 延迟；未设置时自动跳过 |
 
-**测试总览（Step 1.2）**：`prisma-common` 10 + `prisma-ai` 9 + `prisma-app` 22 = **41 通过 / 0 失败**。
+**测试总览（Step 1.2）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-app` 22 = **41 通过 / 0 失败**。
 
 ### B.11 Step 1.3 真实模型调用实测记录（2026-09-29）
 
@@ -504,7 +504,7 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 | 附加请求头是否真的下发 | ✅ 未下发时网关会返回 400 MissingSessionID，实测通过 |
 | 测试守卫 | ✅ 未配置 `AI_CHAT_API_KEY` 时自动跳过（`@EnabledIfEnvironmentVariable`），CI 与无网环境不失败、不消耗 Token |
 
-**测试总览（Step 1.3）**：`prisma-common` 10 + `prisma-ai` 9 + `prisma-app` 24 = **43 通过 / 0 失败 / 0 跳过**。
+**测试总览（Step 1.3）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-app` 24 = **43 通过 / 0 失败 / 0 跳过**。
 
 **顺带修掉一个工程问题**：测试日志里的中文一直是乱码，排查后发现是两处叠加：
 
@@ -521,9 +521,9 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 
 | # | 决策项 | 结论 |
 | --- | --- | --- |
-| 1 | 模块结构 | **采用 Maven 多模块**（`prisma-common` / `prisma-knowledge` / `prisma-app`，Phase 7 加 `prisma-mcp-server`）→ ADR-001 生效 |
+| 1 | 模块结构 | **采用 Maven 多模块**（`nexus-common` / `nexus-knowledge` / `nexus-app`，Phase 7 加 `nexus-mcp-server`）→ ADR-001 生效 |
 | 2 | 默认模型方案 | **对话走云端 OpenAI-compatible API**（DeepSeek 起步，可换 Qwen/智谱）；**嵌入走本地 Ollama `bge-m3`**（1024 维，免费离线）；裁判模型复用云端（可指定更便宜的模型） |
-| 3 | 工作目录 | 维持 `D:\develop\Prisma`（会话已切换为全量访问，shell 可直接执行） |
+| 3 | 工作目录 | 维持 `D:\develop\Prisdvl-Nexus`（会话已切换为全量访问，shell 可直接执行） |
 | 4 | 错误码分段 | 按分段方案：**AI 模型/嵌入/向量 = `4xxx`**（不照抄需求示例中的 `5001`），`5xxx` 保留给工具 / Agent / MCP |
 
 由决策 2 派生的固定约束：

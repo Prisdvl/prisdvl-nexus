@@ -1,4 +1,4 @@
-# API 设计（Prisma）
+# API 设计（Prisdvl-Nexus）
 
 > STEP 1 设计稿。路径遵循需求文档给定的 `/api/...` 风格；版本演进通过 `Api-Version` 请求头（可选）而不是改路径，避免早期过度设计。
 
@@ -213,7 +213,7 @@ Content-Type: application/json
 
 1. 用 `SseEmitter`（Spring MVC）而不是 WebFlux：全栈保持 MVC，避免为流式引入两套编程模型；`SseEmitter` 的超时设 5 分钟，每 15 秒发注释行心跳防代理断连。
 2. 事件顺序有语义：`retrieval` 必须在第一个 `delta` 之前（前端可先展示"检索到 6 个片段"）。
-3. 停止生成：`delta` 循环每片检查一次 `prisma:stream:cancel:{requestId}`，命中即终止并落库部分内容。
+3. 停止生成：`delta` 循环每片检查一次 `nexus:stream:cancel:{requestId}`，命中即终止并落库部分内容。
 4. 断线重连：给每个事件带 `id:`，客户端可用 `Last-Event-ID` 续传（第一版只保证"不重复插入消息"，不做严格续传）。
 5. 前端用 `fetch` + `ReadableStream` 解析 SSE（因为要带 JWT 头），不使用 `EventSource`。
 
@@ -342,7 +342,7 @@ POST /api/eval/datasets/1/import
 | Agent 运行 | 5 次/分钟/用户；最长 5 分钟/次 |
 | 评测批量 | 1 次/分钟/用户（后台异步跑） |
 
-实现：Redis 令牌桶（`prisma:ratelimit:{scope}:{userId}`），超限返回 `429` + `7001`，响应头带 `Retry-After`。
+实现：Redis 令牌桶（`nexus:ratelimit:{scope}:{userId}`），超限返回 `429` + `7001`，响应头带 `Retry-After`。
 
 ---
 

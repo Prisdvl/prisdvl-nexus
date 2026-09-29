@@ -1,4 +1,4 @@
-# Prisma
+# Prisdvl-Nexus
 
 > Personal Knowledge Base & Agent Platform
 > 个人知识库 + AI Agent 智能工作平台
@@ -47,11 +47,11 @@ ZIP / Vault     Hybrid + Rerank    Tool Calling       Prompt 版本管理
 ## 4. 仓库结构（目标态）
 
 ```
-prisma/                 (root pom, packaging=pom)
-├── prisma-common/                   Result / ErrorCode / 异常 / 通用工具（无 Web 依赖）
-├── prisma-knowledge/                知识域核心：解析 / 切分 / 嵌入 / 检索 / 引用 / 图谱
-├── prisma-app/                      Spring Boot 应用（模块化单体）：auth chat agent tool workflow evaluation observability
-├── prisma-mcp-server/               (Phase 7) 独立 MCP Server 进程，复用 prisma-knowledge
+prisdvl-nexus/                 (root pom, packaging=pom)
+├── nexus-common/                   Result / ErrorCode / 异常 / 通用工具（无 Web 依赖）
+├── nexus-knowledge/                知识域核心：解析 / 切分 / 嵌入 / 检索 / 引用 / 图谱
+├── nexus-app/                      Spring Boot 应用（模块化单体）：auth chat agent tool workflow evaluation observability
+├── nexus-mcp-server/               (Phase 7) 独立 MCP Server 进程，复用 nexus-knowledge
 ├── frontend/                     Vue 3 + TS（独立 npm 工程，不做 Maven 模块）
 ├── docs/                         架构 / 数据库 / API / RAG / Agent / MCP / 评测 / 观测 / 部署 / 面试
 ├── deploy/                       docker-compose、Dockerfile、nginx 配置、初始化脚本
