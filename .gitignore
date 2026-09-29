@@ -36,8 +36,9 @@ desktop.ini
 .env.local
 .env.*.local
 .env.prod
-application-local.yml
-application-local.yaml
+# 注意：application-local.yml 是**提交进仓库**的 —— 它只包含 docker compose 的开发默认
+# 账号口令（与 deploy/.env.example 一致），提交它是为了"clone 下来就能跑 local profile"。
+# 真正的密钥文件（下面这些）仍然忽略。
 application-secret.yml
 application-secret.yaml
 application-prod.yml

@@ -34,11 +34,13 @@ spring:
       memory:
         repository:
           jdbc:
-            # SPRING_AI_CHAT_MEMORY 表的建表策略。
-            # embedded：仅当数据源是嵌入式库（H2 测试）时自动建表，测试无需额外准备；
-            # 生产 MySQL 的建表交给 Step 0.6 的 Flyway 迁移，届时把这里改成 never，
-            # 避免"框架自动建表"与"迁移脚本"两套 DDL 打架。
-            initialize-schema: embedded
+            # 表结构由本项目自己拥有（H2: db/h2/schema.sql；MySQL: Flyway V3），统一设为 never。
+            # 为什么不交给框架自动建表：
+            #   框架的自动建表只对嵌入式库生效，若"H2 交给框架、MySQL 交给 Flyway"，
+            #   就变成两套 DDL 来源——Spring AI 升级改了表结构时，
+            #   H2 测试会跟着框架走而通过，MySQL 生产却因迁移脚本过时而失败。
+            #   自己拥有 DDL 后，两边不一致会立刻在测试里暴露（详见 V3 迁移脚本注释）。
+            initialize-schema: never
 
 server:
   port: ${SERVER_PORT:8080}

@@ -89,11 +89,15 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- 数据库迁移：MySQL 与 PostgreSQL 都需要各自的 Flyway 方言模块 -->
+        <!-- 数据库迁移。
+             ⚠️ Boot 4 把自动配置拆成了独立模块：只引 flyway-core 时**没有自动配置**，
+             表现为"应用照常启动、迁移从未执行"（本次真实踩坑：表一直没建出来）。
+             必须引 spring-boot-starter-flyway（它带 flyway-core + Boot 自动配置模块）。 -->
         <dependency>
-            <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-core</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway</artifactId>
         </dependency>
+        <!-- MySQL 与 PostgreSQL 各自的 Flyway 方言模块 -->
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-mysql</artifactId>

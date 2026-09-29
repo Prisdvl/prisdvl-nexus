@@ -79,3 +79,22 @@ CREATE TABLE IF NOT EXISTS chat_message (
     metadata          VARCHAR(4000),
     created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ---------- Spring AI 会话记忆表（Step 1.5）----------
+-- DDL 抄自 spring-ai-model-chat-memory-repository-jdbc-2.0.1.jar 的 schema-h2.sql。
+-- 我们刻意自己建表并把应用侧 initialize-schema 设为 never：
+-- 让"框架管 H2 + Flyway 管 MySQL"会导致 H2 测试通过而 MySQL 生产失败（见 V3 迁移脚本注释）。
+-- conversation_id 是 VARCHAR(36)：记忆 key 必须放得下（见 ChatMemoryKeys）。
+CREATE TABLE IF NOT EXISTS SPRING_AI_CHAT_MEMORY (
+    conversation_id VARCHAR(36) NOT NULL,
+    content         LONGVARCHAR NOT NULL,
+    type            VARCHAR(10) NOT NULL CHECK (type IN ('USER', 'ASSISTANT', 'SYSTEM', 'TOOL')),
+    timestamp       TIMESTAMP   DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    sequence_id     BIGINT      NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS SPRING_AI_CHAT_MEMORY_CONVERSATION_ID_TIMESTAMP_IDX
+    ON SPRING_AI_CHAT_MEMORY (conversation_id, timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS SPRING_AI_CHAT_MEMORY_CONVERSATION_ID_SEQUENCE_ID_IDX
+    ON SPRING_AI_CHAT_MEMORY (conversation_id, sequence_id);

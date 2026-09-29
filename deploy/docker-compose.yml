@@ -1,0 +1,192 @@
+# ============================================================
+# prisdvl-nexus 开发基础设施
+#
+#   cd deploy
+#   docker compose up -d            # 起全部基础依赖
+#   docker compose ps               # 看健康状态
+#   docker compose logs -f mysql    # 看某个服务日志
+#   docker compose down             # 停止（保留数据卷）
+#   docker compose down -v          # 停止并删除数据卷（清库）
+#
+# 【端口为什么不是默认值】
+# 本机已有原生 MySQL 8.0（服务 MySQL80）占用 3306、
+# 原生 PostgreSQL 18（服务 postgresql-x64-18）占用 5432。
+# 为了避免和已有项目互相干扰，本项目容器使用 3307 / 5433。
+# 想用默认端口：停掉那两个 Windows 服务，或改 deploy/.env 覆盖。
+#
+# 【镜像版本】均按官方源核对过，依据见 docs/decisions.md 附录 B.4
+# ============================================================
+name: nexus
+
+services:
+
+  # ----------------------------------------------------------------
+  # MySQL：业务真源（用户/知识库/文档/Chunk/会话/消息/评测/观测）
+  # ----------------------------------------------------------------
+  mysql:
+    image: mysql:8.4.11
+    container_name: nexus-mysql
+    restart: unless-stopped
+    ports:
+      - "${NEXUS_MYSQL_PORT:-3307}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${NEXUS_MYSQL_ROOT_PASSWORD:-nexus_root_pwd}
+      MYSQL_DATABASE: ${NEXUS_MYSQL_DATABASE:-nexus}
+      MYSQL_USER: ${NEXUS_MYSQL_USER:-nexus}
+      MYSQL_PASSWORD: ${NEXUS_MYSQL_PASSWORD:-nexus_pwd}
+      TZ: Asia/Shanghai
+    command:
+      # 显式指定字符集（中文笔记必须 utf8mb4）；顺手把缓冲池调小以适配 Docker VM 的 7.6GB
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --innodb-buffer-pool-size=256M
+      - --max-connections=200
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${NEXUS_MYSQL_ROOT_PASSWORD:-nexus_root_pwd}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    networks: [nexus-net]
+
+  # ----------------------------------------------------------------
+  # PostgreSQL + pgvector：向量索引（Phase 3）
+  # 用 pgvector 官方镜像，pg18 与生产目标一致
+  # ----------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18-trixie
+    container_name: nexus-postgres
+    restart: unless-stopped
+    ports:
+      - "${NEXUS_PG_PORT:-5433}:5432"
+    environment:
+      POSTGRES_DB: ${NEXUS_PG_DATABASE:-nexus_vector}
+      POSTGRES_USER: ${NEXUS_PG_USER:-nexus}
+      POSTGRES_PASSWORD: ${NEXUS_PG_PASSWORD:-nexus_pwd}
+      TZ: Asia/Shanghai
+    volumes:
+      # 注意：PostgreSQL 18+ 的官方镜像改了数据目录布局。
+      # v18 起必须把**单个卷挂在 /var/lib/postgresql**（数据落在 <mount>/18/docker），
+      # 仍然挂 /var/lib/postgresql/data 会导致容器启动即失败并进入重启循环，报错：
+      #   "in 18+, these Docker images are configured to store database data in a format
+      #    which is compatible with pg_ctlcluster ... place a single mount at /var/lib/postgresql"
+      # 这样改也能让未来 pg_upgrade --link 不受挂载点边界影响。
+      - postgres-data:/var/lib/postgresql
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${NEXUS_PG_USER:-nexus} -d ${NEXUS_PG_DATABASE:-nexus_vector}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [nexus-net]
+
+  # ----------------------------------------------------------------
+  # Redis：缓存 / 限流 / 分布式锁 / 停止生成信号（Phase 11 起）
+  # Redis 8 已内建 Query Engine 与 JSON，不需要 redis-stack
+  # ----------------------------------------------------------------
+  redis:
+    image: redis:8.10.2
+    container_name: nexus-redis
+    restart: unless-stopped
+    ports:
+      - "${NEXUS_REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    networks: [nexus-net]
+
+  # ----------------------------------------------------------------
+  # Elasticsearch + IK 中文分词：BM25 关键词检索（Phase 3）
+  # IK 插件版本必须与 ES 完全一致，因此用本地 Dockerfile 安装
+  # ----------------------------------------------------------------
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+      args:
+        ES_VERSION: ${NEXUS_ES_VERSION:-9.4.5}
+    image: nexus-elasticsearch:${NEXUS_ES_VERSION:-9.4.5}
+    container_name: nexus-elasticsearch
+    restart: unless-stopped
+    ports:
+      - "${NEXUS_ES_PORT:-9200}:9200"
+    environment:
+      discovery.type: single-node
+      # 开发环境关闭安全模块。生产必须开启（Phase 11）
+      xpack.security.enabled: "false"
+      xpack.security.enrollment.enabled: "false"
+      # Docker VM 只有 7.6GB，ES 堆必须压小
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      TZ: Asia/Shanghai
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    networks: [nexus-net]
+
+  # ----------------------------------------------------------------
+  # RabbitMQ：异步导入 / 批量嵌入 / 评测 / 报告（Phase 2、9）
+  # 3.x 已 EOL，故使用 4.3 线
+  # ----------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:4.3.6-management
+    container_name: nexus-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "${NEXUS_RABBITMQ_PORT:-5672}:5672"
+      - "${NEXUS_RABBITMQ_CONSOLE_PORT:-15672}:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${NEXUS_RABBITMQ_USER:-nexus}
+      RABBITMQ_DEFAULT_PASS: ${NEXUS_RABBITMQ_PASSWORD:-nexus_pwd}
+      TZ: Asia/Shanghai
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    networks: [nexus-net]
+
+  # ----------------------------------------------------------------
+  # Ollama：本地嵌入模型 bge-m3（Phase 3）
+  # 默认不启动（占内存较大），需要时：
+  #   docker compose --profile ai-local up -d ollama
+  #   docker compose exec ollama ollama pull bge-m3
+  # ----------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nexus-ollama
+    profiles: [ai-local]
+    restart: unless-stopped
+    ports:
+      - "${NEXUS_OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks: [nexus-net]
+
+volumes:
+  mysql-data:
+  postgres-data:
+  redis-data:
+  es-data:
+  rabbitmq-data:
+  ollama-data:
+
+networks:
+  nexus-net:
+    driver: bridge

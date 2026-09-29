@@ -131,7 +131,39 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
 
 > 数据存在内存里，**重启即清空**。要持久化就等 Docker 就绪后切到 `local` profile（MySQL）。
 
-## 9. 开发约定（重要）
+## 9. 完整运行（Docker + MySQL，推荐）
+
+```powershell
+# 1) 起基础设施（MySQL / PostgreSQL+pgvector / Redis / ES+IK / RabbitMQ）
+cd deploy
+docker compose up -d
+docker compose ps            # 等 5 个服务都变成 (healthy)
+
+# 2) 打包并用 local profile 启动（Flyway 会自动建表）
+cd ..
+$env:JAVA_HOME = 'D:\develop\jdk-21'
+$env:AI_CHAT_API_KEY = (Get-Content '.secrets\ai-key.txt' -Raw).Trim()
+mvn -B clean package -DskipTests
+java -jar nexus-app\target\nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=local
+
+# 3) 冒烟测试（同 standalone，只是数据落在 MySQL）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
+```
+
+| 服务 | 地址 | 说明 |
+| --- | --- | --- |
+| MySQL | `localhost:3307` | 库 `nexus`，账号 `nexus` / `nexus_pwd`（**端口 3307 是因为本机原生 MySQL 占了 3306**） |
+| PostgreSQL | `localhost:5433` | 库 `nexus_vector`，pgvector + hstore + uuid-ossp 已启用 |
+| Elasticsearch | http://localhost:9200 | 9.4.5 + analysis-ik 中文分词 |
+| RabbitMQ 控制台 | http://localhost:15672 | `nexus` / `nexus_pwd` |
+| Redis | `localhost:6379` | |
+
+> 数据库结构与迁移由 **Flyway** 管理（`nexus-app/src/main/resources/db/migration/`）：
+> V1 账号权限、V2 会话消息、V3 Spring AI 记忆表。
+> 三个 profile 的分工：`local`（真实 MySQL，日常开发）、`standalone`（H2 内存，无 Docker 时应急）、`test`（H2，跑测试）。
+> **新增 profile 配置或迁移脚本后必须重新 `package`**，否则 jar 里还是旧的。
+
+## 10. 开发约定（重要）
 
 1. **一次只做一个 Step**：需求 → 设计 → 实现 → 运行 → 测试 → 总结，完成后再进入下一步。
 2. **分层不可跨越**：`Controller → Service → Domain/Mapper`；Controller 不碰数据库、不直接调 LLM。

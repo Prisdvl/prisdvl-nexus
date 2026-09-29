@@ -621,6 +621,42 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 `done` 事件带 `stopped:true`，被停止消息以 `STOPPED` 落库且保留部分内容；
 `messageCount` 与消息条数一致（无重复计数）。
 
+### B.16 Step 0.4 + 0.6 实测验证记录（Docker 基础设施 + Flyway 真实建表）
+
+**基础设施全部就绪**（`deploy/docker-compose.yml`）：
+
+| 服务 | 端口 | 实测 |
+| --- | --- | --- |
+| MySQL | 3307→3306 | 8.4.11，`nexus` 库字符集 `utf8mb4` |
+| PostgreSQL + pgvector | 5433→5432 | 19/pg18 镜像，`vector 0.8.6` + `hstore` + `uuid-ossp` 扩展就绪 |
+| Elasticsearch + IK | 9200 | 9.4.5，`analysis-ik 9.4.5` 插件已装（日志 `-> Installed analysis-ik`） |
+| Redis | 6379 | 8.10.2，`PONG` |
+| RabbitMQ | 5672 / 15672 | 4.3.6-management |
+
+**Flyway 真实建表**：V1 账号权限 / V2 会话消息 / V3 Spring AI 记忆表 三个迁移全部 `success=1`，
+共 7 张表；预置角色中文存储正确（`普通用户` / `管理员`）。
+冒烟测试在真实 MySQL 上全通过（含流式与停止生成，STOPPED 消息保留部分内容）。
+
+**五个真实踩坑（都是"看起来正常其实错了"的类型）**
+
+1. **PostgreSQL 18+ 镜像改了数据目录布局**：v18 起必须把单个卷挂在 `/var/lib/postgresql`
+   （数据落在 `<mount>/18/docker`），仍然挂旧的 `/var/lib/postgresql/data` 会让容器**启动即失败并进入重启循环**。
+   官方报错已直接给出建议：*"in 18+ … place a single mount at /var/lib/postgresql"*。
+2. **Boot 4 又一处自动配置模块拆分**：只引 `flyway-core` **没有自动配置**，
+   表现为"应用照常启动、连上了数据库、但迁移从未执行"（表一直建不出来，且没有任何报错）。
+   必须引 `spring-boot-starter-flyway`。这与之前 `spring-boot-webmvc-test`、`spring-boot-jackson` 是同一类问题：
+   **Boot 4 的 starter 与自动配置模块是分离的，引错就静默失效**。
+3. **H2 在 runtime 作用域会导致"静默退回内存库"**：当某个 profile 没有配置 `spring.datasource.url` 时，
+   Boot 的 `DataSourceAutoConfiguration` 会启用嵌入式数据库自动配置，于是应用正常启动、接口正常работа，
+   但数据写进了进程内存（重启即丢）。已加 `DatasourceGuard`：local / prod 下强制校验连的是 MySQL，否则启动失败。
+4. **端口冲突**：本机已有原生 MySQL 8.0（服务 `MySQL80`，占 3306）与 PostgreSQL 18（`postgresql-x64-18`，占 5432），
+   因此容器改用 3307 / 5433，避免与已有项目互相干扰（可用 `deploy/.env` 覆盖）。
+5. **jar 是快照**：新增 profile 配置与迁移脚本后必须重新 `package`，
+   否则"代码改了、跑起来还是旧的"（本次即因此先失败了一次）。
+
+**新增可运行性**：`localhost:8080/actuator/health = UP`，`local` profile 全程走真实 MySQL；
+`standalone` profile 仍可在没有 Docker 时用 H2 跑通全链路（见 B.15）。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
