@@ -78,6 +78,34 @@ class DocumentQueryTest {
     }
 
     @Test
+    @DisplayName("文档详情：返回原始正文（供 Markdown 渲染）与大纲（供目录跳转）")
+    void returnsDocumentContentAndOutline() throws Exception {
+        String token = registerAndLogin("docquery-detail");
+        Long kbId = createKnowledgeBase(token, "详情测试");
+        uploadVault(token, kbId);
+
+        String listBody = mockMvc.perform(get("/api/knowledge-bases/" + kbId + "/documents")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andReturn().getResponse().getContentAsString();
+        Long documentId = Long.valueOf(JsonPath.read(listBody, "$.data.list[0].id").toString());
+
+        String body = mockMvc.perform(get("/api/knowledge-bases/" + kbId + "/documents/" + documentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                // 正文是"原文"（含 frontmatter 与 Markdown 标记），不是切片拼接的结果
+                .andExpect(jsonPath("$.data.content").value(org.hamcrest.Matchers.containsString("# ")))
+                .andExpect(jsonPath("$.data.headings").isArray())
+                .andExpect(jsonPath("$.data.headings[0].level").value(1))
+                // 大纲至少要有两级（一级标题 + 二级标题），否则目录跳转没有意义
+                .andExpect(jsonPath("$.data.headings[1].level").value(2))
+                .andExpect(jsonPath("$.data.headings[1].text").value("G1"))
+                .andReturn().getResponse().getContentAsString();
+
+        // 大纲的锚点由解析阶段生成（与切片里的 headingPath 同源）
+        assertThat(body).contains("\"anchor\":\"g1\"");
+    }
+
+    @Test
     @DisplayName("多租户隔离：别人的知识库一律 404，列表接口也不例外")
     void isolatesBetweenUsers() throws Exception {
         String ownerToken = registerAndLogin("docquery-a");

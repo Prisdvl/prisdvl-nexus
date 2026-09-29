@@ -4,6 +4,7 @@ import com.lky.nexus.app.auth.security.CurrentUser;
 import com.lky.nexus.common.api.PageResult;
 import com.lky.nexus.common.api.Result;
 import com.lky.nexus.knowledge.model.dto.ChunkView;
+import com.lky.nexus.knowledge.model.dto.DocumentDetail;
 import com.lky.nexus.knowledge.model.dto.DocumentSummary;
 import com.lky.nexus.knowledge.service.DocumentQueryService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -42,6 +43,14 @@ public class KnowledgeDocumentController {
     public Result<List<ChunkView>> listChunks(@PathVariable Long knowledgeBaseId,
                                              @PathVariable Long documentId) {
         return Result.ok(documentQueryService.listChunks(
+                CurrentUser.requireId(), knowledgeBaseId, documentId));
+    }
+
+    /** 文档详情：原始正文（供 Markdown 渲染）+ 大纲（供目录跳转）。 */
+    @GetMapping("/documents/{documentId}")
+    public Result<DocumentDetail> getDocument(@PathVariable Long knowledgeBaseId,
+                                             @PathVariable Long documentId) {
+        return Result.ok(documentQueryService.getDocument(
                 CurrentUser.requireId(), knowledgeBaseId, documentId));
     }
 }

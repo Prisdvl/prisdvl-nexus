@@ -193,6 +193,41 @@ public class MarkdownDocumentParser implements DocumentParser {
         }
     }
 
+    /**
+     * 剥离 frontmatter，只返回正文。
+     *
+     * <p>供展示侧复用：详情接口要的是"正文"，不是"原始文件"。
+     * 不剥离的话，前端会把 YAML 元数据当成正文渲染出来（`tags: [java]` 直接出现在页面顶部），
+     * 而元数据本来已经以结构化字段单独返回了。
+     *
+     * <p>边界规则与 {@code extractFrontmatter} 保持一致：必须以 {@code ---} 开头且存在结束行。
+     */
+    public static String stripFrontmatter(String content) {
+        if (content == null) {
+            return null;
+        }
+        String withoutBom = content.startsWith("\uFEFF") ? content.substring(1) : content;
+        if (!withoutBom.startsWith(FRONTMATTER_DELIMITER)) {
+            return withoutBom;
+        }
+        String[] lines = withoutBom.split("\n", -1);
+        if (lines.length == 0 || !FRONTMATTER_DELIMITER.equals(lines[0].trim())) {
+            return withoutBom;
+        }
+        for (int i = 1; i < lines.length; i++) {
+            if (FRONTMATTER_END.contains(lines[i].trim())) {
+                String body = String.join("\n", List.of(lines).subList(i + 1, lines.length));
+                int index = 0;
+                while (index < body.length() && (body.charAt(index) == '\n' || body.charAt(index) == '\r')) {
+                    index++;
+                }
+                return body.substring(index);
+            }
+        }
+        // 只有开头没有结束：当作普通正文
+        return withoutBom;
+    }
+
     // ------------------------------------------------------------------
     // frontmatter
     // ------------------------------------------------------------------

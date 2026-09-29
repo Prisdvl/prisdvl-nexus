@@ -152,8 +152,9 @@ class ChunkEmbeddingServiceTest {
     // ------------------------------------------------------------------
 
     private ChunkEmbeddingService newService() {
-        return new ChunkEmbeddingServiceImpl(knowledgeBaseService, chunkMapper, vectorStore,
-                embeddingClientFactory, properties);
+        // 模型一致性校验现在收敛在 KnowledgeEmbeddingResolver（写入与检索共用）
+        var resolver = new KnowledgeEmbeddingResolver(properties, embeddingClientFactory);
+        return new ChunkEmbeddingServiceImpl(knowledgeBaseService, chunkMapper, vectorStore, resolver);
     }
 
     private List<VectorRecord> capturedRecords() {

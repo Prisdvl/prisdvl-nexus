@@ -85,6 +85,32 @@ export interface IndexResult {
   costMillis: number
 }
 
+export interface HeadingView {
+  level: number
+  text: string
+  anchor: string
+  startOffset: number
+}
+
+export interface DocumentDetail {
+  id: string
+  sourcePath: string
+  fileName: string
+  fileExt: string
+  folder: string | null
+  title: string | null
+  status: string
+  /** 原始 Markdown 正文；原始文件丢失时为 null */
+  content: string | null
+  headings: HeadingView[]
+  tags: string[]
+  fileSizeKb: number | null
+  chunkCount: number
+  tokenCount: number
+  version: number
+  updatedAt: string
+}
+
 export interface SearchHit {
   chunkId: string
   documentId: string
@@ -93,7 +119,11 @@ export interface SearchHit {
   content: string
   score: number
   source: string
+  /** 命中来源明细，如 ["BM25 #2", "向量 #1"] */
+  matchedBy: string[]
 }
+
+export type SearchMode = 'hybrid' | 'bm25' | 'vector'
 
 // ---------- 认证 ----------
 
@@ -182,8 +212,16 @@ export function listChunks(id: string, documentId: string) {
   return client.get<never, ChunkView[]>(`/knowledge-bases/${id}/documents/${documentId}/chunks`)
 }
 
-export function search(id: string, q: string, topK = 10) {
+/** 文档详情：原始正文（Markdown 渲染）+ 大纲。 */
+export function getDocument(id: string, documentId: string) {
+  return client.get<never, DocumentDetail>(`/knowledge-bases/${id}/documents/${documentId}`)
+}
+
+/**
+ * 检索。mode 三选一都开放——融合效果好不好，只有在能单独看每一路时才判断得了。
+ */
+export function search(id: string, q: string, topK = 10, mode: SearchMode = 'hybrid') {
   return client.get<never, SearchHit[]>(`/knowledge-bases/${id}/search`, {
-    params: { q, topK }
+    params: { q, topK, mode }
   })
 }

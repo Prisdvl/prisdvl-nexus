@@ -58,19 +58,29 @@ await page.goto(base, { waitUntil: 'networkidle' })
 await page.waitForSelector('.card, .el-empty', { timeout: 15000 })
 await shoot('kb-list')
 
-// ② 知识库详情：文档列表 + 检索面板
-const firstCard = page.locator('.card .name').first()
-if (await firstCard.count()) {
-  await firstCard.click()
-  await page.waitForSelector('.columns', { timeout: 15000 })
-  await page.waitForTimeout(600)
-  await shoot('kb-detail')
+// ② 进入知识库详情（点卡片标题导航）
+const kbLink = page.locator('.card .name').first()
+if (await kbLink.count()) {
+  await kbLink.click()
+  // 详情页：左侧文档列表 + 右侧正文（Markdown 渲染 + 大纲）
+  await page.waitForSelector('.docs li', { timeout: 15000 })
+  await page.waitForSelector('.markdown, .empty', { timeout: 15000 })
+  await page.waitForTimeout(900)   // 等代码高亮与大纲渲染完成
+  await shoot('kb-doc')
 
-  // ③ 检索：输入中文查询并截图命中结果（含来源与得分）
+  // ③ 切片视图
+  await page.click('.el-tabs__item:has-text("切片")')
+  await page.waitForTimeout(500)
+  await shoot('kb-chunks')
+
+  // ④ 检索（融合模式）：命中项带来源与 RRF 分数
+  await page.click('.el-tabs__item:has-text("检索")')
   await page.locator('.search-box input').fill('缓存击穿怎么解决')
   await page.locator('.search-box button').click()
-  await page.waitForTimeout(2500)
+  await page.waitForTimeout(3000)
   await shoot('kb-search')
+} else {
+  console.log('（没有知识库可进入，跳过详情页截图）')
 }
 
 console.log('\n输出目录: ' + outDir)

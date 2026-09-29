@@ -1,10 +1,7 @@
 package com.lky.nexus.knowledge.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.EmbeddingClient;
-import com.lky.nexus.ai.model.EmbeddingClientFactory;
-import com.lky.nexus.ai.model.ModelRef;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
 import com.lky.nexus.knowledge.mapper.ChunkMapper;
@@ -12,6 +9,7 @@ import com.lky.nexus.knowledge.model.entity.ChunkPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.service.ChunkEmbeddingService;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
+import com.lky.nexus.knowledge.service.KnowledgeEmbeddingResolver;
 import com.lky.nexus.knowledge.vector.VectorRecord;
 import com.lky.nexus.knowledge.vector.VectorStore;
 import org.slf4j.Logger;
@@ -55,19 +53,16 @@ public class ChunkEmbeddingServiceImpl implements ChunkEmbeddingService {
     private final KnowledgeBaseService knowledgeBaseService;
     private final ChunkMapper chunkMapper;
     private final VectorStore vectorStore;
-    private final EmbeddingClientFactory embeddingClientFactory;
-    private final AiModelProperties aiModelProperties;
+    private final KnowledgeEmbeddingResolver embeddingResolver;
 
     public ChunkEmbeddingServiceImpl(KnowledgeBaseService knowledgeBaseService,
                                      ChunkMapper chunkMapper,
                                      VectorStore vectorStore,
-                                     EmbeddingClientFactory embeddingClientFactory,
-                                     AiModelProperties aiModelProperties) {
+                                     KnowledgeEmbeddingResolver embeddingResolver) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.chunkMapper = chunkMapper;
         this.vectorStore = vectorStore;
-        this.embeddingClientFactory = embeddingClientFactory;
-        this.aiModelProperties = aiModelProperties;
+        this.embeddingResolver = embeddingResolver;
     }
 
     @Override
@@ -78,7 +73,8 @@ public class ChunkEmbeddingServiceImpl implements ChunkEmbeddingService {
 
     private EmbeddingResult embed(KnowledgeBasePO knowledgeBase, int batchLimit) {
         long start = System.currentTimeMillis();
-        EmbeddingClient client = resolveClientFor(knowledgeBase);
+        // 与检索侧共用同一份"模型一致性"校验（查询与索引必须同一模型，否则向量空间不一致）
+        EmbeddingClient client = embeddingResolver.resolve(knowledgeBase);
 
         int total = 0;
         int embedded = 0;
@@ -194,31 +190,6 @@ public class ChunkEmbeddingServiceImpl implements ChunkEmbeddingService {
             return;
         }
         vectorStore.deleteByDocumentIds(documentIds);
-    }
-
-    /**
-     * 解析并校验该知识库应使用的嵌入客户端。
-     *
-     * @throws BusinessException 4006：配置的嵌入模型与知识库冻结的模型不一致
-     */
-    private EmbeddingClient resolveClientFor(KnowledgeBasePO knowledgeBase) {
-        String role = AiModelProperties.Role.EMBEDDING_DEFAULT;
-        String reference = aiModelProperties.getRoles().get(role);
-        if (reference == null) {
-            throw new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
-                    "未配置逻辑角色 " + role);
-        }
-        ModelRef ref = ModelRef.parse(reference);
-        if (!ref.provider().equals(knowledgeBase.getEmbeddingProvider())
-                || !ref.model().equals(knowledgeBase.getEmbeddingModel())) {
-            throw new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
-                    ("知识库冻结的嵌入模型是 %s:%s，而当前配置的角色 %s 指向 %s。"
-                            + "同一个库里混用两种嵌入模型的向量会让检索结果错乱（且不会报错），"
-                            + "因此拒绝执行。请恢复配置，或新建知识库。")
-                            .formatted(knowledgeBase.getEmbeddingProvider(), knowledgeBase.getEmbeddingModel(),
-                                    role, ref.value()));
-        }
-        return embeddingClientFactory.get(role);
     }
 
     private record BatchOutcome(int embedded, int cacheHits) {

@@ -64,7 +64,7 @@
 | 2.5 | ZIP / Obsidian Vault 导入（安全解压、目录识别、忽略 `.obsidian/`、附件处理）—— ✅ **已完成**（安全限额 + 端到端真实 MySQL 验证；见 decisions.md B.19） |
 | 2.6 | SHA-256 增量同步（跳过/更新/删除/改名）+ `kb_import_task` 进度 —— ✅ **已完成**（含"零写入"与"保留向量"的可观测断言；见 decisions.md B.20） |
 | 2.7 | RabbitMQ 异步化：上传立即返回，worker 解析切分（嵌入留到 Phase 3）—— ✅ **已完成**（90ms 返回 QUEUED；含幂等 CAS、死信队列、同步/异步可切换；见 decisions.md B.21） |
-| 2.8 | 知识库页面：左侧目录树 + 文档列表 + 文档详情（Markdown 渲染、标签、大纲、Chunk 预览）—— 🔶 **第一阶段已完成**（Vue 3 + Element Plus：登录、知识库列表、上传与进度、向量化/建索引、文档+切片浏览、BM25 检索面板）；待补：Markdown 正文渲染、文档大纲、按目录树筛选 |
+| 2.8 | 知识库页面：文档列表 + 文档详情（Markdown 渲染、标签、大纲、Chunk 预览）—— ✅ **已完成**（Vue 3 + Element Plus：登录/注册、知识库列表、上传与进度、向量化/建索引/重建索引、文档列表+过滤、**Markdown 正文渲染（代码高亮）+ 可跳转大纲**、切片状态、三模式检索面板） |
 | 2.9 | 测试：解析器与切分的单元测试（含边界：空文件、超长段落、嵌套代码块、无 frontmatter）+ 用真实 vault 子集跑集成测试 |
 
 **关键理解点**：为什么结构化切分优于定长切分；为什么文档身份是 `(kb_id, source_path)`；增量同步为什么必须用内容 hash 而不是时间戳。
@@ -80,9 +80,9 @@
 | 3.1 | Embedding 服务：批量嵌入 + 并发控制 + 失败重试 —— ✅ **已完成**（批量 + 按 content_hash 去重 + **维度自校验**；缓存放在 PostgreSQL `embedding_cache` 而不是 Redis，理由见 decisions.md B.23） |
 | 3.2 | 向量写入 pgvector（HNSW 索引）+ 状态回填 —— ✅ **已完成**（独立数据源 + 独立 Flyway；`vector_id` 刻意不回填，因为 chunk_id 就是 pgvector 主键） |
 | 3.3 | ES 索引与 BM25 写入（原生 Java Client + IK 分词 + 别名切换）—— ✅ **已完成**（IK 用 `_analyze` 直接验证；别名原子切换重建；见 decisions.md B.24） |
-| 3.4 | 向量检索 + metadata 过滤（user_id 强制、kb/tag/folder 可选） |
-| 3.5 | BM25 检索 + 过滤 |
-| 3.6 | 混合检索（RRF 融合）+ 去重 |
+| 3.4 | 向量检索 + 过滤（强制 kb_id，避免跨库串数据）—— ✅ **已完成**（查询语句用同一个嵌入模型转成向量，模型一致性由 KnowledgeEmbeddingResolver 统一校验） |
+| 3.5 | BM25 检索 + 过滤 —— ✅ **已完成**（BM25 与向量共用一套命中结构，便于融合） |
+| 3.6 | 混合检索（RRF 融合）+ 去重 —— ✅ **已完成**（`RrfFusion` 纯函数 + 5 条单测；三种模式都可单独调用以便对比；见 decisions.md B.25） |
 | 3.7 | 重排（`Reranker` 接口 + `LlmReranker` 实现，为外部重排 API 预留 `HttpReranker`） |
 | 3.8 | 上下文组装（Token 预算、相邻块扩展、防注入分隔） |
 | 3.9 | RAG 提示词与引用生成 + `chat_message_citation` 落库 + 前端引用点击定位 |

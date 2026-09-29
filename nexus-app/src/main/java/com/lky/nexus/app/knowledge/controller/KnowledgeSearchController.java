@@ -2,6 +2,7 @@ package com.lky.nexus.app.knowledge.controller;
 
 import com.lky.nexus.app.auth.security.CurrentUser;
 import com.lky.nexus.common.api.Result;
+import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkIndexService;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -52,13 +53,15 @@ public class KnowledgeSearchController {
         return Result.ok();
     }
 
-    /** 关键词检索（BM25）。 */
+    /** 检索：mode=bm25 / vector / hybrid（默认 hybrid，三者都开放以便对比融合效果）。 */
     @GetMapping("/{knowledgeBaseId}/search")
     public Result<List<ChunkSearchService.SearchHit>> search(
             @PathVariable Long knowledgeBaseId,
             @RequestParam String q,
-            @RequestParam(defaultValue = "10") int topK) {
+            @RequestParam(defaultValue = "10") int topK,
+            @RequestParam(defaultValue = "hybrid") String mode) {
         int limit = Math.clamp(topK, 1, MAX_TOP_K);
-        return Result.ok(chunkSearchService.searchBm25(CurrentUser.requireId(), knowledgeBaseId, q, limit));
+        return Result.ok(chunkSearchService.search(CurrentUser.requireId(), knowledgeBaseId, q, limit,
+                SearchMode.parse(mode)));
     }
 }

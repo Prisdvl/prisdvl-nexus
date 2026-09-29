@@ -1,29 +1,30 @@
 package com.lky.nexus.knowledge.service;
 
+import com.lky.nexus.knowledge.search.SearchMode;
+
 import java.util.List;
 
 /**
- * 切片检索服务。
+ * 切片检索服务：关键词（BM25）、向量、以及 RRF 融合三种模式。
  *
- * <p>当前只实现关键词（BM25）一路；Phase 3.4 加入向量一路，
- * Phase 3.6 用 RRF 融合两路结果。接口保持"返回带上下文的命中项"这一契约，
- * 融合逻辑因此不会渗到调用方（对话链路只关心"给我 k 条最相关的切片"）。
+ * <p>三种模式都对外暴露是刻意的：融合效果好不好、权重要不要调，
+ * 只有在能单独看每一路结果时才判断得了（否则"融合得不错"只是感觉）。
  */
 public interface ChunkSearchService {
 
-    /** 关键词检索（BM25），返回已补齐正文与文档标题的命中项。 */
-    List<SearchHit> searchBm25(Long userId, Long knowledgeBaseId, String query, int topK);
+    /**
+     * 检索。
+     *
+     * @param mode bm25 / vector / hybrid
+     */
+    List<SearchHit> search(Long userId, Long knowledgeBaseId, String query, int topK, SearchMode mode);
 
     /**
      * 命中项（已补齐展示与引用所需的信息）。
      *
-     * @param chunkId       切片 id
-     * @param documentId    文档 id
-     * @param documentTitle 文档标题（引用时展示"来自哪篇"）
-     * @param headingPath   标题路径（引用时展示"来自哪一节"）
-     * @param content       切片正文（用于生成答案与引用片段）
-     * @param score         相关性得分
-     * @param source        来源：bm25 / vector / hybrid
+     * @param score     相关性得分：单路时是该路原始分数，融合时是 RRF 分数
+     * @param source    bm25 / vector / hybrid
+     * @param matchedBy 命中来源明细（如 {@code ["BM25 #2", "向量 #1"]}），让"为什么排前面"可解释
      */
     record SearchHit(
             Long chunkId,
@@ -32,6 +33,7 @@ public interface ChunkSearchService {
             String headingPath,
             String content,
             double score,
-            String source) {
+            String source,
+            List<String> matchedBy) {
     }
 }

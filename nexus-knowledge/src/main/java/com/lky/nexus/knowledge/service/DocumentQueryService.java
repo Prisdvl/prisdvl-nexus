@@ -2,6 +2,7 @@ package com.lky.nexus.knowledge.service;
 
 import com.lky.nexus.common.api.PageResult;
 import com.lky.nexus.knowledge.model.dto.ChunkView;
+import com.lky.nexus.knowledge.model.dto.DocumentDetail;
 import com.lky.nexus.knowledge.model.dto.DocumentSummary;
 
 import java.util.List;
@@ -19,4 +20,12 @@ public interface DocumentQueryService {
 
     /** 查询某篇文档的切片（按序号）。 */
     List<ChunkView> listChunks(Long userId, Long knowledgeBaseId, Long documentId);
+
+    /**
+     * 查询文档详情（含原始正文与大纲）。
+     *
+     * <p>正文从落盘的原始文件读回，而不是用切片拼——切片带标题路径前缀且按检索边界切分，
+     * 拼出来既会重复标题、也会让段落断裂。
+     */
+    DocumentDetail getDocument(Long userId, Long knowledgeBaseId, Long documentId);
 }
