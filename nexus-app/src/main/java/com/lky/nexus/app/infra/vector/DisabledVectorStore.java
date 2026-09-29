@@ -66,6 +66,11 @@ public class DisabledVectorStore implements VectorStore {
     }
 
     @Override
+    public void deleteByKnowledgeBase(Long knowledgeBaseId) {
+        // 同上
+    }
+
+    @Override
     public long countByKnowledgeBase(Long knowledgeBaseId) {
         return 0;
     }

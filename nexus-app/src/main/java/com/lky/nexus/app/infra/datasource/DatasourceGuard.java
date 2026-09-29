@@ -31,7 +31,15 @@ public class DatasourceGuard implements ApplicationRunner {
 
     private final DataSource dataSource;
 
-    public DatasourceGuard(DataSource dataSource) {
+    /**
+     * 显式限定业务数据源。
+     *
+     * <p>本项目有两个 DataSource（业务 MySQL + 向量 PostgreSQL），
+     * 按类型注入虽然靠 {@code @Primary} 也能工作，但显式限定更不容易在将来被改坏——
+     * 一旦有人不小心动了 @Primary，这里报的错会离真正的原因很远。
+     */
+    public DatasourceGuard(@org.springframework.beans.factory.annotation.Qualifier("dataSource")
+                           DataSource dataSource) {
         this.dataSource = dataSource;
     }
 

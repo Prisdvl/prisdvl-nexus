@@ -141,6 +141,15 @@ public class PgVectorStore implements VectorStore {
     }
 
     @Override
+    public void deleteByKnowledgeBase(Long knowledgeBaseId) {
+        if (knowledgeBaseId == null) {
+            return;
+        }
+        int deleted = jdbcTemplate.update("DELETE FROM kb_vector WHERE kb_id = ?", knowledgeBaseId);
+        log.debug("按知识库删除向量 {} 条（kbId={}）", deleted, knowledgeBaseId);
+    }
+
+    @Override
     public long countByKnowledgeBase(Long knowledgeBaseId) {
         Long count = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM kb_vector WHERE kb_id = ?", Long.class, knowledgeBaseId);

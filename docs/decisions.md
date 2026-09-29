@@ -981,10 +981,37 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
   （`TableInfoHelper.initTableInfo`），否则构造 wrapper 会抛
   "can not find lambda cache for this entity"。
 
-**环境约束（重要）**：本机网络下 `registry-1.docker.io:443` **不可达**，
-依赖 `.docker/daemon.json` 里的国内镜像加速；ollama 镜像（多 GB）拉取耗时很长。
-bge-m3 模型（约 1.2GB）从 ollama registry 拉取，因此**真实嵌入与向量检索的联调需要等待模型就绪**，
-届时用 `AI_EMBEDDING_LIVE=true` 跑 `LiveEmbeddingTest` 即可复验。
+**环境约束与实测结果（重要）**
+
+本机网络下 `registry-1.docker.io:443` **不可达**，依靠 `.docker/daemon.json` 里的国内镜像加速；
+ollama 镜像与 bge-m3 模型（1.08 GB）最终都拉取成功，因此**真实联调已完成**：
+
+| 联调项 | 实测 |
+| --- | --- |
+| pgvector DDL | `V1__vector_store.sql` 由独立 Flyway 在 PG 18.6 上执行成功（`kb_vector` + `embedding_cache` + HNSW 索引） |
+| 幂等写入 | 同一 chunkId 连写两次（第二次向量不同）→ 只保留一行，检索以最后一次为准 |
+| 余弦检索排序 | 单位向量 e0 查询：`[1.0, 0.6, 0.0]` 精确命中预期顺序（`1 - (embedding <=> q)`） |
+| 跨库隔离 | 另一知识库里放入**完全相同**的向量 → 检索结果中不出现 ✓ |
+| 阈值过滤 / 删除 | `minScore=0.5` 正确滤掉正交向量；按知识库删除后计数归零 |
+| 嵌入缓存精度 | 向量经 `::text` 往返后首维误差 < 1e-4 ✓ |
+| **真实 bge-m3 调用** | 维度 1024 ✓；向量非零 ✓；**语义排序正确**（同主题相似度显著高于无关句，差值 > 0.1）✓；同文本两次余弦 > 0.99 ✓ |
+| 真实延迟 | 首次 3 条 5272 ms（含加载模型）；热态单条 42~169 ms |
+
+**测试总览（Phase 3.1/3.2）**：`nexus-common` 10 + `nexus-ai` 14 + `nexus-knowledge` 57 + `nexus-app` 71（11 跳过）= **152 通过 / 0 失败**。
+
+**又两个踩坑（本轮修复）**
+
+- **第二个 DataSource 会让 Boot 放弃自动配置主数据源**。`DataSourceAutoConfiguration` 的内层配置带
+  `@ConditionalOnMissingBean(DataSource.class)`：应用里一旦出现**任何** DataSource bean，
+  它整体退让——表现是"MySQL 连接池根本没创建"，而应用会用**错误的那个数据源**继续跑
+  （DatasourceGuard 报出的 URL 是 PostgreSQL，才让人意识到问题）。
+  修法：显式声明主数据源并用 `@Primary` 标明默认注入目标（`PrimaryDataSourceConfig`），
+  同时给 `DatasourceGuard` 加 `@Qualifier("dataSource")`。
+- **测试清理用错 id，等于没清理**。向量记录的 `documentId` 与 `chunkId` 在真实链路里是不同的值，
+  我第一版按 `documentId = TEST_KB_ID` 清理，实际删不到任何行；
+  残留数据让后续用例的计数断言离奇失败。顺便补上了真实需要的能力
+  `VectorStore.deleteByKnowledgeBase`（删除知识库时必须清向量，否则留下"检索命中却查不到内容"的孤儿向量），
+  并把清理同时放到用例**之前**（上一个用例失败退出时也能保证干净）。
 
 ---
 

@@ -41,6 +41,14 @@ public interface VectorStore {
     /** 按文档删除向量（文档删除/重新切分时调用）。 */
     void deleteByDocumentIds(Collection<Long> documentIds);
 
+    /**
+     * 按知识库删除向量（删除知识库时调用）。
+     *
+     * <p>少了这一步就会留下"孤儿向量"：MySQL 里的切片已经没了，
+     * 但向量库里还在，检索时命中却查不到内容，表现为"结果里出现空白条目"。
+     */
+    void deleteByKnowledgeBase(Long knowledgeBaseId);
+
     /** 统计某知识库的向量条数（用于对账：应与 kb_chunk.vector_status='DONE' 的数量一致）。 */
     long countByKnowledgeBase(Long knowledgeBaseId);
 }

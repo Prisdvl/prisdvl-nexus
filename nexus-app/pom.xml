@@ -114,13 +114,6 @@
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
-        <!-- PostgreSQL JDBC 驱动：向量库（pgvector）用的是第二个数据源，
-             业务库仍是 MySQL —— 两者分工见 VectorDataSourceConfig -->
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
-        </dependency>
 
         <!-- 安全：JWT 资源服务器。
              注意 Boot 4 的坐标变化——旧的 spring-boot-starter-oauth2-resource-server 的 POM 描述已写明
