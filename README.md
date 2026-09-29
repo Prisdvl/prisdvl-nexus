@@ -66,7 +66,7 @@ ai-knowledge-hub/                 (root pom, packaging=pom)
 | [docs/database.md](docs/database.md) | ER 图、核心表设计、索引、Redis/ES 结构 | ✅ STEP 1 |
 | [docs/api.md](docs/api.md) | 统一返回、错误码、REST 与 SSE 协议 | ✅ STEP 1 |
 | [docs/roadmap.md](docs/roadmap.md) | Phase 0–11 任务拆分 + 学习知识点 | ✅ STEP 1 |
-| [docs/decisions.md](docs/decisions.md) | 架构决策记录（ADR） | ✅ STEP 1 |
+| [docs/decisions.md](docs/decisions.md) | 架构决策记录（ADR-001 ~ ADR-017）+ 官方文档核对结果（附录 A ~ D，含实测验证记录） | ✅ 持续更新 |
 | docs/rag.md / agent.md / mcp.md / workflow.md / evaluation.md / observability.md / deployment.md / interview.md | 各阶段深化文档 | ⏳ 随对应 Phase 补齐 |
 
 ## 6. 当前进度
@@ -74,7 +74,7 @@ ai-knowledge-hub/                 (root pom, packaging=pom)
 | Phase | 内容 | 状态 |
 | --- | --- | --- |
 | STEP 1 | 技术方案设计（不写业务代码） | ✅ 完成，待确认 |
-| Phase 0 | 项目初始化（Git / Maven / Boot / Spring AI / Docker / MySQL / Redis / PG） | ⏳ 待启动 |
+| Phase 0 | 项目初始化（Git / Maven / Boot / Spring AI / Docker / MySQL / Redis / PG） | 🔄 进行中：0.1 ✅ 0.2 ✅ 0.3 ✅（MyBatis-Plus 已实测通过）0.5 ✅；0.4 / 0.6 待 Docker 就绪 |
 | Phase 1 | AI Chat（ChatClient / SSE / Conversation / Message / Memory） | ⏳ |
 | Phase 2 | Knowledge Base（MD / TXT / PDF / DOCX / ZIP / Obsidian Vault） | ⏳ |
 | Phase 3 | RAG（Chunk / Embedding / Vector / BM25 / Hybrid / Rerank / Citation） | ⏳ |
@@ -91,11 +91,11 @@ ai-knowledge-hub/                 (root pom, packaging=pom)
 
 | 依赖 | 要求 | 当前机器实测 |
 | --- | --- | --- |
-| JDK | 21（LTS） | ⚠️ 仅 JDK 17（`C:\Program Files\Java\jdk-17`）→ Phase 0 需安装 JDK 21 |
-| Maven | 3.9+ | ✅ 3.9.9 |
-| Docker + Compose | 运行中 | ⚠️ 已装 Docker 29.5.2 / Compose v5.1.3，但 **Docker Desktop 守护进程未启动** |
-| Node.js | 20+（Vite 要求） | ✅ v22.22.0 |
-| 内存 | 建议 ≥ 16 GB（ES + MySQL + PG 同时跑） | — |
+| JDK | 21（LTS） | ✅ **便携版已就绪**：`D:\develop\jdk-21`（Temurin 21.0.12.1，未改系统 `JAVA_HOME`）。构建前请 `$env:JAVA_HOME='D:\develop\jdk-21'` |
+| Maven | 3.9+ | ✅ 3.9.9（本地仓库 `D:\develop\Maven\repository`） |
+| Docker + Compose | 运行中 | ⚠️ 客户端 29.5.2 / Compose v5.1.3 已装，但 **WSL2 后端不可用**：`HCS_E_HYPERV_NOT_INSTALLED`（需管理员启用虚拟机平台 + 安装 WSL2 内核并重启，见 [docs/architecture.md](docs/architecture.md) 第 19 节） |
+| Node.js | 20.19+ 或 22.12+（Vite 8 要求） | ✅ v22.22.0 |
+| 内存 | 建议 ≥ 16 GB（ES + MySQL + PG 同时跑） | ⚠️ 15.6 GB，ES 需按小堆配置（`-Xms512m`、单节点、关闭副本） |
 
 ## 8. 开发约定（重要）
 

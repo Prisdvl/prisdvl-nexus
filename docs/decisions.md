@@ -220,6 +220,30 @@
 
 ---
 
+## ADR-017 统一返回体、错误码分段，以及"雪花 ID 必须序列化为字符串"
+
+**背景**：需要统一 `{code, message, data}` 返回体、统一异常处理与请求追踪；同时主键是 64 位雪花 ID。
+
+**决策**
+1. `Result<T>` / `PageResult<T>` 用 **Java 21 record** 实现，放在 **akh-common**（零框架依赖，Jackson 2/3 都能序列化）；HTTP 状态码映射放在 Web 层 `ErrorCodeHttpStatusMapper`。
+2. 错误码分段：`0` 成功 / `1xxx` 通用参数 / `2xxx` 认证授权 / `3xxx` 知识库文档 / **`4xxx` AI 模型与向量** / `5xxx` 工具与 Agent / `6xxx` 工作流与评测 / `7xxx` 限流 / `9999` 兜底。
+3. 业务码 → HTTP 状态码用 **switch 表达式穷举枚举**：将来给 `ErrorCode` 加常量却忘了映射，**编译就会失败**，而不是悄悄返回 500。
+4. 请求 ID 用 **MDC + `OncePerRequestFilter`**：上游 `X-Request-Id` 必须通过 `[A-Za-z0-9_-]{1,64}` 白名单校验后才透传（**防日志注入**），否则重新生成；响应头回写同一 ID，日志模板用 `%X{requestId}` 自动携带。
+5. **所有 `Long` 序列化为 JSON 字符串**（Boot 4 写法：`@JacksonComponent` + `tools.jackson.databind.ValueSerializer<Long>`），配套硬约定：**DTO 中 ID 用包装类型 `Long`，计数用基本类型 `int/long`**。
+
+**理由**
+- 雪花 ID 是 64 位，而 JavaScript `Number` 只能安全表示到 2^53-1。直接返回数字会**静默丢精度**（`2104750903666438145` → `...144`），前端表现为"拿到的 id 查不到数据"且不报错——最难排查的一类 bug。
+- 业务码与 HTTP 状态码各司其职：前端拦截器按业务码分支，Nginx/监控按状态码统计。
+- 业务异常打 WARN（不打堆栈）、未预知异常打 ERROR（带堆栈 + requestId），避免告警被业务噪声淹没。
+
+**代价 / 注意**
+- 计数字段若误用 `Long` 会变成字符串 → 已用测试锁住（`WebContractTest` 断言 `totalTokens` 必须是数字 `42`）。
+- **Jackson 2 的写法在 Boot 4 不适用**：Boot 4 默认 Jackson 3（`tools.jackson`），自动配置的 bean 是 `JsonMapper`（不是 `ObjectMapper`），自定义序列化用 `@JacksonComponent`；`SimpleModule` / `Jackson2ObjectMapperBuilderCustomizer` 那套属于 Jackson 2 路径。
+
+**验证**：`WebContractTest`（8 用例）+ `ErrorCodeTest`（5）+ `PageResultTest`（5）全绿，见 B.8。
+
+---
+
 ## Appendix A. 版本与 API 核对结果（2026-09-24）
 
 > 规则：**不确定的一律不写进代码**。下表 `✅ 已核对` 项可直接使用；`⚠️ 待核对` 项在动手前必须现场验证（Phase 0 Step 0.3）。
@@ -377,6 +401,21 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 **方法论价值（面试可讲）**：MyBatis-Plus 官方只声明支持 Boot 4.0.x，若直接照文档写业务代码，风险会推迟到 Phase 1 才爆发。这里用 **H2 内存库**把验证成本压到最低——在 Docker 尚不可用（Hyper-V 未启用）的情况下，依然完成了依赖兼容性的端到端验证。
 
 **已知待办（不影响 Phase 0）**：`spring-boot-starter-test` 自带的 Mockito 会动态自附加 javaagent 并打印警告（未来 JDK 将禁止）。等 Phase 1 Step 1.8 真正编写 Mock 测试时，按官方建议改为显式 javaagent 配置。
+
+### B.8 Step 0.5 实测验证记录（Web 契约）
+
+| 验证项 | 结论 | 证据 |
+| --- | --- | --- |
+| Boot 4 的 Jackson 3 自定义序列化方案 | ✅ **`@JacksonComponent` + `ValueSerializer<Long>` 生效** | 雪花 ID 序列化为 `"2104750903666438145"`（带引号） |
+| 基本类型计数保持数字 | ✅ | `totalTokens` = `42`（无引号），支撑 ADR-017 的"ID 用 Long / 计数用基本类型"约定 |
+| 业务码 → HTTP 状态码映射 | ✅ | `3001 → 404`、`3006 → 413`、`1001 → 400`、`9999 → 500` |
+| 参数校验失败带字段级提示 | ✅ | `{"code":1001,"message":"name: name 不能为空"}` |
+| 未预知异常不泄漏堆栈 | ✅ | body 中不含 `IllegalStateException` 与异常消息，只给 requestId |
+| 请求 ID 透传与日志注入防护 | ✅ | 合法上游 ID 原样回写；含换行符的恶意 ID 被替换为随机 ID |
+| Boot 4 的 Web 测试模块拆分 | ⚠️ **踩坑记录** | `@AutoConfigureMockMvc` 已移到独立模块 `spring-boot-webmvc-test`，包名改为 `org.springframework.boot.webmvc.test.autoconfigure`，**不再随 `spring-boot-starter-test` 提供** |
+| Spring 7 废弃常量 | ⚠️ **踩坑记录** | `HttpStatus.PAYLOAD_TOO_LARGE → CONTENT_TOO_LARGE`、`UNPROCESSABLE_ENTITY → UNPROCESSABLE_CONTENT`；测试断言 `isPayloadTooLarge() → isContentTooLarge()` |
+
+**测试总览（`mvn -B clean test`）**：`akh-common` 10 通过 / `akh-app` 9 通过，**0 失败**。
 
 ---
 

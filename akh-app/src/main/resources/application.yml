@@ -17,6 +17,10 @@ server:
   shutdown: graceful
 
 logging:
+  # 日志模板里带上 MDC 中的 requestId（由 RequestIdFilter 写入）：
+  # 排查问题时只需用户提供响应头 X-Request-Id，即可捞出该请求的全部日志
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{requestId:-no-request}] %logger{40} - %msg%n"
   level:
     root: INFO
     com.lky.akh: DEBUG

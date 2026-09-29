@@ -104,6 +104,14 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Boot 4 把 Web MVC 的测试支持拆成了独立模块（不再是 spring-boot-starter-test 的一部分），
+             @AutoConfigureMockMvc 位于 org.springframework.boot.webmvc.test.autoconfigure -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
