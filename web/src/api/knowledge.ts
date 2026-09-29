@@ -125,6 +125,28 @@ export interface SearchHit {
 
 export type SearchMode = 'hybrid' | 'bm25' | 'vector'
 
+export interface RagCitation {
+  /** 资料块编号，与回答里的 [n] 对应 */
+  index: number
+  chunkId: string
+  documentId: string
+  documentTitle: string | null
+  headingPath: string | null
+  snippet: string
+  score: number
+  /** 回答是否真的引用了它（未引用也返回，便于核对模型有没有漏引） */
+  referenced: boolean
+}
+
+export interface RagAnswer {
+  answer: string
+  citations: RagCitation[]
+  contextTokens: number
+  truncated: number
+  reranked: boolean
+  costMillis: number
+}
+
 // ---------- 认证 ----------
 
 export function register(username: string, password: string) {
@@ -224,4 +246,9 @@ export function search(id: string, q: string, topK = 10, mode: SearchMode = 'hyb
   return client.get<never, SearchHit[]>(`/knowledge-bases/${id}/search`, {
     params: { q, topK, mode }
   })
+}
+
+/** RAG 问答：检索 → 重排 → 组装 → 生成，返回带引用的回答。 */
+export function askQuestion(id: string, question: string, topK = 12) {
+  return client.post<never, RagAnswer>(`/knowledge-bases/${id}/ask`, { question, topK })
 }

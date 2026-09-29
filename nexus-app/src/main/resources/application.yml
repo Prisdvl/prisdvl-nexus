@@ -115,6 +115,11 @@ nexus:
       # 索引期用最细粒度（召回高），检索期用粗粒度（精确度高）—— IK 的推荐用法
       index: ${NEXUS_ES_INDEX_ANALYZER:ik_max_word}
       search: ${NEXUS_ES_SEARCH_ANALYZER:ik_smart}
+  rag:
+    # LLM 重排开关：关掉后保持召回顺序（重排失败时也会自动走这条路径）
+    rerank-enabled: ${NEXUS_RAG_RERANK:true}
+    # 送进模型的资料块 Token 预算：超出时从最低分开始丢，并如实告知被截断的段数
+    context-token-budget: ${NEXUS_RAG_CONTEXT_BUDGET:2000}
 
 # ============================================================
 # 模型可替换层（ADR-003）

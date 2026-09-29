@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { MagicStick, Refresh, Search, UploadFilled } from '@element-plus/icons-vue'
 import {
+  askQuestion,
   buildIndex,
   embedChunks,
   getDocument,
@@ -19,6 +20,7 @@ import {
   type DocumentSummary,
   type ImportTask,
   type KnowledgeBase,
+  type RagAnswer,
   type SearchHit,
   type SearchMode
 } from '@/api/knowledge'
@@ -49,6 +51,13 @@ const topK = ref(10)
 const searching = ref(false)
 const hits = ref<SearchHit[]>([])
 const searchedFor = ref('')
+
+// 问答（RAG）
+const question = ref('')
+const asking = ref(false)
+const ragAnswer = ref<RagAnswer | null>(null)
+const answerHtml = ref('')
+const answerRef = ref<HTMLElement | null>(null)
 
 const filteredDocuments = computed(() => {
   const keyword = docFilter.value.trim().toLowerCase()
@@ -131,15 +140,43 @@ async function doSearch() {
 
 /** 点检索结果 → 定位到对应文档与标题（引用定位的第一步）。 */
 async function openHit(hit: SearchHit) {
-  await selectDocument(hit.documentId)
+  await jumpTo(hit.documentId, hit.headingPath)
+}
+
+/** 点引用 → 同样定位到原文（引用必须能落到原文，否则只是装饰）。 */
+async function openCitation(citation: RagAnswer['citations'][number]) {
+  await jumpTo(citation.documentId, citation.headingPath)
+}
+
+async function jumpTo(documentId: string, headingPath: string | null) {
+  await selectDocument(documentId)
   activeTab.value = 'content'
-  if (hit.headingPath) {
-    const leaf = hit.headingPath.split('>').pop()?.trim()
+  if (headingPath) {
+    const leaf = headingPath.split('>').pop()?.trim()
     const index = detail.value?.headings.findIndex((heading) => heading.text === leaf) ?? -1
     if (index >= 0) {
       await nextTick()
       scrollToHeading(index)
     }
+  }
+}
+
+/** RAG 问答：检索 → 重排 → 组装 → 生成，返回带 [n] 引用的回答。 */
+async function doAsk() {
+  if (!question.value.trim()) {
+    ElMessage.warning('请输入问题')
+    return
+  }
+  asking.value = true
+  try {
+    const answer = await askQuestion(kbId, question.value.trim(), topK.value)
+    ragAnswer.value = answer
+    answerHtml.value = renderMarkdown(answer.answer)
+    activeTab.value = 'ask'
+    await nextTick()
+    highlightWithin(answerRef.value)
+  } finally {
+    asking.value = false
   }
 }
 
@@ -411,6 +448,51 @@ watch(activeTab, () => {
                 <p class="snippet">{{ hit.content }}</p>
               </li>
             </ol>
+          </el-tab-pane>
+          <el-tab-pane label="问答" name="ask">
+            <div class="search-box">
+              <el-input
+                v-model="question"
+                placeholder="例如：缓存击穿有哪些解决方案？"
+                clearable
+                @keyup.enter="doAsk"
+              />
+              <el-button type="primary" :icon="MagicStick" :loading="asking" @click="doAsk">
+                提问
+              </el-button>
+            </div>
+            <p class="hint">
+              链路：混合检索（RRF）→ LLM 重排 → 上下文组装（Token 预算 + 去重 + 编号）→ 生成。
+              回答里的 [n] 对应下方引用，点引用可跳到原文小节。
+            </p>
+
+            <div v-if="ragAnswer" class="answer-block">
+              <div class="answer-meta">
+                <span class="num">资料 {{ ragAnswer.citations.length }} 段 / {{ ragAnswer.contextTokens }} tok</span>
+                <span class="num" v-if="ragAnswer.truncated">被预算截断 {{ ragAnswer.truncated }} 段</span>
+                <el-tag size="small" effect="plain" :type="ragAnswer.reranked ? 'success' : 'info'">
+                  {{ ragAnswer.reranked ? '已重排' : '未重排（保持召回顺序）' }}
+                </el-tag>
+                <span class="num">{{ ragAnswer.costMillis }} ms</span>
+              </div>
+              <!-- eslint-disable-next-line vue/no-v-html -- 内容经 marked + DOMPurify 处理 -->
+              <article ref="answerRef" class="markdown answer" v-html="answerHtml" />
+
+              <div v-if="ragAnswer.citations.length" class="citations">
+                <div class="outline-head">引用</div>
+                <ol>
+                  <li v-for="citation in ragAnswer.citations" :key="citation.chunkId" @click="openCitation(citation)">
+                    <span class="cite-index num">[{{ citation.index }}]</span>
+                    <span class="cite-where">
+                      {{ citation.documentTitle || '未命名文档' }}
+                      <template v-if="citation.headingPath"> › {{ citation.headingPath }}</template>
+                    </span>
+                    <el-tag v-if="citation.referenced" size="small" effect="plain" type="success">已引用</el-tag>
+                    <span class="cite-snippet">{{ citation.snippet }}</span>
+                  </li>
+                </ol>
+              </div>
+            </div>
           </el-tab-pane>
         </el-tabs>
       </section>
@@ -873,6 +955,82 @@ watch(activeTab, () => {
   display: -webkit-box;
   -webkit-line-clamp: 4;
   line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 问答块 */
+.answer-block {
+  margin-top: var(--space-4);
+}
+
+.answer-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  color: var(--neutral-500);
+  font-size: 12px;
+  margin-bottom: var(--space-2);
+}
+
+.answer {
+  padding: var(--space-4);
+  background: var(--neutral-50);
+  border: 1px solid var(--neutral-200);
+  border-left: 2px solid var(--accent-400);
+  border-radius: var(--radius-input);
+  max-width: 80ch;
+}
+
+.citations {
+  margin-top: var(--space-4);
+}
+
+.citations ol {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.citations li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-2) var(--space-3);
+  background: var(--neutral-0);
+  border: 1px solid var(--neutral-200);
+  border-radius: var(--radius-input);
+  cursor: pointer;
+  transition: border-color 120ms ease-out;
+}
+
+.citations li:hover {
+  border-color: var(--accent-400);
+}
+
+.cite-index {
+  font-family: var(--font-mono);
+  color: var(--accent-600);
+  font-size: 12px;
+}
+
+.cite-where {
+  font-size: 12.5px;
+  color: var(--neutral-700);
+}
+
+.cite-snippet {
+  grid-column: 2 / -1;
+  font-size: 12px;
+  color: var(--neutral-500);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
