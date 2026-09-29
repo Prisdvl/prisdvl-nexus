@@ -62,13 +62,14 @@ class DocumentQueryTest {
                 .andExpect(jsonPath("$.data.total").value(2))
                 .andReturn().getResponse().getContentAsString();
 
-        // 诊断：区分"写入时没存"与"读取时没解析"——直接看数据库行（必须在响应断言之前执行）
+        // 把"写入侧存了什么"钉住：这一条让前三轮的排查结论变成永久回归防线。
+        // 注意：某些环境（H2 路径）里值会被二次编码成 "[...]"，读取侧已兼容并告警，
+        // 因此这里只断言内容包含标签，不断言编码形态。
+        // 教训：诊断断言要断言**内容**而不是 isNotNull——空字符串同样能通过非空断言。
         DocumentPO stored = documentMapper.selectList(Wrappers.<DocumentPO>lambdaQuery()
                 .eq(DocumentPO::getKbId, kbId)).get(0);
-        assertThat(stored.getTags())
-                .as("数据库里的 tags 应为 JSON 数组（若为 null 说明读取侧没取到该列）")
-                .isNotNull();
-        assertThat(stored.getHeadingTree()).as("数据库里的 heading_tree 不应为空").isNotNull();
+        assertThat(stored.getTags()).as("库里应存有标签").contains("java");
+        assertThat(stored.getHeadingTree()).as("库里应存有标题树").contains("level");
 
         // 标签以数组返回（库里存的是 JSON 字符串，解析是服务端的事）
         String listJson = JsonPath.read(body, "$.data.list").toString();

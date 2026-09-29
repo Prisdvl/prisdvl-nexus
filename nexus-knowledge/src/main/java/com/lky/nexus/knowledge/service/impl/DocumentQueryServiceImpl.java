@@ -152,7 +152,7 @@ public class DocumentQueryServiceImpl implements DocumentQueryService {
             return List.of();
         }
         try {
-            JsonNode array = jsonMapper.readTree(headingTreeJson);
+            JsonNode array = unwrapDoubleEncoded(jsonMapper.readTree(headingTreeJson), "heading_tree");
             if (!array.isArray()) {
                 return List.of();
             }
@@ -191,13 +191,22 @@ public class DocumentQueryServiceImpl implements DocumentQueryService {
                 document.getUpdatedAt());
     }
 
-    /** 标签在库里是 JSON 字符串；解析失败按空处理（展示层不该因脏数据整页失败）。 */
+    /**
+     * 标签在库里是 JSON 字符串；解析失败按空处理（展示层不该因脏数据整页失败）。
+     *
+     * <p><b>兼容"被二次编码"的值</b>：实测在某些环境（H2 路径）里，写进去的是
+     * {@code "[\"java\",\"springboot\"]"}——即 JSON 数组又被序列化了一次。
+     * 这时 {@code readTree} 得到的是<b>字符串节点</b>而非数组，若直接判 {@code isArray()} 就会
+     * 静默返回空标签（这个 bug 让两条测试失败了三轮才定位）。
+     * 因此这里遇到字符串节点就再解析一次，并把这种情况告警出来——
+     * 兼容是为了不丢数据，告警是为了不再隐身。
+     */
     private List<String> parseTags(String tagsJson) {
         if (tagsJson == null || tagsJson.isBlank()) {
             return List.of();
         }
         try {
-            JsonNode array = jsonMapper.readTree(tagsJson);
+            JsonNode array = unwrapDoubleEncoded(jsonMapper.readTree(tagsJson), "tags");
             if (!array.isArray()) {
                 return List.of();
             }
@@ -209,6 +218,19 @@ public class DocumentQueryServiceImpl implements DocumentQueryService {
         } catch (Exception ex) {
             log.warn("标签解析失败（返回空标签）：{}", ex.getMessage());
             return List.of();
+        }
+    }
+
+    /** 字符串节点 → 再解析一次（兼容被二次编码的历史数据）；其余原样返回。 */
+    private JsonNode unwrapDoubleEncoded(JsonNode node, String field) {
+        if (node == null || !node.isString()) {
+            return node;
+        }
+        log.warn("字段 {} 的值被二次编码（形如 \"[...]\"），已兼容解析；建议排查写入侧", field);
+        try {
+            return jsonMapper.readTree(node.asString());
+        } catch (Exception ex) {
+            return node;
         }
     }
 }
