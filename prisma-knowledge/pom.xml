@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  prisma-knowledge — 知识域核心库
+  职责：文档解析、结构化切分、Embedding、向量/BM25 索引、混合检索、重排、引用、知识关联。
+  约束（ADR-001）：不依赖 prisma-app；不引入 Spring Security；
+  租户隔离一律通过方法参数显式传入 userId，禁止使用 SecurityContextHolder。
+
+  依赖策略：本模块是「能力提供方」，因此把 AI 与数据访问依赖放在这里，
+  使 prisma-app 与（Phase 7 的）prisma-mcp-server 能复用同一套检索实现。
+  Step 0.2 只放最小依赖；AI/MyBatis/ES/向量库依赖在 Step 0.3 统一接入并验证。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.lky.prisma</groupId>
+        <artifactId>prisma</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>prisma-knowledge</artifactId>
+    <name>prisma-knowledge</name>
+    <description>知识域核心：解析 / 切分 / 嵌入 / 检索 / 引用 / 关联</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.lky.prisma</groupId>
+            <artifactId>prisma-common</artifactId>
+        </dependency>
+
+        <!-- Spring 容器与 Boot 基础设施（配置绑定、@Service 等） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- 持久化：知识域自己要写 kb_* 的 Mapper，因此在此显式声明（版本由父 POM 管理） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

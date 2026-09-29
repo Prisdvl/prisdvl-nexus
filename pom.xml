@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  AI Knowledge Hub — 聚合父 POM
+  Prisma — 聚合父 POM
   职责：统一版本、统一依赖管理、声明模块；不写任何业务代码。
 
   设计要点（见 docs/decisions.md ADR-001）：
   1) 以 spring-boot-starter-parent 为父：统一第三方依赖版本 + 插件默认配置。
   2) 额外 import spring-ai-bom 管理 Spring AI 全家桶版本（本项目不使用 1.x）。
   3) 内部模块版本集中在 dependencyManagement，子模块引用时不写版本号。
-  4) spring-boot-maven-plugin 只在「可执行应用」模块声明（akh-app / 未来的 akh-mcp-server）。
+  4) spring-boot-maven-plugin 只在「可执行应用」模块声明（prisma-app / 未来的 prisma-mcp-server）。
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -21,20 +21,20 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.lky.akh</groupId>
-    <artifactId>ai-knowledge-hub</artifactId>
+    <groupId>com.lky.prisma</groupId>
+    <artifactId>prisma</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
 
-    <name>ai-knowledge-hub</name>
+    <name>prisma</name>
     <description>Personal Knowledge Base &amp; Agent Platform — 个人知识库 + AI Agent 智能工作平台</description>
 
     <modules>
-        <module>akh-common</module>
-        <module>akh-ai</module>
-        <module>akh-knowledge</module>
-        <module>akh-app</module>
-        <!-- Phase 7 加入：<module>akh-mcp-server</module> -->
+        <module>prisma-common</module>
+        <module>prisma-ai</module>
+        <module>prisma-knowledge</module>
+        <module>prisma-app</module>
+        <!-- Phase 7 加入：<module>prisma-mcp-server</module> -->
     </modules>
 
     <properties>
@@ -68,18 +68,18 @@
 
             <!-- 内部模块 -->
             <dependency>
-                <groupId>com.lky.akh</groupId>
-                <artifactId>akh-common</artifactId>
+                <groupId>com.lky.prisma</groupId>
+                <artifactId>prisma-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.lky.akh</groupId>
-                <artifactId>akh-knowledge</artifactId>
+                <groupId>com.lky.prisma</groupId>
+                <artifactId>prisma-knowledge</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.lky.akh</groupId>
-                <artifactId>akh-ai</artifactId>
+                <groupId>com.lky.prisma</groupId>
+                <artifactId>prisma-ai</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

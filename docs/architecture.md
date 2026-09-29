@@ -1,4 +1,4 @@
-# 系统架构（AI Knowledge Hub）
+# 系统架构（Prisma）
 
 > STEP 1 设计稿。版本事实以官方文档/源码核对为准，核对结果与未决项见 [decisions.md](decisions.md#appendix-a-版本与-api-核对结果-2026-09-24)。
 
@@ -16,7 +16,7 @@ graph TB
         N["Nginx / Vite Dev Proxy"]
     end
 
-    subgraph App["akh-app — Spring Boot 4 模块化单体"]
+    subgraph App["prisma-app — Spring Boot 4 模块化单体"]
         AUTH["auth 认证授权"]
         CHAT["chat 会话与消息"]
         KB["knowledge 知识库管理"]
@@ -29,7 +29,7 @@ graph TB
         PR["prompt 提示词版本"]
     end
 
-    subgraph Knowledge["akh-knowledge — 知识域核心库"]
+    subgraph Knowledge["prisma-knowledge — 知识域核心库"]
         PARSE["Parser 解析"]
         CHUNK["Chunker 结构化切分"]
         EMB["Embedding 嵌入"]
@@ -52,7 +52,7 @@ graph TB
     end
 
     subgraph MCPX["Phase 7"]
-        MCP["akh-mcp-server 独立进程"]
+        MCP["prisma-mcp-server 独立进程"]
     end
 
     B --> N --> App
@@ -82,19 +82,19 @@ graph TB
 ### 2.1 Maven 多模块结构
 
 ```
-ai-knowledge-hub                     packaging=pom   只做 dependencyManagement + 版本统一
-├── akh-common                       jar             无 Spring Web 依赖
-├── akh-knowledge                    jar             依赖 akh-common
-├── akh-app                          Spring Boot jar 依赖 common + knowledge
-└── akh-mcp-server   (Phase 7)       Spring Boot jar 依赖 common + knowledge
+prisma                     packaging=pom   只做 dependencyManagement + 版本统一
+├── prisma-common                       jar             无 Spring Web 依赖
+├── prisma-knowledge                    jar             依赖 prisma-common
+├── prisma-app                          Spring Boot jar 依赖 common + knowledge
+└── prisma-mcp-server   (Phase 7)       Spring Boot jar 依赖 common + knowledge
 ```
 
 ```mermaid
 graph LR
-    C["akh-common"] --> K["akh-knowledge"]
-    C --> APP["akh-app"]
+    C["prisma-common"] --> K["prisma-knowledge"]
+    C --> APP["prisma-app"]
     K --> APP
-    C --> M["akh-mcp-server"]
+    C --> M["prisma-mcp-server"]
     K --> M
     APP -.禁止反向依赖.-> K
 ```
@@ -103,20 +103,20 @@ graph LR
 
 | 规则 | 理由 |
 | --- | --- |
-| `akh-common` 不依赖任何模块，不引入 Web/Security | 保证可被 MCP Server 复用 |
-| `akh-knowledge` 不依赖 `akh-app`，**不依赖 Spring Security 上下文** | MCP Server 也要用它；租户隔离通过**方法参数显式传 `userId`** 实现，禁止 `SecurityContextHolder` |
-| `akh-app` 才能有 `@RestController`、`SecurityFilterChain`、`@Transactional` 事务边界 | Web 关注点集中在一处 |
-| 归档 `akh-mcp-server` 与 `akh-app` 之间零依赖 | 拆服务的成本必须为零 |
+| `prisma-common` 不依赖任何模块，不引入 Web/Security | 保证可被 MCP Server 复用 |
+| `prisma-knowledge` 不依赖 `prisma-app`，**不依赖 Spring Security 上下文** | MCP Server 也要用它；租户隔离通过**方法参数显式传 `userId`** 实现，禁止 `SecurityContextHolder` |
+| `prisma-app` 才能有 `@RestController`、`SecurityFilterChain`、`@Transactional` 事务边界 | Web 关注点集中在一处 |
+| 归档 `prisma-mcp-server` 与 `prisma-app` 之间零依赖 | 拆服务的成本必须为零 |
 
 **执行方式**：用 ArchUnit 写 4 条测试，CI 里跑（Phase 11）。
 
-### 2.2 `akh-app` 内部分包（模块化单体）
+### 2.2 `prisma-app` 内部分包（模块化单体）
 
 ```
-com.lky.akh.app
+com.lky.prisma.app
 ├── auth/           账号、JWT、RBAC、Security 配置
 ├── chat/           会话、消息、SSE 流式、ChatMemory 编排
-├── knowledge/      知识库/文档 REST + 导入任务调度（业务逻辑委托给 akh-knowledge）
+├── knowledge/      知识库/文档 REST + 导入任务调度（业务逻辑委托给 prisma-knowledge）
 ├── rag/            检索增强编排：query 改写 → 检索 → 组装 → 生成 → 引用
 ├── agent/          Planner / Executor / Run 状态机 / 人工确认
 ├── tool/           工具注册表、权限校验、执行器、审计
@@ -127,10 +127,10 @@ com.lky.akh.app
 └── infra/          全局异常、统一返回、拦截器、配置、线程池、MQ 配置
 ```
 
-`akh-knowledge` 内部分包：
+`prisma-knowledge` 内部分包：
 
 ```
-com.lky.akh.knowledge
+com.lky.prisma.knowledge
 ├── model/          实体 + DTO + 枚举
 ├── parser/         Markdown / Txt / Pdf / Docx / Zip(Vault) 解析器
 ├── chunk/          结构化切分策略
@@ -282,7 +282,7 @@ sequenceDiagram
     W-->>U: SSE/轮询 进度直到 DONE
 ```
 
-**为什么必须异步**：导入 1000 篇 Markdown 时，Embedding 是"网络 + 计费 + 慢"的操作。HTTP 同步等待会占满 Tomcat 线程池、超时、无法重试。异步后：立即返回 `taskId`，MQ 削峰，失败可单文件重试，进度可观测（`akh:import:progress:{taskId}`）。
+**为什么必须异步**：导入 1000 篇 Markdown 时，Embedding 是"网络 + 计费 + 慢"的操作。HTTP 同步等待会占满 Tomcat 线程池、超时、无法重试。异步后：立即返回 `taskId`，MQ 削峰，失败可单文件重试，进度可观测（`prisma:import:progress:{taskId}`）。
 
 ### 5.2 读取链路（RAG 问答）
 
@@ -504,12 +504,12 @@ graph TB
 
 ```mermaid
 graph LR
-    subgraph A["akh-app 智能体进程"]
+    subgraph A["prisma-app 智能体进程"]
         AG["AgentExecutor"] --> TR["ToolRegistry"]
         TR --> MC["MCP Client 框架内建"]
     end
-    MC -->|Streamable HTTP + 内部 API Key| MS["akh-mcp-server"]
-    subgraph MSX["akh-mcp-server 进程"]
+    MC -->|Streamable HTTP + 内部 API Key| MS["prisma-mcp-server"]
+    subgraph MSX["prisma-mcp-server 进程"]
         MT["@McpTool searchKnowledge / getDocument / searchByTag / listKnowledgeBase"]
         MT --> KS["KnowledgeSearchService"]
     end
@@ -522,7 +522,7 @@ graph LR
 | 传输 | Streamable HTTP（不是已过时的 STDIO 教程结构）；服务端用 spring-ai MCP server webmvc starter |
 | 暴露能力 | 只读：`searchKnowledge`、`getDocument`、`searchByTag`、`listKnowledgeBase`（第一版**不暴露写工具**） |
 | 进程拆分 | 独立 Spring Boot 进程，端口独立、可单独重启（体现"MCP Server 是能力提供方，不是 app 的内部类"） |
-| 复用 | 依赖 `akh-knowledge`，与 app 共用同一套检索实现——避免"两套检索逻辑不一致" |
+| 复用 | 依赖 `prisma-knowledge`，与 app 共用同一套检索实现——避免"两套检索逻辑不一致" |
 | 鉴权 | 服务端校验内部 API Key（MCP Security 在 2.0 仍标 WIP，不依赖未定稿能力） |
 | 工具身份 | MCP 工具在 `ai_tool_registry` 中 `source=MCP`，权限默认 `READ`，同样参与权限矩阵与审计 |
 | 价值证明 | 任何支持 MCP 的客户端（如本地 IDE 助手）都能接入我的知识库——这才是 MCP 的意义：**能力与调用方解耦** |
@@ -643,7 +643,7 @@ graph TB
 graph TB
     U["浏览器"] --> NG["Nginx :80/:443 静态资源 + /api 反向代理"]
     NG --> FE["frontend 容器 Vue 构建产物"]
-    NG --> APP["akh-app :8080"]
+    NG --> APP["prisma-app :8080"]
     subgraph Infra["docker compose 基础设施"]
         MY[("mysql:8.4.11 :3306")]
         PG[("pgvector/pgvector:0.8.6-pg18 :5432")]
@@ -657,7 +657,7 @@ graph TB
     APP --> RD
     APP --> MQ
     APP -.可选.-> OL["ollama :11434"]
-    MCPC["akh-mcp-server :8090"] --> PG
+    MCPC["prisma-mcp-server :8090"] --> PG
     MCPC --> ES
     APP -.MCP.-> MCPC
 ```
@@ -674,16 +674,16 @@ graph TB
 
 | 模块 | Phase 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| akh-common | ✅ | | | | | | | | | | | 完善 |
-| akh-knowledge | 骨架 | | ✅解析切分 | ✅检索引用 | ✅关联 | ✅工具化 | | 复用 | 复用 | 复用 | | |
-| akh-app auth | ✅ | | | | | | | | | | | ✅加固 |
-| akh-app chat | | ✅ | | ✅RAG | | ✅ | ✅ | ✅ | | ✅ | ✅ | |
-| akh-app knowledge | | | ✅ | ✅ | ✅ | | | | | | | |
-| akh-app agent/tool | | | | | | ✅ | ✅ | ✅ | ✅ | | ✅ | |
-| akh-app workflow | | | | | | | | | ✅ | | | |
-| akh-app evaluation | | | | | | | | | | ✅ | | |
-| akh-app observability | | 埋点 | | 埋点 | | 埋点 | 埋点 | | 埋点 | 埋点 | ✅ | |
-| akh-mcp-server | | | | | | | | ✅ | | | | |
+| prisma-common | ✅ | | | | | | | | | | | 完善 |
+| prisma-knowledge | 骨架 | | ✅解析切分 | ✅检索引用 | ✅关联 | ✅工具化 | | 复用 | 复用 | 复用 | | |
+| prisma-app auth | ✅ | | | | | | | | | | | ✅加固 |
+| prisma-app chat | | ✅ | | ✅RAG | | ✅ | ✅ | ✅ | | ✅ | ✅ | |
+| prisma-app knowledge | | | ✅ | ✅ | ✅ | | | | | | | |
+| prisma-app agent/tool | | | | | | ✅ | ✅ | ✅ | ✅ | | ✅ | |
+| prisma-app workflow | | | | | | | | | ✅ | | | |
+| prisma-app evaluation | | | | | | | | | | ✅ | | |
+| prisma-app observability | | 埋点 | | 埋点 | | 埋点 | 埋点 | | 埋点 | 埋点 | ✅ | |
+| prisma-mcp-server | | | | | | | | ✅ | | | | |
 | frontend | 登录骨架 | Chat | 知识库页 | 引用定位 | | 工具页 | Agent 页 | MCP 页 | 工作流页 | 评测页 | 看板 | 适配 |
 
 ---

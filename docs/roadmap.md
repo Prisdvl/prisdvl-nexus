@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | 0.0 | 环境准备：安装 JDK 21、启动 Docker Desktop | `java -version` = 21；`docker ps` 正常 |
 | 0.1 | Git 初始化 + `.gitignore` + `.env.example` + 目录骨架 | 首次提交，密钥不入库 |
-| 0.2 | Maven 多模块骨架（root + akh-common + akh-knowledge + akh-app） | `mvn -q clean package` 成功 |
+| 0.2 | Maven 多模块骨架（root + prisma-common + prisma-knowledge + prisma-app） | `mvn -q clean package` 成功 |
 | 0.3 | 依赖基线：Spring Boot 4.1.x + spring-ai-bom 2.0.1 + MyBatis + Flyway + Security + MySQL/PG/Redis/AMQP starter | `mvn dependency:tree` 无冲突、无 1.x 遗留坐标 |
 | 0.4 | `deploy/docker-compose.yml`：MySQL、Redis、PostgreSQL(pgvector)、Elasticsearch(+IK)、RabbitMQ | `docker compose up -d` 全部 healthy |
 | 0.5 | 统一返回 + 错误码 + 全局异常处理 + RequestId 过滤器 | 故意抛异常，返回结构符合规范 |
@@ -148,7 +148,7 @@
 
 | Step | 任务 |
 | --- | --- |
-| 7.1 | 新建 `akh-mcp-server` 模块（Streamable HTTP，只读工具） |
+| 7.1 | 新建 `prisma-mcp-server` 模块（Streamable HTTP，只读工具） |
 | 7.2 | 暴露 `searchKnowledge` / `getDocument` / `searchByTag` / `listKnowledgeBase` |
 | 7.3 | app 侧 MCP Client 接入，工具并入 `ToolRegistry`（`source=MCP`，权限 READ） |
 | 7.4 | 内部鉴权（API Key）+ 连接状态与工具刷新接口 |

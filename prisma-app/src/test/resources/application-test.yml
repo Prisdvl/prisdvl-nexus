@@ -1,0 +1,58 @@
+# ============================================================
+# 测试 profile：用 H2 内存库验证数据访问层，不依赖 Docker
+# 目的：在基础设施（MySQL/Redis/ES via Docker）就绪之前，
+#       尽早验证 MyBatis-Plus 3.5.17 与 Spring Boot 4.1.1 的兼容性。
+# ============================================================
+spring:
+  datasource:
+    url: jdbc:h2:mem:prisma_test;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-h2.sql
+  flyway:
+    # 迁移脚本是 MySQL 方言，H2 测试中关闭；真实迁移在 Step 0.6 用 MySQL 验证
+    enabled: false
+
+# 测试专用 JWT 密钥：仅测试使用，绝不用于任何真实环境
+prisma:
+  jwt:
+    secret: test-only-jwt-secret-0123456789-abcdefghijklmnop
+    issuer: prisma-test
+    access-token-ttl: 30m
+
+# 测试用模型配置：
+# 覆盖 providers 列表（Spring Boot 中 profile 的 list 会整体替换，不是合并），
+# 用一个明显是假值的 api-key，让注册表能够构建模型对象（构建不发起网络请求）。
+ai:
+  defaults:
+    temperature: 0.7
+  providers:
+    - name: deepseek
+      type: OPENAI_COMPATIBLE
+      # 支持用环境变量切供应商：AI_CHAT_BASE_URL / AI_CHAT_MODEL / AI_CHAT_API_KEY
+      # 未设置时用假 Key（构建模型不发请求，所以测试照常通过；真实调用由 LiveModelCallTest 守卫）
+      base-url: ${AI_CHAT_BASE_URL:https://api.deepseek.com}
+      api-key: ${AI_CHAT_API_KEY:sk-test-dummy-key-not-a-real-credential-0123456789}
+      models:
+        - name: ${AI_CHAT_MODEL:deepseek-chat}
+          context-window: 65536
+          capabilities: [CHAT, TOOL_CALLING, JSON]
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: assign_id
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+logging:
+  level:
+    com.lky.prisma: DEBUG

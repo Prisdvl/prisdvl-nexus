@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  prisma-app — 可执行应用（模块化单体）
+  职责：Web 层（auth / chat / knowledge / rag / agent / tool / workflow / evaluation / observability / prompt）
+        + 全局配置 + 事务边界 + 安全。
+  这是唯一声明 spring-boot-maven-plugin 的模块（可执行 jar）。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.lky.prisma</groupId>
+        <artifactId>prisma</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>prisma-app</artifactId>
+    <name>prisma-app</name>
+    <description>Prisma 应用：模块化单体 Web 层</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.lky.prisma</groupId>
+            <artifactId>prisma-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.lky.prisma</groupId>
+            <artifactId>prisma-ai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.lky.prisma</groupId>
+            <artifactId>prisma-knowledge</artifactId>
+        </dependency>
+
+        <!-- Web MVC：Boot 4 起 spring-boot-starter-web 已废弃，使用 spring-boot-starter-webmvc -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+
+        <!-- 参数校验 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- 可观测（Step 0.7 起用 /actuator/health 做验收） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- ========== 数据访问基线 ==========
+             prisma-app 也直接编写 Mapper（sys_* / chat_*），因此显式声明 MyBatis-Plus。
+             Boot 4 必须使用 mybatis-plus-spring-boot4-starter（3.x 系列仅供 Boot 3，禁用）。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
+        </dependency>
+
+        <!-- 数据库驱动：MySQL 为业务真源，PostgreSQL 承载 pgvector 向量索引 -->
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- 数据库迁移：MySQL 与 PostgreSQL 都需要各自的 Flyway 方言模块 -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
+        <!-- 安全：JWT 资源服务器。
+             注意 Boot 4 的坐标变化——旧的 spring-boot-starter-oauth2-resource-server 的 POM 描述已写明
+             "deprecated in favor of spring-boot-starter-security-oauth2-resource-server"。
+             该 starter 传递引入 spring-boot-starter-security 与 spring-security-oauth2-jose（含 Nimbus）。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+        </dependency>
+
+        <!-- 测试用内存库：让 MyBatis-Plus / Mapper 的兼容性验证不依赖 Docker -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Boot 4 把 Web MVC 的测试支持拆成了独立模块（不再是 spring-boot-starter-test 的一部分），
+             @AutoConfigureMockMvc 位于 org.springframework.boot.webmvc.test.autoconfigure -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- 安全测试支持：@WithMockUser 等（本步先引入，Step 1.1 的用例主要用真实 Token） -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
