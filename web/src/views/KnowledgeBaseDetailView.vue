@@ -9,6 +9,7 @@ import {
   embedChunks,
   getDocument,
   getImportTask,
+  getQaHistory,
   listChunks,
   listDocuments,
   listKnowledgeBases,
@@ -36,7 +37,7 @@ const busy = ref('')
 const task = ref<ImportTask | null>(null)
 
 const docFilter = ref('')
-const activeTab = ref<'content' | 'chunks' | 'search'>('content')
+const activeTab = ref<'content' | 'chunks' | 'search' | 'ask'>('content')
 
 const selectedId = ref<string>('')
 const detail = ref<DocumentDetail | null>(null)
@@ -58,6 +59,10 @@ const asking = ref(false)
 const ragAnswer = ref<RagAnswer | null>(null)
 const answerHtml = ref('')
 const answerRef = ref<HTMLElement | null>(null)
+/** 本次会话内的问答轮次（用于追问时带上上下文） */
+const qaTurns = ref<Array<{ question: string; answer: string }>>([])
+/** 服务端留档的历史记录 */
+const qaHistory = ref<RagAnswer[]>([])
 
 const filteredDocuments = computed(() => {
   const keyword = docFilter.value.trim().toLowerCase()
@@ -83,6 +88,7 @@ async function load() {
     kb.value = page.list.find((item) => item.id === kbId) ?? null
     const docs = await listDocuments(kbId, 1, 200)
     documents.value = docs.list
+    await loadQaHistory()
     if (!selectedId.value && docs.list.length > 0) {
       await selectDocument(docs.list[0].id)
     }
@@ -168,16 +174,44 @@ async function doAsk() {
     return
   }
   asking.value = true
+  const asked = question.value.trim()
   try {
-    const answer = await askQuestion(kbId, question.value.trim(), topK.value)
+    // 带上最近两轮问答：让"那它有什么缺点？"这类省略主语的追问能被理解
+    const history = qaTurns.value.slice(-2).map((turn) => ({
+      question: turn.question,
+      answer: turn.answer
+    }))
+    const answer = await askQuestion(kbId, asked, topK.value, history)
     ragAnswer.value = answer
     answerHtml.value = renderMarkdown(answer.answer)
+    qaTurns.value.push({ question: asked, answer: answer.answer })
     activeTab.value = 'ask'
     await nextTick()
     highlightWithin(answerRef.value)
+    await loadQaHistory()
   } finally {
     asking.value = false
   }
+}
+
+async function loadQaHistory() {
+  try {
+    qaHistory.value = await getQaHistory(kbId, 8)
+  } catch {
+    // 历史加载失败不影响当前回答
+  }
+}
+
+/** 点历史记录 → 把它重新显示出来（含引用）。 */
+function restoreHistory(record: RagAnswer) {
+  ragAnswer.value = record
+  answerHtml.value = renderMarkdown(record.answer)
+  nextTick(() => highlightWithin(answerRef.value))
+}
+
+function clearTurns() {
+  qaTurns.value = []
+  ElMessage.info('已清空追问上下文（下一个问题将作为独立问题处理）')
 }
 
 function pickFile() {
@@ -492,6 +526,28 @@ watch(activeTab, () => {
                   </li>
                 </ol>
               </div>
+
+              <div class="ask-actions">
+                <span class="hint">
+                  追问时会带上最近 2 轮问答作为上下文（{{ qaTurns.length }} 轮）
+                </span>
+                <el-button v-if="qaTurns.length" link size="small" @click="clearTurns">清空上下文</el-button>
+              </div>
+            </div>
+
+            <!-- 留档历史：回看"当时依据了哪些资料" -->
+            <div v-if="qaHistory.length" class="qa-history">
+              <div class="outline-head">问答历史（已留档 {{ qaHistory.length }} 条）</div>
+              <ul>
+                <li
+                  v-for="(record, index) in qaHistory"
+                  :key="record.recordId ?? index"
+                  @click="restoreHistory(record)"
+                >
+                  <span class="cite-where">{{ record.answer.slice(0, 48) }}…</span>
+                  <span class="num">{{ record.citations.length }} 引用 · {{ record.costMillis }} ms</span>
+                </li>
+              </ul>
             </div>
           </el-tab-pane>
         </el-tabs>
@@ -1011,6 +1067,45 @@ watch(activeTab, () => {
 
 .citations li:hover {
   border-color: var(--accent-400);
+}
+
+.ask-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.qa-history {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--neutral-200);
+}
+
+.qa-history ul {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.qa-history li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 6px 10px;
+  border-radius: var(--radius-input);
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--neutral-600);
+}
+
+.qa-history li:hover {
+  background: var(--accent-50);
+  color: var(--accent-600);
 }
 
 .cite-index {

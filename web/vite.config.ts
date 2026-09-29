@@ -1,4 +1,3 @@
-import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
@@ -7,8 +6,9 @@ export default defineConfig({
   resolve: {
     // 关键：tsconfig.json 里的 paths 只影响类型检查，打包器不认。
     // Vite 必须在这里再声明一次别名，否则运行时会报 "Failed to resolve import @/..."。
+    // 用 '/src' 这种"相对项目根"的写法，避免为 node:url 引入 @types/node。
     alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url))
+      '@': '/src'
     }
   },
   server: {

@@ -44,6 +44,14 @@ public class RagAnswerServiceImpl implements RagAnswerService {
     /** 回答里引用的编号：{@code [1]}、{@code [2,3]}、{@code [1][2]} 都要能认出来。 */
     private static final Pattern CITATION_INDEX = Pattern.compile("\\[(\\d+(?:\\s*,\\s*\\d+)*)]");
 
+    /**
+     * 重排的候选条数上限。
+     *
+     * <p>重排是一次 LLM 调用，是整条链路里最贵的一步（实测占端到端延迟的大头）。
+     * 只对前 8 条重排、其余保持原顺序跟在后面：既显著缩短延迟，也不丢召回结果。
+     */
+    private static final int RERANK_CANDIDATES = 8;
+
     private static final String SYSTEM_PROMPT = """
             你是知识库问答助手。规则：
             1. 只依据用户提供的【资料】回答，不要使用资料之外的知识；
@@ -93,7 +101,8 @@ public class RagAnswerServiceImpl implements RagAnswerService {
     }
 
     @Override
-    public RagAnswer ask(Long userId, Long knowledgeBaseId, String question, int topK) {
+    public RagAnswer ask(Long userId, Long knowledgeBaseId, String question, int topK,
+                         List<RagTurn> history) {
         long start = System.currentTimeMillis();
         knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
         if (question == null || question.isBlank()) {
@@ -101,27 +110,26 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         }
 
         // ① 混合检索（RRF 融合）
+        //    注意检索用"消解指代后"的查询：追问常常省略主语（"那它有什么缺点？"），
+        //    直接拿它去检索几乎召回不到东西——实测会返回"资料中没有相关内容"。
+        //    这里用最省的启发式（拼上一轮问题），不额外调模型；更彻底的做法是
+        //    先用 LLM 把追问改写为独立问题（代价是多一次调用，留作后续优化）。
+        String retrievalQuery = buildRetrievalQuery(question, history);
         List<ChunkSearchService.SearchHit> hits =
-                chunkSearchService.search(userId, knowledgeBaseId, question, topK, SearchMode.HYBRID);
+                chunkSearchService.search(userId, knowledgeBaseId, retrievalQuery, topK, SearchMode.HYBRID);
         if (hits.isEmpty()) {
             return finish("资料中没有相关内容（知识库尚未导入或未建立索引）。",
                     List.of(), 0, 0, false, start, knowledgeBaseId, userId, question);
         }
 
-        // ② 重排（失败即降级）
-        List<ChunkSearchService.SearchHit> ordered = hits;
-        List<Double> scores = reranker.score(question, candidatesOf(hits));
-        boolean reranked = scores.size() == hits.size();
-        if (reranked) {
-            List<ScoredHit> scored = new ArrayList<>(hits.size());
-            for (int i = 0; i < hits.size(); i++) {
-                scored.add(new ScoredHit(hits.get(i), scores.get(i)));
-            }
-            ordered = scored.stream()
-                    .sorted(Comparator.comparingDouble(ScoredHit::score).reversed())
-                    .map(ScoredHit::hit)
-                    .toList();
-        }
+        // ② 重排（失败即降级）。只对前 N 条重排：
+        //    重排是最贵的一步（一次 LLM 调用），而靠后的候选本来也很难进最终资料块，
+        //    把范围收窄能显著缩短端到端延迟，召回深度不受影响。
+        long rerankStart = System.currentTimeMillis();
+        List<Double> scores = reranker.score(question, candidatesOf(headWithin(hits)));
+        long rerankMs = System.currentTimeMillis() - rerankStart;
+        boolean reranked = scores.size() == RERANK_CANDIDATES;
+        List<ChunkSearchService.SearchHit> ordered = reranked ? reorder(hits, scores) : hits;
 
         // ③ 组装上下文
         ContextAssembler.AssembledContext context = contextAssembler.assemble(ordered, contextTokenBudget);
@@ -130,25 +138,72 @@ public class RagAnswerServiceImpl implements RagAnswerService {
                     knowledgeBaseId, userId, question);
         }
 
-        // ④ 生成
-        String answer = generate(question, context.text());
+        // ④ 生成（带历史，支持省略主语的追问）
+        long generateStart = System.currentTimeMillis();
+        String answer = generate(question, context.text(), history);
+        long generateMs = System.currentTimeMillis() - generateStart;
 
         // ⑤ 引用归位：编号 ↔ 资料块顺序一致
         List<RagAnswer.RagCitation> citations = toCitations(context, answer);
 
-        log.info("RAG 回答 kbId={} 问题「{}」：召回 {} 条 → 重排 {} → 资料 {} 段（{} tok）→ 引用 {} 条，耗时 {} ms",
-                knowledgeBaseId, question, hits.size(), reranked, context.used().size(), context.tokens(),
-                citations.size(), System.currentTimeMillis() - start);
+        log.info("""
+                        RAG 回答 kbId={} 问题「{}」：召回 {} 条 → 重排 {} 条 {} ms（{}）→ 资料 {} 段（{} tok）\
+                        → 生成 {} ms → 引用 {} 条，耗时 {} ms""",
+                knowledgeBaseId, question, hits.size(), Math.min(hits.size(), RERANK_CANDIDATES),
+                rerankMs, reranked ? "已重排" : "降级", context.used().size(), context.tokens(),
+                generateMs, citations.size(), System.currentTimeMillis() - start);
         return finish(answer, citations, context.tokens(), context.truncated(), reranked, start,
                 knowledgeBaseId, userId, question);
     }
 
-    private String generate(String question, String contextText) {
+    private List<ChunkSearchService.SearchHit> headWithin(List<ChunkSearchService.SearchHit> hits) {
+        return hits.size() > RERANK_CANDIDATES ? hits.subList(0, RERANK_CANDIDATES) : hits;
+    }
+
+    /** 追问的检索查询 = 上一轮问题 + 当前问题（消解省略主语的指代）。 */
+    private String buildRetrievalQuery(String question, List<RagTurn> history) {
+        if (history == null || history.isEmpty()) {
+            return question;
+        }
+        String previous = history.get(history.size() - 1).question();
+        return previous == null || previous.isBlank() ? question : previous + " " + question;
+    }
+
+    /** 只重排前 N 条，其余保持原相对顺序跟在后面（不因重排丢掉召回结果）。 */
+    private List<ChunkSearchService.SearchHit> reorder(List<ChunkSearchService.SearchHit> hits,
+                                                       List<Double> scores) {
+        int headSize = Math.min(hits.size(), RERANK_CANDIDATES);
+        List<ScoredHit> head = new ArrayList<>(headSize);
+        for (int i = 0; i < headSize; i++) {
+            head.add(new ScoredHit(hits.get(i), scores.get(i)));
+        }
+        List<ChunkSearchService.SearchHit> ordered = new ArrayList<>(hits.size());
+        head.stream()
+                .sorted(Comparator.comparingDouble(ScoredHit::score).reversed())
+                .forEach(scored -> ordered.add(scored.hit()));
+        ordered.addAll(hits.subList(headSize, hits.size()));
+        return ordered;
+    }
+
+    private String generate(String question, String contextText, List<RagTurn> history) {
+        StringBuilder user = new StringBuilder();
+        if (history != null && !history.isEmpty()) {
+            user.append("【之前的问答（仅用于理解指代，不要重复回答）】\n");
+            for (RagTurn turn : history) {
+                user.append("问：").append(turn.question()).append('\n');
+                if (turn.answerSummary() != null && !turn.answerSummary().isBlank()) {
+                    user.append("答：").append(turn.answerSummary()).append('\n');
+                }
+            }
+            user.append('\n');
+        }
+        user.append("【资料】\n").append(contextText).append("\n\n【问题】\n").append(question);
+
         try {
             ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_DEFAULT);
             return client.prompt()
                     .system(SYSTEM_PROMPT)
-                    .user("【资料】\n" + contextText + "\n\n【问题】\n" + question)
+                    .user(user.toString())
                     .call()
                     .content();
         } catch (Exception ex) {

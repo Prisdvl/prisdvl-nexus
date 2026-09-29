@@ -139,6 +139,8 @@ export interface RagCitation {
 }
 
 export interface RagAnswer {
+  /** 留档记录 id（用于问答历史；旧记录可能为空） */
+  recordId: string | null
   answer: string
   citations: RagCitation[]
   contextTokens: number
@@ -249,6 +251,16 @@ export function search(id: string, q: string, topK = 10, mode: SearchMode = 'hyb
 }
 
 /** RAG 问答：检索 → 重排 → 组装 → 生成，返回带引用的回答。 */
-export function askQuestion(id: string, question: string, topK = 12) {
-  return client.post<never, RagAnswer>(`/knowledge-bases/${id}/ask`, { question, topK })
+export function askQuestion(
+  id: string,
+  question: string,
+  topK = 12,
+  history: Array<{ question: string; answer: string }> = []
+) {
+  return client.post<never, RagAnswer>(`/knowledge-bases/${id}/ask`, { question, topK, history })
+}
+
+/** 问答历史（含引用），用于回看"当时依据了哪些资料"。 */
+export function getQaHistory(id: string, limit = 10) {
+  return client.get<never, RagAnswer[]>(`/knowledge-bases/${id}/qa-history`, { params: { limit } })
 }

@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 /**
  * RAG 问答接口（非流式 MVP）。
  *
@@ -37,15 +39,40 @@ public class KnowledgeRagController {
                                  @RequestBody AskRequest request) {
         int topK = request.topK() == null ? 12 : Math.clamp(request.topK(), 1, MAX_TOP_K);
         return Result.ok(ragAnswerService.ask(CurrentUser.requireId(), knowledgeBaseId,
-                request.question(), topK));
+                request.question(), topK, toTurns(request.history())));
     }
 
-    public record AskRequest(@NotBlank String question, Integer topK) {
+    /** 前端只传"上一轮的问题 + 回答开头"，避免把上下文撑爆（多轮不等于无限塞历史）。 */
+    private List<RagAnswerService.RagTurn> toTurns(List<HistoryTurn> history) {
+        if (history == null || history.isEmpty()) {
+            return List.of();
+        }
+        return history.stream()
+                .filter(turn -> turn.question() != null && !turn.question().isBlank())
+                .limit(3)
+                .map(turn -> new RagAnswerService.RagTurn(turn.question().trim(),
+                        summarize(turn.answer())))
+                .toList();
+    }
+
+    private String summarize(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return null;
+        }
+        String flat = answer.replaceAll("\\s+", " ").trim();
+        return flat.length() <= 300 ? flat : flat.substring(0, 300) + "…";
+    }
+
+    public record AskRequest(@NotBlank String question, Integer topK, List<HistoryTurn> history) {
+    }
+
+    /** 一轮历史问答（前端把上一轮的问题与回答回传，服务端不维护会话状态）。 */
+    public record HistoryTurn(String question, String answer) {
     }
 
     /** 最近的问答记录（含引用），用于回看"当时依据了哪些资料"。 */
     @org.springframework.web.bind.annotation.GetMapping("/{knowledgeBaseId}/qa-history")
-    public Result<java.util.List<RagAnswer>> history(
+    public Result<List<RagAnswer>> history(
             @PathVariable Long knowledgeBaseId,
             @org.springframework.web.bind.annotation.RequestParam(defaultValue = "10") int limit) {
         return Result.ok(ragAnswerService.listHistory(CurrentUser.requireId(), knowledgeBaseId, limit));
