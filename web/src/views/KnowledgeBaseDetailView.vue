@@ -9,6 +9,7 @@ import {
   buildIndex,
   embedChunks,
   getDocument,
+  getDocumentLinks,
   getImportTask,
   getQaHistory,
   listChunks,
@@ -19,6 +20,7 @@ import {
   uploadVault,
   type ChunkView,
   type DocumentDetail,
+  type DocumentLinks,
   type DocumentSummary,
   type ImportTask,
   type KnowledgeBase,
@@ -44,6 +46,7 @@ const selectedId = ref<string>('')
 const detail = ref<DocumentDetail | null>(null)
 const detailLoading = ref(false)
 const chunks = ref<ChunkView[]>([])
+const links = ref<DocumentLinks | null>(null)
 const articleRef = ref<HTMLElement | null>(null)
 const renderedHtml = ref('')
 
@@ -111,12 +114,14 @@ async function selectDocument(documentId: string) {
   selectedId.value = documentId
   detailLoading.value = true
   try {
-    const [doc, chunkList] = await Promise.all([
+    const [doc, chunkList, linkList] = await Promise.all([
       getDocument(kbId, documentId),
-      listChunks(kbId, documentId)
+      listChunks(kbId, documentId),
+      getDocumentLinks(kbId, documentId)
     ])
     detail.value = doc
     chunks.value = chunkList
+    links.value = linkList
     renderedHtml.value = renderMarkdown(doc.content)
     await nextTick()
     applyHeadingAnchors(articleRef.value)
@@ -280,6 +285,18 @@ function restoreHistory(record: RagAnswer) {
 function clearTurns() {
   qaTurns.value = []
   ElMessage.info('已清空追问上下文（下一个问题将作为独立问题处理）')
+}
+
+/** 点关联项 → 跳到那篇文档（未解析的项不可点，它本来就是"待创建"）。 */
+async function openLinked(documentId: string | null) {
+  if (!documentId) return
+  await jumpTo(documentId, null)
+}
+
+function linkTypeLabel(type: string): string {
+  if (type === 'WIKILINK') return '双链'
+  if (type === 'EMBED') return '嵌入'
+  return '链接'
 }
 
 function pickFile() {
@@ -472,6 +489,55 @@ watch(activeTab, () => {
                   </div>
                   <!-- eslint-disable-next-line vue/no-v-html -- 内容经 marked + DOMPurify 处理 -->
                   <article v-else ref="articleRef" class="markdown" v-html="renderedHtml" />
+
+                  <!-- 关联（Phase 4）：出链 / 反向链接 / 待创建清单 -->
+                  <section v-if="links && (links.outlinks.length || links.backlinks.length)" class="links">
+                    <div class="links-head">
+                      <h3>关联</h3>
+                      <span class="num">
+                        {{ links.outlinks.length }} 出链 · {{ links.backlinks.length }} 反向链接
+                        <template v-if="links.dangling"> · {{ links.dangling }} 待创建</template>
+                      </span>
+                    </div>
+
+                    <div v-if="links.outlinks.length" class="link-group">
+                      <div class="outline-head">出链（本文档指向）</div>
+                      <ul>
+                        <li
+                          v-for="link in links.outlinks"
+                          :key="link.linkId"
+                          :class="{
+                            unresolved: !link.external && !link.resolvedDocumentId,
+                            external: link.external
+                          }"
+                          @click="openLinked(link.resolvedDocumentId)"
+                        >
+                          <el-tag size="small" effect="plain" type="info">
+                            {{ linkTypeLabel(link.linkType) }}
+                          </el-tag>
+                          <span class="link-name">{{ link.resolvedTitle || link.target }}</span>
+                          <el-tag v-if="link.external" size="small" effect="plain">外链</el-tag>
+                          <el-tag v-else-if="!link.resolvedDocumentId" size="small" effect="plain" type="warning">
+                            待创建
+                          </el-tag>
+                        </li>
+                      </ul>
+                    </div>
+
+                    <div v-if="links.backlinks.length" class="link-group">
+                      <div class="outline-head">反向链接（谁引用了本文档）</div>
+                      <ul>
+                        <li
+                          v-for="link in links.backlinks"
+                          :key="link.linkId"
+                          @click="openLinked(link.resolvedDocumentId)"
+                        >
+                          <el-tag size="small" effect="plain" type="success">被引用</el-tag>
+                          <span class="link-name">{{ link.resolvedTitle || '未知文档' }}</span>
+                        </li>
+                      </ul>
+                    </div>
+                  </section>
                 </template>
               </div>
             </div>
@@ -1089,6 +1155,81 @@ watch(activeTab, () => {
   line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* 关联面板：放在正文下方（阅读完正文再看"它和别的笔记有什么关系"最自然） */
+.links {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--neutral-200);
+  max-width: 76ch;
+}
+
+.links-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.links-head h3 {
+  font-size: 15px;
+}
+
+.links-head .num {
+  color: var(--neutral-500);
+  font-size: 12px;
+}
+
+.link-group {
+  margin-top: var(--space-4);
+}
+
+.link-group ul {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.link-group li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--neutral-200);
+  border-radius: 999px;
+  font-size: 12.5px;
+  background: var(--neutral-0);
+  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+}
+
+.link-group li:not(.unresolved):not(.external) {
+  cursor: pointer;
+}
+
+.link-group li:not(.unresolved):not(.external):hover {
+  border-color: var(--accent-400);
+  background: var(--accent-50);
+}
+
+/* 未解析的引用是"待创建笔记"：虚线 + 弱化，且不可点（点了也没有目标） */
+.link-group li.unresolved {
+  border-style: dashed;
+  color: var(--neutral-500);
+}
+
+/* 外链不是内部关联，点击交给浏览器新开标签 */
+.link-group li.external .link-name {
+  color: var(--accent-600);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link-name {
+  color: var(--neutral-700);
 }
 
 /* 问答块 */

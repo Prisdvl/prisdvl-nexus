@@ -241,6 +241,29 @@ export function getDocument(id: string, documentId: string) {
   return client.get<never, DocumentDetail>(`/knowledge-bases/${id}/documents/${documentId}`)
 }
 
+export interface DocumentLinkView {
+  linkId: string
+  linkType: string
+  target: string
+  display: string | null
+  resolvedDocumentId: string | null
+  resolvedTitle: string | null
+  external: boolean
+  startOffset: number
+}
+
+export interface DocumentLinks {
+  outlinks: DocumentLinkView[]
+  backlinks: DocumentLinkView[]
+  /** 指向尚不存在文档的引用数——知识库最有用的一份"待创建笔记"清单 */
+  dangling: number
+}
+
+/** 文档关联（Phase 4）：出链 + 反向链接。 */
+export function getDocumentLinks(id: string, documentId: string) {
+  return client.get<never, DocumentLinks>(`/knowledge-bases/${id}/documents/${documentId}/links`)
+}
+
 /**
  * 检索。mode 三选一都开放——融合效果好不好，只有在能单独看每一路时才判断得了。
  */
