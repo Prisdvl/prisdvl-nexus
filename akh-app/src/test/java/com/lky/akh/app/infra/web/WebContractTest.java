@@ -5,8 +5,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -119,5 +125,26 @@ class WebContractTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(body).doesNotContain("IllegalStateException").doesNotContain("模拟未预期异常");
+    }
+
+    /**
+     * 测试专用安全过滤器链：只对 {@code /test-only/**} 放行。
+     *
+     * <p>为什么需要它：Step 1.1 引入 Spring Security 后，主链（{@code @Order(2)}）会要求所有请求
+     * 都带 JWT，这些"契约测试"用的假接口就会一律 401。这里用 {@code @Order(1)} +
+     * {@code securityMatcher} 只放行测试路径，<b>既不改动生产配置，也不会在生产包里出现</b>
+     * （{@code @TestConfiguration} 嵌套类只在测试编译产物中）。
+     */
+    @TestConfiguration
+    static class TestOnlySecurityConfig {
+
+        @Bean
+        @Order(1)
+        SecurityFilterChain testOnlySecurityFilterChain(HttpSecurity http) throws Exception {
+            http.securityMatcher("/test-only/**")
+                    .csrf(AbstractHttpConfigurer::disable)
+                    .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+            return http.build();
+        }
     }
 }

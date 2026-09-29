@@ -86,6 +86,15 @@
             <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
 
+        <!-- 安全：JWT 资源服务器。
+             注意 Boot 4 的坐标变化——旧的 spring-boot-starter-oauth2-resource-server 的 POM 描述已写明
+             "deprecated in favor of spring-boot-starter-security-oauth2-resource-server"。
+             该 starter 传递引入 spring-boot-starter-security 与 spring-security-oauth2-jose（含 Nimbus）。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+        </dependency>
+
         <!-- 测试用内存库：让 MyBatis-Plus / Mapper 的兼容性验证不依赖 Docker -->
         <dependency>
             <groupId>com.h2database</groupId>
@@ -110,6 +119,13 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- 安全测试支持：@WithMockUser 等（本步先引入，Step 1.1 的用例主要用真实 Token） -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

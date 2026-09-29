@@ -14,3 +14,25 @@ CREATE TABLE IF NOT EXISTS sys_user (
     updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted       TINYINT      NOT NULL DEFAULT 0
 );
+
+-- ---------- RBAC：角色与用户角色关联 ----------
+CREATE TABLE IF NOT EXISTS sys_role (
+    id          BIGINT       NOT NULL PRIMARY KEY,
+    code        VARCHAR(32)  NOT NULL,
+    name        VARCHAR(64)  NOT NULL,
+    description VARCHAR(255),
+    CONSTRAINT uk_role_code UNIQUE (code)
+);
+
+CREATE TABLE IF NOT EXISTS sys_user_role (
+    id      BIGINT NOT NULL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL
+);
+
+-- 预置角色。用 MERGE 保证幂等：同一个测试 JVM 里多个 Spring 上下文共享这个内存库，
+-- 若用普通 INSERT，第二个上下文启动时就会因唯一键冲突而失败。
+MERGE INTO sys_role (id, code, name, description) KEY (code)
+    VALUES (1, 'USER', '普通用户', '默认角色，注册时自动授予');
+MERGE INTO sys_role (id, code, name, description) KEY (code)
+    VALUES (2, 'ADMIN', '管理员', '可访问 /api/admin/**');

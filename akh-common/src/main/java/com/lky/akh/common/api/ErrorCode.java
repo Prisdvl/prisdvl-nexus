@@ -39,6 +39,8 @@ public enum ErrorCode {
     TOKEN_EXPIRED(2002, "登录状态已过期，请重新登录"),
     FORBIDDEN(2003, "无权限访问该资源"),
     ACCOUNT_DISABLED(2004, "账号已被禁用"),
+    USERNAME_ALREADY_EXISTS(2005, "用户名已被占用"),
+    INVALID_CREDENTIALS(2006, "用户名或密码错误"),
 
     // ---------- 3xxx 知识库 / 文档 ----------
     KNOWLEDGE_BASE_NOT_FOUND(3001, "知识库不存在"),

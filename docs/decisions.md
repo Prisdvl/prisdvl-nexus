@@ -244,6 +244,26 @@
 
 ---
 
+## ADR-018 认证方案：无状态 JWT（自签自发 HS256）+ 自定义 401/403 + 账号枚举防护
+
+**背景**：需要注册 / 登录 / API 鉴权 / RBAC，且 Phase 1 的 SSE 流式接口同样要鉴权。
+
+**决策**
+1. **自签自发 JWT**：应用既是签发方又是校验方，因此用对称密钥 HS256（`NimbusJwtEncoder` + `ImmutableSecret`），不引入 RSA 密钥对。将来拆服务时换成 RS256（私钥签、公钥验）即可让其他服务独立校验。
+2. **过滤器链无状态**：`STATELESS` + 关闭 CSRF / formLogin / httpBasic / logout。纯 Token API 不用 Cookie，不存在 CSRF 的适用场景。
+3. **401 与 403 都自定义**（`RestAuthenticationEntryPoint` / `RestAccessDeniedHandler`），返回统一 `{code,message,data}`（2001 / 2003）。否则 Spring Security 的默认响应会破坏前端契约，前端无法区分"去登录页"还是"提示无权限"。
+4. **权限来自 Token 的 `roles` 声明**（`JwtAuthenticationConverter` + `ROLE_` 前缀）：无状态鉴权不在每个请求上查库。
+5. **不使用 `AuthenticationManager` / `UserDetailsService`**：手工 `passwordEncoder.matches()` 校验，语义更直接可控（那套机制的默认异常链与我们要的业务码语义冲突）。接入第三方 OAuth2 登录时再引入 `AuthenticationProvider`。
+6. **账号枚举防护**：用户不存在与密码错误返回**完全相同**的 2006 提示（已用测试断言两者 message 相等）；"账号被禁用"只在密码校验通过之后才提示。
+7. **密钥 fail-fast**：`akh.jwt.secret` 不设默认值，缺失或不足 32 字节直接启动失败——避免开发期弱密钥被带进生产。
+8. **userId 只从 JWT 的 `sub` 取**（`CurrentUser.requireId()`），任何接口都不得从请求参数接收 userId（水平越权的典型来源）。
+
+**代价 / 后续**
+- 无状态意味着**登出与吊销需要额外机制**（Redis 黑名单 + `jti`）→ claims 里已预置 `jti`，Phase 11 落地。
+- 短 access token + 长会话需要 refresh token → **Step 1.1b** 实现（`sys_refresh_token` 表已设计好，存哈希并支持轮换与吊销）。
+
+---
+
 ## Appendix A. 版本与 API 核对结果（2026-09-24）
 
 > 规则：**不确定的一律不写进代码**。下表 `✅ 已核对` 项可直接使用；`⚠️ 待核对` 项在动手前必须现场验证（Phase 0 Step 0.3）。
@@ -374,7 +394,7 @@
 | 项 | 验证方式 |
 | --- | --- |
 | ~~MyBatis-Plus boot4-starter 在 **Boot 4.1.1** 上的实测~~ | ✅ 已关闭，见 **B.7** |
-| OAuth2 资源服务器两种 starter 坐标的取舍 | Phase 1 Step 1.1 依赖树验证 |
+| ~~OAuth2 资源服务器两种 starter 坐标的取舍~~ | ✅ 已关闭，见 **B.9**（旧坐标已废弃） |
 | ~~Spring AI 2.0.1 关键 API~~ | ✅ 已关闭，见 **Appendix D** |
 
 ### B.7 实测验证记录（2026-09-29）
@@ -416,6 +436,23 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 | Spring 7 废弃常量 | ⚠️ **踩坑记录** | `HttpStatus.PAYLOAD_TOO_LARGE → CONTENT_TOO_LARGE`、`UNPROCESSABLE_ENTITY → UNPROCESSABLE_CONTENT`；测试断言 `isPayloadTooLarge() → isContentTooLarge()` |
 
 **测试总览（`mvn -B clean test`）**：`akh-common` 10 通过 / `akh-app` 9 通过，**0 失败**。
+
+### B.9 Step 1.1 实测验证记录（认证与 JWT）
+
+| 验证项 | 结论 |
+| --- | --- |
+| Boot 4 资源服务器 starter 坐标 | ⚠️ **踩坑**：`spring-boot-starter-oauth2-resource-server` 的 POM 描述已写明 *deprecated in favor of* **`spring-boot-starter-security-oauth2-resource-server`**（后者传递引入 `spring-boot-starter-security` + `spring-security-oauth2-jose`） |
+| 完整鉴权闭环：注册 → 登录 → 带 Token 访问 `/api/users/me` | ✅ |
+| 无 Token / 伪造 Token → 401 + 业务码 2001 + 统一返回体（非 Security 默认响应） | ✅ |
+| 重复用户名 → 409 + 业务码 2005 | ✅ |
+| 密码错误与用户不存在的提示完全一致（防账号枚举） | ✅ 断言两者 message 相等 |
+| RBAC：普通用户访问 `/api/admin/**` → 403 + 2003；授予 ADMIN 后重新登录即可访问 | ✅ |
+| 雪花 ID 在注册响应中是字符串、`expiresIn` 是数字 | ✅ |
+| 响应体绝不包含密码哈希 | ✅ |
+| **真实 HTTP 冒烟**（真实 Tomcat + JDK 原生 `HttpClient`） | ✅ 日志出现 `Tomcat started on port 50388`；中文提示经真实 HTTP 编解码正确 |
+| 测试专用安全链隔离 | ✅ `@TestConfiguration` 嵌套类只放行 `/test-only/**`，不会进入生产 jar |
+
+**测试总览（Step 1.1）**：`akh-common` 10 + `akh-app` 18 = **28 通过 / 0 失败**。
 
 ---
 

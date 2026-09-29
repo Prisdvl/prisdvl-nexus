@@ -17,6 +17,13 @@ spring:
     # 迁移脚本是 MySQL 方言，H2 测试中关闭；真实迁移在 Step 0.6 用 MySQL 验证
     enabled: false
 
+# 测试专用 JWT 密钥：仅测试使用，绝不用于任何真实环境
+akh:
+  jwt:
+    secret: test-only-jwt-secret-0123456789-abcdefghijklmnop
+    issuer: ai-knowledge-hub-test
+    access-token-ttl: 30m
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true

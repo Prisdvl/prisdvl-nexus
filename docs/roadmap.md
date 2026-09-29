@@ -33,7 +33,7 @@
 
 | Step | 任务 | 完成标准 |
 | --- | --- | --- |
-| 1.1 | 用户注册/登录/JWT/RBAC + Spring Security 配置 | 未带 Token 访问受保护接口返回 401 |
+| 1.1 | 用户注册/登录/JWT/RBAC + Spring Security 配置 | ✅ **已完成**（28 用例全绿，含真实 HTTP 冒烟；见 decisions.md B.9） |
 | 1.2 | **模型可替换层**：`AiModelProperties` + `AiModelRegistry` + `ChatClientFactory`（多 provider 多角色） | 改 yaml 从 DeepSeek 切到 Ollama，业务代码零改动 |
 | 1.3 | 第一次真正的模型调用：`ChatClient` 同步 + 流式 | 控制台能打印流式输出 |
 | 1.4 | 会话与消息持久化（`chat_conversation` / `chat_message`）+ CRUD | 新建/列表/改名/删除可用 |

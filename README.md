@@ -75,7 +75,7 @@ ai-knowledge-hub/                 (root pom, packaging=pom)
 | --- | --- | --- |
 | STEP 1 | 技术方案设计（不写业务代码） | ✅ 完成，待确认 |
 | Phase 0 | 项目初始化（Git / Maven / Boot / Spring AI / Docker / MySQL / Redis / PG） | 🔄 进行中：0.1 ✅ 0.2 ✅ 0.3 ✅（MyBatis-Plus 已实测通过）0.5 ✅；0.4 / 0.6 待 Docker 就绪 |
-| Phase 1 | AI Chat（ChatClient / SSE / Conversation / Message / Memory） | ⏳ |
+| Phase 1 | AI Chat（ChatClient / SSE / Conversation / Message / Memory） | 🔄 进行中：1.1 ✅（注册/登录/JWT/RBAC，28 用例全绿）；1.2 起为模型接入 |
 | Phase 2 | Knowledge Base（MD / TXT / PDF / DOCX / ZIP / Obsidian Vault） | ⏳ |
 | Phase 3 | RAG（Chunk / Embedding / Vector / BM25 / Hybrid / Rerank / Citation） | ⏳ |
 | Phase 4 | 个人 AI 知识助手（总结 / 关联 / 学习路线 / 知识缺口） | ⏳ |
