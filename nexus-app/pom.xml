@@ -69,6 +69,14 @@
             <artifactId>mybatis-plus-jsqlparser</artifactId>
         </dependency>
 
+        <!-- Spring AI：JDBC 版会话记忆仓库（表 SPRING_AI_CHAT_MEMORY）。
+             注意它与本项目自建的 chat_message 是两件事：
+             前者是"发给模型的有界窗口"，后者是"完整聊天历史"（ADR-011）。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-chat-memory-repository-jdbc</artifactId>
+        </dependency>
+
         <!-- 数据库驱动：MySQL 为业务真源，PostgreSQL 承载 pgvector 向量索引 -->
         <dependency>
             <groupId>com.mysql</groupId>

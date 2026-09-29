@@ -541,6 +541,39 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 
 **测试总览（Step 1.4）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-app` 30 = **49 通过 / 0 失败**。
 
+### B.13 Step 1.5 实测验证记录（ChatMemory 多轮对话）
+
+| 验证项 | 结论 |
+| --- | --- |
+| 记忆仓库是 JDBC 实现（非默认内存实现） | ✅ `JdbcChatMemoryRepository` |
+| 写入后可读回、按时间顺序、`clear` 生效 | ✅ |
+| 窗口超限淘汰最老消息、保留最新 | ✅ |
+| **真实多轮对话**：第二轮说出第一轮给出的事实（"我的名字是 LKY"） | ✅ `MultiTurnMemoryTest`（真实模型调用） |
+| 记忆顾问的"写"生效（本轮问答应出现在记忆仓库中） | ✅ |
+| 完整历史（`chat_message`）同时记录两轮问答共 4 条 | ✅ |
+
+**四个真实踩坑**
+
+1. **`SPRING_AI_CHAT_MEMORY.conversation_id` 是 `VARCHAR(36)`**。最初把记忆 key 设计成
+   `user:{userId}:conv:{conversationId}`，对 6 位用户 id + 19 位雪花 id **恰好 36 字符**——
+   正好卡在边界上，用户 id 位数再多就会在运行期以数据库异常炸掉（由一条离线测试暴露）。
+   纠正：key 简化为 `conv:{conversationId}`（最大 24 字符），并用测试钉住长度不变量。
+   **教训：会话 id 已全局唯一、归属校验已在服务层完成，多拼 user 前缀不提供真实保护，
+   却引入了列宽溢出这个真实故障模式——"看起来更安全"的设计往往更脆弱。**
+2. **`finishReason` 不在 `ChatResponseMetadata` 上**（后者只有 `usage` / `model` / `id` / `rateLimit`），
+   而在 `response.getResult().getMetadata().getFinishReason()`。
+3. **记忆仓库类的包名**：`org.springframework.ai.chat.memory.repository.jdbc.JdbcChatMemoryRepository`
+   （记忆仓库是独立 artifact；`ChatMemoryRepository` / `InMemoryChatMemoryRepository` 在 `spring-ai-model`）。
+4. **记忆顾问必须按调用挂载**，不能作为 ChatClient 的默认顾问：
+   `MessageChatMemoryAdvisor` 要求每次调用都带 `ChatMemory.CONVERSATION_ID`，
+   否则抛 `IllegalArgumentException`。评测裁判、字段抽取这类无会话的调用不该被迫造一个会话 id。
+
+**一条刻意的设计选择**：`ChatServiceImpl.ask` **不加 `@Transactional`**——
+模型调用是秒级外部 IO，把数据库事务包在它外面会长时间占用连接（常见性能事故）。
+落库由 `ChatMessageService` 内部各自的小事务完成。
+
+**测试总览（Step 1.5）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-app` 35 = **54 通过 / 0 失败**。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）

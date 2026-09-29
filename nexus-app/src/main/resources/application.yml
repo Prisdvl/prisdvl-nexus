@@ -30,6 +30,15 @@ spring:
         speech: "none"
         transcription: "none"
       moderation: "none"
+    chat:
+      memory:
+        repository:
+          jdbc:
+            # SPRING_AI_CHAT_MEMORY 表的建表策略。
+            # embedded：仅当数据源是嵌入式库（H2 测试）时自动建表，测试无需额外准备；
+            # 生产 MySQL 的建表交给 Step 0.6 的 Flyway 迁移，届时把这里改成 never，
+            # 避免"框架自动建表"与"迁移脚本"两套 DDL 打架。
+            initialize-schema: embedded
 
 server:
   port: ${SERVER_PORT:8080}
@@ -48,6 +57,11 @@ nexus:
     secret: ${JWT_SECRET:}
     issuer: prisdvl-nexus
     access-token-ttl: ${JWT_ACCESS_TOKEN_TTL:30m}
+  chat:
+    memory:
+      # 会话记忆窗口大小（条）。太大：浪费 Token 且可能超出上下文；
+      # 太小：多轮对话"记不住"。20 是 Spring AI 的默认值，先沿用并留出可调入口。
+      max-messages: ${CHAT_MEMORY_MAX_MESSAGES:20}
 
 # ============================================================
 # 模型可替换层（ADR-003）
