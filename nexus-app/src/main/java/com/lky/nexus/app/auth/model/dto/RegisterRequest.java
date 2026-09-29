@@ -9,13 +9,18 @@ import jakarta.validation.constraints.Size;
  * 注册请求。
  *
  * <p>校验规则即接口契约（由 Spring Validation 自动执行，失败统一返回 1001）：
- * 用户名 3–32 位字母/数字/下划线；密码 8–64 位；邮箱可选。
+ * 用户名 3–32 位字母/数字/下划线/连字符；密码 8–64 位；邮箱可选。
+ *
+ * <p>关于用户名允许连字符：最初只放开下划线，结果两次在测试/联调时被"conv-lifecycle"
+ * 这类名字绊住（注册静默 400，后续登录表现为 401，排查成本高）。主流产品（GitHub、
+ * GitLab）都允许连字符，因此放宽。**校验规则要按"真实用户会怎么起名"来定，
+ * 而不是按实现方便程度来定。**
  */
 public record RegisterRequest(
 
         @NotBlank(message = "用户名不能为空")
         @Size(min = 3, max = 32, message = "用户名长度需在 3–32 之间")
-        @Pattern(regexp = "^[A-Za-z0-9_]+$", message = "用户名只能包含字母、数字与下划线")
+        @Pattern(regexp = "^[A-Za-z0-9_-]+$", message = "用户名只能包含字母、数字、下划线与连字符")
         String username,
 
         @NotBlank(message = "密码不能为空")

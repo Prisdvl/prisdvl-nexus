@@ -13,6 +13,7 @@ package com.lky.nexus.common.api;
  * 5xxx   工具 / Agent / MCP
  * 6xxx   工作流 / 评测
  * 7xxx   限流 / 配额
+ * 8xxx   会话 / 消息
  * 9999   系统内部错误
  * </pre>
  *
@@ -76,6 +77,10 @@ public enum ErrorCode {
     // ---------- 7xxx 限流 / 配额 ----------
     RATE_LIMITED(7001, "请求过于频繁，请稍后再试"),
     QUOTA_EXHAUSTED(7002, "配额已用尽"),
+
+    // ---------- 8xxx 会话 / 消息 ----------
+    CONVERSATION_NOT_FOUND(8001, "会话不存在"),
+    MESSAGE_NOT_FOUND(8002, "消息不存在"),
 
     // ---------- 兜底 ----------
     INTERNAL_ERROR(9999, "系统内部错误");

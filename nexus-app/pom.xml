@@ -63,6 +63,11 @@
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
         </dependency>
+        <!-- 分页插件（PaginationInnerInterceptor）自 3.5.9 起移到了 mybatis-plus-jsqlparser 模块 -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser</artifactId>
+        </dependency>
 
         <!-- 数据库驱动：MySQL 为业务真源，PostgreSQL 承载 pgvector 向量索引 -->
         <dependency>

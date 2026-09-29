@@ -89,6 +89,16 @@
                 <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
                 <version>${mybatis-plus.version}</version>
             </dependency>
+            <!-- 分页插件所在的模块。
+                 自 3.5.9 起 MyBatis-Plus 把 JSqlParser 依赖拆成独立模块，
+                 PaginationInnerInterceptor 也从 mybatis-plus-extension 移到了这里：
+                 只加 starter 会导致「编译期找不到 PaginationInnerInterceptor」，
+                 或者在别处静默降级成不分页。 -->
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-jsqlparser</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 

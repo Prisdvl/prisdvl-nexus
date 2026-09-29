@@ -52,6 +52,11 @@ public final class ErrorCodeHttpStatusMapper {
 
             // 7xxx 限流
             case RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
+
+            // 8xxx 会话 / 消息
+            // 注意：访问别人的会话返回 404 而不是 403 ——
+            // 403 等于告诉攻击者"这个 id 确实存在"，而 404 不泄露资源存在性（防资源枚举）。
+            case CONVERSATION_NOT_FOUND, MESSAGE_NOT_FOUND -> HttpStatus.NOT_FOUND;
         };
     }
 }

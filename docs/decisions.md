@@ -515,6 +515,32 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 `-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8`，应用侧设置 `logging.charset.console: UTF-8`。
 （终端本身也需为 UTF-8：Windows Terminal 默认即是，旧 conhost 需先 `chcp 65001`。）
 
+### B.12 Step 1.4 实测验证记录（会话与消息持久化）
+
+| 验证项 | 结论 |
+| --- | --- |
+| 会话 CRUD（建 / 列 / 详情 / 改名+置顶 / 删除） | ✅ |
+| mode 宽松解析（`rag` → `RAG`，缺省 → `PLAIN`）与非法值 → 400/1001 | ✅ |
+| **多租户隔离**：B 访问 A 的会话返回 **404 + 8001**（不是 403，避免泄露资源存在性） | ✅ 详情 / 删除 / 消息列表三处都断言 |
+| 消息按时间正序（雪花 ID 天然有序）、角色正确、Token 与延迟字段落库 | ✅ |
+| 会话冗余字段：`message_count` 用 SQL 自增、`last_message_at`、首条用户消息自动生成标题 | ✅ |
+| **分页真的生效**（25 条 / 每页 10 → 3 页；`pageSize=99999` 截断为 100） | ✅ 专门用来钉住分页插件 |
+| 删除会话时其消息被物理清理 | ✅ |
+
+**两个真实踩坑（都值得记住）**
+
+1. **MyBatis-Plus 自 3.5.9 起把 JSqlParser 拆成了独立模块**：`PaginationInnerInterceptor`
+   已从 `mybatis-plus-extension` 移到 **`mybatis-plus-jsqlparser`**，只引 starter 会直接编译失败。
+   更隐蔽的变体是：**类有了但没注册拦截器** —— 此时 `selectPage` 不报错，
+   只是安静地把 SQL 变成不带 LIMIT 的全表查询（接口"正常"，实则全表扫描 + 全量返回）。
+   本项目因此显式注册拦截器，并用"每页 10 条"的断言把它钉死。
+2. **校验规则过严的代价**：用户名最初只允许 `[A-Za-z0-9_]`，导致测试里 `conv-lifecycle`
+   这类含连字符的名字注册被 400 拦下，而症状表现为**后续登录 401**（排查成本高，本项目已第二次踩）。
+   已放宽为允许连字符（GitHub / GitLab 同样允许），并让测试辅助方法**显式断言注册状态**，
+   避免"失败延迟表现"这种最难查的形态。
+
+**测试总览（Step 1.4）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-app` 30 = **49 通过 / 0 失败**。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
