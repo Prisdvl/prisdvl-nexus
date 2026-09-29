@@ -35,6 +35,9 @@ nexus:
     # 测试环境不启动 PostgreSQL：向量库关闭（相关用例用 DisabledVectorStore 验证报错行为，
     # 真实 pgvector 读写由 AI_VECTOR_LIVE=true 的守卫测试覆盖）
     enabled: false
+  search:
+    # 同理：测试环境不启动 Elasticsearch（真实 ES 联调由 AI_SEARCH_LIVE=true 的守卫测试覆盖）
+    enabled: false
 
 management:
   health:

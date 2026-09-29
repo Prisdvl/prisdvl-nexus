@@ -43,6 +43,9 @@ nexus:
   vector:
     # 同理：没有 PostgreSQL，向量功能关闭（使用时明确报 4003）
     enabled: false
+  search:
+    # 同理：没有 Elasticsearch，关键词检索关闭
+    enabled: false
 
 management:
   health:

@@ -999,6 +999,58 @@ ollama 镜像与 bge-m3 模型（1.08 GB）最终都拉取成功，因此**真�
 
 **测试总览（Phase 3.1/3.2）**：`nexus-common` 10 + `nexus-ai` 14 + `nexus-knowledge` 57 + `nexus-app` 71（11 跳过）= **152 通过 / 0 失败**。
 
+### B.24 Phase 3.3 实现记录（ES 索引与 BM25）
+
+| 组件 | 关键点 |
+| --- | --- |
+| `ElasticsearchConfig` | ES 9 官方客户端：`Rest5Client.builder(URI...)` + `Jackson3JsonpMapper`（复用 Boot 4 的 Jackson 3） |
+| `ElasticsearchChunkIndex` | IK 分析器映射、批量写入（逐条收集失败原因）、多字段加权检索、**别名原子切换重建** |
+| `ChunkIndexService` | 由 `kb_chunk.es_status='PENDING'` 驱动；补齐文档级字段（标题/标签/目录）后写入 |
+| `ChunkSearchService` | 检索 + 回表补齐正文与文档标题，**严格保持相关性顺序** |
+| `DisabledChunkIndex` | 未启用 ES 时明确报错（与向量库同样的原则） |
+| 接口 | `POST /{id}/index`、`POST /{id}/index/recreate`、`GET /{id}/search?q=` |
+
+**真实联调（`LiveChunkIndexTest` 5/5，真实 ES 9.4.5 + IK）**：
+
+| 验证项 | 结果 |
+| --- | --- |
+| **IK 分析器真实生效** | 直接调 `_analyze`：`缓存击穿与互斥锁` → 切出「缓存」「击穿」，且**不含单字「缓」**（标准分析器才会切单字）✓ |
+| 中文 BM25 检索 | 查询「缓存击穿怎么解决」→ 缓存相关切片排第一，分数为正 ✓ |
+| 字段权重 | `title^3 / heading_path^2 / content^1`：标题命中排在正文命中之前 ✓ |
+| 跨库隔离 | 另一知识库写入**完全相同**的文本 → 检索结果不出现 ✓ |
+| 重建索引 | 别名原子切换、旧索引被清理、切换后别名仍可用 ✓ |
+
+**六个实现要点 / 踩坑**
+
+1. **ES 9 的客户端 API 与 8.x 差异不小**，本次全部用 `javap` 逐一核实后才写代码：
+   传输层换成 `elasticsearch-rest5-client`（入口 `Rest5Client.builder(URI...)`，8.x 是 HttpHost + RestClient）；
+   `GetAliasResponse` 直接暴露 `aliases()`（8.x 是 `result()`）；
+   `updateAliases` 的动作需要 `Action.of(...)` 包一层（接口签名收的是 Action 容器类型）。
+2. **客户端 9.4.5 自带 `Jackson3JsonpMapper`**，可以直接复用 Spring Boot 4 的 Jackson 3 `JsonMapper`——
+   不必再引入 Jackson 2 或额外的 JSON-P 提供者，整个项目保持一套 JSON 栈。
+   客户端版本与服务端**严格同版本**（9.4.5）：官方客户端会做版本兼容性检查，跨大版本直接拒绝。
+3. **索引期与检索期用不同的 IK 分析器**：索引期 `ik_max_word`（最细粒度 → 召回高），
+   检索期 `ik_smart`（粗粒度 → 精确度高）。这是 IK 的推荐用法：
+   两边都用最细粒度会让查询词被切碎，命中大量无关内容。
+4. **字段权重是 BM25 相对向量检索的核心补充**：标题命中通常意味着整篇都相关，
+   因此 `title^3 / heading_path^2 / content^1`；而标签与目录必须是 `keyword`
+   （要精确过滤，不能分词）。
+5. **别名是为了零停机重建**：物理索引名带时间戳，对外只暴露别名；
+   重建时新建 → `updateAliases` 原子切换 → 删旧索引。直接删表重建会出现检索空窗期。
+6. **"刚写完就查不到"是 ES 的正常行为**（`refresh_interval` 默认 1s）。
+   第一次跑联调时 4 个用例一起失败，全部是"写完立刻查"造成的。
+   生产环境**不该**为每次写入等待 refresh（那会把写入吞吐压到每秒一次），
+   但测试需要确定性，因此测试里显式 `refresh`。这条同样适用于**删除**。
+
+**一个自找的教训（值得记下来）**
+
+我用 PowerShell 做文本替换（`Get-Content -Raw` → 正则 → `WriteAllText`）修改一个含中文的测试文件，
+结果**中文全部变成乱码**——PS 5.1 的 `Get-Content` 默认按 ANSI/GBK 读取 UTF-8 文件。
+结论：**不要用 shell 文本处理工具改 UTF-8 源码**，即便只是"批量替换一个方法名"；
+这类修改应当用专用编辑工具完成（本项目此前所有中文乱码问题都源于编码，这次是操作方式的问题）。
+
+**测试总览（Phase 3.3）**：`nexus-common` 10 + `nexus-ai` 14 + `nexus-knowledge` 57 + `nexus-app` 76（16 跳过）= **157 通过 / 0 失败**。
+
 **又两个踩坑（本轮修复）**
 
 - **第二个 DataSource 会让 Boot 放弃自动配置主数据源**。`DataSourceAutoConfiguration` 的内层配置带

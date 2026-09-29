@@ -54,6 +54,9 @@
              两个版本号都取自 Maven Central 当前稳定版（2026-09 核实），不是猜的。 -->
         <pdfbox.version>3.0.7</pdfbox.version>
         <poi.version>5.5.1</poi.version>
+        <!-- ES 官方 Java Client：版本与 ES 服务端严格一致（9.4.5）。
+             客户端与服务端的兼容性检查会拒绝跨大版本，同版本最省心。 -->
+        <elasticsearch-java.version>9.4.5</elasticsearch-java.version>
 
         <!-- 测试 -->
         <skipUnitTests>false</skipUnitTests>

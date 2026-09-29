@@ -60,6 +60,16 @@
             <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
 
+        <!-- ES 官方 Java Client（ADR-006：BM25 用原生客户端，不套 Spring Data ES）。
+             理由：本项目要控制的东西很具体——IK 分析器的索引/查询分词器分别设置、
+             多字段权重、别名原子切换、过滤条件与打分。这些在原生 API 上是一等公民，
+             套一层抽象后反而要绕过它。 -->
+        <dependency>
+            <groupId>co.elastic.clients</groupId>
+            <artifactId>elasticsearch-java</artifactId>
+            <version>${elasticsearch-java.version}</version>
+        </dependency>
+
         <!-- ========== 数据访问基线 ==========
              nexus-app 也直接编写 Mapper（sys_* / chat_*），因此显式声明 MyBatis-Plus。
              Boot 4 必须使用 mybatis-plus-spring-boot4-starter（3.x 系列仅供 Boot 3，禁用）。 -->

@@ -105,6 +105,16 @@ nexus:
       url: ${NEXUS_VECTOR_URL:jdbc:postgresql://localhost:5433/nexus_vector}
       username: ${NEXUS_VECTOR_USER:nexus}
       password: ${NEXUS_VECTOR_PASSWORD:nexus_pwd}
+  search:
+    # 检索索引（Elasticsearch + IK 中文分词）。与向量库同理，缺失时明确报错。
+    enabled: ${NEXUS_SEARCH_ENABLED:true}
+    uris: ${NEXUS_ES_URIS:http://localhost:9200}
+    # 对外暴露的是别名，物理索引名带时间戳，重建时原子切换（检索不中断）
+    index-alias: ${NEXUS_ES_INDEX_ALIAS:nexus_chunk}
+    analyzer:
+      # 索引期用最细粒度（召回高），检索期用粗粒度（精确度高）—— IK 的推荐用法
+      index: ${NEXUS_ES_INDEX_ANALYZER:ik_max_word}
+      search: ${NEXUS_ES_SEARCH_ANALYZER:ik_smart}
 
 # ============================================================
 # 模型可替换层（ADR-003）
