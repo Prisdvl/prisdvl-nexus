@@ -97,7 +97,41 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | Node.js | 20.19+ 或 22.12+（Vite 8 要求） | ✅ v22.22.0 |
 | 内存 | 建议 ≥ 16 GB（ES + MySQL + PG 同时跑） | ⚠️ 15.6 GB，ES 需按小堆配置（`-Xms512m`、单节点、关闭副本） |
 
-## 8. 开发约定（重要）
+## 8. 快速运行（不依赖 Docker）
+
+`standalone` profile 用 H2 内存库跑通全部功能，**不需要 MySQL / Redis / Docker**：
+
+```powershell
+# 0) 准备（本机便携 JDK 21）
+$env:JAVA_HOME = 'D:\develop\jdk-21'
+
+# 1) 模型 Key（没有 Key 也能启动，只是问答会报 4001）
+$env:AI_CHAT_API_KEY = (Get-Content '.secrets\ai-key.txt' -Raw).Trim()
+
+# 2) 打包并启动（首次约 1-2 分钟）
+mvn -B clean package -DskipTests
+java -jar nexus-app\target\nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=standalone
+
+# 3) 另开一个终端跑冒烟测试（注册→登录→建会话→问答→流式+停止→查历史）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
+```
+
+启动后可用入口：
+
+| 用途 | 地址 |
+| --- | --- |
+| 健康检查 | http://localhost:8080/actuator/health |
+| H2 控制台（直接看表数据） | http://localhost:8080/h2-console （JDBC URL 填 `jdbc:h2:mem:nexus_standalone`，用户名 `sa`，密码空） |
+| 注册 / 登录 | `POST /api/auth/register`、`POST /api/auth/login` |
+| 会话 | `POST/GET/PUT/DELETE /api/chat/conversations`、`GET /api/chat/conversations/{id}` |
+| 问答（非流式） | `POST /api/chat/conversations/{id}/messages` |
+| 问答（SSE 流式） | `POST /api/chat/stream` |
+| 停止生成 | `POST /api/chat/stream/{requestId}/stop` |
+| 历史消息 | `GET /api/chat/messages/{conversationId}` |
+
+> 数据存在内存里，**重启即清空**。要持久化就等 Docker 就绪后切到 `local` profile（MySQL）。
+
+## 9. 开发约定（重要）
 
 1. **一次只做一个 Step**：需求 → 设计 → 实现 → 运行 → 测试 → 总结，完成后再进入下一步。
 2. **分层不可跨越**：`Controller → Service → Domain/Mapper`；Controller 不碰数据库、不直接调 LLM。

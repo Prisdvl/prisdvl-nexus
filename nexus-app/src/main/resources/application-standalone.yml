@@ -1,0 +1,43 @@
+# ============================================================
+# standalone —— 不依赖任何外部基础设施的开发 profile
+#
+# 用途：在 Docker / MySQL / Redis 尚未就绪时，也能把整应用跑起来调接口、连前端。
+#   mvn -pl nexus-app spring-boot:run -Dspring-boot.run.profiles=standalone
+#
+# 与测试 profile 共用同一份 H2 建表脚本（src/main/resources/db/h2/schema.sql），
+# 避免"测试用的表结构"和"本地开发用的表结构"两套 DDL 漂移。
+# ============================================================
+spring:
+  datasource:
+    url: jdbc:h2:mem:nexus_standalone;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/h2/schema.sql
+  flyway:
+    # H2 下不使用迁移脚本（迁移是 MySQL 方言）；生产迁移见 Step 0.6
+    enabled: false
+  h2:
+    console:
+      # 开启 H2 控制台，方便直接看表数据：http://localhost:8080/h2-console
+      enabled: true
+      path: /h2-console
+
+# ------------------------------------------------------------
+# 仅用于本地开发的 JWT 密钥。
+# 注意：这与主配置"缺失即启动失败"的策略不同，是刻意的取舍——
+# 开发 profile 要能一条命令跑起来，不能逼每个人先去配环境变量。
+# 生产 profile 仍然不给默认值（见 application.yml）。
+# ------------------------------------------------------------
+nexus:
+  jwt:
+    secret: ${JWT_SECRET:standalone-only-dev-secret-do-not-use-in-production-32b}
+
+logging:
+  level:
+    com.lky.nexus: DEBUG
+    # 想看清每次发给模型的完整 prompt 时可打开下面两行（默认关闭，避免日志过大/泄漏）
+    # org.springframework.ai.chat.client: DEBUG

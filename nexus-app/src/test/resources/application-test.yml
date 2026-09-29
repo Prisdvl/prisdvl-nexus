@@ -12,7 +12,8 @@ spring:
   sql:
     init:
       mode: always
-      schema-locations: classpath:schema-h2.sql
+      # 与 standalone 开发 profile 共用同一份建表脚本，避免两套 DDL 漂移
+      schema-locations: classpath:db/h2/schema.sql
   flyway:
     # 迁移脚本是 MySQL 方言，H2 测试中关闭；真实迁移在 Step 0.6 用 MySQL 验证
     enabled: false

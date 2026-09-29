@@ -112,11 +112,14 @@
             <artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
         </dependency>
 
-        <!-- 测试用内存库：让 MyBatis-Plus / Mapper 的兼容性验证不依赖 Docker -->
+        <!-- 测试用内存库：让 MyBatis-Plus / Mapper 的兼容性验证不依赖 Docker。
+             用 runtime（而非 test）作用域是为了让 standalone 开发 profile 也能启动：
+             mvn spring-boot:run -Dspring-boot.run.profiles=standalone
+             生产镜像会在打包阶段排除它（Phase 11）。 -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <scope>test</scope>
+            <scope>runtime</scope>
         </dependency>
 
         <dependency>

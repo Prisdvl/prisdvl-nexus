@@ -596,6 +596,31 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 
 **测试总览（Step 1.6）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-app` 45 = **64 通过 / 0 失败**。
 
+### B.15 让应用不依赖 Docker 也能跑起来（standalone profile）
+
+**背景**：Docker 因 WSL2 / Hyper-V 未启用而不可用（根因见 architecture.md 第 19 节），
+但"应用真的能跑"是本项目第一优先级，因此补一个零依赖的开发 profile。
+
+- 新增 `application-standalone.yml`：H2 内存库 + 共用 `db/h2/schema.sql` + 关闭 Flyway + 打开 H2 控制台
+- H2 依赖从 `test` 提升为 `runtime`（生产镜像在 Phase 11 排除）
+- `StandaloneDevSecurityConfig` 用 `@Profile("standalone")` 放行 `/h2-console/**`：
+  **生产环境根本不会加载这个 Bean**——把能直接执行 SQL 的控制台暴露到公网等于交出数据库
+- 测试 profile 与 standalone **共用同一份建表脚本**，避免"测试用的表结构"与"本地开发用的表结构"漂移
+- `scripts/smoke.ps1`：一键冒烟（注册 → 登录 → 建会话 → 非流式问答 → 流式+停止 → 查历史）
+
+**两个 Windows 环境坑（都值得记住）**
+
+1. **PowerShell 5.1 读取无 BOM 的 UTF-8 `.ps1` 会按 GBK 解析**，含中文注释的脚本直接语法报错
+   （`Unexpected token ...`）。含非 ASCII 的 `.ps1` 必须保存为 **UTF-8 with BOM**。
+2. **`Invoke-RestMethod`（PS 5.1）在响应头没有 charset 时按 ISO-8859-1 解码 JSON**，
+   中文回答在控制台显示为乱码——**服务端是对的**（JSON 按 RFC 8259 即 UTF-8，浏览器 `fetch` 也按 UTF-8）。
+   测试脚本改为显式 UTF-8 解码，避免"客户端显示问题被误判成后端 bug"。
+
+**实测**：应用 **7.22 秒**启动（`Tomcat started on port 8080`），
+非流式问答 `tokens=93/83/176, latency=1158ms`；流式收到第 3 个分片后停止成功，
+`done` 事件带 `stopped:true`，被停止消息以 `STOPPED` 落库且保留部分内容；
+`messageCount` 与消息条数一致（无重复计数）。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
