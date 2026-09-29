@@ -166,3 +166,70 @@ CREATE TABLE IF NOT EXISTS kb_document_tag (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tag_kb ON kb_document_tag (kb_id, tag);
+
+-- ---------- 切片与导入任务（Step 2.5）----------
+CREATE TABLE IF NOT EXISTS kb_chunk (
+    id            BIGINT        NOT NULL PRIMARY KEY,
+    kb_id         BIGINT        NOT NULL,
+    document_id   BIGINT        NOT NULL,
+    user_id       BIGINT        NOT NULL,
+    chunk_index   INT           NOT NULL,
+    chunk_type    VARCHAR(16)   NOT NULL,
+    content       VARCHAR(20000) NOT NULL,
+    raw_content   VARCHAR(20000),
+    content_hash  VARCHAR(64)   NOT NULL,
+    heading       VARCHAR(512),
+    heading_path  VARCHAR(1024),
+    heading_level TINYINT,
+    start_offset  INT           NOT NULL DEFAULT 0,
+    end_offset    INT           NOT NULL DEFAULT 0,
+    token_count   INT           NOT NULL DEFAULT 0,
+    char_count    INT           NOT NULL DEFAULT 0,
+    vector_id     VARCHAR(64),
+    vector_status VARCHAR(16)   NOT NULL DEFAULT 'PENDING',
+    es_status     VARCHAR(16)   NOT NULL DEFAULT 'PENDING',
+    created_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_chunk_doc_index UNIQUE (document_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_kb_doc ON kb_chunk (kb_id, document_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_hash ON kb_chunk (content_hash);
+
+CREATE TABLE IF NOT EXISTS kb_import_task (
+    id            BIGINT       NOT NULL PRIMARY KEY,
+    kb_id         BIGINT       NOT NULL,
+    user_id       BIGINT       NOT NULL,
+    task_type     VARCHAR(16)  NOT NULL,
+    status        VARCHAR(16)  NOT NULL,
+    total_files   INT          NOT NULL DEFAULT 0,
+    created_count INT          NOT NULL DEFAULT 0,
+    updated_count INT          NOT NULL DEFAULT 0,
+    skipped_count INT          NOT NULL DEFAULT 0,
+    deleted_count INT          NOT NULL DEFAULT 0,
+    failed_count  INT          NOT NULL DEFAULT 0,
+    total_chunks  INT          NOT NULL DEFAULT 0,
+    total_tokens  BIGINT       NOT NULL DEFAULT 0,
+    progress      INT          NOT NULL DEFAULT 0,
+    started_at    TIMESTAMP,
+    finished_at   TIMESTAMP,
+    error_msg     VARCHAR(2000),
+    created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS kb_import_task_item (
+    id          BIGINT       NOT NULL PRIMARY KEY,
+    task_id     BIGINT       NOT NULL,
+    kb_id       BIGINT       NOT NULL,
+    source_path VARCHAR(512) NOT NULL,
+    action      VARCHAR(16)  NOT NULL,
+    document_id BIGINT,
+    old_hash    VARCHAR(64),
+    new_hash    VARCHAR(64),
+    chunk_count INT          NOT NULL DEFAULT 0,
+    duration_ms INT          NOT NULL DEFAULT 0,
+    message     VARCHAR(1000),
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_task ON kb_import_task_item (task_id, action);

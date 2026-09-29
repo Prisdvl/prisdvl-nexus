@@ -731,6 +731,49 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 
 **测试总览（Step 2.4）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-knowledge` 25 + `nexus-app` 51（5 跳过）= **95 通过 / 0 失败**。
 
+### B.19 Step 2.5 实测验证记录（Obsidian Vault 导入）
+
+**真实端到端**（HTTP 上传 → 真实 MySQL）：造一个 3 篇笔记 + `.obsidian/` + png 附件的 Vault 压缩包，
+经 `POST /api/knowledge-bases/{id}/vault` 导入后实测：
+
+| 项 | 实测值 |
+| --- | --- |
+| 任务结果 | `status=DONE`、总文件 3、新增 3、跳过 2、失败 0、切片 4、进度 100% |
+| 文档 | `Java/SpringBoot.md`、`Java/JVM/GC.md`、`Redis/缓存击穿.md`；**Vault 顶层目录已剥离**；folder/title/status/version/file_hash 均正确 |
+| 切片 | `heading_path` 正确（如 `Spring Boot > 自动配置`）；`vector_status=PENDING` 等 Phase 3 回填 |
+| 标签 | `java`、`springboot` 独立成表（`kb_document_tag`） |
+| 任务明细 | `kb_import_task_item` 3 条 CREATED |
+| 知识库统计 | `doc_count=3 / chunk_count=4 / total_tokens=108` |
+
+**五个设计要点 / 踩坑**
+
+1. **安全解压是第一道关口，且必须"看解压后的字节"**。`VaultPackageExtractor` 限制条目数、
+   单文件字节、**解压后总字节**（不是压缩包大小——那才是 ZIP 炸弹的真实指标），并且边读边计数；
+   路径穿越（`../`、绝对路径、盘符）**直接拒绝整批导入**而不是静默跳过——
+   一个带 `../` 的压缩包说明它不是正常的 Obsidian 导出，应当让用户看到明确原因。
+2. **`ZipInputStream` 面对非 ZIP 字节不会抛异常**，只是 `getNextEntry()` 返回 null。
+   如果不显式判断"零条目"，用户上传一个乱码文件会得到"导入成功，0 个文件"这种误导性结果。
+   已改为显式报 3007（这个问题正是被单元测试逼出来的）。
+3. **必须剥离 Vault 顶层目录**。导出的 ZIP 通常是 `MyVault/Java/SpringBoot.md`，
+   而 Obsidian 内部路径是相对 Vault 根的 `Java/SpringBoot.md`。不剥离的话，
+   所有文档都多一层前缀，按目录过滤与内部链接匹配都会变别扭。
+   实现上只在"全部文件确实共享同一顶层目录"时才剥离。
+4. **覆盖时必须先清理旧切片**。`kb_chunk` 的唯一键是 `(document_id, chunk_index)`，
+   若重新切分后行数变少而不清旧行，会留下"幽灵切片"——检索能命中、正文里却早已没有。
+   已用"重复导入两次"的用例断言切片总数不增。
+5. **切片必须批量插入**。一个 Vault 上千篇笔记会产生几万行切片，逐条 insert 就是几万次数据库往返。
+   `ChunkMapper.insertBatch` 按 200 行一批，把它压到几十次。
+
+**已知限制（刻意记录而非隐藏）**：① 解压在内存中完成（个人笔记量级足够，Phase 3 引入大文件时改为流式落盘）；
+② 文本按 UTF-8 解码，非 UTF-8 文件会出现替换字符；③ 图片等二进制附件只保留**引用**（`kb_document` 的 links/attachments），
+不存储二进制本体；④ 重复导入会重新解析全部文件——**按 `file_hash` 跳过未变化文件是 Step 2.6 的内容**。
+
+**另一个教训（配置类）**：给 `application.yml` 追加 `spring.servlet.multipart` 时，我差点写成
+**第二个顶级 `spring:` 块**——YAML 不允许重复键，Spring Boot 会直接启动失败。
+追加配置时应把新项挂到已有节点下，而不是另起一个同名节点。
+
+**测试总览（Step 2.5）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-knowledge` 35 + `nexus-app` 55（5 跳过）= **109 通过 / 0 失败**。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）

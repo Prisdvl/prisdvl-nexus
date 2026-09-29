@@ -42,6 +42,14 @@ spring:
             #   自己拥有 DDL 后，两边不一致会立刻在测试里暴露（详见 V3 迁移脚本注释）。
             initialize-schema: never
 
+  servlet:
+    multipart:
+      # 默认只有 1MB —— 上传 Obsidian Vault 时必然超限，因此显式放大。
+      # 注意：真正的安全限额在 VaultPackageExtractor（按"解压后"的条目数/字节数限制），
+      # 这里的 multipart 上限只是第一道粗筛。
+      max-file-size: 200MB
+      max-request-size: 220MB
+
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
@@ -64,6 +72,9 @@ nexus:
       # 会话记忆窗口大小（条）。太大：浪费 Token 且可能超出上下文；
       # 太小：多轮对话"记不住"。20 是 Spring AI 的默认值，先沿用并留出可调入口。
       max-messages: ${CHAT_MEMORY_MAX_MESSAGES:20}
+  storage:
+    # 原始文件存储根目录（增量同步要重新解析已导入的文件，因此必须留一份原文）
+    root: ${NEXUS_STORAGE_ROOT:./data}
 
 # ============================================================
 # 模型可替换层（ADR-003）

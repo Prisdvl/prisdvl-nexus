@@ -24,6 +24,9 @@ nexus:
     secret: test-only-jwt-secret-0123456789-abcdefghijklmnop
     issuer: nexus-test
     access-token-ttl: 30m
+  storage:
+    # 原始文件落到 target 下（已被 .gitignore 忽略），避免污染仓库根目录
+    root: ./target/test-storage
 
 # 测试用模型配置：
 # 覆盖 providers 列表（Spring Boot 中 profile 的 list 会整体替换，不是合并），
