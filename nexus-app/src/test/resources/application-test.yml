@@ -5,7 +5,10 @@
 # ============================================================
 spring:
   datasource:
-    url: jdbc:h2:mem:nexus_test;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    # 库名带随机后缀：H2 内存库 + DB_CLOSE_DELAY=-1 时，**固定库名会让所有 Spring 上下文
+    # 共用同一个数据库**，测试结果因此依赖执行顺序（真实踩坑：同一个唯一键冲突/查不到
+    # 刚插入的数据，单独跑却全过）。加随机后缀后每个上下文各有一个干净的库。
+    url: jdbc:h2:mem:nexus_test_${random.uuid};MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
     driver-class-name: org.h2.Driver
     username: sa
     password: ""

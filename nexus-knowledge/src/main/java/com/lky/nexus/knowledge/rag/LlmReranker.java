@@ -52,13 +52,16 @@ public class LlmReranker implements Reranker {
     private final ChatClientFactory chatClientFactory;
     private final JsonMapper jsonMapper;
     private final boolean enabled;
+    private final java.time.Duration timeout;
 
     public LlmReranker(ChatClientFactory chatClientFactory,
                        JsonMapper jsonMapper,
-                       @Value("${nexus.rag.rerank-enabled:true}") boolean enabled) {
+                       @Value("${nexus.rag.rerank-enabled:true}") boolean enabled,
+                       @Value("${nexus.rag.rerank-timeout-ms:12000}") long timeoutMs) {
         this.chatClientFactory = chatClientFactory;
         this.jsonMapper = jsonMapper;
         this.enabled = enabled;
+        this.timeout = java.time.Duration.ofMillis(timeoutMs);
     }
 
     @Override
@@ -69,24 +72,31 @@ public class LlmReranker implements Reranker {
         List<Candidate> limited = candidates.size() > MAX_CANDIDATES
                 ? candidates.subList(0, MAX_CANDIDATES) : candidates;
 
-        try {
-            ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_JUDGE);
-            String response = client.prompt()
-                    .user(PROMPT.formatted(query, renderCandidates(limited)))
-                    .call()
-                    .content();
+        // 带超时：网关退化时"重排"是最先该被牺牲的一步（它本来就是增强项），
+        // 超时即降级为召回顺序，绝不让用户干等（实测遇到过单次调用上百秒）
+        var response = com.lky.nexus.common.util.TimeLimitedCall.run(timeout,
+                () -> callModel(query, limited));
 
-            List<Double> scores = parseScores(response, limited.size());
-            if (scores.size() != limited.size()) {
-                log.warn("重排返回条数与候选不一致（{} vs {}），本次放弃重排",
-                        scores.size(), limited.size());
-                return List.of();
-            }
-            return scores;
-        } catch (Exception ex) {
-            log.warn("重排失败，保持召回顺序：{}", ex.getMessage());
+        if (response.isEmpty()) {
+            log.warn("重排超时（>{} ms）或失败，保持召回顺序", timeout.toMillis());
             return List.of();
         }
+        List<Double> scores = parseScores(response.get(), limited.size());
+        if (scores.size() != limited.size()) {
+            log.warn("重排返回条数与候选不一致（{} vs {}），本次放弃重排",
+                    scores.size(), limited.size());
+            return List.of();
+        }
+        return scores;
+    }
+
+    /** 实际的模型调用（抽出来是为了让超时逻辑与调用逻辑分开）。 */
+    private String callModel(String query, List<Candidate> candidates) {
+        ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_JUDGE);
+        return client.prompt()
+                .user(PROMPT.formatted(query, renderCandidates(candidates)))
+                .call()
+                .content();
     }
 
     private String renderCandidates(List<Candidate> candidates) {
