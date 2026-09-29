@@ -3,26 +3,30 @@ package com.lky.nexus.knowledge.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.util.HashUtils;
 import com.lky.nexus.knowledge.chunk.ChunkingOptions;
 import com.lky.nexus.knowledge.chunk.ChunkerFactory;
 import com.lky.nexus.knowledge.chunk.DocumentChunker;
 import com.lky.nexus.knowledge.chunk.TextChunk;
+import com.lky.nexus.knowledge.imports.ScannedFile;
 import com.lky.nexus.knowledge.imports.VaultFile;
 import com.lky.nexus.knowledge.imports.VaultPackageExtractor;
 import com.lky.nexus.knowledge.imports.VaultScanOptions;
 import com.lky.nexus.knowledge.imports.VaultScanResult;
+import com.lky.nexus.knowledge.imports.VaultSyncPlan;
+import com.lky.nexus.knowledge.imports.VaultSyncPlanner;
+import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.ImportTaskItemMapper;
 import com.lky.nexus.knowledge.mapper.ImportTaskMapper;
 import com.lky.nexus.knowledge.model.ImportAction;
 import com.lky.nexus.knowledge.model.ImportTaskStatus;
 import com.lky.nexus.knowledge.model.ImportTaskType;
 import com.lky.nexus.knowledge.model.dto.ImportTaskResponse;
+import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.ImportTaskItemPO;
 import com.lky.nexus.knowledge.model.entity.ImportTaskPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
-import com.lky.nexus.knowledge.parser.DocumentParser;
 import com.lky.nexus.knowledge.parser.ParsedDocument;
-import com.lky.nexus.knowledge.parser.ParserRegistry;
 import com.lky.nexus.knowledge.service.DocumentPersistResult;
 import com.lky.nexus.knowledge.service.DocumentPersistService;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
@@ -34,24 +38,33 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Vault 导入编排。
+ * Vault 导入编排（含 SHA-256 增量同步）。
  *
- * <p>流程：<b>安全解压 → 逐文件（解析 → 切分 → 存原始文件 → 落库）→ 汇总</b>。
+ * <p>流程：<b>安全解压 → 增量比对（不解析）→ 按计划处理 → 差集删除 → 汇总</b>。
+ *
+ * <p>增量同步的省钱逻辑（嵌入选 Phase 3 接入后会更明显）：
+ * <pre>
+ *   file_hash 相同           → SKIPPED        不解析、不写库（整个 Vault 重导可以近乎零成本）
+ *   file_hash 变、content 不变 → METADATA_ONLY  只更新元数据，<b>保留切片与向量</b>
+ *   正文也变了                → UPDATED        重建切片（后续会重新嵌入）
+ *   新路径 + 旧文档同 hash     → RENAMED        只改路径，<b>保留切片与向量</b>
+ *   清单里没有                → DELETED        删文档、切片、标签与原始文件
+ * </pre>
  *
  * <p>三个刻意的设计：
  * <ol>
- *   <li><b>单文件失败不终止整批</b>：一篇笔记的 frontmatter 写坏不该让另外 999 篇也进不来。
- *       失败会记录到任务明细（含原因），任务最终状态为 {@code PARTIAL}；</li>
- *   <li><b>进度按批更新</b>：每 10 个文件写一次任务行，避免"每个文件一次 UPDATE"的写放大；</li>
- *   <li><b>统计最后算一次</b>：知识库的 docCount/chunkCount/totalTokens 在导入结束后
- *       用一条聚合查询重算，而不是在循环里累加（累加值容易与实际行数漂移）。</li>
+ *   <li><b>单文件失败不终止整批</b>：一篇笔记的 frontmatter 写坏不该让另外 999 篇也进不来；
+ *       失败记录到任务明细（含原因），任务最终状态为 {@code PARTIAL}；</li>
+ *   <li><b>SKIPPED 不写明细</b>：否则一次"什么都没改"的重导会插入上千行明细，
+ *       把增量同步"零写入"的优势直接抹掉（跳过数量在任务行里已有汇总）；</li>
+ *   <li><b>删除只在完整 Vault 同步时判定</b>：单文件上传时清单只有一个文件，
+ *       若也按"清单里没有就删"处理，会把库里其余文档全部误删——这是增量同步最危险的失误点。</li>
  * </ol>
- *
- * <p>注意：本步<b>还没做增量同步</b>（按 file_hash 跳过未变化文件），那是 Step 2.6 的内容，
- * 因此现在重复导入同一个 Vault 会重新解析全部文件。
  */
 @Service
 public class KnowledgeImportServiceImpl implements KnowledgeImportService {
@@ -63,27 +76,33 @@ public class KnowledgeImportServiceImpl implements KnowledgeImportService {
 
     private final KnowledgeBaseService knowledgeBaseService;
     private final VaultPackageExtractor vaultPackageExtractor;
-    private final ParserRegistry parserRegistry;
+    private final VaultSyncPlanner vaultSyncPlanner;
+    private final com.lky.nexus.knowledge.parser.ParserRegistry parserRegistry;
     private final ChunkerFactory chunkerFactory;
     private final DocumentPersistService documentPersistService;
     private final DocumentStorage documentStorage;
+    private final DocumentMapper documentMapper;
     private final ImportTaskMapper importTaskMapper;
     private final ImportTaskItemMapper importTaskItemMapper;
 
     public KnowledgeImportServiceImpl(KnowledgeBaseService knowledgeBaseService,
                                       VaultPackageExtractor vaultPackageExtractor,
-                                      ParserRegistry parserRegistry,
+                                      VaultSyncPlanner vaultSyncPlanner,
+                                      com.lky.nexus.knowledge.parser.ParserRegistry parserRegistry,
                                       ChunkerFactory chunkerFactory,
                                       DocumentPersistService documentPersistService,
                                       DocumentStorage documentStorage,
+                                      DocumentMapper documentMapper,
                                       ImportTaskMapper importTaskMapper,
                                       ImportTaskItemMapper importTaskItemMapper) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.vaultPackageExtractor = vaultPackageExtractor;
+        this.vaultSyncPlanner = vaultSyncPlanner;
         this.parserRegistry = parserRegistry;
         this.chunkerFactory = chunkerFactory;
         this.documentPersistService = documentPersistService;
         this.documentStorage = documentStorage;
+        this.documentMapper = documentMapper;
         this.importTaskMapper = importTaskMapper;
         this.importTaskItemMapper = importTaskItemMapper;
     }
@@ -98,72 +117,110 @@ public class KnowledgeImportServiceImpl implements KnowledgeImportService {
                 knowledgeBase.getChunkSize(), knowledgeBase.getChunkOverlap(), null);
         DocumentChunker chunker = chunkerFactory.of(knowledgeBase.getChunkStrategy());
 
-        int created = 0;
-        int updated = 0;
-        int failed = 0;
-        int totalChunks = 0;
-        int processed = 0;
+        // ---------- 第一阶段：只用 file_hash 做廉价比对（不解析正文） ----------
+        List<DocumentPO> existingDocuments = documentMapper.selectList(Wrappers.<DocumentPO>lambdaQuery()
+                .eq(DocumentPO::getKbId, knowledgeBase.getId()));
+        Map<String, DocumentPO> existingByPath = new HashMap<>();
+        for (DocumentPO document : existingDocuments) {
+            existingByPath.put(document.getSourcePath(), document);
+        }
+        List<ScannedFile> scannedFiles = scan.files().stream()
+                .map(file -> new ScannedFile(file, HashUtils.sha256Hex(file.content())))
+                .toList();
+        // 完整 Vault 同步才允许判定删除
+        VaultSyncPlan plan = vaultSyncPlanner.plan(existingDocuments, scannedFiles, true);
 
-        for (VaultFile file : scan.files()) {
+        Map<String, DocumentPO> missingByHash = vaultSyncPlanner.indexByFileHash(plan.missing());
+
+        Counters counters = new Counters(totalFiles(plan, scan));
+        counters.skipped += plan.unchanged().size();
+
+        // ---------- 第二阶段：字节变了 → 解析后判断"只改元数据"还是"正文也变" ----------
+        for (ScannedFile scanned : plan.changed()) {
+            counters.accept(processFile(task, scanned, () -> {
+                ParsedDocument parsed = parse(scanned.file());
+                DocumentPO document = existingByPath.get(scanned.file().sourcePath());
+                String contentHash = HashUtils.sha256Hex(parsed.content());
+                if (document != null && contentHash.equals(document.getContentHash())) {
+                    documentPersistService.updateMetadataOnly(userId, knowledgeBase, document,
+                            scanned.file(), parsed);
+                    return new FileOutcome(ImportAction.METADATA_ONLY, document.getId(),
+                            nz(document.getChunkCount()));
+                }
+                List<TextChunk> chunks = chunker.chunk(parsed, chunkingOptions);
+                String storedPath = documentStorage.store(knowledgeBase.getId(),
+                        scanned.file().sourcePath(), scanned.file().content());
+                DocumentPersistResult result = documentPersistService.save(userId, knowledgeBase,
+                        scanned.file(), parsed, chunks, storedPath);
+                return new FileOutcome(ImportAction.UPDATED, result.document().getId(), chunks.size());
+            }));
+        }
+
+        // ---------- 第三阶段：新路径 → 先按 file_hash 认领改名，否则新增 ----------
+        for (ScannedFile scanned : plan.added()) {
+            counters.accept(processFile(task, scanned, () -> {
+                ParsedDocument parsed = parse(scanned.file());
+                DocumentPO renamedFrom = vaultSyncPlanner.claimRename(missingByHash, scanned);
+                if (renamedFrom != null) {
+                    documentPersistService.relocate(userId, knowledgeBase, renamedFrom,
+                            scanned.file(), parsed);
+                    log.debug("识别为改名：{} → {}", renamedFrom.getSourcePath(), scanned.file().sourcePath());
+                    return new FileOutcome(ImportAction.RENAMED, renamedFrom.getId(),
+                            nz(renamedFrom.getChunkCount()));
+                }
+                List<TextChunk> chunks = chunker.chunk(parsed, chunkingOptions);
+                String storedPath = documentStorage.store(knowledgeBase.getId(),
+                        scanned.file().sourcePath(), scanned.file().content());
+                DocumentPersistResult result = documentPersistService.save(userId, knowledgeBase,
+                        scanned.file(), parsed, chunks, storedPath);
+                return new FileOutcome(ImportAction.CREATED, result.document().getId(), chunks.size());
+            }));
+        }
+
+        // ---------- 第四阶段：没被认领的"消失文档" → 删除 ----------
+        for (DocumentPO document : missingByHash.values()) {
             long startMillis = System.currentTimeMillis();
             try {
-                DocumentParser parser = parserRegistry.requireParser(file.fileName());
-                // 第一版按 UTF-8 解码；非 UTF-8 文件会出现替换字符（已记录为已知限制）
-                ParsedDocument parsed = parser.parse(file.fileName(),
-                        new String(file.content(), StandardCharsets.UTF_8));
-                List<TextChunk> chunks = chunker.chunk(parsed, chunkingOptions);
-                String storedPath = documentStorage.store(knowledgeBase.getId(), file.sourcePath(), file.content());
-
-                DocumentPersistResult result = documentPersistService.save(
-                        userId, knowledgeBase, file, parsed, chunks, storedPath);
-
-                if (result.created()) {
-                    created++;
-                } else {
-                    updated++;
-                }
-                totalChunks += chunks.size();
-                recordItem(task.getId(), knowledgeBase.getId(), file.sourcePath(),
-                        result.created() ? ImportAction.CREATED : ImportAction.UPDATED,
-                        result.document().getId(), null, result.document().getFileHash(),
-                        chunks.size(), (int) (System.currentTimeMillis() - startMillis), null);
-            } catch (BusinessException ex) {
-                failed++;
-                log.warn("导入失败 path={}, reason={}", file.sourcePath(), ex.getMessage());
-                recordItem(task.getId(), knowledgeBase.getId(), file.sourcePath(), ImportAction.FAILED,
-                        null, null, null, 0, (int) (System.currentTimeMillis() - startMillis), ex.getMessage());
+                documentPersistService.delete(userId, document);
+                counters.deleted++;
+                recordItem(task, document.getSourcePath(), ImportAction.DELETED, document.getId(),
+                        document.getFileHash(), null, 0,
+                        (int) (System.currentTimeMillis() - startMillis), "本次 Vault 清单中已不存在该文件");
             } catch (Exception ex) {
-                failed++;
-                log.error("导入异常 path={}", file.sourcePath(), ex);
-                recordItem(task.getId(), knowledgeBase.getId(), file.sourcePath(), ImportAction.FAILED,
-                        null, null, null, 0, (int) (System.currentTimeMillis() - startMillis),
+                counters.failed++;
+                log.error("删除文档失败 path={}", document.getSourcePath(), ex);
+                recordItem(task, document.getSourcePath(), ImportAction.FAILED, document.getId(),
+                        document.getFileHash(), null, 0,
+                        (int) (System.currentTimeMillis() - startMillis),
                         ex.getClass().getSimpleName() + ": " + ex.getMessage());
             }
-
-            processed++;
-            if (processed % PROGRESS_BATCH == 0) {
-                updateProgress(task, processed, scan.files().size(), created, updated, failed, totalChunks);
+            counters.processed++;
+            if (counters.processed % PROGRESS_BATCH == 0) {
+                updateProgress(task, counters);
             }
         }
 
-        // 解的"跳过"条目（隐藏目录、不支持类型）也计入任务统计，让用户看到完整情况
-        int skipped = scan.skipped().size();
+        // 被跳过的压缩包条目（隐藏目录、不支持类型）也计入统计，让用户看到完整情况
+        counters.skipped += scan.skipped().size();
 
-        task.setCreatedCount(created);
-        task.setUpdatedCount(updated);
-        task.setSkippedCount(skipped);
-        task.setFailedCount(failed);
-        task.setTotalChunks(totalChunks);
+        task.setCreatedCount(counters.created);
+        task.setUpdatedCount(counters.updated + counters.metadataOnly + counters.renamed);
+        task.setSkippedCount(counters.skipped);
+        task.setDeletedCount(counters.deleted);
+        task.setFailedCount(counters.failed);
+        task.setTotalChunks(counters.totalChunks);
         task.setProgress(100);
         task.setFinishedAt(LocalDateTime.now());
-        task.setStatus(failed == 0 ? ImportTaskStatus.DONE.name()
-                : (created + updated > 0 ? ImportTaskStatus.PARTIAL.name() : ImportTaskStatus.FAILED.name()));
+        task.setStatus(counters.failed == 0 ? ImportTaskStatus.DONE.name()
+                : (counters.created + counters.updated + counters.metadataOnly + counters.renamed > 0
+                        ? ImportTaskStatus.PARTIAL.name() : ImportTaskStatus.FAILED.name()));
         importTaskMapper.updateById(task);
 
         documentPersistService.refreshKnowledgeBaseStats(knowledgeBase.getId());
 
-        log.info("Vault 导入完成 kbId={}, 新增 {} / 更新 {} / 跳过 {} / 失败 {}，切片 {} 个",
-                knowledgeBase.getId(), created, updated, skipped, failed, totalChunks);
+        log.info("Vault 同步完成 kbId={}，新增 {} / 正文更新 {} / 元数据更新 {} / 改名 {} / 跳过 {} / 删除 {} / 失败 {}，切片 {}",
+                knowledgeBase.getId(), counters.created, counters.updated, counters.metadataOnly,
+                counters.renamed, counters.skipped, counters.deleted, counters.failed, counters.totalChunks);
         return toResponse(task);
     }
 
@@ -176,6 +233,85 @@ public class KnowledgeImportServiceImpl implements KnowledgeImportService {
             throw new BusinessException(ErrorCode.IMPORT_TASK_NOT_FOUND);
         }
         return toResponse(task);
+    }
+
+    // ------------------------------------------------------------------
+    // 单文件处理与计数
+    // ------------------------------------------------------------------
+
+    /** 单文件处理逻辑（返回动作与文档标识，供记明细）。 */
+    @FunctionalInterface
+    private interface FileTask {
+        FileOutcome run() throws Exception;
+    }
+
+    private record FileOutcome(ImportAction action, Long documentId, int chunkCount) {
+    }
+
+    /** 可变计数器：把"处理一个文件"的统计逻辑收在一处，避免散落在各分支里漏加。 */
+    private static final class Counters {
+        private final int total;
+        private int processed;
+        private int created;
+        private int updated;
+        private int metadataOnly;
+        private int renamed;
+        private int skipped;
+        private int deleted;
+        private int failed;
+        private int totalChunks;
+
+        private Counters(int total) {
+            this.total = total;
+        }
+
+        private void accept(FileOutcome outcome) {
+            processed++;
+            switch (outcome.action()) {
+                case CREATED -> created++;
+                case UPDATED -> updated++;
+                case METADATA_ONLY -> metadataOnly++;
+                case RENAMED -> renamed++;
+                case SKIPPED -> skipped++;
+                case DELETED -> deleted++;
+                case FAILED -> failed++;
+            }
+            totalChunks += outcome.chunkCount();
+        }
+    }
+
+    /** 执行单文件处理：统一异常处理与明细记录（这是"一个文件失败不影响其他文件"的落点）。 */
+    private FileOutcome processFile(ImportTaskPO task, ScannedFile scanned, FileTask body) {
+        long startMillis = System.currentTimeMillis();
+        try {
+            FileOutcome outcome = body.run();
+            recordItem(task, scanned.file().sourcePath(), outcome.action(), outcome.documentId(),
+                    null, scanned.fileHash(), outcome.chunkCount(),
+                    (int) (System.currentTimeMillis() - startMillis), null);
+            return outcome;
+        } catch (BusinessException ex) {
+            log.warn("导入失败 path={}, reason={}", scanned.file().sourcePath(), ex.getMessage());
+            recordItem(task, scanned.file().sourcePath(), ImportAction.FAILED, null, null,
+                    scanned.fileHash(), 0, (int) (System.currentTimeMillis() - startMillis), ex.getMessage());
+            return new FileOutcome(ImportAction.FAILED, null, 0);
+        } catch (Exception ex) {
+            log.error("导入异常 path={}", scanned.file().sourcePath(), ex);
+            recordItem(task, scanned.file().sourcePath(), ImportAction.FAILED, null, null,
+                    scanned.fileHash(), 0, (int) (System.currentTimeMillis() - startMillis),
+                    ex.getClass().getSimpleName() + ": " + ex.getMessage());
+            return new FileOutcome(ImportAction.FAILED, null, 0);
+        }
+    }
+
+    private ParsedDocument parse(VaultFile file) {
+        // 第一版按 UTF-8 解码；非 UTF-8 文件会出现替换字符（已记录为已知限制）
+        return parserRegistry.requireParser(file.fileName())
+                .parse(file.fileName(), new String(file.content(), StandardCharsets.UTF_8));
+    }
+
+    private int totalFiles(VaultSyncPlan plan, VaultScanResult scan) {
+        return plan.unchanged().size() + plan.changed().size() + plan.added().size()
+                + plan.missing().size() + scan.skipped().size();
     }
 
     private ImportTaskPO createTask(Long userId, KnowledgeBasePO knowledgeBase, VaultScanResult scan) {
@@ -199,22 +335,23 @@ public class KnowledgeImportServiceImpl implements KnowledgeImportService {
         return task;
     }
 
-    private void updateProgress(ImportTaskPO task, int processed, int total,
-                                int created, int updated, int failed, int totalChunks) {
-        task.setProgress(total == 0 ? 100 : (int) (processed * 100L / total));
-        task.setCreatedCount(created);
-        task.setUpdatedCount(updated);
-        task.setFailedCount(failed);
-        task.setTotalChunks(totalChunks);
+    private void updateProgress(ImportTaskPO task, Counters counters) {
+        task.setProgress(counters.total == 0 ? 100
+                : Math.min(99, (int) (counters.processed * 100L / counters.total)));
+        task.setCreatedCount(counters.created);
+        task.setUpdatedCount(counters.updated + counters.metadataOnly + counters.renamed);
+        task.setDeletedCount(counters.deleted);
+        task.setFailedCount(counters.failed);
+        task.setTotalChunks(counters.totalChunks);
         importTaskMapper.updateById(task);
     }
 
-    private void recordItem(Long taskId, Long kbId, String sourcePath, ImportAction action,
+    private void recordItem(ImportTaskPO task, String sourcePath, ImportAction action,
                             Long documentId, String oldHash, String newHash,
                             int chunkCount, int durationMs, String message) {
         ImportTaskItemPO item = new ImportTaskItemPO();
-        item.setTaskId(taskId);
-        item.setKbId(kbId);
+        item.setTaskId(task.getId());
+        item.setKbId(task.getKbId());
         item.setSourcePath(sourcePath);
         item.setAction(action.name());
         item.setDocumentId(documentId);

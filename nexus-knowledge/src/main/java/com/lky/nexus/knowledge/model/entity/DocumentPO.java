@@ -36,6 +36,9 @@ public class DocumentPO {
     /** 相对 Vault 根的路径，如 Spring/SpringBoot.md —— 增量同步的身份键。 */
     private String sourcePath;
 
+    /** 原始文件在存储中的相对路径（重新解析与删除清理用）。 */
+    private String storedPath;
+
     private String folder;
 
     private String title;

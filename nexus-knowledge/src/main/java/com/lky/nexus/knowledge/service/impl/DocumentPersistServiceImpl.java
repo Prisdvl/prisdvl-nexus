@@ -11,6 +11,7 @@ import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.DocumentTagMapper;
 import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;
 import com.lky.nexus.knowledge.model.DocumentStatus;
+import com.lky.nexus.knowledge.model.KnowledgeSourceType;
 import com.lky.nexus.knowledge.model.entity.ChunkPO;
 import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.DocumentTagPO;
@@ -18,28 +19,32 @@ import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.parser.ParsedDocument;
 import com.lky.nexus.knowledge.service.DocumentPersistResult;
 import com.lky.nexus.knowledge.service.DocumentPersistService;
+import com.lky.nexus.knowledge.storage.DocumentStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 文档落库实现。
  *
- * <p>两个值得注意的点：
+ * <p>几个值得注意的点：
  * <ol>
  *   <li><b>批量插入切片</b>：一个 Vault 上千篇笔记会产生几万行切片，
  *       逐条 insert 是几万次数据库往返。这里按 200 行一批插入；</li>
  *   <li><b>覆盖时先清理旧数据</b>：切片的唯一键是 (document_id, chunk_index)，
- *       如果不清旧行，重新切分后行数变少就会留下"幽灵切片"——检索能命中但早已不存在于正文里。</li>
+ *       如果不清旧行，重新切分后行数变少就会留下"幽灵切片"——检索能命中但早已不存在于正文里；</li>
+ *   <li><b>三条写入路径</b>（save / updateMetadataOnly / relocate）刻意分开：
+ *       只有正文真的变了才重建切片（否则会白白丢掉向量、触发重新嵌入）；</li>
+ *   <li><b>version 只随正文变化递增</b>：它表达的是"内容版本"，
+ *       改个 tag 或改个文件名不该让它跳动（否则用它做增量判断的逻辑会全部失效）。</li>
  * </ol>
  */
 @Service
@@ -50,24 +55,27 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
     /** 单批插入的行数：太大可能超过 MySQL 的 max_allowed_packet，太小则往返次数多。 */
     private static final int BATCH_SIZE = 200;
 
-    /** md_chunk.content 是 MEDIUMTEXT，但单片过大本身就说明切分有问题，这里做个记录性截断保护。 */
+    /** 单片文本上限：过大本身就说明切分有问题，这里做记录性截断保护。 */
     private static final int MAX_CHUNK_CHARS = 20000;
 
     private final DocumentMapper documentMapper;
     private final DocumentTagMapper documentTagMapper;
     private final ChunkMapper chunkMapper;
     private final KnowledgeBaseMapper knowledgeBaseMapper;
+    private final DocumentStorage documentStorage;
     private final JsonMapper jsonMapper;
 
     public DocumentPersistServiceImpl(DocumentMapper documentMapper,
                                       DocumentTagMapper documentTagMapper,
                                       ChunkMapper chunkMapper,
                                       KnowledgeBaseMapper knowledgeBaseMapper,
+                                      DocumentStorage documentStorage,
                                       JsonMapper jsonMapper) {
         this.documentMapper = documentMapper;
         this.documentTagMapper = documentTagMapper;
         this.chunkMapper = chunkMapper;
         this.knowledgeBaseMapper = knowledgeBaseMapper;
+        this.documentStorage = documentStorage;
         this.jsonMapper = jsonMapper;
     }
 
@@ -79,33 +87,13 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
                                       ParsedDocument parsed,
                                       List<TextChunk> chunks,
                                       String storedPath) {
-        DocumentPO existing = documentMapper.selectOne(Wrappers.<DocumentPO>lambdaQuery()
-                .eq(DocumentPO::getKbId, knowledgeBase.getId())
-                .eq(DocumentPO::getSourcePath, file.sourcePath()));
-
-        LocalDateTime now = LocalDateTime.now();
-        DocumentPO document = existing == null ? new DocumentPO() : existing;
+        DocumentPO existing = findByPath(knowledgeBase.getId(), file.sourcePath());
         boolean created = existing == null;
 
-        document.setKbId(knowledgeBase.getId());
-        document.setUserId(userId);
-        document.setFileName(file.fileName());
-        document.setFileExt(file.extension());
-        document.setSourceType(com.lky.nexus.knowledge.model.KnowledgeSourceType.OBSIDIAN.name());
-        document.setSourcePath(file.sourcePath());
-        document.setFolder(file.folder());
-        document.setTitle(parsed.title());
-        document.setFileSize(file.size());
-        document.setFileHash(HashUtils.sha256Hex(file.content()));
-        document.setContentHash(HashUtils.sha256Hex(parsed.content()));
-        document.setFrontmatter(toJson(parsed.frontmatter()));
-        document.setTags(toJson(parsed.tags()));
-        document.setHeadingTree(toJson(parsed.headings()));
-        document.setDocUpdatedAt(VaultPackageExtractor.toLocalDateTime(file.lastModified()));
-        // 说明：本阶段只做"解析 + 切分"，因此直接置为 READY。
-        // Phase 3 接入嵌入与索引后，这里会经历 EMBEDDING → INDEXING → READY。
-        document.setStatus(DocumentStatus.READY.name());
-        document.setErrorMsg(null);
+        LocalDateTime now = LocalDateTime.now();
+        DocumentPO document = created ? new DocumentPO() : existing;
+
+        applyMetadata(document, knowledgeBase.getId(), userId, file, parsed, storedPath, true);
         document.setChunkCount(chunks.size());
         document.setTokenCount(chunks.stream().mapToInt(TextChunk::tokenCount).sum());
         document.setIndexedAt(now);
@@ -119,15 +107,66 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
             documentMapper.updateById(document);
             // 覆盖前清掉旧切片与标签，避免"幽灵切片"
             chunkMapper.delete(Wrappers.<ChunkPO>lambdaQuery().eq(ChunkPO::getDocumentId, document.getId()));
-            documentTagMapper.delete(Wrappers.<DocumentTagPO>lambdaQuery()
-                    .eq(DocumentTagPO::getDocumentId, document.getId()));
         }
-
+        // 标签在两条路径下都要重建（元数据可能变了）
+        documentTagMapper.delete(Wrappers.<DocumentTagPO>lambdaQuery()
+                .eq(DocumentTagPO::getDocumentId, document.getId()));
         insertTags(knowledgeBase.getId(), document.getId(), parsed.tags());
         insertChunks(userId, knowledgeBase.getId(), document.getId(), chunks);
 
-        log.debug("文档落库完成 path={}, created={}, chunks={}", file.sourcePath(), created, chunks.size());
+        log.debug("文档落库 path={}, created={}, chunks={}", file.sourcePath(), created, chunks.size());
         return new DocumentPersistResult(document, created);
+    }
+
+    @Override
+    @Transactional
+    public void updateMetadataOnly(Long userId,
+                                   KnowledgeBasePO knowledgeBase,
+                                   DocumentPO existing,
+                                   VaultFile file,
+                                   ParsedDocument parsed) {
+        LocalDateTime now = LocalDateTime.now();
+        String oldStoredPath = existing.getStoredPath();
+        applyMetadata(existing, knowledgeBase.getId(), userId, file, parsed, oldStoredPath, false);
+        // 原始字节也变了（否则 file_hash 不会变），因此覆盖保存，保证磁盘上的副本是最新的
+        String storedPath = documentStorage.store(knowledgeBase.getId(), file.sourcePath(), file.content());
+        existing.setStoredPath(storedPath);
+        existing.setUpdatedAt(now);
+        documentMapper.updateById(existing);
+
+        documentTagMapper.delete(Wrappers.<DocumentTagPO>lambdaQuery()
+                .eq(DocumentTagPO::getDocumentId, existing.getId()));
+        insertTags(knowledgeBase.getId(), existing.getId(), parsed.tags());
+
+        // 刻意不动：kb_chunk、version、chunk_count、token_count
+        log.debug("仅元数据更新 path={}（保留 {} 个切片与向量）", file.sourcePath(), existing.getChunkCount());
+    }
+
+    @Override
+    @Transactional
+    public void relocate(Long userId,
+                         KnowledgeBasePO knowledgeBase,
+                         DocumentPO existing,
+                         VaultFile file,
+                         ParsedDocument parsed) {
+        String oldStoredPath = existing.getStoredPath();
+        LocalDateTime now = LocalDateTime.now();
+        applyMetadata(existing, knowledgeBase.getId(), userId, file, parsed, oldStoredPath, true);
+        String storedPath = documentStorage.store(knowledgeBase.getId(), file.sourcePath(), file.content());
+        existing.setStoredPath(storedPath);
+        existing.setUpdatedAt(now);
+        documentMapper.updateById(existing);
+
+        // 旧路径的原始文件已无用，删掉（否则每改一次名就多一份垃圾）
+        if (oldStoredPath != null && !Objects.equals(oldStoredPath, storedPath)) {
+            documentStorage.delete(oldStoredPath);
+        }
+
+        documentTagMapper.delete(Wrappers.<DocumentTagPO>lambdaQuery()
+                .eq(DocumentTagPO::getDocumentId, existing.getId()));
+        insertTags(knowledgeBase.getId(), existing.getId(), parsed.tags());
+
+        log.debug("文档改名 path={}（保留 {} 个切片与向量）", file.sourcePath(), existing.getChunkCount());
     }
 
     @Override
@@ -140,6 +179,8 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
         documentTagMapper.delete(Wrappers.<DocumentTagPO>lambdaQuery()
                 .eq(DocumentTagPO::getDocumentId, document.getId()));
         documentMapper.deleteById(document.getId());
+        // 原始文件也清掉：文档都删了，留着它只会随每次导入不断累积
+        documentStorage.delete(document.getStoredPath());
     }
 
     @Override
@@ -148,12 +189,14 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
         Long docCount = documentMapper.selectCount(Wrappers.<DocumentPO>lambdaQuery()
                 .eq(DocumentPO::getKbId, knowledgeBaseId));
 
-        // 切片数与 token 总数用两条聚合查询算出来，而不是在 Java 里累加：
-        // 导入失败重试、并发导入等情况下，Java 侧计数容易与实际行数不一致。
+        // 切片数与 token 总数用聚合查询算出来，而不是在 Java 里累加：
+        // 导入失败重试、重复导入等情况下，Java 侧计数容易与实际行数不一致。
         List<ChunkPO> chunks = chunkMapper.selectList(Wrappers.<ChunkPO>lambdaQuery()
                 .select(ChunkPO::getTokenCount)
                 .eq(ChunkPO::getKbId, knowledgeBaseId));
-        long totalTokens = chunks.stream().mapToLong(chunk -> chunk.getTokenCount() == null ? 0 : chunk.getTokenCount()).sum();
+        long totalTokens = chunks.stream()
+                .mapToLong(chunk -> chunk.getTokenCount() == null ? 0 : chunk.getTokenCount())
+                .sum();
 
         KnowledgeBasePO update = new KnowledgeBasePO();
         update.setId(knowledgeBaseId);
@@ -162,6 +205,48 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
         update.setTotalTokens(totalTokens);
         update.setUpdatedAt(LocalDateTime.now());
         knowledgeBaseMapper.updateById(update);
+    }
+
+    // ------------------------------------------------------------------
+
+    private DocumentPO findByPath(Long knowledgeBaseId, String sourcePath) {
+        return documentMapper.selectOne(Wrappers.<DocumentPO>lambdaQuery()
+                .eq(DocumentPO::getKbId, knowledgeBaseId)
+                .eq(DocumentPO::getSourcePath, sourcePath));
+    }
+
+    /**
+     * 应用元数据字段。
+     *
+     * @param updatePath 是否更新路径相关字段（改名时为 true，仅元数据变化时为 false）
+     */
+    private void applyMetadata(DocumentPO document, Long knowledgeBaseId, Long userId,
+                               VaultFile file, ParsedDocument parsed, String storedPath,
+                               boolean updatePath) {
+        document.setKbId(knowledgeBaseId);
+        document.setUserId(userId);
+        document.setFileName(file.fileName());
+        document.setFileExt(file.extension());
+        document.setSourceType(KnowledgeSourceType.OBSIDIAN.name());
+        if (updatePath) {
+            document.setSourcePath(file.sourcePath());
+            document.setFolder(file.folder());
+        }
+        document.setTitle(parsed.title());
+        document.setFileSize(file.size());
+        document.setFileHash(HashUtils.sha256Hex(file.content()));
+        document.setContentHash(HashUtils.sha256Hex(parsed.content()));
+        document.setFrontmatter(toJson(parsed.frontmatter()));
+        document.setTags(toJson(parsed.tags()));
+        document.setHeadingTree(toJson(parsed.headings()));
+        document.setDocUpdatedAt(VaultPackageExtractor.toLocalDateTime(file.lastModified()));
+        if (storedPath != null) {
+            document.setStoredPath(storedPath);
+        }
+        // 本阶段只做"解析 + 切分"，因此直接置为 READY。
+        // Phase 3 接入嵌入与索引后，这里会经历 EMBEDDING → INDEXING → READY。
+        document.setStatus(DocumentStatus.READY.name());
+        document.setErrorMsg(null);
     }
 
     private void insertTags(Long knowledgeBaseId, Long documentId, List<String> tags) {

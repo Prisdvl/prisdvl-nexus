@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS kb_document (
     file_ext       VARCHAR(16)   NOT NULL,
     source_type    VARCHAR(16)   NOT NULL,
     source_path    VARCHAR(512)  NOT NULL,
+    stored_path    VARCHAR(512),
     folder         VARCHAR(512),
     title          VARCHAR(512),
     file_size      BIGINT        NOT NULL DEFAULT 0,

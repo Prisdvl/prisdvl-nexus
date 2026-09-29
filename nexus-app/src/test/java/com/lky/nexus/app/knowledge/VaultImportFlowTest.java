@@ -145,8 +145,8 @@ class VaultImportFlowTest {
     }
 
     @Test
-    @DisplayName("重复导入同一 Vault：识别为更新而不是新增，且不会出现重复切片（无幽灵切片）")
-    void reimportUpdatesInsteadOfDuplicating() throws Exception {
+    @DisplayName("重复导入同一 Vault：增量同步命中，全部跳过且不产生重复切片")
+    void reimportSkipsUnchangedFiles() throws Exception {
         String token = registerAndLogin("vault-reimport");
         Long kbId = createKnowledgeBase(token, "重复导入");
         byte[] zip = sampleVault();
@@ -155,22 +155,26 @@ class VaultImportFlowTest {
         long firstChunkCount = chunkMapper.selectCount(Wrappers.<ChunkPO>lambdaQuery()
                 .eq(ChunkPO::getKbId, kbId));
 
-        // 第二次导入：内容未变，但当前版本还没有"按 hash 跳过"（Step 2.6），因此会走更新路径
+        // 第二次导入：字节完全一致 → 走 SHA-256 增量同步，全部跳过
         mockMvc.perform(multipart("/api/knowledge-bases/" + kbId + "/vault")
                         .file(new MockMultipartFile("file", "MyVault.zip", "application/zip", zip))
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.createdCount").value(0))
-                .andExpect(jsonPath("$.data.updatedCount").value(3));
+                .andExpect(jsonPath("$.data.updatedCount").value(0))
+                // skippedCount 同时包含"内容未变化"与"扫描阶段跳过"：
+                // 3 个文件未变化 + 3 个跳过条目（.obsidian/、.trash/、png）
+                .andExpect(jsonPath("$.data.skippedCount").value(6));
 
-        // 关键断言：覆盖时旧切片被清理，不会越导越多
+        // 关键断言：跳过的文件既不重建切片、也不升版本，更不会越导越多
         assertThat(documentMapper.selectCount(Wrappers.<DocumentPO>lambdaQuery().eq(DocumentPO::getKbId, kbId)))
                 .isEqualTo(3);
         assertThat(chunkMapper.selectCount(Wrappers.<ChunkPO>lambdaQuery().eq(ChunkPO::getKbId, kbId)))
                 .as("重复导入不应产生幽灵切片")
                 .isEqualTo(firstChunkCount);
         assertThat(documentMapper.selectList(Wrappers.<DocumentPO>lambdaQuery().eq(DocumentPO::getKbId, kbId)))
-                .allSatisfy(document -> assertThat(document.getVersion()).isEqualTo(2));
+                .as("内容未变化时版本不应递增")
+                .allSatisfy(document -> assertThat(document.getVersion()).isEqualTo(1));
     }
 
     @Test
