@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AI Knowledge Hub — 聚合父 POM
+  职责：统一版本、统一依赖管理、声明模块；不写任何业务代码。
+
+  设计要点（见 docs/decisions.md ADR-001）：
+  1) 以 spring-boot-starter-parent 为父：统一第三方依赖版本 + 插件默认配置。
+  2) 额外 import spring-ai-bom 管理 Spring AI 全家桶版本（本项目不使用 1.x）。
+  3) 内部模块版本集中在 dependencyManagement，子模块引用时不写版本号。
+  4) spring-boot-maven-plugin 只在「可执行应用」模块声明（akh-app / 未来的 akh-mcp-server）。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.1</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.lky.akh</groupId>
+    <artifactId>ai-knowledge-hub</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>ai-knowledge-hub</name>
+    <description>Personal Knowledge Base &amp; Agent Platform — 个人知识库 + AI Agent 智能工作平台</description>
+
+    <modules>
+        <module>akh-common</module>
+        <module>akh-knowledge</module>
+        <module>akh-app</module>
+        <!-- Phase 7 加入：<module>akh-mcp-server</module> -->
+    </modules>
+
+    <properties>
+        <!-- 语言与编码 -->
+        <java.version>21</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <!-- 保留方法参数名：Spring AI 的 @Tool/@ToolParam 与 MyBatis 参数绑定都依赖它 -->
+        <maven.compiler.parameters>true</maven.compiler.parameters>
+
+        <!-- 关键第三方版本（Boot 未托管的必须显式声明） -->
+        <spring-ai.version>2.0.1</spring-ai.version>
+        <mybatis-plus.version>3.5.17</mybatis-plus.version>
+
+        <!-- 测试 -->
+        <skipUnitTests>false</skipUnitTests>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- ---------- Spring AI BOM：统一所有 spring-ai-* 版本（本项目基线 2.0.1，兼容 Boot 4.0.x/4.1.x）---------- -->
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- ---------- 内部模块 ---------- -->
+            <dependency>
+                <groupId>com.lky.akh</groupId>
+                <artifactId>akh-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.lky.akh</groupId>
+                <artifactId>akh-knowledge</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- ---------- MyBatis-Plus（Boot 4 专用 starter；不在 Boot BOM 中，必须钉版本）---------- -->
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration>
+                        <skipTests>${skipUnitTests}</skipTests>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>

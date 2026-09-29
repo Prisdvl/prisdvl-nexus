@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  akh-app — 可执行应用（模块化单体）
+  职责：Web 层（auth / chat / knowledge / rag / agent / tool / workflow / evaluation / observability / prompt）
+        + 全局配置 + 事务边界 + 安全。
+  这是唯一声明 spring-boot-maven-plugin 的模块（可执行 jar）。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.lky.akh</groupId>
+        <artifactId>ai-knowledge-hub</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>akh-app</artifactId>
+    <name>akh-app</name>
+    <description>AI Knowledge Hub 应用：模块化单体 Web 层</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.lky.akh</groupId>
+            <artifactId>akh-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.lky.akh</groupId>
+            <artifactId>akh-knowledge</artifactId>
+        </dependency>
+
+        <!-- Web MVC：Boot 4 起 spring-boot-starter-web 已废弃，使用 spring-boot-starter-webmvc -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

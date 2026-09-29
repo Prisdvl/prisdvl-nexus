@@ -1,0 +1,465 @@
+# 架构决策记录（ADR）
+
+> 每个决策记录：背景 → 决策 → 理由 → 代价 → 被否方案。
+> 面试时"你做过哪些技术选型"就靠这份文档回答。
+
+---
+
+## ADR-001 采用 Maven 多模块的模块化单体，而不是单模块或微服务
+
+**背景**：功能域有 auth / chat / knowledge / rag / agent / tool / evaluation / observability 八个。需求明确第一版不要微服务化，但 Phase 7 需要一个**独立进程**的 MCP Server。
+
+**决策**：单仓库 Maven 多模块（`akh-common` + `akh-knowledge` + `akh-app`，Phase 7 增加 `akh-mcp-server`），业务按包分模块，部署仍是一个应用。
+
+**理由**
+1. MCP Server 必须是独立进程，且要复用知识检索逻辑 —— 如果全在一个模块里，只能靠"复制代码"或"把整个单体也打进 MCP Server"（会带上 Security/JWT/Chat 等无关依赖）。拆模块后 `akh-mcp-server` 依赖 `akh-knowledge` 即可，**拆服务成本≈0**。
+2. 模块边界由**编译器**保证，而不是靠代码评审时的自觉。`akh-knowledge` 里根本 import 不到 `SecurityContextHolder`，租户隔离只能通过显式 `userId` 参数实现 —— 这恰好是未来拆服务必须的形态。
+3. 现在项目小，多模块的维护成本低；等 8 个域都写满了再拆，重构成本高得多。
+
+**代价**：每个模块都要单独 `mvn install`；IDE 里跨模块改动需要先安装依赖模块；不能像单模块那样随手 import。
+
+**被否方案**
+- 单模块 + 严格分包的"模块化单体"：最省事，但 Phase 7 必然要复制检索代码，且边界形同虚设。→ 若你更在意前两周的迭代速度，可以选它，但要接受 Phase 7 的重构。
+- 直接微服务（knowledge-service / chat-service / agent-service）：对一个个人项目是过度设计，本地要跑 3+ 个 JVM，简历上也不加分（面试官会问"多少 QPS 需要拆"，答不上来反而扣分）。
+
+---
+
+## ADR-002 存储分工：MySQL 业务真源 + pgvector 向量索引 + ES 关键词索引
+
+**背景**：需要同时具备事务型业务数据、向量相似度检索、中文全文检索（BM25）三种能力。
+
+**决策**：MySQL 存业务与 Chunk 正文（真源）；pgvector 只做向量索引；Elasticsearch 只做 BM25 索引。两者都是**派生索引**，可从 MySQL 重建。
+
+**理由**
+1. MySQL 事务能力是业务刚需（导入任务的计数、会话消息顺序、评测结果一致性）。
+2. pgvector 与业务库分离，避免向量写入把 MySQL 拖慢；HNSW 索引重建不影响业务表。
+3. ES 的中文分词（IK）+ BM25 打分可控性远好于 MySQL 全文索引。
+4. "派生索引 + 真源"的划分让**删库重建**成为可能：提供 `/api/documents/{id}/reindex` 与全库重建接口，索引坏了不是数据灾难。
+
+**代价**：三套存储要同步，存在不一致窗口。→ 对策：写入顺序"MySQL 先落库（PENDING）→ 写索引 → 回填状态"；失败项由任务表标记，支持重试与重建；不追求分布式事务。
+
+**被否方案**
+- 只用 ES 做全部（含向量）：ES 支持 dense_vector，但业务事务、复杂关联查询、报表统计都不如 MySQL。
+- 只用 PostgreSQL（pgvector + 全文检索）：中文 BM25 需要 zhparser 等扩展，生态与可控性不如 ES，且你在简历上"ES + 中文分词"是加分项。
+- Redis 当向量库（Spring AI 支持 Redis VectorStore）：需要 Redis Stack，且持久化与查询能力不是首选。
+
+---
+
+## ADR-003 用 Spring AI 的抽象，但**不用** starter 自动配置模型
+
+**背景**：Spring AI 的 starter 自动配置一个 `ChatModel`/`EmbeddingModel` bean，provider 由依赖决定。但本项目需要同时存在：对话模型、裁判模型（评测）、嵌入模型（本地），且要能按角色切换。
+
+**决策**：`spring.ai.model.chat=none` 关掉自动配置（官方文档确认该属性存在，且其设计目的正是"允许多模型配置"），由 `AiModelRegistry` 按配置列表手工构建多个模型，`ChatClientFactory` 按逻辑角色（`chat.default` / `chat.agent` / `chat.judge` / `embedding.default`）提供 `ChatClient`。
+
+**理由**
+1. "模型可替换"是需求硬约束；角色化后，业务代码只写 `chatClientFactory.get("chat.agent")`。
+2. 评测需要"裁判模型可能与生成模型不同"，这在单 bean 自动配置下做不干净。
+3. 可以在测试里注入假 provider，实现不联网的单元测试。
+
+**代价**：失去 starter 的自动重试/超时/客户端工厂配置，需要自己管 API Key 校验、超时、连接池。→ 对策：`AiModelRegistry` 统一封装构建参数，配置校验在启动时失败（fail fast）。
+
+**被否方案**：多 profile + 每 profile 一个 starter（dev 用 ollama、prod 用 openai）——做不到"同一进程里同时用两个 provider"。
+
+---
+
+## ADR-004 导入、嵌入、评测、报告一律异步（RabbitMQ）
+
+**背景**：上传一个 Obsidian Vault（几百到上千文件）时，解析 + 嵌入是分钟级操作，且嵌入按 Token 计费。
+
+**决策**：HTTP 接口只做"存原始文件 + 建任务 + 投递消息"，立即返回 `taskId`；worker 消费后解析/切分/嵌入/建索引，进度写 DB + Redis，前端轮询或 SSE。
+
+**理由**：不被 HTTP 超时截断；MQ 削峰并支持重试；任务可取消、可单文件重试；进度可观测。
+
+**代价**：需要处理"任务状态机 + 幂等 + 重复消费"。→ 对策：`kb_import_task` 作为状态载体，worker 以 `taskId + source_path` 为幂等键；重复消费只产生 SKIPPED。
+
+**被否方案**：Spring `@Async` 线程池（进程重启任务丢失、无法跨实例、无死信重试）；同步处理（必超时）。
+
+---
+
+## ADR-005 Markdown 采用**结构化切分**，定长切分只作为兜底
+
+**背景**：笔记是 Markdown，标题就是语义边界。
+
+**决策**：按 H1→H2→H3 构建标题树，节点内的正文在"目标 400 token"上限内整块成 Chunk，超出则按段落递归切分（重叠 50），代码块/表格整体保留；嵌入文本 = 标题路径 + 正文。
+
+**理由**
+1. 引用必须能定位到标题（前端要滚动到 `heading_path`），定长切分做不到。
+2. 语义边界对齐后，向量的语义纯度更高，召回更准。
+3. 代码块被切断会产生无意义的向量（且会误导模型）。
+
+**代价**：切分逻辑复杂度上升，需要在 Phase 9 用评测集验证参数。→ 对策：切分器可配置，评测对比不同参数。
+
+**被否方案**：Spring AI `TokenTextSplitter` 一把梭 —— 作为 TXT/PDF 的兜底使用，不作为 Markdown 主策略。
+
+---
+
+## ADR-006 BM25 用原生 Elasticsearch Java Client 实现（不用 Spring AI 的 ES VectorStore）
+
+**背景**：混合检索需要 BM25。核对官方文档确认：Spring AI 2.0.1 的 Elasticsearch VectorStore **只支持 kNN 向量相似度**，没有任何 BM25 / 关键词 / 混合检索 API，其非向量路径只有 metadata 过滤。
+
+**决策**：`akh-knowledge` 内自建 ES 索引（IK 分词、字段与向量 metadata 对齐）与查询（`multi_match` + `bool.filter`），用官方 `ElasticsearchClient`。
+
+**理由**：需求要求真正的 BM25 与混合检索；用原生客户端才能控制分词器、字段权重、filter 下推与打分解释（面试可展示 `explain`）。
+
+**代价**：多一套客户端与索引映射维护；索引重建需要别名切换（`akh_chunk_v1` → 别名 `akh_chunk`）。
+
+**被否方案**：给 `spring-ai-elasticsearch-store` 提 issue 等官方支持（不可行）；用 ES 的向量检索替换 pgvector（则失去"pgvector 专项经验"，且与 ADR-002 冲突）。
+
+---
+
+## ADR-007 自研 `Reranker` 接口（因为 Spring AI 2.0.1 没有 Rerank API）
+
+**背景**：核对 2.0.1 完整 BOM 与文档目录：**不存在任何 rerank 制品，也没有 `RerankModel` 接口**。而混合检索后必须精排才能把 TopK 20 收敛到 TopN 6。
+
+**决策**：定义 `Reranker` 接口（`List<RankedChunk> rerank(query, candidates, topN)`），提供两种实现：
+1. `LlmReranker`：把候选片段编号后让裁判模型打 0–10 相关性分并输出 JSON，按分数排序（复用 ADR-003 的 `chat.judge` 角色，可用便宜模型）。
+2. `HttpReranker`：对接外部重排 API（如 DashScope gte-rerank、BGE reranker），通过配置切换。
+另提供 `NoopReranker`（关闭重排），供评测对比"有无重排"的差异。
+
+**理由**：`Reranker` 是检索质量的关键一环且官方缺失，自己实现既满足需求，也是很好的面试素材（能讲清 cross-encoder 与 bi-encoder 的区别、为什么重排贵但有效）。
+
+**代价**：LLM 重排有额外延迟与成本。→ 对策：只在启用重排时对 TopK 候选做重排，结果写缓存；评测量化收益后再决定默认是否开启。
+
+---
+
+## ADR-008 Embedding 模型与维度在知识库上**冻结**
+
+**背景**：不同嵌入模型的向量空间不可比；即使同为 1024 维，语义空间也不同。pgvector 的 HNSW 索引最大支持 2000 维，且维度在列定义上固定。
+
+**决策**：`kb_knowledge_base` 记录 `embedding_provider/model/dim`，建库后**不允许修改**；换模型 = 新建知识库 + 全量重建。pgvector 表固定 `vector(1024)`，默认嵌入模型为本地 `bge-m3`（中文强、免费、离线、1024 维）。
+
+**理由**：避免"库里一半是 A 模型的向量、一半是 B 模型的向量"这种静默的质量灾难（向量照常返回结果，但相似度毫无意义——这是 RAG 最隐蔽的坑）。
+
+**代价**：不能平滑升级嵌入模型。→ 对策：重建接口 + Embedding 缓存（同内容不重复付费）。默认用本地模型，重建成本≈电费。
+
+---
+
+## ADR-009 Agent 手动驱动工具循环，而不是依赖 `ToolCallingAdvisor` 自动循环
+
+**背景**：Spring AI 2.0 中 `ChatModel` 不再内部执行工具；`ChatClient` 会自动注册 `ToolCallingAdvisor` 在内部完成"模型 → 工具 → 模型"的循环。但本项目要求：权限校验、写操作人工确认、审计、超时/步数控制。
+
+**决策**：普通聊天（简单工具）用框架自动 advisor；**Agent 走"用户控制工具执行"路径**：关闭自动注册，自己用 `ToolCallingManager` 驱动循环，并持久化每一步到 `ai_agent_run_step`。
+
+**理由**：自动循环内部执行工具，**没有插入点**做权限判定与人工确认；人工确认还要求循环能挂起并跨 HTTP 请求恢复（`WAITING_APPROVAL`），这必须由自己的状态机实现。
+
+**代价**：要自己处理消息历史拼接、工具结果回灌、最大步数、重试与超时。→ 这正是 Agent 的核心工程价值所在，也是面试重点。
+
+---
+
+## ADR-010 自研轻量工作流引擎，不引入 Flowable / Camunda
+
+**背景**：需要"AI 节点 + 工具节点 + 条件 + 并行 + 人工确认"的编排。
+
+**决策**：自研约 10 个类的引擎（定义/节点/边 + 引擎 + 节点执行器 + 运行表），节点类型固定 7 种。
+
+**理由**：需求是 AI 编排而不是 BPMN 全语义；引入重型引擎会让项目变成"配置工程师"，且难以与 Agent/Tool 体系融合；自研引擎能讲清 DAG 调度、状态持久化、失败重试、人工挂起恢复。
+
+**代价**：要自己保证无环校验、并行收敛、幂等重试。→ 这些恰好是有价值的测试用例。
+
+---
+
+## ADR-011 Chat Memory（框架）与 Chat History（自建表）并存
+
+**背景**：Spring AI 提供 `ChatMemory` + `ChatMemoryRepository`（默认 20 条窗口、turn-boundary 淘汰），官方明确说明"Memory 用于给模型的有界上下文，History 需要自己存"。
+
+**决策**：`chat_message` 存完整历史（前端展示、评测、观测）；`ChatMemory`（JDBC repository）存发给模型的窗口。
+
+**理由**：职责分离，且官方 `JdbcChatMemoryRepository` **不保存 tool-call 消息**，所以 Agent 的完整轨迹必须落在自己的 `ai_agent_run_step`，不能指望 Memory。
+
+**代价**：两处写入，需注意一致性（先写 History，再写 Memory）。
+
+---
+
+## ADR-012 观测双轨：自建 `obs_ai_request` + Spring AI 自带 Micrometer 观测
+
+**背景**：Spring AI 2.0 自带观测（`gen_ai.client.operation`、`gen_ai.client.token.usage` 等，Micrometer）；但前端看板需要按业务维度（用户/会话/场景/成本）统计。
+
+**决策**：① 用框架观测做**单次调用链路**排查（可接 Actuator/Prometheus）；② 自建 `obs_ai_request` 做**业务统计**（Token、延迟、首 Token、检索数、工具数、成本、错误率）。
+
+**理由**：框架指标是技术维度、无业务上下文；业务看板需要自己落库并聚合（`obs_daily_stat`）。第一版**不引入** OTel Collector + Grafana + Loki 全家桶——个人项目里那只是给截图加负担。
+
+**代价**：埋点要写在 Advisor/Orchestrator 统一点位，否则会漏。→ 约束："业务 Service 不得直接注入 `ChatClient`"。
+
+---
+
+## ADR-013 SSE 用 Spring MVC `SseEmitter`，前端用 `fetch` 读取（不用 `EventSource`，不引 WebFlux）
+
+**背景**：需要逐字流式输出、工具调用中间态、引用与用量事件。
+
+**决策**：服务端 `POST /api/chat/stream` 返回 `text/event-stream`（`SseEmitter`，15s 心跳，5min 超时）；前端用 `fetch` + `ReadableStream` 解析。
+
+**理由**：① 全栈保持 Spring MVC，不为流式引入第二套编程模型；② 浏览器 `EventSource` 只能发 GET 且不能带 `Authorization` 头，`fetch` 流式可带 JWT；③ 自定义事件类型（`retrieval`/`tool_call`/`approval_required`）比纯文本流更利于交互设计。
+
+**代价**：要自己写 SSE 解析（十几行）、自己处理重连与取消。
+
+---
+
+## ADR-014 前端为独立 npm 工程（不做 Maven 模块、不用 frontend-maven-plugin）
+
+**决策**：`frontend/` 目录独立 `package.json`，Vite 开发时通过 proxy 调 `:8080`；生产由 Docker 多阶段构建成静态资源交给 Nginx。
+
+**理由**：前后端构建周期完全不同；`frontend-maven-plugin` 把 npm 生命周期的复杂度塞进 Maven，调试体验差；独立工程可以单独用 pnpm 管理。
+
+---
+
+## ADR-015 知识缺口分析必须"规则 + 证据"，禁止模型凭空断言
+
+**背景**：需求明确"不允许凭空声称我的知识库缺少某知识"。
+
+**决策**：缺口分析采用两段式：① **规则层**产出候选（标签/目录/未解析 WikiLink 的覆盖率统计，全部可 SQL 查询）；② **表述层**只负责把规则结果组织成自然语言，且每条结论必须携带证据（文档路径、命中数、未解析链接名）。响应结构里 `evidence` 字段必填，前端默认展开显示。
+
+**理由**：LLM 对"有没有某知识"这类**存在性判断**极不可靠（它看不到全库）。把判断权交给可验证的规则，模型只做表达，才能既好看又不假。
+
+---
+
+## ADR-016 MCP Server 独立进程且第一版只读
+
+**决策**：`akh-mcp-server` 独立 Spring Boot 进程（Streamable HTTP），只暴露 4 个只读工具，内部 API Key 鉴权。
+
+**理由**：体现 MCP 的本意（能力提供方与调用方解耦、可被任意 MCP 客户端复用）；只读能规避"外部客户端通过 MCP 改我的数据"的风险；写工具等到权限与确认机制成熟后再评估。
+
+---
+
+## Appendix A. 版本与 API 核对结果（2026-09-24）
+
+> 规则：**不确定的一律不写进代码**。下表 `✅ 已核对` 项可直接使用；`⚠️ 待核对` 项在动手前必须现场验证（Phase 0 Step 0.3）。
+
+### A.1 已核对（有官方来源）
+
+| 项 | 结论 |
+| --- | --- |
+| Spring AI BOM | `org.springframework.ai:spring-ai-bom:2.0.1`（2.0.x 最新；`2.1.0-M1` 为里程碑，不用） |
+| Boot 兼容 | 官方原文："Spring AI 2.0.x supports Spring Boot 4.0.x and 4.1.x" |
+| Spring Boot 版本 | 4.0.x 最新 = 4.0.8；4.1.x 最新 = 4.1.1（本项目用 **4.1.1**） |
+| Java 要求 | Boot 4.1.1 最低 Java 17、最高兼容 Java 26 → **Java 21 可用**（本项目用 21） |
+| 模型 starter | `spring-ai-starter-model-openai`（chat 与 embedding 同一个）、`spring-ai-starter-model-ollama`（同）、另有专用 `spring-ai-starter-model-deepseek` |
+| 向量库 starter | `spring-ai-starter-vector-store-pgvector`、`spring-ai-starter-vector-store-elasticsearch` |
+| ChatMemory starter | `spring-ai-starter-model-chat-memory-repository-jdbc`（表 `SPRING_AI_CHAT_MEMORY`，含 `sequence_id`；`initialize-schema` 默认 `embedded`）；Redis 版 `spring-ai-starter-model-chat-memory-repository-redis`（2.0.1 改名，属性前缀 `spring.ai.chat.memory.repository.redis.*`） |
+| 关闭模型自动配置 | `spring.ai.model.chat=none` 有效（官方明确该属性用于多模型场景）；`spring.ai.openai.chat.enabled` 已移除 |
+| OpenAI 兼容第三方 | 通过属性 `spring.ai.openai.base-url` / `spring.ai.openai.chat.base-url` 指向 DeepSeek 等（官方有 DeepSeek 示例） |
+| PgVectorStore 配置 | `initialize-schema` **默认 false（2.0 起破坏性变更）**；HNSW 默认索引类型；`dimensions` 需显式设置；`max-document-batch-size` 默认 10000 |
+| VectorStore 删除 | 接口含 `delete(List<String>)` 与 `delete(Filter.Expression)` |
+| SearchRequest | `SearchRequest.builder().query(..).topK(..).similarityThreshold(..).filterExpression(..)`；默认 topK=4、threshold=0.0 |
+| 元数据过滤语法 | 裸键表达式，如 `user_id == 1001 && kb_id in [1,2]`（不是 `metadata['x']` 形式） |
+| **Rerank** | **Spring AI 2.0.1 不存在**（BOM 无 rerank 制品、无对应文档页）→ 自研（ADR-007） |
+| ES VectorStore 能力 | **仅 kNN 向量检索**，无 BM25/混合检索 API → 自研 BM25（ADR-006） |
+| 工具调用 | 2.0 起 `ChatModel` 不再内部执行工具；`ChatClient` 自动注册 `ToolCallingAdvisor`；`FunctionCallback` → `ToolCallback`；`ToolCallAdvisor` → `ToolCallingAdvisor`；`@Tool` 注解为推荐写法 |
+| 工具调用限额 | `DefaultToolCallingManager` 默认每工具 40 次/150 次总量上限（2.0.1 新增），可用 `spring.ai.tools.limits.*` 调整 |
+| JDBC ChatMemory 限制 | 不保存 tool-call 消息（`AssistantMessage` 工具调用与 `ToolResponseMessage` 被静默过滤） |
+| 观测 | 观测名 `gen_ai.client.operation`、`spring.ai.chat.client`、`spring.ai.tool`、`db.vector.client.operation`；Token 指标 `gen_ai.client.token.usage`；内容默认不导出，需显式开启 `spring.ai.*.observations.log-prompt/log-completion` |
+| 评测 API | 存在 `Evaluator`（`EvaluationResponse evaluate(EvaluationRequest)`）、`RelevancyEvaluator`、`FactCheckingEvaluator`（用 `ChatClient.Builder` 构造） |
+
+### A.2 ⚠️ 待核对（动手前现场验证，不在设计里下结论）
+
+| 项 | 为什么重要 | 验证方式 |
+| --- | --- | --- |
+| Boot 4.1.x 的 starter 坐标是否更名（如 `spring-boot-starter-web` → `spring-boot-starter-webmvc`）、Jackson 3 默认的影响 | 依赖写错直接起不来 | 用 **start.spring.io 生成 4.1.1 基线 pom** 作为唯一事实来源，再逐项加依赖 |
+| MyBatis / MyBatis-Plus 对 Boot 4 的支持版本 | 数据访问层选型 | Maven Central + 官方 release notes；**若 MyBatis-Plus 尚不支持 Boot 4，回退到官方 MyBatis Starter 或 Spring Data JDBC** |
+| `spring.ai.model.embedding=none` 是否有效 | 多嵌入模型共存 | Spring AI 2.0.1 文档 Ollama/OpenAI embedding 页 |
+| `ChatClient` 流式重载（`.stream().content()` / `.stream().chatClientResponse()`）在 2.0.1 的确切方法名 | SSE 实现 | 官方 ChatClient 文档页 |
+| `Usage` 的访问器命名（`getPromptTokens()` 还是 `getInputTokens()`） | 观测埋点 | 读 v2.0.1 源码 `Usage.java` |
+| `Evaluator` 系列所在包与所属 artifact | 评测实现 | v2.0.1 源码树；若不在 BOM 内则手动加模块 |
+| `OpenAiChatOptions.Builder` 是否有 `baseUrl(...)` | 多 provider 手工构建模型 | 读 v2.0.1 源码 |
+| MCP client/server starter 坐标与属性（`@McpTool` 包名、`spring.ai.mcp.client.streamable-http.connections.*`） | Phase 7 | 官方 MCP starter 文档页 |
+| ES 当前稳定版本 + IK 插件版本匹配 + 《pgvector 当前版本/镜像 tag》+《Redis Stack 镜像 tag》 | Phase 2/3 基础设施 | Docker Hub / GitHub releases |
+| Vue / Vite / Element Plus / Pinia 当前版本 | Phase 1 前端 | npm registry |
+
+### A.3 环境实测（2026-09-24）
+
+| 项 | 实测 |
+| --- | --- |
+| Maven | ✅ 3.9.9（`D:\develop\Maven\apache-maven-3.9.9`） |
+| Java | ⚠️ 仅 JDK 17（`C:\Program Files\Java\jdk-17`）→ **需装 JDK 21** |
+| Docker | ⚠️ 客户端 29.5.2 / Compose v5.1.3 已装，**守护进程未启动** |
+| Node.js | ✅ v22.22.0 |
+| 工作目录 | `D:\develop\Prisma`（NTFS，属主 `LKY-PC\LKY`） |
+| 文件沙箱 | ✅ 已解除：会话切换为 `danger-full-access`，`pwsh` 可直接执行（此前 `SetNamedSecurityInfoW failed (Win32 5)` 的问题消失） |
+
+---
+
+## Appendix B. 版本矩阵（第二轮核对，2026-09-24）
+
+> 来源：`spring-boot-dependencies-4.1.1.pom`、Maven Central metadata、MyBatis / MyBatis-Plus release notes、pgvector README、docker-library/official-images、infinilabs 官方发布站、npm registry。
+
+### B.1 Spring Boot 4.1.1 坐标（**关键更正**）
+
+| 用途 | 坐标 |
+| --- | --- |
+| Web MVC | ⚠️ `spring-boot-starter-web` 仍存在但**已废弃**（POM 描述 `deprecated in favor of spring-boot-starter-webmvc`）→ 本项目用 **`spring-boot-starter-webmvc`** |
+| 校验 / 安全 | `spring-boot-starter-validation`、`spring-boot-starter-security` |
+| 资源服务器 | `spring-boot-starter-oauth2-resource-server`；Boot 4 另有新风格 `spring-boot-starter-security-oauth2-resource-server`（二选一，Phase 1 Step 1.1 定） |
+| 可观测 / MQ / 缓存 | `spring-boot-starter-actuator`、`spring-boot-starter-amqp`、`spring-boot-starter-data-redis` |
+| 数据 / 迁移 | `spring-boot-starter-jdbc`、`spring-boot-starter-flyway` |
+| ES | `spring-boot-starter-elasticsearch`（客户端）与 `spring-boot-starter-data-elasticsearch`（Spring Data）用途不同 |
+| 测试 / 开发 | `spring-boot-testcontainers`（**无** `starter-` 前缀）、`spring-boot-docker-compose` |
+| MyBatis | **不在 Boot BOM 中**，必须自己钉版本 |
+
+### B.2 Boot 4.1.1 托管版本
+
+| 组件 | 版本 | 组件 | 版本 |
+| --- | --- | --- | --- |
+| Spring Framework | 7.0.9 | Spring Security | 7.1.1 |
+| Spring AMQP | 4.1.1 | Spring Data BOM | 2026.0.1 |
+| Flyway | 12.4.0 | Testcontainers | 2.0.5 |
+| Elasticsearch Java Client | 9.4.5 | Micrometer | 1.17.1 |
+| mysql-connector-j | 9.7.0 | PostgreSQL JDBC | 42.7.13 |
+| Lettuce | 7.5.2 | Rabbit AMQP Client | 5.30.0 |
+| Jackson 3 | 3.1.5（group `tools.jackson`） | Jackson 2 | 2.21.5（`com.fasterxml.jackson`） |
+
+**注意**：Boot 4 同时管理**两套 Jackson**，Jackson 3 为默认。本项目统一用 Jackson 3，禁止混用两套 API。
+
+### B.3 数据访问层选型
+
+| 方案 | 最新版本 | 状态 |
+| --- | --- | --- |
+| `org.mybatis.spring.boot:mybatis-spring-boot-starter` | **4.1.0**（2026-07-16） | 官方声明 4.1.x → Spring Boot 4.1 ✅ |
+| `com.baomidou:mybatis-plus-spring-boot4-starter` | **3.5.17** | MyBatis-Plus 自 v3.5.13 起支持 Boot 4 ✅；但其 POM 以 **Boot 4.0.1** 为基线，对 4.1.1 未声明 ⚠️ |
+| `mybatis-plus-spring-boot3-starter` | 3.5.17 | ❌ 仅 Boot 3，禁用 |
+
+**决策**：主用 **MyBatis-Plus boot4-starter 3.5.17**（你已熟悉，代码生成器提效），Phase 0 Step 0.3 用一次真实启动 + CRUD 验证；若自动配置不兼容，立即回退 `mybatis-spring-boot-starter 4.1.0`（Mapper 层 API 基本无需改动）。
+
+### B.4 中间件镜像与版本（compose）
+
+| 组件 | 选定镜像 | 说明 |
+| --- | --- | --- |
+| MySQL | `mysql:8.4.11` | 8.4 为 LTS 线；⚠️ `mysql:lts` 标签现指向 **9.7.2**，不要用 |
+| PostgreSQL + pgvector | `pgvector/pgvector:0.8.6-pg18-trixie` | 扩展 0.8.6（2026-07-29） |
+| Redis | `redis:8.10.2` | **Redis 8 起 Query Engine / JSON / 向量已内建** → 不需要 `redis-stack` |
+| RabbitMQ | `rabbitmq:4.3.6-management` | 4.3 为当前稳定线；⚠️ **3.x 已 EOL**（3.13 社区支持止于 2024-09-30） |
+| Elasticsearch | `docker.elastic.co/elasticsearch/elasticsearch:9.4.5` | **与 Boot 4.1.1 托管的 ES Java Client 9.4.5 完全同版本** |
+| IK 分词插件 | `https://get.infini.cloud/elasticsearch/analysis-ik/9.4.5` | 已确认 `elasticsearch-analysis-ik-9.4.5.zip` 存在于官方发布站；⚠️ **已不在 GitHub Releases 发布**；**版本必须与 ES 完全一致**（每个 ES 版本一个独立 zip，非范围兼容） |
+
+- ES 版本选择依据：Boot 托管客户端为 9.4.5，而 IK 发布站同时提供 9.4.5 与 9.5.4 → 选 **9.4.5** 让「服务端 = 客户端 = 分词插件」三者完全对齐，消除版本偏差这一整类问题。
+- pgvector HNSW 维度上限（官方 README）：`vector` ≤ 2000、`halfvec` ≤ 4000、`bit` ≤ 64000 → **`vector(1024)` 安全**。
+- 建索引语法：`CREATE INDEX ON vector_store USING hnsw (embedding vector_cosine_ops);`
+- 备选中文分词：`analysis-smartcn` 仍随 ES 提供（`bin/elasticsearch-plugin install analysis-smartcn`），作为 IK 出问题时的退路。
+
+### B.5 前端依赖版本（npm latest）
+
+| 包 | 版本 | 备注 |
+| --- | --- | --- |
+| vue | 3.5.43 | |
+| vite | **8.3.1** | 要求 Node `^20.19.0 \|\| >=22.12.0` → 本机 v22.22.0 ✅ |
+| typescript | 7.0.2 | |
+| element-plus | 2.14.6 | peer `vue ^3.3.7` |
+| pinia | 4.0.3 | |
+| vue-router | 5.3.1 | |
+
+### B.6 仍未核对（写码前现场验证）
+
+| 项 | 验证方式 |
+| --- | --- |
+| MyBatis-Plus boot4-starter 在 **Boot 4.1.1** 上的实测 | Phase 0 Step 0.3 启动 + CRUD 冒烟 |
+| OAuth2 资源服务器两种 starter 坐标的取舍 | Phase 1 Step 1.1 依赖树验证 |
+| ~~Spring AI 2.0.1 关键 API~~ | ✅ 已关闭，见 **Appendix D** |
+
+---
+
+## Appendix C. 已确认的选型（用户拍板，2026-09-24）
+
+| # | 决策项 | 结论 |
+| --- | --- | --- |
+| 1 | 模块结构 | **采用 Maven 多模块**（`akh-common` / `akh-knowledge` / `akh-app`，Phase 7 加 `akh-mcp-server`）→ ADR-001 生效 |
+| 2 | 默认模型方案 | **对话走云端 OpenAI-compatible API**（DeepSeek 起步，可换 Qwen/智谱）；**嵌入走本地 Ollama `bge-m3`**（1024 维，免费离线）；裁判模型复用云端（可指定更便宜的模型） |
+| 3 | 工作目录 | 维持 `D:\develop\Prisma`（会话已切换为全量访问，shell 可直接执行） |
+| 4 | 错误码分段 | 按分段方案：**AI 模型/嵌入/向量 = `4xxx`**（不照抄需求示例中的 `5001`），`5xxx` 保留给工具 / Agent / MCP |
+
+由决策 2 派生的固定约束：
+
+- `kb_knowledge_base.embedding_model = bge-m3`、`embedding_dim = 1024`、pgvector 列类型 `vector(1024)`（ADR-008 冻结）。
+- compose 需要 `ai-local` profile 拉起 `ollama`，并在首次启动后 `ollama pull bge-m3`。
+- 云端对话模型必须支持 **Tool Calling**（Agent 阶段的前提），选型时优先验证该项。
+
+---
+
+## Appendix D. Spring AI 2.0.1 关键 API 核对（源码级，2026-09-24）
+
+> 来源：`github.com/spring-projects/spring-ai` tag `v2.0.1` 的源码与文档（`raw.githubusercontent.com` / `api.github.com` + docs.spring.io 2.0.1）。
+> **写码时直接用这里的签名，不要凭记忆写 1.x 的名字。**
+
+### D.1 ChatClient 流式（直接决定 SSE 实现）
+
+| 需求 | 2.0.1 确切 API |
+| --- | --- |
+| 纯文本流 | `chatClient.prompt().user(x).stream().content()` → `Flux<String>` |
+| 需要 usage / metadata | `.stream().chatResponse()` → `Flux<ChatResponse>` |
+| 需要执行上下文 | `.stream().chatClientResponse()` → `Flux<ChatClientResponse>` |
+
+三者**都存在**，不是二选一。⚠️ **没有** `.stream().usage()` 这类终结方法 → 用量必须从流末尾的 `ChatResponse` 上取。
+
+### D.2 Token 用量（观测埋点，最容易照抄错的地方）
+
+`org.springframework.ai.chat.metadata.Usage` 是**接口**，且只有**扁平 getter**：
+
+```java
+Integer getPromptTokens();          // 注意：不是 getInputTokens()
+Integer getCompletionTokens();      // 注意：不是 getOutputTokens()
+default Integer getTotalTokens();   // 默认 prompt + completion
+default Long getCacheReadInputTokens();   // 2.0 新增，缓存命中计价用
+default Long getCacheWriteInputTokens();  // 2.0 新增
+```
+
+取用路径：`chatResponse.getMetadata().getUsage()`；`ChatResponseMetadata` 另有 `getModel()`、`getId()`、`getRateLimit()`。
+
+### D.3 评测（Phase 9 可直接用）
+
+| 类 | 包 | 所属 artifact |
+| --- | --- | --- |
+| `Evaluator` / `EvaluationRequest` / `EvaluationResponse` | `org.springframework.ai.evaluation` | **`spring-ai-commons`**（在 BOM 内） |
+| `RelevancyEvaluator` | `org.springframework.ai.chat.evaluation` | **`spring-ai-client-chat`**（在 BOM 内） |
+| `FactCheckingEvaluator` | 推测同包（FQCN 未核实） | `spring-ai-client-chat` |
+
+构造方式：`new RelevancyEvaluator(ChatClient.builder(chatModel))`，`RelevancyEvaluator` 还支持 `.promptTemplate(...)`。
+→ 用我们 `AiModelRegistry` 的 `chat.judge` 角色构造 `ChatClient.Builder` 即可，与 ADR-003 无缝衔接。
+
+### D.4 多 provider 手工构建模型（ADR-003 可行性确认）
+
+- ✅ `OpenAiChatOptions.Builder.baseUrl(String)` **存在**（另有 `getBaseUrl()`、`apiKey(ApiKey)`、`customHeaders`、`extraBody`）→ 手工构建 OpenAI-compatible 模型**可行**，不必依赖属性。
+- 属性侧：`spring.ai.openai.base-url`、`spring.ai.openai.chat.base-url`（优先级更高）、`spring.ai.openai.chat.model`（默认 `gpt-5-mini`）、`.chat.temperature`（0.8）、`.chat.extra-body.*`。
+- ⚠️ `spring.ai.openai.chat.completions-path` **不存在**（2.0 改用官方 `openai-java` SDK）→ 若第三方服务的路径不是标准 `/v1/chat/completions`，**不能靠配置解决**，需改用其 compatible 端点或换 provider。
+- 禁用自动配置：`spring.ai.model.chat=none`、`spring.ai.model.embedding=none`（**embedding 侧同样有效，已确认**）。
+
+### D.5 Ollama（本地嵌入 bge-m3）
+
+扁平属性（**没有** `.options` 段）：
+`spring.ai.ollama.base-url`（默认 `http://localhost:11434`）、`spring.ai.ollama.chat.model`（默认 mistral）、`.chat.temperature`（0.8）、`spring.ai.ollama.embedding.model`（默认 `mxbai-embed-large`）、`.embedding.keep_alive`、`.embedding.truncate`。
+
+**省事的一条**：`spring.ai.ollama.init.pull-model-strategy=when_missing` + `spring.ai.ollama.init.embedding.additional-models=bge-m3` → 应用启动时自动拉取模型，省掉手工 `ollama pull`。
+
+⚠️ 官方 Ollama 文档里同一页的示例 YAML 仍写着 `.options.model`，与属性表自相矛盾 → **以属性表（扁平）为准**。
+
+### D.6 工具调用（ADR-009 可行性确认）
+
+| 需求 | 2.0.1 确切 API |
+| --- | --- |
+| 单次调用关闭自动工具循环 | `AdvisorParams.toolCallingAdvisorAutoRegister(false)`（`org.springframework.ai.chat.client.AdvisorParams`） |
+| 全局关闭 | `spring.ai.chat.client.tool-calling.enabled=false` |
+| 手工执行工具 | `ToolCallingManager.builder().build()` → `executeToolCalls(prompt, chatResponse)` → `ToolExecutionResult.conversationHistory()` |
+| 收集工具定义 | `ToolCallbacks.from(bean)` → `ToolCallback[]`（`org.springframework.ai.support.ToolCallbacks`） |
+| 读工具元信息 | `ToolCallback.getToolDefinition()` → `name()` / `description()` / `inputSchema()`（**record 风格，不是 getXxx()**） |
+| 调用限额 | `ToolCallingManager.builder().maxCallsPerTool(40).maxTotalToolCalls(150).onLimitExceeded(...)`；属性 `spring.ai.tools.limits.*` |
+
+**关键结论**：`ToolMetadata` 只有 `returnDirect()`，**2.0.1 完全没有权限 / 风险元数据 API**。
+→ 工具的 `READ / WRITE / DANGEROUS` 分级、是否需人工确认，**必须由我们自己的 `ai_tool_registry` + `ToolPermissionChecker` 维护**。这从框架层面证实了 ADR-009 与 `ai_tool_registry` 表设计的必要性（面试可直接讲这一点）。
+
+### D.7 MCP（Phase 7）
+
+| 用途 | 坐标 / 配置 |
+| --- | --- |
+| client（STDIO + JDK HttpClient 的 SSE/Streamable-HTTP） | `spring-ai-starter-mcp-client` |
+| client（WebFlux 传输） | `spring-ai-starter-mcp-client-webflux` |
+| server（STDIO） | `spring-ai-starter-mcp-server`（`spring.ai.mcp.server.stdio=true`） |
+| server（Servlet / MVC） | **`spring-ai-starter-mcp-server-webmvc`** ← 本项目使用 |
+| server（WebFlux） | `spring-ai-starter-mcp-server-webflux` |
+| 协议选择 | `spring.ai.mcp.server.protocol=STREAMABLE`（Streamable-HTTP）或 `=STATELESS`；`SSE` 自 2.0.0 起废弃 |
+| 服务端注解 | `@McpTool` → `org.springframework.ai.mcp.annotation.McpTool`（同包：`@McpToolParam`、`@McpResource`、`@McpPrompt`） |
+| 客户端按 URL 连接 | `spring.ai.mcp.client.streamable-http.connections.<name>.url`（`.endpoint` 默认 `/mcp`） |
+| 客户端通用 | `.request-timeout`（默认 20s）、`.type=SYNC\|ASYNC`、`.toolcallback.enabled` |
+
+**关键结论**：**没有**独立的 stateless starter，协议靠属性切换；MCP 工具以 `SyncMcpToolCallbackProvider` 暴露且**不会自动注册到 ChatClient**，必须显式 `.tools(...)` 传入 → 与我们的 `ToolRegistry` 统一汇聚设计一致。
+
+### D.8 仍未核实（不影响设计，写码时顺手确认）
+
+- `FactCheckingEvaluator` 的确切 FQCN（推测 `org.springframework.ai.chat.evaluation`）
+- `@ToolParam` 的确切 FQCN（同 `org.springframework.ai.tool.annotation` 包）
+- Elasticsearch **Docker Hub 官方**镜像 tag 字符串（本项目用 `docker.elastic.co/...` 官方仓库，不受影响）
