@@ -77,8 +77,8 @@
 
 | Step | 任务 |
 | --- | --- |
-| 3.1 | Embedding 服务：批量嵌入 + 并发控制 + Redis 向量缓存 + 失败重试 |
-| 3.2 | 向量写入 pgvector（metadata 设计 + HNSW 索引）+ `kb_chunk.vector_id` 回填 |
+| 3.1 | Embedding 服务：批量嵌入 + 并发控制 + 失败重试 —— ✅ **已完成**（批量 + 按 content_hash 去重 + **维度自校验**；缓存放在 PostgreSQL `embedding_cache` 而不是 Redis，理由见 decisions.md B.23） |
+| 3.2 | 向量写入 pgvector（HNSW 索引）+ 状态回填 —— ✅ **已完成**（独立数据源 + 独立 Flyway；`vector_id` 刻意不回填，因为 chunk_id 就是 pgvector 主键） |
 | 3.3 | ES 索引与 BM25 写入（原生 Java Client + IK 分词 + 别名切换） |
 | 3.4 | 向量检索 + metadata 过滤（user_id 强制、kb/tag/folder 可选） |
 | 3.5 | BM25 检索 + 过滤 |

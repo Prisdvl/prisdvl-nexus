@@ -930,6 +930,62 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 
 **测试总览（Step 2.3）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-knowledge` 53 + `nexus-app` 65（5 跳过）= **137 通过 / 0 失败**。
 
+### B.23 Phase 3.1 / 3.2 实现记录（嵌入客户端 + pgvector 向量存储）
+
+**已完成并有单测覆盖**：
+
+| 组件 | 关键点 |
+| --- | --- |
+| `EmbeddingClient` | 批量（单批 32）+ **维度自校验** + 统一错误包装（4004 带模型引用） |
+| `EmbeddingClientFactory` | 按逻辑角色取模型（ADR-003）；能力校验（必须声明 EMBEDDING）；按角色缓存 |
+| `ChunkEmbeddingService` | 只处理 `vector_status='PENDING'`；按 `content_hash` 去重 + 查缓存；写入幂等；失败保持 PENDING 以便重试 |
+| `VectorStore`（端口） | 领域定义能力，app 提供 pgvector 适配器（与消息队列同样的依赖倒置） |
+| `PgVectorStore` | 手写 SQL：`ON CONFLICT (chunk_id) DO UPDATE` 幂等写入、`<=>` 余弦距离检索、强制 `kb_id` 过滤 |
+| `DisabledVectorStore` | 未启用向量库时**明确报 4003**，而不是静默什么都不做 |
+| 向量表 DDL | 独立数据源 + **独立 Flyway**（`db/vector-migration`），HNSW 索引 + `embedding_cache` |
+
+**测试**：`EmbeddingClientTest` 5（维度不一致拦截 / 批量切分 / 空向量 / 异常包装）、
+`ChunkEmbeddingServiceTest` 4（缓存命中不调模型 / 批内去重 / 模型不一致拒执行 / 空集合），
+`LiveEmbeddingTest` 2（真实 bge-m3，需 `AI_EMBEDDING_LIVE=true`，默认跳过）。
+全量 **148 通过 / 7 跳过**（跳过项即需要外部模型与 API Key 的守卫测试）。
+
+**六个设计要点 / 踩坑**
+
+1. **"OpenAI 兼容"不等于"支持所有端点"**。实测本项目的模型网关：`/chat/completions` 正常，
+   但 `/embeddings` 返回的是 HTML 页面（网关只代理对话模型，模型列表里也没有任何 embedding 模型）。
+   结论：**不要假设网关能力，要实测**；嵌入只能走本地模型。
+2. **Spring AI 2.0 的 OpenAI 嵌入路径需要自建官方 SDK 客户端**（`com.openai.client.OpenAIClient`，
+   与 chat 的 `OpenAiChatOptions.baseUrl()` 写法完全不同，已用 `javap` 核实）。
+   我没有写一段"看起来对但没验证过"的代码，而是：实现已核实的 Ollama 路径，
+   OpenAI 路径**明确报错并说明扩展点**——错误信息本身也是文档。
+3. **维度必须自校验**。知识库存了冻结维度（ADR-008），而模型实际维度只有调用一次才知道。
+   不一致时向量能写进去、检索却会莫名其妙，因此 `EmbeddingClient` 首次调用就探针校验并直接失败。
+4. **模型一致性要校验两次**：建库时（解析角色→冻结）与向量化时（配置的模型 vs 库的冻结模型）。
+   后者防的是"改了配置后给旧库补向量"——同一个库里混入两个语义空间的向量，检索结果必然错乱且不报错。
+5. **缓存放在向量库里，而不是 Redis**（与路线图的差异，理由如下）：
+   缓存内容是"一段文本 → 1024 维向量"，放 Redis 需要额外的序列化与内存预算，
+   而 pgvector 表本身就在 PostgreSQL 里、天然支持向量列与精确哈希查询，
+   一次索引查找即可命中。Redis 更适合放"查询→最终检索结果"这类热数据（Phase 3.6 再做）。
+6. **`kb_chunk.vector_id` 刻意不回填**（与路线图的差异）：pgvector 表的主键就是 `chunk_id`，
+   两库用同一个 id 直接对应，再多一个 `vector_id` 只会引入"两个 id 不一致"的可能。
+   该列保留给"向量库自行生成 id"的场景，当前为空并在实体注释里说明。
+
+**两个过程性教训**
+
+- **判断"卡住"要看真实进度，不要看结果列表**：我在 `docker pull` 进行中查询镜像列表为空，
+  误判为"镜像拉不下来"（甚至走了镜像源重试的弯路）。实际上镜像最终拉成功了
+  （容器已 Up）。教训是：进度条/字节数才是证据，中间态的空结果不是。
+- **单测里漏桩会以 NPE 的形式失败**：三个用例只在其中一个里桩了 `requireOwned`，
+  其余拿到 null。把公共桩提到 `@BeforeEach` 后一次通过。
+  另外 MyBatis-Plus 的 LambdaQueryWrapper 在纯单测里需要手工初始化实体元数据
+  （`TableInfoHelper.initTableInfo`），否则构造 wrapper 会抛
+  "can not find lambda cache for this entity"。
+
+**环境约束（重要）**：本机网络下 `registry-1.docker.io:443` **不可达**，
+依赖 `.docker/daemon.json` 里的国内镜像加速；ollama 镜像（多 GB）拉取耗时很长。
+bge-m3 模型（约 1.2GB）从 ollama registry 拉取，因此**真实嵌入与向量检索的联调需要等待模型就绪**，
+届时用 `AI_EMBEDDING_LIVE=true` 跑 `LiveEmbeddingTest` 即可复验。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）

@@ -97,6 +97,14 @@ nexus:
     # async：投递到 RabbitMQ（需要 broker，local/prod 默认）
     # sync ：当前线程直接执行（standalone / 测试：环境里没有 broker）
     mode: ${NEXUS_IMPORT_MODE:async}
+  vector:
+    # 向量库（PostgreSQL + pgvector）。standalone / 测试环境没有它，会被关掉；
+    # 关闭时写入与检索会明确报 4003，而不是静默失败。
+    enabled: ${NEXUS_VECTOR_ENABLED:true}
+    datasource:
+      url: ${NEXUS_VECTOR_URL:jdbc:postgresql://localhost:5433/nexus_vector}
+      username: ${NEXUS_VECTOR_USER:nexus}
+      password: ${NEXUS_VECTOR_PASSWORD:nexus_pwd}
 
 # ============================================================
 # 模型可替换层（ADR-003）
