@@ -1,0 +1,33 @@
+# ============================================================
+# 测试 profile：用 H2 内存库验证数据访问层，不依赖 Docker
+# 目的：在基础设施（MySQL/Redis/ES via Docker）就绪之前，
+#       尽早验证 MyBatis-Plus 3.5.17 与 Spring Boot 4.1.1 的兼容性。
+# ============================================================
+spring:
+  datasource:
+    url: jdbc:h2:mem:akh_test;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-h2.sql
+  flyway:
+    # 迁移脚本是 MySQL 方言，H2 测试中关闭；真实迁移在 Step 0.6 用 MySQL 验证
+    enabled: false
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: assign_id
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+logging:
+  level:
+    com.lky.akh: DEBUG

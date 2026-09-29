@@ -75,3 +75,6 @@ deploy/**/data/
 **/target/
 site/
 *.exec
+
+# ---- 构建日志 ----
+build.log

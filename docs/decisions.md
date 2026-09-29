@@ -313,10 +313,10 @@
 | 方案 | 最新版本 | 状态 |
 | --- | --- | --- |
 | `org.mybatis.spring.boot:mybatis-spring-boot-starter` | **4.1.0**（2026-07-16） | 官方声明 4.1.x → Spring Boot 4.1 ✅ |
-| `com.baomidou:mybatis-plus-spring-boot4-starter` | **3.5.17** | MyBatis-Plus 自 v3.5.13 起支持 Boot 4 ✅；但其 POM 以 **Boot 4.0.1** 为基线，对 4.1.1 未声明 ⚠️ |
+| `com.baomidou:mybatis-plus-spring-boot4-starter` | **3.5.17** | ✅ **实测通过**（2026-09-29，Boot 4.1.1 + Java 21，见 B.7）——其 POM 虽以 Boot 4.0.1 为基线，但实际兼容 4.1.1 |
 | `mybatis-plus-spring-boot3-starter` | 3.5.17 | ❌ 仅 Boot 3，禁用 |
 
-**决策**：主用 **MyBatis-Plus boot4-starter 3.5.17**（你已熟悉，代码生成器提效），Phase 0 Step 0.3 用一次真实启动 + CRUD 验证；若自动配置不兼容，立即回退 `mybatis-spring-boot-starter 4.1.0`（Mapper 层 API 基本无需改动）。
+**决策（已实测锁定）**：使用 **MyBatis-Plus `mybatis-plus-spring-boot4-starter:3.5.17`**。原本准备了"若 Boot 4.1.1 不兼容就回退 `mybatis-spring-boot-starter:4.1.0`"的退路，**实测通过后该退路不再需要**（证据见 B.7）。
 
 ### B.4 中间件镜像与版本（compose）
 
@@ -349,9 +349,34 @@
 
 | 项 | 验证方式 |
 | --- | --- |
-| MyBatis-Plus boot4-starter 在 **Boot 4.1.1** 上的实测 | Phase 0 Step 0.3 启动 + CRUD 冒烟 |
+| ~~MyBatis-Plus boot4-starter 在 **Boot 4.1.1** 上的实测~~ | ✅ 已关闭，见 **B.7** |
 | OAuth2 资源服务器两种 starter 坐标的取舍 | Phase 1 Step 1.1 依赖树验证 |
 | ~~Spring AI 2.0.1 关键 API~~ | ✅ 已关闭，见 **Appendix D** |
+
+### B.7 实测验证记录（2026-09-29）
+
+| 验证项 | 结论 | 证据 |
+| --- | --- | --- |
+| `mvn -B clean package`（4 模块 reactor） | ✅ BUILD SUCCESS | Java 21.0.12.1 (Temurin) + Boot 4.1.1 |
+| `spring-boot-starter-webmvc` 在 Boot 4.1.1 下可解析 | ✅ 可用 | 无需回退到已废弃的 `spring-boot-starter-web` |
+| **MyBatis-Plus 3.5.17 boot4-starter 在 Boot 4.1.1 + Java 21** | ✅ **可用（最大风险关闭）** | `MybatisPlusCompatibilityTest` 通过（1/1，0 失败） |
+| Flyway 12.4.0 的 `flyway-mysql` / `flyway-database-postgresql` 由 Boot 托管版本 | ✅ 无需手写版本 | 依赖解析成功 |
+
+MyBatis-Plus 实测 SQL 证据（来自 `akh-app` 测试日志，一字未改）：
+
+```sql
+-- 1) 雪花 ID 回填（IdType.ASSIGN_ID）
+INSERT INTO sys_user ( id, username, password_hash, nickname, status ) VALUES ( ?, ?, ?, ?, ? )
+  Parameters: 2104750903666438145(Long), lky(String), ...
+-- 2) @TableLogic 自动追加 deleted = 0
+SELECT id,username,... FROM sys_user WHERE id=? AND deleted=0
+-- 3) deleteById 被改写为逻辑删除 UPDATE（不是物理 DELETE）
+UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
+```
+
+**方法论价值（面试可讲）**：MyBatis-Plus 官方只声明支持 Boot 4.0.x，若直接照文档写业务代码，风险会推迟到 Phase 1 才爆发。这里用 **H2 内存库**把验证成本压到最低——在 Docker 尚不可用（Hyper-V 未启用）的情况下，依然完成了依赖兼容性的端到端验证。
+
+**已知待办（不影响 Phase 0）**：`spring-boot-starter-test` 自带的 Mockito 会动态自附加 javaagent 并打印警告（未来 JDK 将禁止）。等 Phase 1 Step 1.8 真正编写 Mock 测试时，按官方建议改为显式 javaagent 配置。
 
 ---
 
