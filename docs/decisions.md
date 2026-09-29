@@ -695,6 +695,42 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 真实 MySQL 上：Flyway V1–V4 全部 `success=1`，`kb_*` 三张表与唯一键 `uk_doc_kb_path` 就位，
 建库接口落库记录中 `embedding_provider=ollama / embedding_model=bge-m3 / embedding_dim=1024 / chunk_size=600`。
 
+### B.18 Step 2.4 实测验证记录（结构化切分）
+
+| 验证项 | 结论 |
+| --- | --- |
+| 按标题切分：每小节一片，嵌入文本带 `headingPath`、原文不含路径 | ✅ |
+| 三级标题路径 `Spring > SpringBoot > 自动配置` | ✅ |
+| **代码块绝不被腰斩**（超预算时只按行边界切，每行语句完整） | ✅ |
+| 表格整体成片、类型为 `TABLE` | ✅ |
+| 超长小节按预算切成多片，各片均在预算内 | ✅ |
+| **过小切片并回同小节的上一块**（避免产生检索不到的碎片） | ✅ |
+| 偏移量可回溯到原文区间 | ✅ |
+| `contentHash` 稳定（相同内容 → 相同哈希，作为 Embedding 缓存键） | ✅ |
+| 无标题文档 / 空文档 / 只有标题无正文的小节 | ✅ 分别产出整篇一片、空列表、不产出 |
+| 递归切分带重叠（防"答案跨在交界处被切丢"） | ✅ |
+| Token 估算：中文约 1 token/字、英文约 4 字符/token | ✅ |
+
+**两个真实踩坑**
+
+1. **分段偏移量的基准错了**（本次最有价值的发现）。结构化切分先把正文按标题切成小节，
+   再对每个小节的**子串**分段；分段器却从 0 开始计数，于是所有切片的 `startOffset/endOffset`
+   都变成了"小节内相对位置"——前端据此高亮会定位到完全错误的地方，而且<b>不会报错</b>。
+   修法：`TextSegmenter.segment(text, baseOffset)`，由切分器传入小节的 `bodyStart`。
+   <b>排查手法值得记下</b>：控制台在中文 Windows 上把中文日志显示成乱码，
+   因此让测试把诊断信息写入 UTF-8 文件（`target/chunk-offsets-debug.txt`），
+   再用读取工具查看——一次就看清了 `chunk0 offsets=[1,7)` 这个明显偏小的区间。
+2. **"小块合并"与"代码块整体保留"会叠加**：紧随代码块之后的短说明文字会被并进代码切片
+   （这是合并策略的预期行为），因此测试断言不能写成"CODE 切片里所有行都必须以 `;` 结束"，
+   而应只校验**代码行本身**未被腰斩。教训：断言要针对"真正的约束"，不要顺手把无关条件也写进去。
+
+**环境约束（构建期对策）**：本机 15.6GB 内存叠加「完整 Docker 栈 + Maven + 测试 JVM」会触发
+`Native memory allocation (malloc) failed`。已验证可行的做法：**构建/测试期间停掉 ES 与 RabbitMQ**
+（`docker compose stop elasticsearch rabbitmq`，测试只用 H2 不需要它们），
+跑完再 `docker compose start`。长期建议把 Docker Desktop 的内存上限调到 4GB 左右（Settings → Resources）。
+
+**测试总览（Step 2.4）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-knowledge` 25 + `nexus-app` 51（5 跳过）= **95 通过 / 0 失败**。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
