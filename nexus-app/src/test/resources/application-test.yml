@@ -27,6 +27,15 @@ nexus:
   storage:
     # 原始文件落到 target 下（已被 .gitignore 忽略），避免污染仓库根目录
     root: ./target/test-storage
+  import:
+    # 测试环境没有 broker：默认走同步执行，保证测试的确定性
+    # （异步契约由 ImportTaskAsyncTest 通过替换 ImportTaskPublisher 单独验证）
+    mode: sync
+
+management:
+  health:
+    rabbit:
+      enabled: false
 
 # 测试用模型配置：
 # 覆盖 providers 列表（Spring Boot 中 profile 的 list 会整体替换，不是合并），

@@ -5,20 +5,26 @@ import com.lky.nexus.knowledge.model.dto.ImportTaskResponse;
 /**
  * 知识导入服务。
  *
- * <p>当前是<b>同步执行</b>：调用方（HTTP 请求）会一直等到整批处理完。
- * 这对"几十篇笔记"够用，但对整个 Vault（上千篇）不合适——
- * 因此 Step 2.7 会把它改成"立即返回 taskId + MQ 异步处理"，
- * 届时本接口签名的语义不变（返回任务），只是立刻返回 QUEUED 状态的任务。
+ * <p>接口刻意分成"入队"与"执行"两步，对应异步化的两个半场：
+ * <ul>
+ *   <li>{@link #enqueueVaultImport}：HTTP 线程执行——校验归属、建 QUEUED 任务、
+ *       压缩包落暂存、投递消息，然后<b>立刻返回</b>（用户拿到 taskId 去轮询进度）；</li>
+ *   <li>{@link #processVaultImport}：消费者线程执行——真正做解压/解析/切分/落库。
+ *       它是<b>幂等</b>的（CAS 抢占任务状态），因为消息中间件保证的是"至少一次"投递。</li>
+ * </ul>
  */
 public interface KnowledgeImportService {
 
     /**
-     * 导入 Obsidian Vault（ZIP 字节）。
+     * 入队：创建任务 + 压缩包落暂存 + 投递消息。
      *
-     * @return 导入结果/任务状态
+     * @return 处于 QUEUED（异步）或已完成（同步实现）的任务
      */
-    ImportTaskResponse importVault(Long userId, Long knowledgeBaseId, byte[] zipBytes);
+    ImportTaskResponse enqueueVaultImport(Long userId, Long knowledgeBaseId, byte[] zipBytes);
 
     /** 查询导入任务（校验归属）。 */
     ImportTaskResponse getTask(Long userId, Long taskId);
+
+    /** 重试失败任务（复用暂存区的压缩包）。 */
+    ImportTaskResponse retryTask(Long userId, Long taskId);
 }

@@ -52,6 +52,7 @@ public enum ErrorCode {
     FILE_SIZE_EXCEEDED(3006, "文件超出大小限制"),
     INVALID_ZIP_STRUCTURE(3007, "压缩包结构非法"),
     IMPORT_TASK_NOT_FOUND(3008, "导入任务不存在"),
+    IMPORT_TASK_PUBLISH_FAILED(3009, "导入任务投递失败"),
 
     // ---------- 4xxx AI 模型 / 嵌入 / 向量 ----------
     MODEL_UNAVAILABLE(4001, "AI 模型不可用"),

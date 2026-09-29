@@ -817,6 +817,68 @@ UPDATE sys_user SET deleted=1 WHERE id=? AND deleted=0
 
 **测试总览（Step 2.6）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-knowledge` 43 + `nexus-app` 60（5 跳过）= **122 通过 / 0 失败**。
 
+### B.21 Step 2.7 实测验证记录（RabbitMQ 异步化）
+
+**真实端到端**（真实 broker + 真实 MySQL）：上传 Vault 压缩包 →
+
+| 观测点 | 实测 |
+| --- | --- |
+| HTTP 返回 | **90 ms 返回 `QUEUED`**（此前同步模式要等整批处理完） |
+| 生产者 | `RabbitImportTaskPublisher - 导入任务已投递 taskId=...`（HTTP 线程） |
+| 消费者 | `[no-request] ImportTaskListener - 收到导入任务消息 taskId=...`（**消费者线程**，与 HTTP 请求无关） |
+| 幂等抢占 | `UPDATE kb_import_task SET status=RUNNING WHERE id=? AND status IN (QUEUED,PARTIAL,FAILED)` → `Updates: 1` |
+| 处理结果 | 3 篇文档 + 3 个切片，`status=DONE, progress=100` |
+| 收尾 | `导入暂存已清理 taskId=...`（成功后清理压缩包；部分失败则保留以便重试） |
+| 队列拓扑（自动声明） | `nexus.import.vault.queue`（durable，参数含 `x-dead-letter-exchange=nexus.import.dlx`）、`nexus.import.vault.dlq` |
+| 队列积压 | 消费后 `messages=0`（无堆积） |
+
+**六个设计要点**
+
+1. **压缩包不进消息体**。Vault 可能几十 MB，而消息中间件不是文件通道：超大消息会撑爆 broker 内存、
+   触发 `max_message_size`，消费者失败重试时还会被反复投递。
+   做法是"压缩包落暂存区 + 消息只传 taskId"，消费者按 id 取数据。
+2. **幂等靠数据库 CAS，而不是"应该不会重复"**。消息队列只保证"至少一次"投递，
+   因此执行前必须做一次比较并设置（QUEUED/PARTIAL/FAILED → RUNNING），抢不到就直接返回。
+   这条在 `ImportTaskAsyncTest` 里有专门用例（重复投递 3 次，文档数、明细数、版本号都不变）。
+3. **失败分两类，处理方式不同**：
+   业务性失败（压缩包损坏、参数非法）重试不会有不同结果 → 落 FAILED 且**不抛异常**；
+   非预期失败（数据库抖动、网络）→ 落 FAILED 并**抛出**，交给重试策略，最终进死信队列。
+   这个区分是有意的：把不可恢复的错误也送进重试，只会浪费三次尝试并把死信队列塞满。
+4. **`default-requeue-rejected=false` + 死信拓扑**。默认行为是消费者抛异常后消息重新入队，
+   于是同一条"注定失败"的消息会被无限重放，把 CPU 与日志打满——这是消息队列最典型的生产事故。
+   这里配合 `retry.max-attempts=3` 与 DLX，把"重试"和"兜底"都变成显式配置。
+5. **同步 / 异步可切换**（`nexus.import.mode`）。standalone profile 与集成测试没有 broker，
+   因此提供同步投递器：**两条路径走同一个执行器**，差别只有"谁在什么时候调用它"，
+   从而避免"本地跑通了、上线异步却不一样"这类最难查的问题。
+   注意 sync profile 必须关掉 RabbitMQ 健康检查，否则 `/actuator/health` 会因连不上 broker 而误报 DOWN。
+6. **投递失败必须收尾**。broker 不可用时若不处理，任务会永远停在 QUEUED，
+   用户以为"排队中"其实永远不动。因此投递异常时要标记任务 FAILED 并清理暂存，
+   再向调用方返回 503（新增错误码 3009）——让客户端知道"依赖挂了、可以稍后重试"。
+
+**一个架构上的必要调整（循环依赖）**
+
+最初把"执行"放在入队服务里，于是同步投递器形成
+`投递器 → 导入服务 → 投递器` 的环——Spring Boot 默认拒绝循环引用，应用会直接启动失败。
+解决办法不是加 `@Lazy`，而是把"消费者侧的执行"抽成独立组件
+`VaultImportExecutor`（它同时被 MQ 监听器、同步投递器、手工重试复用），
+依赖关系随即变成一棵树。`@Lazy` 会把设计问题藏起来，抽组件则让它消失。
+
+**两个过程性教训**
+
+- **重构时"顺手删掉"的方法要检查引用**：我把 `toResponse` 挪到 DTO 的静态工厂时，
+  连带删掉了邻近的 `nz()` 私有方法，而它在另外两处仍在被调用——编译立刻报错。
+  小方法散落时，最好让"删除"与"引用检查"成为一个动作（IDE 的查找引用），不要凭记忆。
+- **本机内存约束再次打断构建**：全量测试（4 个 Spring 上下文）叠加 ES/RabbitMQ 容器会触发
+  `Native memory allocation (malloc) failed`。已验证可行的流程是
+  **构建前 `docker compose stop elasticsearch rabbitmq`，跑完再 start**
+  （测试只用 H2，不需要它们）。长期建议把 Docker Desktop 内存上限调到 4GB 左右。
+
+**已知限制**：① 依赖"至少一次投递 + 幂等执行"，因此极端情况下同一篇文档会被处理两次
+（结果仍一致，但会多一次解析开销）；② 死亡队列中的消息目前没有自动回放界面，需要人工从 DLQ 重投；
+③ 暂存压缩包在"部分失败"时保留，长期堆积需要 Phase 11 的清理任务。
+
+**测试总览（Step 2.7）**：`nexus-common` 10 + `nexus-ai` 9 + `nexus-knowledge` 43 + `nexus-app` 64（5 跳过）= **126 通过 / 0 失败**。
+
 ---
 
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）

@@ -21,9 +21,13 @@ import java.util.Locale;
 /**
  * 知识导入接口。
  *
- * <p>当前的 Vault 导入是<b>同步</b>执行的：请求会一直等到整批处理完才返回。
- * 对几十篇笔记够用，但对上千篇的 Vault 不合适（会占用 Tomcat 线程直到超时），
- * 因此 Step 2.7 会改成"立即返回 QUEUED 任务 + MQ 异步处理"，接口契约不变。
+ * <p>导入是<b>异步</b>的：{@code POST /vault} 只做"建任务 + 压缩包落暂存 + 投递消息"，
+ * 立刻返回一个 {@code QUEUED} 状态的任务；真正处理由消费者线程完成，
+ * 前端拿 taskId 轮询 {@code GET /import-tasks/{id}} 看进度。
+ *
+ * <p>当 {@code nexus.import.mode=sync}（standalone profile / 集成测试，
+ * 环境里没有 RabbitMQ）时，投递器会在当前线程直接执行，
+ * 因此返回的可能是已经 {@code DONE} 的任务——<b>接口契约不变</b>，调用方无需区分。
  */
 @RestController
 @RequestMapping("/api")
@@ -38,7 +42,7 @@ public class KnowledgeImportController {
         this.knowledgeImportService = knowledgeImportService;
     }
 
-    /** 导入 Obsidian Vault（ZIP）。 */
+    /** 导入 Obsidian Vault（ZIP）。异步模式下立即返回 QUEUED 任务。 */
     @PostMapping(value = "/knowledge-bases/{knowledgeBaseId}/vault",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Result<ImportTaskResponse> importVault(@PathVariable Long knowledgeBaseId,
@@ -56,13 +60,19 @@ public class KnowledgeImportController {
             throw new BusinessException(ErrorCode.INVALID_ZIP_STRUCTURE, "文件内容不是合法的 ZIP 压缩包");
         }
         // 归属校验在服务层（requireOwned）：不是自己的知识库一律 404
-        return Result.ok(knowledgeImportService.importVault(CurrentUser.requireId(), knowledgeBaseId, bytes));
+        return Result.ok(knowledgeImportService.enqueueVaultImport(CurrentUser.requireId(), knowledgeBaseId, bytes));
     }
 
-    /** 查询导入任务状态与结果。 */
+    /** 查询导入任务状态与结果（异步模式下的进度轮询入口）。 */
     @GetMapping("/import-tasks/{taskId}")
     public Result<ImportTaskResponse> getTask(@PathVariable Long taskId) {
         return Result.ok(knowledgeImportService.getTask(CurrentUser.requireId(), taskId));
+    }
+
+    /** 重试部分成功/失败的任务（复用暂存区里的原始压缩包，用户不必重新上传）。 */
+    @PostMapping("/import-tasks/{taskId}/retry")
+    public Result<ImportTaskResponse> retryTask(@PathVariable Long taskId) {
+        return Result.ok(knowledgeImportService.retryTask(CurrentUser.requireId(), taskId));
     }
 
     private boolean isZip(byte[] bytes) {

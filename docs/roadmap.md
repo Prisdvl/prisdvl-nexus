@@ -63,7 +63,7 @@
 | 2.4 | 结构化 Chunk 策略（标题层级切分 + 段落递归 + 代码块保护 + offset 记录）—— ✅ **已完成**（13 个切分用例；见 decisions.md B.18） |
 | 2.5 | ZIP / Obsidian Vault 导入（安全解压、目录识别、忽略 `.obsidian/`、附件处理）—— ✅ **已完成**（安全限额 + 端到端真实 MySQL 验证；见 decisions.md B.19） |
 | 2.6 | SHA-256 增量同步（跳过/更新/删除/改名）+ `kb_import_task` 进度 —— ✅ **已完成**（含"零写入"与"保留向量"的可观测断言；见 decisions.md B.20） |
-| 2.7 | RabbitMQ 异步化：上传立即返回，worker 解析切分（嵌入留到 Phase 3） |
+| 2.7 | RabbitMQ 异步化：上传立即返回，worker 解析切分（嵌入留到 Phase 3）—— ✅ **已完成**（90ms 返回 QUEUED；含幂等 CAS、死信队列、同步/异步可切换；见 decisions.md B.21） |
 | 2.8 | 知识库页面：左侧目录树 + 文档列表 + 文档详情（Markdown 渲染、标签、大纲、Chunk 预览） |
 | 2.9 | 测试：解析器与切分的单元测试（含边界：空文件、超长段落、嵌套代码块、无 frontmatter）+ 用真实 vault 子集跑集成测试 |
 

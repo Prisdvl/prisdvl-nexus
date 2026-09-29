@@ -50,6 +50,24 @@ spring:
       max-file-size: 200MB
       max-request-size: 220MB
 
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:nexus}
+    password: ${RABBITMQ_PASSWORD:nexus_pwd}
+    listener:
+      simple:
+        acknowledge-mode: auto
+        # 重试耗尽后不要无限重新入队（那会把 CPU 与日志打满，是 MQ 最常见的生产事故），
+        # 而是交给死信交换机（拓扑见 RabbitImportConfig）
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 2s
+          multiplier: 2
+          max-interval: 30s
+
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
@@ -75,6 +93,10 @@ nexus:
   storage:
     # 原始文件存储根目录（增量同步要重新解析已导入的文件，因此必须留一份原文）
     root: ${NEXUS_STORAGE_ROOT:./data}
+  import:
+    # async：投递到 RabbitMQ（需要 broker，local/prod 默认）
+    # sync ：当前线程直接执行（standalone / 测试：环境里没有 broker）
+    mode: ${NEXUS_IMPORT_MODE:async}
 
 # ============================================================
 # 模型可替换层（ADR-003）

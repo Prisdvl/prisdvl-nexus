@@ -52,6 +52,14 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- 消息队列：导入任务异步化（Step 2.7）。
+             只有"投递/消费"这两个适配器在 nexus-app，领域层通过 ImportTaskPublisher
+             接口与具体中间件解耦（依赖倒置），因此 standalone profile 能换成同步实现。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
         <!-- ========== 数据访问基线 ==========
              nexus-app 也直接编写 Mapper（sys_* / chat_*），因此显式声明 MyBatis-Plus。
              Boot 4 必须使用 mybatis-plus-spring-boot4-starter（3.x 系列仅供 Boot 3，禁用）。 -->

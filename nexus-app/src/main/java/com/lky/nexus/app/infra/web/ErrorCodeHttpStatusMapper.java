@@ -39,6 +39,9 @@ public final class ErrorCodeHttpStatusMapper {
             case FILE_TYPE_UNSUPPORTED -> HttpStatus.UNSUPPORTED_MEDIA_TYPE;
             case FILE_SIZE_EXCEEDED -> HttpStatus.CONTENT_TOO_LARGE;
             case DOCUMENT_PARSE_FAILED -> HttpStatus.UNPROCESSABLE_CONTENT;
+            // 消息中间件属于外部依赖：投递失败返回 503 而不是 500，
+            // 这样监控能区分"自己写错了"与"依赖挂了"，客户端也知道可以稍后重试
+            case IMPORT_TASK_PUBLISH_FAILED -> HttpStatus.SERVICE_UNAVAILABLE;
 
             // 4xxx AI 依赖：上游不可用/超时 → 502/503/504，便于监控区分"自己挂了"还是"模型挂了"
             case MODEL_UNAVAILABLE, VECTOR_STORE_UNAVAILABLE, MCP_SERVER_UNAVAILABLE, EVAL_JUDGE_MODEL_UNAVAILABLE ->
