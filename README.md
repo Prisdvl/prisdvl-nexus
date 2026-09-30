@@ -71,6 +71,11 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 
 ## 6. 当前进度
 
+> ⚠️ 下面这张表停在早期，**不是**当前进度的权威来源。
+> 逐项状态以 [docs/roadmap.md](docs/roadmap.md)（到 Phase 3 逐条标注）与
+> [docs/decisions.md](docs/decisions.md) 附录 B 的实测记录为准；平台化升级这条线在
+> [docs/platform-upgrade-phase1-analysis.md](docs/platform-upgrade-phase1-analysis.md)。
+
 | Phase | 内容 | 状态 |
 | --- | --- | --- |
 | STEP 1 | 技术方案设计（不写业务代码） | ✅ 完成，待确认 |
@@ -86,6 +91,14 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | Phase 9 | Evaluation | ⏳ |
 | Phase 10 | Observability | ⏳ |
 | Phase 11 | 工程化（Docker / Nginx / 安全 / 限流 / CI） | ⏳ |
+
+平台化升级（另一条轨道，与上面的 Phase 并行）：
+
+| 阶段 | 内容 | 状态 |
+| --- | --- | --- |
+| Phase 1 | 架构分析（**未改代码**） | ✅ 完成（[docs/platform-upgrade-phase1-analysis.md](docs/platform-upgrade-phase1-analysis.md)） |
+| Phase 2 | 领域模型：`workspace`（个人工作区）+ 知识库平台字段（icon/status/检索参数） | ✅ 完成（迁移 V9/V10；见 decisions.md B.30） |
+| Phase 3+ | RAG/Agent/Workflow/Application/Model 的抽象上移与用户可配置化 | ⏳ 见分析文档第 12 节 |
 
 ## 7. 本地环境要求
 
@@ -114,6 +127,10 @@ java -jar nexus-app\target\nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active
 
 # 3) 另开一个终端跑冒烟测试（注册→登录→建会话→问答→流式+停止→查历史）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
+
+# 4) 界面验证要用的演示数据（demo 用户 + 一个装着笔记的知识库 + web/.demo-token）
+#    H2 内存库重启即清，所以每轮重启后都要跑一次
+node scripts\seed-demo.mjs
 ```
 
 启动后可用入口：
@@ -159,7 +176,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
 | Redis | `localhost:6379` | |
 
 > 数据库结构与迁移由 **Flyway** 管理（`nexus-app/src/main/resources/db/migration/`）：
-> V1 账号权限、V2 会话消息、V3 Spring AI 记忆表。
+> V1 账号权限、V2 会话消息、V3 Spring AI 记忆表、V4 知识库与文档、V5 切片与导入任务、
+> V6 原始文件路径、V7 问答留档、V8 文档关联、V9 工作区（平台化）、V10 知识库平台字段。
+> **只增不改**：新增字段一律 `ADD COLUMN` 带默认值，不改名、不删除。
 > 三个 profile 的分工：`local`（真实 MySQL，日常开发）、`standalone`（H2 内存，无 Docker 时应急）、`test`（H2，跑测试）。
 > **新增 profile 配置或迁移脚本后必须重新 `package`**，否则 jar 里还是旧的。
 
@@ -175,15 +194,22 @@ npm run dev            # http://localhost:5173（/api 由 Vite 代理到后端 8
 **已有功能**：注册/登录（JWT，刷新保持登录）、知识库列表与新建、上传 Obsidian Vault
 （显示队列/处理中/完成进度）、向量化 / 建索引 / 重建索引、文档与切片浏览
 （切片带标题路径、Token 数，以及**向量与索引状态**——排查"为什么搜不到"的第一手信息）、
-关键词检索（每条命中显示来源标签与相关性得分）。
+关键词检索（每条命中显示来源标签与相关性得分），以及 **Agent 对话**
+（模型自己决定检索什么：检索过程实时可见、工具痕迹随消息落库、随时可停）。
 
 **界面验证（不下载浏览器，复用系统 Edge/Chrome）**：
 
 ```powershell
 cd web
-node scripts/screenshot.mjs      # 生成 docs/screenshots/{login,kb-list,kb-detail,kb-search}.png
-node scripts/verify-login.mjs    # 真实走一遍登录表单，确认跳转与刷新后仍保持登录
+node scripts/screenshot.mjs        # 生成 docs/screenshots/{login,kb-list,kb-detail,kb-search}.png
+node scripts/verify-login.mjs      # 真实走一遍登录表单，确认跳转与刷新后仍保持登录
+node scripts/verify-frontend.mjs   # 知识库列表 → 正文（Markdown/大纲/关联面板）→ 切片
+node scripts/verify-agent-chat.mjs # Agent 对话：工具卡片出现 → 结果非占位 → 回答渲染 → 刷新后痕迹仍在
 ```
+
+> 三个 `verify-*.mjs` 都要求后端已按上一节跑起来，并且**已经种好演示数据**
+> （`node scripts/seed-demo.mjs`，`standalone` 重启后要重跑）。
+> 脚本会把截图写进 `docs/screenshots/`。
 
 > 这两个脚本的意义不只是截图：**"服务返回了 HTML"不等于"页面渲染正常"**。
 > 本项目就是靠它发现了一个真实问题（前端 `@` 别名只配了 tsconfig、没配 Vite，

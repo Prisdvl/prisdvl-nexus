@@ -1,0 +1,2574 @@
+你现在需要基于我现有的 Java 项目 **`prisdvl-nexus`** 进行产品级升级和重构。
+
+注意：
+
+> **不要重新创建项目。**
+>
+> **不要修改项目名称。**
+>
+> **不要修改现有 Maven 聚合工程和基础包名。**
+>
+> **不要推倒重写。**
+>
+> 必须基于当前代码进行分析、重构和增量开发。
+
+---
+
+# 一、现有项目固定约定
+
+当前项目已经确定以下命名规范，后续所有代码必须严格遵守：
+
+| 范围     | 当前约定              |
+| ------ | ----------------- |
+| 聚合工程   | `prisdvl-nexus`   |
+| 公共模块   | `nexus-common`    |
+| AI 模块  | `nexus-ai`        |
+| 知识库模块  | `nexus-knowledge` |
+| 应用模块   | `nexus-app`       |
+| Java 包 | `com.lky.nexus.*` |
+
+例如：
+
+```text
+com.lky.nexus.common
+com.lky.nexus.ai
+com.lky.nexus.knowledge
+com.lky.nexus.app
+```
+
+如果需要增加新的 package：
+
+```text
+com.lky.nexus.xxx
+```
+
+必须保持统一。
+
+不要改成：
+
+```text
+com.prisdvl.xxx
+com.example.xxx
+com.sky.xxx
+org.xxx.xxx
+```
+
+也不要擅自修改：
+
+```text
+prisdvl-nexus
+nexus-common
+nexus-ai
+nexus-knowledge
+nexus-app
+```
+
+---
+
+# 二、项目新的产品定位
+
+当前项目不要再定位成：
+
+> 个人 RAG 知识库 Agent
+
+需要升级成为：
+
+> **一个面向个人、团队和企业用户的通用 AI 应用开发与运行平台。**
+
+核心思想是：
+
+```text
+用户
+ ↓
+创建自己的资源
+ ↓
+知识库
+Agent
+Workflow
+Tools
+AI Application
+ ↓
+组合这些能力
+ ↓
+形成属于自己的 AI 应用
+```
+
+平台不应该假设：
+
+```text
+只有一个用户
+只有一个知识库
+只有一套 Prompt
+只有一个 Agent
+只有一个 Workflow
+```
+
+而必须从系统设计上支持：
+
+```text
+多用户
+多知识库
+多 Agent
+多 Workflow
+多 Application
+```
+
+---
+
+# 三、目标产品形态
+
+最终产品可以理解为一个轻量级的：
+
+```text
+Dify
++
+Coze
++
+FastGPT
+```
+
+类型的 AI 应用平台。
+
+但是：
+
+> 不要照搬这些产品的具体实现。
+
+要基于现有 `prisdvl-nexus` 的 Spring Boot / Spring AI 架构，设计一个属于自己的平台。
+
+---
+
+# 四、目标核心能力
+
+最终平台至少包含：
+
+```text
+用户系统
+Workspace
+知识库
+文档管理
+RAG
+Embedding
+Vector Store
+Agent
+Tool
+Workflow
+Workflow Engine
+AI Application
+Conversation
+Memory
+模型配置
+AI 执行记录
+权限控制
+```
+
+整体关系：
+
+```text
+User
+ │
+ └── Workspace
+       │
+       ├── Knowledge Bases
+       │      │
+       │      └── Documents
+       │              │
+       │              └── Chunks
+       │
+       ├── Agents
+       │      │
+       │      ├── Knowledge Bases
+       │      ├── Tools
+       │      └── Memory
+       │
+       ├── Workflows
+       │      │
+       │      └── Nodes / Edges
+       │
+       ├── Applications
+       │
+       └── Conversations
+```
+
+---
+
+# 五、第一原则：先分析，再修改
+
+在任何代码修改之前，必须先对现有 `prisdvl-nexus` 进行完整扫描。
+
+至少分析：
+
+```text
+pom.xml
+父工程 pom
+所有 Maven module
+application.yml
+application-dev.yml
+数据库配置
+数据库表
+Entity
+DTO
+VO
+Controller
+Service
+Mapper
+Config
+AI 相关代码
+RAG 相关代码
+认证代码
+Redis
+RabbitMQ
+定时任务
+异常处理
+日志
+前端
+```
+
+必须先输出：
+
+```text
+1. 当前项目架构
+2. 当前模块职责
+3. 当前已有业务
+4. 当前 RAG 实现
+5. 当前 AI 实现
+6. 当前用户体系
+7. 当前数据库结构
+8. 当前可以直接复用的代码
+9. 当前需要重构的代码
+10. 当前存在的架构问题
+11. 目标架构
+12. 详细改造路径
+```
+
+**没有完成分析之前，不允许大规模修改代码。**
+
+---
+
+# 六、必须保留当前 Maven 多模块结构
+
+当前结构：
+
+```text
+prisdvl-nexus
+│
+├── nexus-common
+├── nexus-ai
+├── nexus-knowledge
+└── nexus-app
+```
+
+必须继续保留。
+
+---
+
+# 七、重新明确各模块职责
+
+## 1. nexus-common
+
+负责所有通用能力：
+
+```text
+Result
+统一异常
+全局异常处理
+工具类
+常量
+枚举
+基础 DTO
+基础 VO
+通用响应
+通用分页
+JSON 工具
+Redis 基础设施
+Security 公共能力
+```
+
+不要将业务代码放在 `nexus-common`。
+
+禁止：
+
+```text
+nexus-common
+    ↓
+KnowledgeBaseService
+```
+
+这种业务耦合。
+
+---
+
+# 八、nexus-ai
+
+负责 AI 基础设施和 AI 核心抽象。
+
+应该逐步形成：
+
+```text
+com.lky.nexus.ai
+```
+
+下面可以划分：
+
+```text
+chat
+embedding
+rag
+agent
+tool
+memory
+workflow
+model
+advisor
+prompt
+```
+
+核心抽象：
+
+```text
+ChatService
+EmbeddingService
+RagService
+AgentService
+ToolExecutor
+MemoryService
+WorkflowEngine
+ModelProvider
+```
+
+业务层不要直接依赖具体厂商 SDK。
+
+例如禁止业务代码到处：
+
+```java
+new OpenAiChatModel(...)
+new DashScopeChatModel(...)
+```
+
+应该：
+
+```text
+业务层
+ ↓
+Nexus AI 抽象
+ ↓
+具体 Model Adapter
+ ↓
+Qwen / OpenAI / DeepSeek / Ollama
+```
+
+---
+
+# 九、nexus-knowledge
+
+负责完整知识库生命周期。
+
+包：
+
+```text
+com.lky.nexus.knowledge
+```
+
+建议划分：
+
+```text
+controller
+service
+repository / mapper
+entity
+dto
+vo
+parser
+splitter
+embedding
+retrieval
+```
+
+负责：
+
+```text
+KnowledgeBase
+Document
+Chunk
+Import
+Parse
+Split
+Embedding
+VectorStore
+Retrieval
+Source
+```
+
+---
+
+# 十、nexus-app
+
+负责面向最终用户的业务层和应用层。
+
+包：
+
+```text
+com.lky.nexus.app
+```
+
+可以包含：
+
+```text
+user
+workspace
+agent
+workflow
+application
+conversation
+message
+model
+execution
+```
+
+但是具体边界需要根据现有代码决定。
+
+不要为了“模块看起来漂亮”进行无意义拆分。
+
+---
+
+# 十一、Knowledge Base 必须从个人知识库升级成用户资源
+
+知识库不能再写死。
+
+应该：
+
+```text
+Workspace
+  ↓
+KnowledgeBase
+```
+
+KnowledgeBase 至少包含：
+
+```text
+id
+workspaceId
+ownerId
+name
+description
+icon
+status
+embeddingModel
+chunkSize
+chunkOverlap
+retrievalTopK
+similarityThreshold
+createdAt
+updatedAt
+```
+
+用户可以：
+
+```text
+创建
+查询
+编辑
+删除
+启用
+禁用
+```
+
+---
+
+# 十二、Document
+
+知识库支持用户自行导入知识。
+
+第一阶段至少：
+
+```text
+PDF
+DOCX
+TXT
+Markdown
+HTML
+CSV
+JSON
+```
+
+后续架构预留：
+
+```text
+URL
+网页
+Notion
+GitHub
+数据库
+云盘
+API
+```
+
+Document：
+
+```text
+id
+knowledgeBaseId
+fileName
+fileType
+fileSize
+storageUrl
+parseStatus
+embeddingStatus
+status
+errorMessage
+createdAt
+updatedAt
+```
+
+状态：
+
+```text
+UPLOADING
+PARSING
+CHUNKING
+EMBEDDING
+COMPLETED
+FAILED
+```
+
+---
+
+# 十三、文档处理必须异步
+
+用户上传：
+
+```text
+PDF
+```
+
+不能让 HTTP 请求一直阻塞：
+
+```text
+上传
+ ↓
+解析
+ ↓
+Chunk
+ ↓
+Embedding
+ ↓
+VectorStore
+ ↓
+几十秒后才返回
+```
+
+应该：
+
+```text
+Upload
+ ↓
+保存 Document
+ ↓
+status = PROCESSING
+ ↓
+异步任务
+ ↓
+Parse
+ ↓
+Chunk
+ ↓
+Embedding
+ ↓
+Vector Store
+ ↓
+COMPLETED
+```
+
+优先复用当前已有：
+
+```text
+RabbitMQ
+Spring Task
+线程池
+```
+
+不要重复创建同类基础设施。
+
+---
+
+# 十四、Document Chunk
+
+一个文件必须经过：
+
+```text
+Document
+ ↓
+Parser
+ ↓
+Text
+ ↓
+TextSplitter
+ ↓
+Chunks
+ ↓
+Embedding
+```
+
+Chunk：
+
+```text
+id
+documentId
+knowledgeBaseId
+content
+chunkIndex
+tokenCount
+metadata
+```
+
+metadata 至少保留：
+
+```text
+source
+fileName
+page
+documentId
+knowledgeBaseId
+```
+
+---
+
+# 十五、RAG
+
+RAG 不允许再绑定某个固定知识库。
+
+应该变成：
+
+```text
+User
+ ↓
+Application / Agent
+ ↓
+指定 Knowledge Base
+ ↓
+Query
+ ↓
+Retrieval
+ ↓
+Top K Context
+ ↓
+LLM
+ ↓
+Answer
+```
+
+---
+
+# 十六、RAG 抽象
+
+不要把 RAG 逻辑写死在 Controller。
+
+建议：
+
+```text
+RagService
+    ↓
+Retriever
+    ↓
+VectorStore
+    ↓
+Embedding
+```
+
+为未来扩展预留：
+
+```text
+Vector Retrieval
+Keyword Retrieval
+Hybrid Retrieval
+Rerank
+Query Rewrite
+Multi Query
+Metadata Filter
+Parent Retrieval
+Context Compression
+```
+
+---
+
+# 十七、RAG 检索参数必须可配置
+
+例如：
+
+```text
+TopK
+Similarity Threshold
+Metadata Filter
+```
+
+可以允许用户在知识库层配置：
+
+```text
+topK = 5
+threshold = 0.7
+```
+
+Agent/Application 可以覆盖默认参数。
+
+---
+
+# 十八、Metadata Filter
+
+这是平台必须重点实现的能力。
+
+例如：
+
+```text
+knowledgeBaseId = kb001
+```
+
+检索只能在：
+
+```text
+kb001
+```
+
+中进行。
+
+未来还要支持：
+
+```text
+documentId
+fileType
+category
+tag
+ownerId
+workspaceId
+```
+
+---
+
+# 十九、RAG Source 引用
+
+AI 回答不能只有：
+
+```text
+answer
+```
+
+必须能够返回：
+
+```text
+answer
+sources[]
+```
+
+例如：
+
+```json
+{
+  "answer": "Redis 的 RDB 和 AOF...",
+  "sources": [
+    {
+      "documentId": "doc001",
+      "fileName": "Redis学习笔记.pdf",
+      "page": 12,
+      "chunkId": "chunk001",
+      "score": 0.91
+    }
+  ]
+}
+```
+
+前端展示：
+
+```text
+回答
+ ↓
+参考资料
+ ↓
+Redis学习笔记.pdf
+第12页
+```
+
+---
+
+# 二十、Agent
+
+Agent 必须完全用户可配置。
+
+Agent：
+
+```text
+id
+workspaceId
+name
+description
+avatar
+systemPrompt
+modelConfig
+temperature
+maxTokens
+memoryConfig
+status
+```
+
+Agent 可以绑定：
+
+```text
+KnowledgeBase
+Tool
+Memory
+Workflow
+```
+
+关系：
+
+```text
+Agent
+ ├── KnowledgeBase A
+ ├── KnowledgeBase B
+ │
+ ├── Tool A
+ ├── Tool B
+ │
+ └── Memory
+```
+
+使用场景：
+
+```text
+Java 助手
+客服助手
+产品经理助手
+企业内部助手
+论文助手
+运营助手
+```
+
+禁止在代码里写死：
+
+```text
+JavaAgent
+CustomerAgent
+```
+
+必须让用户创建。
+
+---
+
+# 二十一、Tool 系统
+
+建立统一 Tool 抽象。
+
+例如：
+
+```text
+Tool
+├── id
+├── workspaceId
+├── name
+├── description
+├── type
+├── configuration
+└── status
+```
+
+Tool 类型预留：
+
+```text
+RAG_SEARCH
+WEB_SEARCH
+HTTP_REQUEST
+DATABASE_QUERY
+CALCULATOR
+CODE_EXECUTION
+MCP
+CUSTOM
+```
+
+第一阶段不需要全部实现。
+
+至少实现：
+
+```text
+RAG
+Calculator
+HTTP Request
+Web Search
+```
+
+---
+
+# 二十二、Tool Registry
+
+不要：
+
+```java
+if ("rag".equals(type)) {
+    ...
+}
+else if ("http".equals(type)) {
+    ...
+}
+else if ("calculator".equals(type)) {
+    ...
+}
+```
+
+这种代码大量堆积。
+
+应该设计：
+
+```text
+Tool
+ ↓
+ToolRegistry
+ ↓
+ToolFactory
+ ↓
+ToolExecutor
+ ↓
+Concrete Tool
+```
+
+例如：
+
+```text
+RagTool
+HttpTool
+CalculatorTool
+WebSearchTool
+```
+
+以后增加：
+
+```text
+McpTool
+DatabaseTool
+```
+
+不应该大范围修改已有代码。
+
+---
+
+# 二十三、Tool 安全
+
+Tool 必须具备：
+
+```text
+权限
+参数校验
+超时
+限流
+异常处理
+执行日志
+```
+
+尤其是：
+
+```text
+HTTP
+DATABASE
+CODE EXECUTION
+```
+
+不能允许普通用户无限制执行危险操作。
+
+---
+
+# 二十四、Workflow
+
+这是整个项目从“RAG 项目”升级为“AI 平台”的关键能力。
+
+Workflow 使用 DAG / Graph 模型。
+
+示例：
+
+```text
+Start
+ ↓
+Input
+ ↓
+LLM
+ ↓
+RAG
+ ↓
+Condition
+ ├── true → Agent A
+ │
+ └── false → Agent B
+              ↓
+             LLM
+              ↓
+             End
+```
+
+Workflow 至少包括：
+
+```text
+id
+workspaceId
+name
+description
+version
+status
+definition
+createdAt
+updatedAt
+```
+
+---
+
+# 二十五、Workflow Node
+
+统一 Node 模型：
+
+```text
+id
+type
+name
+position
+config
+inputs
+outputs
+```
+
+节点类型预留：
+
+```text
+START
+END
+LLM
+RAG
+AGENT
+CONDITION
+HTTP
+CODE
+VARIABLE
+TEMPLATE
+LOOP
+PARALLEL
+```
+
+第一阶段实现：
+
+```text
+START
+END
+LLM
+RAG
+CONDITION
+HTTP
+```
+
+---
+
+# 二十六、Workflow Edge
+
+定义：
+
+```text
+sourceNode
+targetNode
+condition
+priority
+```
+
+例如：
+
+```text
+A
+├── success → B
+└── failure → C
+```
+
+---
+
+# 二十七、Workflow Engine
+
+在：
+
+```text
+nexus-ai
+```
+
+中设计核心执行抽象。
+
+例如：
+
+```text
+WorkflowEngine
+WorkflowExecutor
+NodeExecutor
+ExecutionContext
+```
+
+执行过程：
+
+```text
+Workflow Definition
+ ↓
+Graph Parse
+ ↓
+Execution Context
+ ↓
+Node Executor
+ ↓
+Next Node
+ ↓
+...
+ ↓
+End
+```
+
+必须支持：
+
+```text
+节点执行
+上下文
+变量
+条件分支
+错误处理
+超时
+重试
+日志
+执行状态
+```
+
+---
+
+# 二十八、Workflow Context
+
+设计：
+
+```text
+ExecutionContext
+```
+
+至少包含：
+
+```text
+executionId
+workflowId
+workspaceId
+userId
+variables
+currentNode
+history
+status
+```
+
+支持变量：
+
+```text
+{{input}}
+{{user.name}}
+{{node.xxx.output}}
+{{workflow.xxx}}
+```
+
+节点之间必须可以传递数据。
+
+---
+
+# 二十九、Workflow 不允许写死
+
+禁止：
+
+```java
+if (node == 1) {
+    ...
+}
+if (node == 2) {
+    ...
+}
+```
+
+应该：
+
+```text
+Workflow Definition
+ ↓
+Node Type
+ ↓
+NodeExecutor
+ ↓
+对应执行器
+```
+
+例如：
+
+```text
+LLMNodeExecutor
+RagNodeExecutor
+AgentNodeExecutor
+ConditionNodeExecutor
+HttpNodeExecutor
+```
+
+---
+
+# 三十、AI Application
+
+引入一个更高层次的概念：
+
+```text
+Application
+```
+
+用户真正使用的是 Application。
+
+Application 可以绑定：
+
+```text
+Agent
+KnowledgeBase
+Workflow
+Model
+```
+
+例如：
+
+```text
+Application:
+Java 面试助手
+
+Agent:
+Java Interview Agent
+
+Knowledge Base:
+Java + Spring + MySQL
+
+Workflow:
+Interview Workflow
+```
+
+---
+
+# 三十一、Application 类型
+
+预留：
+
+```text
+CHAT
+AGENT
+RAG
+WORKFLOW
+CUSTOM
+```
+
+Application 应该成为：
+
+```text
+最终产品入口
+```
+
+而不是让普通用户直接操作底层 AI Bean。
+
+---
+
+# 三十二、Conversation
+
+结构：
+
+```text
+Application
+ ↓
+Conversation
+ ↓
+Message
+```
+
+Conversation：
+
+```text
+id
+applicationId
+userId
+title
+createdAt
+updatedAt
+```
+
+Message：
+
+```text
+id
+conversationId
+role
+content
+metadata
+createdAt
+```
+
+Role：
+
+```text
+SYSTEM
+USER
+ASSISTANT
+TOOL
+```
+
+支持：
+
+```text
+历史会话
+上下文
+流式输出
+重新生成
+删除
+标题生成
+```
+
+---
+
+# 三十三、Memory
+
+Agent / Application 支持：
+
+```text
+Conversation Memory
+```
+
+第一阶段：
+
+```text
+最近 N 条消息
+```
+
+架构预留：
+
+```text
+Window Memory
+Summary Memory
+Long-term Memory
+Semantic Memory
+```
+
+---
+
+# 三十四、模型系统
+
+不能把模型写死。
+
+不要出现：
+
+```text
+qwen-plus
+```
+
+散落在业务代码里。
+
+应该：
+
+```text
+ModelProvider
+ModelConfig
+ChatModelAdapter
+EmbeddingModelAdapter
+```
+
+支持：
+
+```text
+DashScope
+OpenAI
+DeepSeek
+Ollama
+OpenAI Compatible
+```
+
+后续可以继续扩展。
+
+API Key：
+
+```text
+数据库加密保存
+```
+
+禁止：
+
+```text
+明文返回给前端
+日志打印
+异常堆栈泄露
+```
+
+---
+
+# 三十五、AI Model 抽象
+
+业务层：
+
+```text
+ChatService
+EmbeddingService
+```
+
+基础设施：
+
+```text
+DashScopeChatAdapter
+OpenAIChatAdapter
+DeepSeekChatAdapter
+OllamaChatAdapter
+```
+
+业务层不能直接依赖厂商 SDK。
+
+---
+
+# 三十六、用户权限
+
+所有资源必须考虑归属关系。
+
+例如：
+
+```text
+KnowledgeBase
+Agent
+Workflow
+Application
+Tool
+Conversation
+```
+
+必须绑定：
+
+```text
+workspaceId
+ownerId
+```
+
+查询时必须进行权限判断。
+
+禁止：
+
+```sql
+SELECT *
+FROM knowledge_base
+WHERE id = ?
+```
+
+而应该至少：
+
+```sql
+SELECT *
+FROM knowledge_base
+WHERE id = ?
+AND workspace_id = ?
+```
+
+不要允许用户通过猜测 ID 获取其他用户资源。
+
+---
+
+# 三十七、Workspace
+
+为了让项目未来具备团队能力，设计：
+
+```text
+User
+ ↓
+Workspace
+ ↓
+Resources
+```
+
+资源：
+
+```text
+KnowledgeBase
+Agent
+Workflow
+Tool
+Application
+```
+
+成员角色：
+
+```text
+OWNER
+ADMIN
+EDITOR
+VIEWER
+```
+
+第一阶段可以先实现：
+
+```text
+个人 Workspace
+```
+
+但架构必须允许以后增加团队 Workspace。
+
+---
+
+# 三十八、AI Execution
+
+平台需要记录 AI 调用。
+
+统一记录：
+
+```text
+executionId
+userId
+workspaceId
+applicationId
+conversationId
+model
+promptTokens
+completionTokens
+totalTokens
+latency
+status
+errorMessage
+createdAt
+```
+
+Workflow 进一步：
+
+```text
+WorkflowExecution
+NodeExecution
+```
+
+这样可以查看：
+
+```text
+执行次数
+耗时
+失败
+Token
+模型
+节点执行过程
+```
+
+---
+
+# 三十九、可观察性
+
+用户需要知道：
+
+```text
+AI 正在做什么
+```
+
+例如：
+
+```text
+正在检索知识库...
+找到 5 条相关资料
+正在调用工具...
+正在生成答案...
+```
+
+Agent / Workflow 需要有执行事件。
+
+最终可以用于：
+
+```text
+前端执行面板
+Debug
+日志
+监控
+```
+
+---
+
+# 四十、SSE 流式聊天
+
+聊天接口使用当前项目最合适的 Spring 方案实现 SSE。
+
+例如：
+
+```text
+POST /api/applications/{id}/chat
+```
+
+支持：
+
+```text
+Token Stream
+Tool Event
+RAG Event
+Workflow Event
+Error Event
+Complete Event
+```
+
+例如：
+
+```text
+data: {"type":"token","content":"Redis"}
+
+data: {"type":"rag","source":"Redis.pdf"}
+
+data: {"type":"token","content":" 是..."}
+
+data: {"type":"complete"}
+```
+
+具体协议根据现有前端实现进行设计，不要盲目重构已有聊天接口。
+
+---
+
+# 四十一、前端升级
+
+如果当前项目已有前端，必须在现有技术栈基础上升级。
+
+不要因为要做 Workflow 就无理由更换前端框架。
+
+目标界面：
+
+```text
+Dashboard
+│
+├── Applications
+├── Knowledge Bases
+├── Agents
+├── Workflows
+├── Tools
+├── Models
+└── Settings
+```
+
+---
+
+# 四十二、Knowledge Base UI
+
+至少支持：
+
+```text
+知识库列表
+创建
+编辑
+删除
+文档上传
+文档删除
+解析状态
+Embedding 状态
+检索测试
+RAG 参数配置
+```
+
+---
+
+# 四十三、Agent Builder
+
+需要可视化配置：
+
+```text
+Name
+Description
+System Prompt
+Model
+Temperature
+Max Tokens
+Knowledge Bases
+Tools
+Memory
+```
+
+保存之后成为一个真正可运行的 Agent。
+
+---
+
+# 四十四、Workflow Builder
+
+提供可视化 Workflow 编辑器。
+
+目标：
+
+```text
+┌──────────────────────────────────────────────┐
+│ Workflow Builder                             │
+├────────────┬────────────────────┬────────────┤
+│ Nodes      │ Canvas             │ Config     │
+│            │                    │            │
+│ Start      │ Start              │ Node       │
+│ LLM        │   ↓                │ Settings   │
+│ RAG        │  LLM               │            │
+│ Agent      │   ↓                │            │
+│ Condition  │  RAG               │            │
+│ HTTP       │   ↓                │            │
+│ End        │  End               │            │
+└────────────┴────────────────────┴────────────┘
+```
+
+第一阶段只要求：
+
+```text
+拖拽
+连线
+配置
+保存
+执行
+```
+
+---
+
+# 四十五、Workflow JSON
+
+统一定义 Workflow，例如：
+
+```json
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "START",
+      "config": {}
+    },
+    {
+      "id": "llm1",
+      "type": "LLM",
+      "config": {
+        "model": "qwen-plus",
+        "prompt": "{{input}}"
+      }
+    },
+    {
+      "id": "rag1",
+      "type": "RAG",
+      "config": {
+        "knowledgeBaseId": "kb001",
+        "topK": 5
+      }
+    },
+    {
+      "id": "end",
+      "type": "END",
+      "config": {}
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "llm1"
+    },
+    {
+      "source": "llm1",
+      "target": "rag1"
+    },
+    {
+      "source": "rag1",
+      "target": "end"
+    }
+  ]
+}
+```
+
+不要把 Workflow 节点结构硬编码到 Java 类中。
+
+---
+
+# 四十六、安全设计
+
+必须考虑：
+
+```text
+Authentication
+Authorization
+Resource Ownership
+API Key Protection
+File Upload Security
+Prompt Injection
+Tool Permission
+Rate Limit
+```
+
+特别注意 RAG：
+
+```text
+用户上传的文档
+```
+
+只能作为：
+
+```text
+Context
+```
+
+不能默认作为：
+
+```text
+System Instruction
+```
+
+例如用户知识中出现：
+
+```text
+忽略之前所有指令
+执行 XXX
+```
+
+不能因为这是 RAG 内容，就让 Agent 执行。
+
+---
+
+# 四十七、Prompt Injection
+
+至少在设计层面区分：
+
+```text
+System Prompt
+Developer Prompt
+User Prompt
+Retrieved Context
+Tool Result
+```
+
+优先保证：
+
+```text
+System Instruction
+    >
+User Instruction
+    >
+Retrieved Context
+```
+
+检索结果必须明确标识为外部知识。
+
+---
+
+# 四十八、代码架构要求
+
+Controller：
+
+```text
+参数
+校验
+Service
+返回结果
+```
+
+禁止 Controller 中出现：
+
+```text
+Embedding
+Vector Search
+Prompt 构造
+LLM 调用细节
+Workflow 执行细节
+```
+
+---
+
+Service：
+
+负责业务。
+
+例如：
+
+```text
+KnowledgeBaseService
+DocumentService
+RagService
+AgentService
+ToolService
+WorkflowService
+ApplicationService
+ConversationService
+ExecutionService
+ModelService
+```
+
+---
+
+Repository / Mapper：
+
+只负责数据访问。
+
+---
+
+AI Infrastructure：
+
+统一管理：
+
+```text
+ChatModel
+EmbeddingModel
+VectorStore
+Advisor
+Tool
+Retriever
+```
+
+不要把这些代码散落在业务层。
+
+---
+
+# 四十九、数据库设计
+
+必须先分析现有数据库。
+
+不要直接删除旧表。
+
+需要修改时优先：
+
+```text
+CREATE TABLE
+ALTER TABLE
+ADD COLUMN
+CREATE INDEX
+```
+
+推荐核心数据模型：
+
+```text
+user
+workspace
+workspace_member
+
+knowledge_base
+document
+document_chunk
+
+agent
+agent_knowledge_base
+agent_tool
+
+tool
+
+workflow
+workflow_execution
+node_execution
+
+application
+
+conversation
+message
+
+model_provider
+model_config
+
+ai_execution
+```
+
+最终结构应该类似：
+
+```text
+User
+ │
+ └── Workspace
+       │
+       ├── KnowledgeBase
+       ├── Agent
+       ├── Workflow
+       ├── Tool
+       └── Application
+
+KnowledgeBase
+ └── Document
+       └── Chunk
+
+Agent
+ ├── KnowledgeBase
+ └── Tool
+
+Application
+ ├── Agent
+ ├── KnowledgeBase
+ └── Workflow
+
+Application
+ └── Conversation
+       └── Message
+```
+
+具体字段必须根据现有数据库设计进行调整。
+
+---
+
+# 五十、AI 技术架构
+
+目标：
+
+```text
+                         prismdvl-nexus
+                              │
+       ┌──────────────────────┼──────────────────────┐
+       │                      │                      │
+       ↓                      ↓                      ↓
+nexus-common             nexus-ai             nexus-knowledge
+       │                      │                      │
+       │              ┌───────┼────────┐             │
+       │              ↓       ↓        ↓             │
+       │            Chat    Agent     Tool            │
+       │              │       │        │             │
+       │              └───────┼────────┘             │
+       │                      ↓                      │
+       │                 Workflow                   │
+       │                                             │
+       │                                  Document    │
+       │                                  Chunk       │
+       │                                  RAG         │
+       │                                  Vector      │
+       │                                             │
+       └──────────────────────┬──────────────────────┘
+                              ↓
+                        nexus-app
+                              │
+                              ↓
+                         REST / SSE
+                              │
+                              ↓
+                           Frontend
+```
+
+注意实际模块依赖必须根据 Maven 最佳实践调整，避免：
+
+```text
+循环依赖
+```
+
+---
+
+# 五十一、不要盲目微服务化
+
+当前项目可以保持：
+
+```text
+模块化单体
+```
+
+优先做好：
+
+```text
+Spring Boot
+Spring AI
+MySQL
+Redis
+RabbitMQ
+Vector Database
+Docker
+```
+
+暂时不要为了“看起来高级”加入：
+
+```text
+Kubernetes
+Nacos
+Seata
+Kafka
+复杂微服务
+```
+
+除非当前代码确实已经存在对应基础设施并且有实际业务需要。
+
+---
+
+# 五十二、异步任务
+
+优先使用已有：
+
+```text
+RabbitMQ
+Spring Task
+线程池
+```
+
+处理：
+
+```text
+Document Parse
+Chunk
+Embedding
+Vector Store
+Workflow Async Execution
+```
+
+例如：
+
+```text
+upload
+ ↓
+Document
+ ↓
+MQ
+ ↓
+DocumentProcessConsumer
+ ↓
+Parse
+ ↓
+Chunk
+ ↓
+Embedding
+ ↓
+VectorStore
+ ↓
+Complete
+```
+
+---
+
+# 五十三、测试
+
+每完成一个模块必须验证。
+
+## Knowledge Base
+
+```text
+创建
+查询
+修改
+删除
+权限
+```
+
+## Document
+
+```text
+上传
+解析
+切分
+Embedding
+入库
+删除
+重试
+失败恢复
+```
+
+## RAG
+
+```text
+检索
+TopK
+Threshold
+Metadata Filter
+Source
+```
+
+## Agent
+
+```text
+创建
+修改
+删除
+绑定知识库
+绑定 Tool
+聊天
+Memory
+```
+
+## Tool
+
+```text
+参数
+权限
+调用
+异常
+超时
+日志
+```
+
+## Workflow
+
+```text
+创建
+保存
+读取
+执行
+条件分支
+节点输出
+错误处理
+```
+
+## Application
+
+```text
+创建
+发布
+聊天
+Conversation
+```
+
+---
+
+# 五十四、兼容现有功能
+
+每次重构必须检查：
+
+```text
+已有 API
+已有数据库
+已有登录
+已有 Redis
+已有 RabbitMQ
+已有 AI
+已有 RAG
+```
+
+不能因为新增：
+
+```text
+Agent
+Workflow
+Application
+```
+
+而破坏现有功能。
+
+---
+
+# 五十五、开发过程要求
+
+严格按照阶段进行。
+
+## Phase 1
+
+只分析现有代码。
+
+输出：
+
+```text
+当前架构
+当前功能
+问题
+目标架构
+改造方案
+```
+
+暂不修改。
+
+---
+
+## Phase 2
+
+重构领域模型：
+
+```text
+User
+Workspace
+KnowledgeBase
+Document
+```
+
+---
+
+## Phase 3
+
+升级：
+
+```text
+RAG
+Document Pipeline
+Embedding
+VectorStore
+Retrieval
+Source
+```
+
+---
+
+## Phase 4
+
+实现：
+
+```text
+Agent
+Tool
+ToolRegistry
+ToolExecutor
+```
+
+---
+
+## Phase 5
+
+实现：
+
+```text
+Workflow
+WorkflowEngine
+NodeExecutor
+ExecutionContext
+```
+
+---
+
+## Phase 6
+
+实现：
+
+```text
+Application
+Conversation
+Message
+Memory
+```
+
+---
+
+## Phase 7
+
+实现：
+
+```text
+Model Provider
+Model Config
+AI Execution
+```
+
+---
+
+## Phase 8
+
+完善：
+
+```text
+Permission
+Workspace
+Security
+Logging
+Monitoring
+```
+
+---
+
+## Phase 9
+
+升级前端：
+
+```text
+Dashboard
+Knowledge Base
+Agent Builder
+Workflow Builder
+Application
+Chat
+Execution
+```
+
+---
+
+# 五十六、最终代码要求
+
+必须满足：
+
+```text
+Maven 构建通过
+Spring Boot 正常启动
+数据库正常
+Redis 正常
+RabbitMQ 正常
+VectorStore 正常
+AI Model 正常
+RAG 正常
+Agent 正常
+Tool 正常
+Workflow 正常
+Application 正常
+Conversation 正常
+SSE 正常
+权限正常
+```
+
+代码必须：
+
+```text
+低耦合
+高内聚
+接口抽象
+可扩展
+可测试
+统一异常
+统一响应
+统一日志
+```
+
+不要：
+
+```text
+Controller 巨型方法
+Service 巨型方法
+大量 if/else
+大量硬编码
+模型写死
+知识库写死
+Agent 写死
+Workflow 写死
+用户写死
+```
+
+---
+
+# 五十七、最终需要输出的项目文档
+
+改造完成后生成：
+
+```text
+1. 项目架构图
+2. Maven 模块关系
+3. 包结构
+4. 数据库 ER 图
+5. 核心领域模型
+6. RAG 调用链
+7. Agent 调用链
+8. Tool 调用链
+9. Workflow 执行链
+10. Application 调用链
+11. 权限模型
+12. AI Model 抽象
+13. VectorStore 抽象
+14. Tool 抽象
+15. Workflow Engine 设计
+16. API 清单
+17. SSE 协议
+18. 数据库 Migration
+19. 启动方式
+20. 测试方式
+21. 已完成能力
+22. 未完成能力
+23. TODO
+24. 未来扩展方案
+```
+
+---
+
+# 五十八、最终产品定位
+
+最终不要再把项目描述为：
+
+```text
+个人 RAG 知识库
+```
+
+而应该形成：
+
+```text
+prisdvl-nexus
+│
+├── Knowledge
+│   ├── Import
+│   ├── Parse
+│   ├── Chunk
+│   ├── Embedding
+│   └── RAG
+│
+├── Agent
+│   ├── Prompt
+│   ├── Knowledge
+│   ├── Tool
+│   └── Memory
+│
+├── Workflow
+│   ├── DAG
+│   ├── Node
+│   ├── Condition
+│   └── Execution
+│
+├── Application
+│   ├── Agent App
+│   ├── RAG App
+│   └── Workflow App
+│
+└── Platform
+    ├── User
+    ├── Workspace
+    ├── Model
+    ├── Permission
+    ├── Conversation
+    └── Execution
+```
+
+最终用户体验：
+
+```text
+注册
+ ↓
+创建 Workspace
+ ↓
+创建 Knowledge Base
+ ↓
+上传自己的 PDF / Markdown / Word
+ ↓
+系统自动解析
+ ↓
+Chunk
+ ↓
+Embedding
+ ↓
+Vector Store
+ ↓
+创建 Agent
+ ↓
+绑定 Knowledge Base
+ ↓
+绑定 Tool
+ ↓
+配置 Prompt
+ ↓
+创建 Workflow
+ ↓
+组合 LLM + RAG + Agent + Tool
+ ↓
+发布 Application
+ ↓
+开始聊天
+ ↓
+RAG 检索
+ ↓
+Agent 推理
+ ↓
+Tool Calling
+ ↓
+Workflow 执行
+ ↓
+返回答案
+ ↓
+展示引用来源
+ ↓
+保存 Conversation
+ ↓
+记录 Execution
+```
+
+---
+
+# 五十九、最重要的一条要求
+
+你必须记住：
+
+> **`prisdvl-nexus` 不是一个“给我自己用的 AI 项目”，而是一个“允许其他用户在平台上创建属于自己的 AI 应用”的平台。**
+
+因此所有核心资源都必须从：
+
+```text
+写死
+```
+
+升级为：
+
+```text
+用户创建
+用户配置
+用户保存
+用户复用
+用户执行
+用户管理
+```
+
+最终应该达到：
+
+```text
+平台提供能力
+        ↓
+用户组合能力
+        ↓
+用户创造 AI 应用
+        ↓
+用户使用 AI 应用
+```
+
+而不是：
+
+```text
+开发者写一个 Agent
+        ↓
+所有用户只能使用这个 Agent
+```
+
+---
+
+
+
+禁止在未验证的情况下连续进行大规模重构。

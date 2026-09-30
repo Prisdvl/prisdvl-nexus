@@ -1165,8 +1165,9 @@ ollama 镜像与 bge-m3 模型（1.08 GB）最终都拉取成功，因此**真�
    `spring-ai-model`（2.0.1）里，**不需要**额外引入 `spring-ai-tool-calling` 模块。
    守卫测试（AgentLoopTest）证明：OpenCode 网关 + deepseek-v4-flash **支持函数调用**
    （若网关不支持，这条测试会如实失败——这是守卫测试存在的意义）。
-2. 工具执行发生在响应处理线程，没有请求上下文——用 `ThreadLocal`（AgentContext）
-   绑定"当前用户 + 本轮痕迹"，并测了双线程不串（工具在线程池里最易串）。
+2. 工具执行发生在响应处理线程，没有请求上下文——用上下文对象（AgentContext）绑定
+   "当前用户 + 本轮痕迹"。（**这一版最初是 ThreadLocal，非流式可用、流式静默失效；
+   已改为框架的 `ToolContext`，详见 B.30——这里的"线程绑定"是已被推翻的初版方案。）
 3. **检索降级阶梯**（只有 Agent 工具有，`ChunkSearchService` 保持严格是刻意设计）：
    混合检索 → SQL LIKE 关键词匹配 → 如实说明。第一版 LIKE 用完整问题做
    `%LIKE%`（"缓存击穿怎么解决"不会出现在正文里）→ 空结果；修法是剥问句助词 +
@@ -1226,6 +1227,57 @@ ollama 镜像与 bge-m3 模型（1.08 GB）最终都拉取成功，因此**真�
   残留数据让后续用例的计数断言离奇失败。顺便补上了真实需要的能力
   `VectorStore.deleteByKnowledgeBase`（删除知识库时必须清向量，否则留下"检索命中却查不到内容"的孤儿向量），
   并把清理同时放到用例**之前**（上一个用例失败退出时也能保证干净）。
+
+### B.30 Phase 2（工作区归属 + 知识库平台字段）与一个静默失效的工具上下文 bug
+
+**Phase 2 平台化（§三十六 归属、§四十九 只增不改）**
+1. 新增 `workspace` 表与"资源带 `workspace_id` + `owner_id`"的归属骨架（V9）：个人工作区
+   1:1 用户，注册时创建（`requirePersonalWorkspace` 幂等，重复注册/并发也不会建出两个）；
+   成员角色 OWNER/ADMIN/EDITOR/VIEWER 先落位，Phase 8 才真正使用。
+2. **依赖方向不能倒**：`workspace` 属于 app 层，`nexus-knowledge` 不认识它。
+   因此归属解析放在**控制器**（app 层）——先把 `workspaceId` 解出来，再调
+   `knowledgeBaseService.create(userId, workspaceId, request)`。知识库模块保持"只认 userId/workspaceId 两个数字"。
+3. 知识库平台字段（V10）：`icon` / `status`(ENABLED|DISABLED，默认 ENABLED) /
+   `retrieval_top_k`(默认 5) / `similarity_threshold`(默认 0.7)，校验边界在 DTO 上
+   （`@Min(1)@Max(50)`、`@DecimalMin("0.0")@DecimalMax("1.0")`）。
+   **迁移四条独立的 `ADD COLUMN`**：H2 不接受逗号连写的 `ADD COLUMN`，一次一条才能在 `test`/`standalone` 上同样跑通。
+
+**静默失效的 bug：流式链路上工具拿不到"当前用户"（本轮最值得记的一条）**
+
+现象：Agent **非流式**问答（`AgentService.ask`）能真实调用 `knowledge_search`（live 测试通过），
+但 **Agent 模式流式对话**里工具从不生效——SSE 里没有 `tool_call`/`tool_result` 事件，
+回答由模型自身的知识生成。**接口 200、界面无报错、日志无异常**，只是"它不检索"。
+
+定位（三次实验，每次都排掉一种可能）：
+1. 非流式 live 测试通过 → 网关与 prompt 支持函数调用，问题只可能在流式链路；
+2. 手工 `curl` 观察网关的流式响应 → 网关**确实**回了标准 `tool_calls` 分片与
+   `finish_reason:"tool_calls"`，不是网关的问题；
+3. 打开 `org.springframework.ai=DEBUG` 跑同一条链路 → 决定性日志：
+   `Executing tool call: knowledge_search` 之后紧跟
+   `Exception thrown by tool: 工具调用缺少用户上下文（AgentContext 未初始化）`。
+
+根因：`AgentContext` 当时用 **ThreadLocal** 绑定用户，而流式链路上**工具的执行线程不是绑定上下文的那个线程**
+（订阅在 boundedElastic，工具由响应式 HTTP 客户端聚合完 `tool_calls` 后执行）。
+更糟的是 **Spring AI 把工具抛出的异常当成工具结果回填给模型**——模型于是收到
+"缺少用户上下文"这句话，改用自身知识作答。异常被框架吞掉，所以从外部看一切正常。
+
+修法（换通道，而不是修线程）：上下文改用框架自带的 **`ToolContext`**——
+`ChatClient.prompt().toolContext(map)` 传入，框架注入到工具方法参数上
+（`KnowledgeSearchTool.search(query, topK, ToolContext)`），与线程无关，这类 bug 从根上不存在。
+`ToolContext` 参数会被 `JsonSchemaGenerator` 跳过，**不会**出现在给模型看的工具 schema 里。
+配套：`AgentService` 用监听器收痕迹（`AgentContext.collector(sink)`）而不是读 ThreadLocal；
+MCP 的 `tools/call` 是"我们自己直接调工具"，显式 `new ToolContext(...)`。
+
+两条复用的教训：
+- **跨线程的上下文不要用 ThreadLocal**——响应式链路上"哪个线程执行"是框架的实现细节，
+  不是可以依赖的契约；
+- **回归测试要钉住失败模式本身**：`AgentContextTest.traceCrossesThreads` 特意在**另一个线程**里
+  写痕迹并断言发起侧收得到——这正是原实现会失败、新实现会通过的那条线。
+
+**顺带修掉的噪声**：降级（SQL LIKE）路径把 `headingPath` 传成 `null`，工具拼给模型的
+资料里出现 `来源: 缓存击穿 › null`，模型把它**照抄进回答**（用户可见的脏数据）。
+修法：降级路径改用切片自带的 `heading_path`/`heading`，拼装时对空值直接不输出该段。
+教训：**给模型的上下文同样要按"用户可见"的标准要求**，模型会忠实复制里面的噪声。
 
 ---
 

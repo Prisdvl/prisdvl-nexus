@@ -93,14 +93,25 @@ POST /api/auth/login
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/knowledge-bases` | 创建（name、description、embedding 角色） |
+| POST | `/api/knowledge-bases` | 创建（name、description、icon、chunkStrategy、retrievalTopK、similarityThreshold） |
 | GET | `/api/knowledge-bases` | 我的知识库列表（含 doc/chunk 统计、最近同步时间） |
 | GET | `/api/knowledge-bases/{id}` | 详情（含 embedding 模型、维度、切分参数） |
-| PUT | `/api/knowledge-bases/{id}` | 改名称/描述（**不允许**改 embedding 模型，见 ADR-008） |
+| PUT | `/api/knowledge-bases/{id}` | 改名/描述/图标/enabled 状态/检索参数（**不允许**改 embedding 模型，见 ADR-008） |
 | DELETE | `/api/knowledge-bases/{id}` | 删除知识库（级联删除文档、Chunk、向量、ES 文档） |
 | GET | `/api/knowledge-bases/{id}/tree` | 目录树（供左侧栏：Java / Spring / Redis…） |
 | GET | `/api/knowledge-bases/{id}/tags` | 标签云与计数 |
 | GET | `/api/knowledge-bases/{id}/stats` | 文档数/Chunk 数/Token 数/向量数/失败数 |
+
+平台化字段（Phase 2，均可选，缺省见下）：
+
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `workspaceId` | Long | 个人工作区 | 所属工作区，服务端解析后写入，**请求里不需要传** |
+| `icon` | String(≤512) | null | 图标（URL 或 emoji） |
+| `status` | String | `ENABLED` | `ENABLED` / `DISABLED` |
+| `retrievalTopK` | Integer(1–50) | 5 | 该库的检索 TopK |
+| `similarityThreshold` | Double(0–1) | 0.7 | 相似度阈值 |
+
 
 ### 3.2 文档
 
@@ -190,24 +201,26 @@ Authorization: Bearer <accessToken>
 Accept: text/event-stream
 Content-Type: application/json
 
-{ "conversationId": 5001, "content": "解释一下 Redis 缓存击穿，并结合我的笔记回答",
-  "mode": "RAG", "kbIds": [1], "options": { "temperature": 0.3, "stream": true } }
+{ "conversationId": 5001, "content": "解释一下 Redis 缓存击穿，并结合我的笔记回答" }
 ```
+
+> 上面是**当前实现**的请求体；设计稿里的 `mode` / `kbIds` / `options` 已收敛：
+> `mode` 属于会话（建会话时定），检索范围由会话/知识库配置决定（见 5.2 末的"当前实现的事件子集"）。
 
 响应 `Content-Type: text/event-stream`，事件序列：
 
 | 事件 | 何时发送 | data 示例 |
 | --- | --- | --- |
-| `meta` | 立即 | `{"requestId":"...","conversationId":5001,"userMessageId":91,"assistantMessageId":92,"model":"deepseek-chat","mode":"RAG"}` |
-| `retrieval` | 检索完成、生成前 | `{"count":6,"documents":[{"documentId":100,"name":"缓存击穿.md","headingPath":"Redis > 缓存 > 缓存击穿"}]}` |
-| `delta` | 每个 token 片段 | `{"text":"缓存击穿是指"}` |
-| `tool_call` | Agent/工具场景 | `{"toolCode":"searchKnowledge","arguments":{...},"step":1}` |
-| `tool_result` | 工具返回 | `{"toolCode":"searchKnowledge","success":true,"summary":"命中 6 个片段","durationMs":134}` |
-| `approval_required` | 需要人工确认 | `{"approvalId":"a1","toolCode":"createStudyPlan","arguments":{...},"reason":"该操作会写入你的学习计划"}` |
-| `citation` | 生成结束后 | `{"citations":[{...}]}` |
-| `usage` | 结束前 | `{"inputTokens":1820,"outputTokens":240,"latencyMs":2900,"firstTokenMs":380}` |
-| `done` | 正常结束 | `{"finishReason":"stop","grounded":true}` |
-| `error` | 异常结束 | `{"code":4002,"message":"模型响应超时","retryable":true}` |
+| `meta` | 立即（**已实现**） | `{"requestId":"...","conversationId":5001,"userMessageId":91,"assistantMessageId":92,"modelRole":"chat.default","mode":"RAG"}` |
+| `retrieval` | 检索完成、生成前（Phase 3 预留，未实现） | `{"count":6,"documents":[{"documentId":100,"name":"缓存击穿.md","headingPath":"Redis > 缓存 > 缓存击穿"}]}` |
+| `delta` | 每个 token 片段（**已实现**） | `{"text":"缓存击穿是指"}` |
+| `tool_call` | Agent/工具场景（**已实现**） | `{"tool":"knowledge_search","input":"缓存击穿怎么解决"}` |
+| `tool_result` | 工具返回（**已实现**） | `{"tool":"knowledge_search","input":"缓存击穿怎么解决","resultSummary":"3 条结果"}` |
+| `approval_required` | 需要人工确认（Phase 8 预留，未实现） | `{"approvalId":"a1","toolCode":"createStudyPlan","arguments":{...},"reason":"该操作会写入你的学习计划"}` |
+| `citation` | 生成结束后（Phase 3 预留，未实现） | `{"citations":[{...}]}` |
+| `usage` | 结束前（**已实现**） | `{"promptTokens":1820,"completionTokens":240,"totalTokens":2060,"latencyMs":2900,"firstTokenMs":380}` |
+| `done` | 正常结束（**已实现**） | `{"finishReason":"stop"}`；用户停止时 `{"finishReason":"stopped","stopped":true}` |
+| `error` | 异常结束（**已实现**） | `{"code":4001,"message":"模型调用失败，请稍后重试","retryable":true}` |
 
 **实现约束**
 
@@ -216,6 +229,22 @@ Content-Type: application/json
 3. 停止生成：`delta` 循环每片检查一次 `nexus:stream:cancel:{requestId}`，命中即终止并落库部分内容。
 4. 断线重连：给每个事件带 `id:`，客户端可用 `Last-Event-ID` 续传（第一版只保证"不重复插入消息"，不做严格续传）。
 5. 前端用 `fetch` + `ReadableStream` 解析 SSE（因为要带 JWT 头），不使用 `EventSource`。
+
+**当前实现的事件子集**（Phase 1 / 5，实测口径）：
+
+| 配置 | 事件序列 |
+| --- | --- |
+| `mode=PLAIN` / `RAG` | `meta` → `delta…` → `usage` → `done`（异常时 `error`） |
+| `mode=AGENT` | `meta` → (`tool_call` → `tool_result`)* → `delta…` → `usage` → `done` |
+
+- 工具事件的实际字段是 `{tool, input, resultSummary}`（`tool` 为工具名，如 `knowledge_search`），
+  **不是**设计稿早期的 `toolCode/arguments/step` 形状；工具痕迹同时随消息落库
+  （`chat_message.metadata.toolCalls`），刷新后仍可回看。
+- `retrieval` / `citation` / `approval_required` 尚未实现：RAG 模式的引用随回答正文给出，
+  检索过程事件属于 Phase 3 的 `retrieval` 事件（设计保留）。
+- `mode` 在**建会话时**指定（`POST /api/chat/conversations` 的 `mode` 字段），
+  不是每次发送时指定；`/api/chat/stream` 的请求体只有 `conversationId` 与 `content`。
+
 
 ---
 

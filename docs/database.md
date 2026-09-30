@@ -147,6 +147,32 @@ CREATE TABLE sys_user (
 | `sys_user_role` | `user_id`、`role_id` | 唯一键 `(user_id, role_id)` |
 | `sys_refresh_token` | `user_id`、`token_hash`(SHA-256)、`expires_at`、`revoked`、`device_info` | Refresh Token 轮换与吊销；**存 hash 不存明文** |
 
+### 3.1 `workspace`（平台化 Phase 2，迁移 V9）
+
+归属链：`User → Workspace → 资源(知识库/Agent/工作流/工具/应用)`。
+第一阶段只实现**个人工作区**：注册时自动创建，与用户 1:1，`name` = "个人工作区"。
+
+```sql
+CREATE TABLE workspace (
+  id          BIGINT       NOT NULL PRIMARY KEY,
+  user_id     BIGINT       NOT NULL,                 -- 所有者
+  name        VARCHAR(128) NOT NULL,
+  description VARCHAR(512)          DEFAULT NULL,
+  type        VARCHAR(16)  NOT NULL DEFAULT 'PERSONAL',  -- PERSONAL / TEAM（预留）
+  created_at  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  deleted     TINYINT      NOT NULL DEFAULT 0,
+  UNIQUE KEY uk_ws_user_type (user_id, type, deleted),   -- 每人每种类型只允许一个未删除工作区
+  KEY idx_ws_user (user_id, deleted)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+| 说明 | 内容 |
+| --- | --- |
+| 幂等创建 | `WorkspaceService.requirePersonalWorkspace(userId)`：查到就返回，没有才建（注册、登录、以及任何需要工作区的入口都走它） |
+| 为什么先不动查询条件 | §三十六 要求"查询必须带 `workspace_id` + `owner_id`"。当前阶段所有查询仍是 `user_id`（个人工作区与用户 1:1，两者等价），**权限维度切到 workspace 是 Phase 8 的事**——迁移里 `workspace_id` 允许为 NULL 正是为此 |
+| 成员角色 | OWNER/ADMIN/EDITOR/VIEWER 已在设计里占位，表与管理接口 Phase 8 才建 |
+
 ---
 
 ## 4. 知识库与文档（Phase 2 核心）
@@ -157,13 +183,22 @@ CREATE TABLE sys_user (
 | --- | --- | --- |
 | `id` | BIGINT PK | |
 | `user_id` | BIGINT | 所有者，**所有查询必须带此条件**（租户隔离） |
+| `workspace_id` | BIGINT NULL | 所属工作区（V9 加入；历史数据为空，归属查询仍走 `user_id`） |
 | `name` / `description` | VARCHAR | |
+| `icon` | VARCHAR(512) NULL | 图标（URL 或 emoji，V10 加入） |
+| `status` | VARCHAR(16) | `ENABLED`（默认）/ `DISABLED`；禁用后不参与检索（V10 加入） |
+| `retrieval_top_k` | INT | 该库的检索 TopK，默认 5（V10 加入；生效在 Phase 3 的 Retriever） |
+| `similarity_threshold` | DOUBLE | 相似度阈值，默认 0.7（V10 加入） |
 | `source_type` | VARCHAR(16) | `MANUAL` / `OBSIDIAN` / `MIXED` |
 | `embedding_provider` / `embedding_model` / `embedding_dim` | VARCHAR / INT | **建库时冻结**；改 embedding 模型必须重建库（见 docs/decisions.md ADR-008） |
 | `chunk_strategy` | VARCHAR(32) | `MARKDOWN_HEADING` / `RECURSIVE`（默认前者） |
 | `chunk_size` / `chunk_overlap` | INT | 目标 token 与重叠（Markdown 结构化切分的上限/兜底） |
 | `doc_count` / `chunk_count` / `total_tokens` | INT | 冗余统计，导入完成后更新 |
 | `created_at` / `updated_at` / `deleted` | | |
+
+> V10 的四条 `ADD COLUMN` 是**分开写的**：测试与 standalone 用 H2（MySQL 模式）执行同一批迁移，
+> 而 H2 不接受 `ADD COLUMN a ..., ADD COLUMN b ...` 的逗号连写形式。
+> 索引 `idx_kb_workspace (workspace_id, deleted)` 同期创建。
 
 索引：`idx_kb_user (user_id, deleted, created_at)`
 
@@ -441,5 +476,6 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
 1. Phase 0：`sys_*` + Flyway 基线 + PG 扩展与 `vector_store` 表。
 2. Phase 1：`chat_conversation` / `chat_message` / `chat_message_citation` + Spring AI JDBC ChatMemory 表。
 3. Phase 2：`kb_knowledge_base` / `kb_document` / `kb_document_tag` / `kb_document_link` / `kb_attachment` / `kb_import_task(_item)`。
-4. Phase 3：`kb_chunk` + ES 索引 + 向量写入。
-5. Phase 5–10：按对应 ADR 补 `ai_*` / `wf_*` / `eval_*` / `obs_*`。
+4. Phase 2（平台化）：`workspace`（V9）+ `kb_knowledge_base` 的 `workspace_id` / `icon` / `status` / `retrieval_top_k` / `similarity_threshold`（V9 / V10，全部只增不改）。
+5. Phase 3：`kb_chunk` + ES 索引 + 向量写入。
+6. Phase 5–10：按对应 ADR 补 `ai_*` / `wf_*` / `eval_*` / `obs_*`。

@@ -163,3 +163,28 @@ RAG 链条（输入到引用）已基本完整。平台化最大的三个改造�
 
 Phase 1 到此为止，**未改一行代码**。下一步按规格进入 Phase 2（领域模型：Workspace + 归属列 + KB 字段升级），
 从"新增 workspace 表 + 个人默认 workspace + 关键表 ADD COLUMN"这一唯一最小增量开始，编译、测试、验证后再继续。
+
+---
+
+## 13. Phase 2 完成记录（2026-09-30）
+
+§12 的 Phase 2 有四个子项，本轮落了前三个（每个都编译 + 测试 + 真实环境验证过）：
+
+| 子项 | 状态 | 证据 |
+| --- | --- | --- |
+| 新增 `workspace` + 个人工作区自动创建 | ✅ | 迁移 V9；`WorkspaceService.requirePersonalWorkspace` 幂等；注册链路已接 |
+| 资源的 `workspace_id` / `owner_id` 列 | ✅ 部分 | `kb_knowledge_base.workspace_id` 已加（V9，允许 NULL）；agent/tool/workflow/application 表**尚不存在**（Phase 4/5/8 才建，建表时直接带列） |
+| KnowledgeBase 字段升级（icon / status / 检索参数） | ✅ | 迁移 V10；DTO 校验 + 默认值 5 / 0.7；列表/详情/更新接口已暴露 |
+| Document 状态模型与解析器扩展（HTML/CSV/JSON） | ⏳ 未做 | 现有 `kb_document.status`（PENDING/PARSING/READY/FAILED）已够用；新格式解析属独立增量 |
+
+**另外完成的两件事（不在 §12 的 Phase 2 里，但属于"可运行优先"）**：
+
+1. **Agent 模式流式对话**（前端 Agent 对话页 + SSE 工具事件 + 工具痕迹落库）——
+   过程中定位并修掉一个静默失效的缺陷：流式链路上工具读不到用户（ThreadLocal 跨线程丢失），
+   详见 [decisions.md](decisions.md) **B.30**。
+2. **演示数据与界面回归脚本化**：`scripts/seed-demo.mjs`（H2 重启即清，之前每轮都在手工重建）、
+   `web/scripts/verify-agent-chat.mjs`（Agent 对话的界面证据链）。
+
+**仍未做（属 Phase 8）**：所有权查询切到 workspace 维度。当前 `workspace_id` 只是落库 + 暴露，
+所有查询仍走 `user_id`——个人工作区与用户 1:1，两者语义等价，因此这不是"漏做"，而是**刻意的顺序**：
+先让数据长出来，再切查询维度，避免在没有成员模型时把权限逻辑写死。
