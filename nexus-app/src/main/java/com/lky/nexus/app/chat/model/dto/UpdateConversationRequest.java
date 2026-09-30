@@ -29,8 +29,19 @@ public record UpdateConversationRequest(
          *
          * <p>与 {@code kbIds} 同理，"换 Agent 再问"是常见操作：Agent 是<b>执行者</b>，
          * 换掉只影响后续轮次由谁来答，不改 mode，历史回答的可比性不受影响。
-         * null = 不改；这里没有"解绑"一说——传 null 只能是"不改"，要回到默认请新建会话，
-         * 否则"null 既是不改又是解绑"就分不清了。
+         * null = 不改；要回到内置默认 Agent 请用 {@link #resetAgent()}——
+         * "null 既是不改又是解绑"分不清，所以清空必须有独立信号。
          */
-        Long agentId) {
+        Long agentId,
+
+        /**
+         * 回到内置默认 Agent（仅 AGENT 模式）：{@code true} = 清空会话选用的 Agent。
+         *
+         * <p>为什么需要它：选过 Agent 的会话若没有回退路径，用户唯一的办法是新建会话——
+         * 而"这个会话我不想用自定义 Agent 了"是完全正常的操作（Phase 4.2 做界面时才发现
+         * 这条死路，是 E2E 逼出来的：界面上要么给这个按钮，要么就得写一句"请新建会话"）。
+         *
+         * <p>与 {@code agentId} 同时传属于自相矛盾的请求，直接报 1001，不猜用户意图。
+         */
+        Boolean resetAgent) {
 }

@@ -3,11 +3,13 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, DataAnalysis, Delete, Promotion, Plus, VideoPause } from '@element-plus/icons-vue'
 import {
+  bindAgent,
   bindKnowledgeBase,
   createConversation,
   deleteConversation,
   listConversations,
   listMessages,
+  resetConversationAgent,
   stopStream,
   streamChat,
   type Conversation,
@@ -15,6 +17,7 @@ import {
   type StreamRetrieval
 } from '@/api/chat'
 import { DEFAULT_EVAL_CASES, runEval, type EvalReport } from '@/api/agent'
+import { listAgents, type AgentResource, type AgentStatus } from '@/api/agents'
 import { listKnowledgeBases, type KnowledgeBase } from '@/api/knowledge'
 import { renderMarkdown } from '@/utils/markdown'
 
@@ -30,6 +33,10 @@ import { renderMarkdown } from '@/utils/markdown'
  * 2. **可回看**：工具痕迹随消息落库，刷新/切换会话后仍在（RAG 的命中片段目前只在本次流里可见）；
  * 3. **可中断**：生成中随时能停，停掉是真的断开上游（不是只关界面）；
  * 4. **不装作检索了**：RAG 会话没绑知识库时服务端会明确报错，界面上也提前拦住。
+ *
+ * Phase 4.2 增补：AGENT 会话要能选"用哪个 Agent"（提示词 + 模型 + 检索范围都由它决定）。
+ * 选择器里只列**已发布**的 Agent——草稿/停用的选了会被服务端拒绝（5008/5009），
+ * 与其让用户到提问时才发现，不如在这里就标出为什么不能选。
  */
 
 /** 界面上的一条消息。流式进行中的那条是临时消息，结束后用服务端数据校正。 */
@@ -59,6 +66,15 @@ const streaming = ref(false)
 const draftMode = ref<'AGENT' | 'RAG'>('AGENT')
 const draftKbId = ref('')
 const knowledgeBases = ref<KnowledgeBase[]>([])
+
+/** AGENT 会话选用的 Agent（'' = 内置默认）。已建会话可在头部换，草稿/停用的不列出来 */
+const draftAgentId = ref('')
+const agents = ref<AgentResource[]>([])
+/** 只有已发布的能被选用：其余的在选择器下方给一句解释，不静默隐藏 */
+const usableAgents = computed(() => agents.value.filter((agent) => agent.status === 'PUBLISHED'))
+const blockedAgents = computed(() =>
+  agents.value.filter((agent) => agent.status !== 'PUBLISHED' && !agent.builtin)
+)
 
 /**
  * 用户是否已经自己做过选择（点了"新对话"或点了某个会话）。
@@ -93,18 +109,88 @@ async function changeBoundKnowledgeBase(value: unknown) {
   }
 }
 
+/**
+ * AGENT 会话换 Agent（或回到内置默认）。
+ *
+ * 换的是"执行者"：提示词、模型角色、能检索哪些库都跟着变，模式不变，
+ * 所以同一段历史里的回答仍然可比。清空走独立字段 `resetAgent`
+ * （`agentId: null` 在服务端表示"不改"，一个值不能同时是"不改"和"清空"）。
+ */
+async function changeBoundAgent(value: unknown) {
+  const conversation = activeConversation.value
+  if (!conversation) return
+  const agentId = String(value ?? '')
+  try {
+    if (agentId) {
+      await bindAgent(conversation.id, agentId)
+    } else {
+      await resetConversationAgent(conversation.id)
+    }
+    await loadConversations()
+    ElMessage.success(agentId ? '已切换 Agent（下一轮生效）' : '已回到内置默认 Agent')
+  } catch (error) {
+    ElMessage.error('切换失败：' + (error instanceof Error ? error.message : String(error)))
+  }
+}
+
+/** 当前会话用的 Agent 名称：给头部一个可读的标签，而不是只显示一个 id */
+const activeAgentName = computed(() => {
+  const agentId = activeConversation.value?.agentId
+  if (!agentId) return '内置默认'
+  return agents.value.find((agent) => agent.id === agentId)?.name ?? '已删除的 Agent'
+})
+
+const AGENT_STATE_TEXT: Record<AgentStatus, string> = {
+  DRAFT: '草稿',
+  PUBLISHED: '已发布',
+  DISABLED: '已停用'
+}
+
+/**
+ * 头部选择器的候选项：可用的 Agent，外加**当前正绑着的那个**（即使它已不可用）。
+ *
+ * 为什么必须把"不可用但正绑着"的也列进来：会话绑定的 Agent 之后可能被停用或退回草稿。
+ * 那时若选项里没有它，el-select 会把这串雪花 id 原样显示出来——用户看不懂那是什么，
+ * 也找不到当前值。带上状态后缀，用户一眼能明白"下一轮会失败，原因是这个"，并顺手切走。
+ */
+const headerAgentOptions = computed(() => {
+  const options = usableAgents.value.filter((agent) => !agent.builtin)
+  const boundId = activeConversation.value?.agentId
+  if (!boundId || options.some((agent) => agent.id === boundId)) return options
+  const bound = agents.value.find((agent) => agent.id === boundId)
+  return bound ? [...options, bound] : options
+})
+
+/** 头部下拉里的显示名：只有"正绑着且已不可用"的那一项需要标状态 */
+function boundAgentLabel(agent: AgentResource): string {
+  if (agent.id !== activeConversation.value?.agentId || agent.status === 'PUBLISHED') {
+    return agent.name
+  }
+  return `${agent.name}（${AGENT_STATE_TEXT[agent.status]}）`
+}
+
 /** 示例问题：直接点就能跑，省去"第一句该问什么"的犹豫 */
 const samples = ['我的笔记里缓存击穿怎么解决？', '线程池的核心参数有哪些坑？', 'G1 和 ZGC 该怎么选？']
 
 onMounted(async () => {
   await loadConversations()
   await loadKnowledgeBases()
+  await loadAgents()
   // 进来就选中最近一次会话：比让用户看一个空面板更省一步。
   // 但两个 await 期间用户可能已经点过"新对话"——那就尊重他的选择，别再抢回来
   if (!pickedByUser.value && conversations.value.length) {
     await selectConversation(conversations.value[0].id)
   }
 })
+
+async function loadAgents() {
+  try {
+    agents.value = (await listAgents()).list
+  } catch {
+    // Agent 列表加载失败不影响对话：选择器为空 = 用内置默认 Agent
+    agents.value = []
+  }
+}
 
 async function loadKnowledgeBases() {
   try {
@@ -212,7 +298,9 @@ async function send(preset?: string) {
       return
     }
     const created = await createConversation(draftMode.value, {
-      kbIds: draftMode.value === 'RAG' ? [draftKbId.value] : []
+      kbIds: draftMode.value === 'RAG' ? [draftKbId.value] : [],
+      // Agent 只在 AGENT 模式下有意义；空串 = 不传 = 用内置默认 Agent
+      agentId: draftMode.value === 'AGENT' && draftAgentId.value ? draftAgentId.value : null
     })
     conversationId = created.id
     activeId.value = created.id
@@ -464,6 +552,27 @@ watch(activeId, () => {
           >
             <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
           </el-select>
+          <!-- AGENT 会话换 Agent：提示词/模型/检索范围都跟着换，模式不变。
+               空值 = 内置默认，走 resetAgent 清空而不是传 null（null 在服务端表示"不改"） -->
+          <el-select
+            v-if="activeConversation?.mode === 'AGENT'"
+            class="kb-select"
+            size="small"
+            :model-value="activeConversation.agentId ?? ''"
+            placeholder="内置默认 Agent"
+            @change="changeBoundAgent"
+          >
+            <el-option label="内置默认 Agent" value="" />
+            <el-option
+              v-for="agent in headerAgentOptions"
+              :key="agent.id"
+              :label="boundAgentLabel(agent)"
+              :value="agent.id"
+            />
+          </el-select>
+          <span v-if="activeConversation?.mode === 'AGENT'" class="agent-hint">
+            {{ activeAgentName }}
+          </span>
         </div>
       </header>
 
@@ -541,7 +650,8 @@ watch(activeId, () => {
         </article>
       </div>
 
-      <!-- 新建会话时的两个选择：模式决定走哪条链路，知识库决定 RAG 检索哪里。
+      <!-- 新建会话时的三个选择：模式决定走哪条链路，知识库决定 RAG 检索哪里，
+           Agent 决定 AGENT 模式用哪套提示词/模型/检索范围。
            已有会话时不再显示——模式是会话属性，中途改等于换了一种问答（服务端也拒绝）。 -->
       <div v-if="!activeId" class="composer-options">
         <el-radio-group v-model="draftMode" size="small">
@@ -557,7 +667,27 @@ watch(activeId, () => {
         >
           <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
         </el-select>
+        <el-select
+          v-else
+          v-model="draftAgentId"
+          size="small"
+          placeholder="选择 Agent"
+          class="kb-select"
+        >
+          <el-option label="内置默认 Agent" value="" />
+          <el-option
+            v-for="agent in usableAgents.filter((item) => !item.builtin)"
+            :key="agent.id"
+            :label="agent.name"
+            :value="agent.id"
+          />
+        </el-select>
       </div>
+      <!-- 没有可选 Agent 时要说清楚为什么（草稿要先发布），而不是给一个空下拉 -->
+      <p v-if="!activeId && draftMode === 'AGENT' && blockedAgents.length" class="composer-hint">
+        还有 {{ blockedAgents.length }} 个 Agent 不能选用（草稿需先发布、已停用需先启用）：
+        {{ blockedAgents.map((agent) => agent.name).join('、') }} —— 到「Agent 管理」里试跑后发布
+      </p>
 
       <footer class="composer">
         <el-input
@@ -983,6 +1113,19 @@ watch(activeId, () => {
 
 .kb-select {
   width: 200px;
+}
+
+.agent-hint {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.composer-hint {
+  margin: 0;
+  padding: var(--space-1) var(--space-5) 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.6;
 }
 
 /* ---------- 检索卡片（RAG 模式：先于回答出现） ---------- */

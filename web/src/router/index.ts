@@ -27,6 +27,13 @@ const routes: RouteRecordRaw[] = [
     name: 'agent',
     component: () => import('@/views/AgentView.vue'),
     meta: { title: 'Agent' }
+  },
+  {
+    // 路径特意用复数：/agent 是"用 Agent 对话"，/agents 才是"管理 Agent"
+    path: '/agents',
+    name: 'agents',
+    component: () => import('@/views/AgentsView.vue'),
+    meta: { title: 'Agent 管理' }
   }
 ]
 

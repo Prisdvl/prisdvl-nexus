@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import { ChatDotRound, Collection, SwitchButton } from '@element-plus/icons-vue'
+import { ChatDotRound, Collection, MagicStick, SwitchButton } from '@element-plus/icons-vue'
 import { isLoggedIn, logout, session } from '@/stores/auth'
 
 const route = useRoute()
@@ -24,7 +24,8 @@ const navItems = [
     icon: Collection,
     match: ['knowledge-bases', 'knowledge-base-detail']
   },
-  { to: '/agent', label: '对话', icon: ChatDotRound, match: ['agent'] }
+  { to: '/agent', label: '对话', icon: ChatDotRound, match: ['agent'] },
+  { to: '/agents', label: 'Agent 管理', icon: MagicStick, match: ['agents'] }
 ]
 
 /** 头像里的首字母：没有头像时比一个通用图标更能区分账号 */

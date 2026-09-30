@@ -147,7 +147,17 @@ public class ConversationServiceImpl implements ConversationService {
             // null = 不改（局部更新约定）；空列表 = 解绑
             conversation.setKbIds(resolveKbIds(userId, mode, request.kbIds()));
         }
-        if (request.agentId() != null) {
+        if (Boolean.TRUE.equals(request.resetAgent()) && request.agentId() != null) {
+            // 既指定又清空是自相矛盾的请求：猜哪个都可能在用户没预期的地方生效
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "agentId 与 resetAgent 不能同时传");
+        }
+        if (Boolean.TRUE.equals(request.resetAgent())) {
+            // 回到内置默认 Agent。只在 AGENT 模式有意义，理由与"选 Agent"同：
+            // 给 PLAIN/RAG 会话留一个 agentId 会让"谁在执行"变得含糊
+            requireAgentMode(mode, "清空 Agent");
+            conversation.setAgentId(null);
+        } else if (request.agentId() != null) {
             conversation.setAgentId(resolveAgentId(userId, mode, request.agentId()));
         }
         conversation.setUpdatedAt(LocalDateTime.now());
@@ -245,12 +255,17 @@ public class ConversationServiceImpl implements ConversationService {
         if (rawAgentId == null) {
             return null;
         }
-        if (mode != ChatMode.AGENT) {
-            throw new BusinessException(ErrorCode.PARAM_INVALID,
-                    "只有 AGENT 会话可以选用 Agent（当前模式 " + mode + "）");
-        }
+        requireAgentMode(mode, "选用 Agent");
         agentService.requireDefinition(userId, rawAgentId);
         return rawAgentId;
+    }
+
+    /** "Agent 只属于 AGENT 会话"这一条，选用与清空都适用，所以单独提出来。 */
+    private void requireAgentMode(ChatMode mode, String action) {
+        if (mode != ChatMode.AGENT) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "只有 AGENT 会话可以" + action + "（当前模式 " + mode + "）");
+        }
     }
 
     private ConversationResponse toResponse(ChatConversationPO conversation) {

@@ -102,7 +102,8 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | Phase 3.2 | 检索参数真正可配置：知识库的 `retrieval_top_k` / `similarity_threshold` 生效 + 全局默认值收敛到 `nexus.retrieval.*` | ✅ 完成（阈值统一为 0.25；见 decisions.md B.32） |
 | Phase 3.3 | 元数据过滤：`tags` / `folder` / `documentId` 下推到 ES `filter` 与 pgvector `WHERE`（向量路先解析成文档 id） | ✅ 完成（ES/pgvector 真机 `UNAVAILABLE`；见 decisions.md B.33） |
 | Phase 3.4 | RAG 模式的会话流式：`retrieval` 事件先于第一个字、会话绑定知识库（`kb_ids`）、多轮历史走 ChatMemory、前端"检索到 N 个片段" | ✅ 完成（真浏览器只验到 Agent 腿；RAG 腿因本地无 ES 跳过；见 decisions.md B.34） |
-| Phase 4.1 | Agent 配置化（后端）：`agent` 表 + Definition/Runtime 分离 + `/api/agents` CRUD/复制/试跑 + 会话选 Agent + Agent 绑定知识库决定检索范围 | ✅ 后端完成（迁移 V12；**前端管理页留到 4.2**；真模型与真检索 `SKIPPED`；见 decisions.md B.35） |
+| Phase 4.1 | Agent 配置化（后端）：`agent` 表 + Definition/Runtime 分离 + `/api/agents` CRUD/复制/试跑 + 会话选 Agent + Agent 绑定知识库决定检索范围 | ✅ 后端完成（迁移 V12；见 decisions.md B.35） |
+| Phase 4.2 | Agent 配置化（前端）：Agent 管理页（生命周期全流程）+ 对话页 Agent 选择器 + `resetAgent`（回到内置默认）+ E2E 脚本 | ✅ 完成（真机栈 E2E 全过；试跑因本机无模型 `SKIPPED`；见 decisions.md B.36） |
 | Phase 3+ | RAG/Agent/Workflow/Application/Model 的抽象上移与用户可配置化 | ⏳ 见分析文档第 12 节 |
 
 ## 7. 本地环境要求
@@ -148,7 +149,7 @@ node scripts\seed-demo.mjs
 | H2 控制台（直接看表数据） | http://localhost:8080/h2-console （JDBC URL 填 `jdbc:h2:mem:nexus_standalone`，用户名 `sa`，密码空） |
 | 注册 / 登录 | `POST /api/auth/register`、`POST /api/auth/login` |
 | 会话 | `POST/GET/PUT/DELETE /api/chat/conversations`、`GET /api/chat/conversations/{id}` |
-| Agent 管理（Phase 4.1） | `GET/POST /api/agents`、`GET/PUT/DELETE /api/agents/{agentId}`、`POST /api/agents/{agentId}/duplicate`、`POST /api/agents/{agentId}/test-chat`（试跑，不要求已发布） |
+| Agent 管理（Phase 4.1/4.2） | 界面 `http://localhost:5173/#/agents`；接口 `GET/POST /api/agents`、`GET/PUT/DELETE /api/agents/{agentId}`、`POST /api/agents/{agentId}/duplicate`、`POST /api/agents/{agentId}/test-chat`（试跑，不要求已发布） |
 | Agent 问答（用内置默认 Agent） | `POST /api/agent/ask` |
 | 问答（非流式） | `POST /api/chat/conversations/{id}/messages` |
 | 问答（SSE 流式） | `POST /api/chat/stream` |
@@ -186,7 +187,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
 
 > 数据库结构与迁移由 **Flyway** 管理（`nexus-app/src/main/resources/db/migration/`）：
 > V1 账号权限、V2 会话消息、V3 Spring AI 记忆表、V4 知识库与文档、V5 切片与导入任务、
-> V6 原始文件路径、V7 问答留档、V8 文档关联、V9 工作区（平台化）、V10 知识库平台字段。
+> V6 原始文件路径、V7 问答留档、V8 文档关联、V9 工作区（平台化）、V10 知识库平台字段、
+> V12 Agent 定义与绑定（**没有 V11**：编号为 Phase 4.1 预留后未用，Flyway 不要求连续）。
 > **只增不改**：新增字段一律 `ADD COLUMN` 带默认值，不改名、不删除。
 > 三个 profile 的分工：`local`（真实 MySQL，日常开发）、`standalone`（H2 内存，无 Docker 时应急）、`test`（H2，跑测试）。
 > **新增 profile 配置或迁移脚本后必须重新 `package`**，否则 jar 里还是旧的。
@@ -203,8 +205,10 @@ npm run dev            # http://localhost:5173（/api 由 Vite 代理到后端 8
 **已有功能**：注册/登录（JWT，刷新保持登录）、知识库列表与新建、上传 Obsidian Vault
 （显示队列/处理中/完成进度）、向量化 / 建索引 / 重建索引、文档与切片浏览
 （切片带标题路径、Token 数，以及**向量与索引状态**——排查"为什么搜不到"的第一手信息）、
-关键词检索（每条命中显示来源标签与相关性得分），以及 **Agent 对话**
-（模型自己决定检索什么：检索过程实时可见、工具痕迹随消息落库、随时可停）。
+关键词检索（每条命中显示来源标签与相关性得分），**Agent 对话**
+（模型自己决定检索什么：检索过程实时可见、工具痕迹随消息落库、随时可停），
+以及 **Agent 管理**（`/agents`：新建 → 试跑 → 发布 → 在对话页选用 → 停用 → 删除；
+配提示词与可检索的知识库；草稿不能选用，选择器里会说明原因）。
 
 **界面验证（不下载浏览器，复用系统 Edge/Chrome）**：
 
@@ -216,6 +220,7 @@ node scripts/verify-frontend.mjs   # 知识库列表 → 正文（Markdown/大�
 node scripts/verify-agent-chat.mjs # 对话页两条腿：Agent（工具卡片/真实摘要/刷新后痕迹仍在）+ RAG（"检索到 N 个片段"且先于回答）
 node scripts/verify-stream.mjs     # 知识库问答流式：逐字增长 + 引用 + 生成期间的"检索到 N 个片段"
 node scripts/verify-retrieval-ui.mjs # 检索卡片渲染契约：桩掉 /api/chat/stream，验"检索到 N 个片段"排在回答之前
+node scripts/verify-agents.mjs     # Agent 管理页：新建→配置→发布→对话页可选→停用→不可选→删除（11 条腿）
 ```
 
 > `verify-*.mjs` 都要求后端已按上一节跑起来，并且**已经种好演示数据**
@@ -225,7 +230,9 @@ node scripts/verify-retrieval-ui.mjs # 检索卡片渲染契约：桩掉 /api/ch
 > **退出码**：`0` 全部通过 / `1` 真实失败 / `2` 有跳过。跳过只在**环境能力缺失**时发生
 > ——`standalone` 没有 Elasticsearch，RAG 在检索这一步就返回 4005，
 > 于是"检索到 N 个片段"相关的断言无法执行（`verify-agent-chat.mjs` 只跳过 RAG 腿，
-> `verify-stream.mjs` 整体跳过）。脚本会打印 `⚠ SKIPPED` 与原因，
+> `verify-stream.mjs` 整体跳过）；`verify-agents.mjs` 只跳过试跑那条腿
+> （没配可用的模型时 4006，`模型 … 未注册。已注册：[…]`），其余 10 条腿照跑。
+> 脚本会打印 `⚠ SKIPPED` 与原因，
 > **跳过不等于通过**：要真验这一层，得用 `deploy/docker-compose.yml` 起 full 栈再跑一遍。
 
 > **`verify-retrieval-ui.mjs` 是桩验证，不是 E2E**：它把 `/api/chat/stream` 换成

@@ -238,7 +238,7 @@ POST /api/search
 | — | — | `agentId`（Phase 4.1）只在 `AGENT` 下有意义，且必须是**自己已发布**的 Agent（草稿 5008、停用 5009、别人的 5006→404）；不传 = 用内置默认 Agent |
 | GET | `/api/chat/conversations` | 会话列表（分页、置顶优先、按最后消息时间倒序） |
 | GET | `/api/chat/conversations/{id}` | 会话详情（含配置：mode、kbIds、agentId、模型角色、prompt 版本） |
-| PUT | `/api/chat/conversations/{id}` | 改标题 / 置顶 / 绑定知识库 / 换 Agent（`agentId` 为 null = 不改） |
+| PUT | `/api/chat/conversations/{id}` | 改标题 / 置顶 / 绑定知识库 / 换 Agent（`agentId` 为 null = 不改；`resetAgent:true` = 回到内置默认，见下） |
 | DELETE | `/api/chat/conversations/{id}` | 删除会话（逻辑删除 + 清理 ChatMemory 窗口） |
 | GET | `/api/chat/messages/{conversationId}` | 历史消息（分页，含引用、Token、耗时） |
 | POST | `/api/chat/messages` | 非流式发送（用于简单场景与自动化测试） |
@@ -307,6 +307,18 @@ Content-Type: application/json
 - **RAG 会话必须绑定知识库**：没绑就提问，在开流之前返回统一 JSON（HTTP 400 / code 1001，
   文案"该会话（RAG 模式）尚未绑定知识库，请先绑定后再提问"），而不是"悄悄退化成不检索"。
   绑定用 `PUT /api/chat/conversations/{id}` 的 `kbIds`：传 `[]` = 解绑，不传该字段 = 不改。
+- **换 Agent / 回到内置默认**（Phase 4.2，仅 `AGENT` 会话）：
+
+  ```http
+  PUT /api/chat/conversations/5001
+  { "agentId": "12" }      // 换成某个已发布的 Agent
+  PUT /api/chat/conversations/5001
+  { "resetAgent": true }   // 回到内置默认 Agent（清空选用）
+  ```
+
+  `resetAgent` 必须是**独立信号**：本接口是局部更新，`agentId: null` 已经表示"这个字段不改"，
+  一个值不能同时是"不改"和"清空"。两个字段同时传属自相矛盾的请求 → HTTP 400 / code 1001
+  （不猜用户意图）；非 `AGENT` 会话传 `resetAgent` 同样 1001。
 
 
 ---

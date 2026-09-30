@@ -17,6 +17,13 @@ export interface Conversation {
   pinned: boolean
   /** RAG 会话绑定的知识库 id（空数组 = 未绑定，不是 null）。其余模式恒为空 */
   kbIds: string[]
+  /**
+   * AGENT 会话选用的 Agent（Phase 4.1）。为 null = 用内置默认 Agent。
+   *
+   * 其余模式恒为 null：检索范围与提示词只有 AGENT 模式由 Agent 定义决定，
+   * RAG 模式由 kbIds 决定（两处语义不同，别混用）。
+   */
+  agentId?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -44,16 +51,35 @@ export interface ChatMessage {
  *
  * `kbIds` 只在 RAG 模式下有意义（服务端会拒绝给 PLAIN/AGENT 绑库，也会拒绝绑多个）：
  * RAG 会话必须绑定知识库，否则提问时会被明确拒绝——不做"悄悄退化成不检索"。
+ *
+ * `agentId` 只在 AGENT 模式下有意义，且必须是**已发布**的 Agent
+ * （草稿 5008 / 停用 5009 / 别人的 5006）；不传 = 内置默认 Agent。
  */
 export function createConversation(
   mode: 'PLAIN' | 'RAG' | 'AGENT',
-  options: { title?: string; kbIds?: string[] } = {}
+  options: { title?: string; kbIds?: string[]; agentId?: string | null } = {}
 ) {
   return client.post<never, Conversation>('/chat/conversations', {
     mode,
     title: options.title,
-    kbIds: options.kbIds
+    kbIds: options.kbIds,
+    agentId: options.agentId
   })
+}
+
+/** 换 Agent（AGENT 会话）。 */
+export function bindAgent(id: string, agentId: string) {
+  return client.put<never, Conversation>(`/chat/conversations/${id}`, { agentId })
+}
+
+/**
+ * 清空会话选用的 Agent（回到内置默认）。
+ *
+ * 必须是独立信号而不是传 `agentId: null`：null 在这个局部更新接口里已经表示"不改"，
+ * 一个值不能同时是"不改"和"清空"。
+ */
+export function resetConversationAgent(id: string) {
+  return client.put<never, Conversation>(`/chat/conversations/${id}`, { resetAgent: true })
 }
 
 export function listConversations(pageSize = 50) {

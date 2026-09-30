@@ -21,6 +21,15 @@ export interface PageResult<T> {
   pageSize: number
 }
 
+/**
+ * 请求失败时抛出的错误：`message` 是**后端原话**（可直接展示给用户），
+ * `status` / `code` 保留 HTTP 状态与业务码，供需要分支处理的调用方使用。
+ */
+export interface ApiError extends Error {
+  status?: number
+  code?: number
+}
+
 const TOKEN_KEY = 'nexus.token'
 
 /**
@@ -95,7 +104,19 @@ client.interceptors.response.use(
     } else {
       ElMessage.error(body?.message || error.message || '网络错误')
     }
-    return Promise.reject(error)
+    /*
+     * 抛出的错误必须带上**后端原话**，而不是 axios 那句 HTTP 状态描述。
+     *
+     * 踩过的坑（Phase 4.2 试跑功能）：后端按错误码映射 HTTP 状态（4006 → 502），
+     * axios 由此抛出 `Request failed with status code 502`。界面上想"把失败原因显示在
+     * 弹窗里而不是弹个 3 秒就消失的提示"时，拿到的就是这句毫无信息量的话——
+     * 而真正有用的"模型 opencode:xxx 未注册。已注册：[ollama:qwen3:7b]"在响应体里被丢掉了。
+     * 状态码仍挂在 error.status 上，需要区分 404/409 的调用方不必回去翻 response。
+     */
+    const failure = new Error(body?.message || error.message || '网络错误') as ApiError
+    failure.status = status
+    failure.code = body?.code
+    return Promise.reject(failure)
   }
 )
 

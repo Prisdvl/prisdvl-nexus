@@ -823,6 +823,10 @@ UNAVAILABLE：MySQL / ES / pgvector / RabbitMQ 未验证（本机 Docker WSL2 �
 **不得据此声称"完整生产链路已真实验证"** —— ES 检索、pgvector 向量检索、RabbitMQ 异步导入在本轮
 处于 `UNAVAILABLE`，与 `Validated` 严格区分。
 
+> 上表是**规划当轮**的快照（199 运行）。每个增量落地后的当前数字在各增量的完成记录里
+> （§9.1 起逐级递增，最新为 §9.5 的 **335 运行 / 317 通过 / 18 跳过 / 0 失败 / 0 错误**）。
+> 本表保留原样不改，避免"历史基线被后来的数字覆盖"这种文档造假。
+
 ---
 
 ## 九、执行顺序与首个增量
@@ -836,7 +840,8 @@ P0 ─┬─ 3.1 Retriever 端口与拆分（含 parity 回归测试）
     ├─ 3.4 SSE retrieval + RAG 模式流式检索
     ├─ 3.5 检索侧 Workspace 隔离（workspaceId → kbIds + 出口断言 + 计数）
     ├─ 3.6 HTML / CSV / JSON Parser（ParserRegistry 加三个实现）
-    ├─ 4.x Agent Definition（表 + Definition/Runtime 分离 + CRUD/Preview）
+    ├─ 4.1 Agent Definition（后端：表 + Definition/Runtime 分离 + CRUD/Preview）✅
+    ├─ 4.2 Agent 管理页 + 会话选 Agent（前端 + E2E）✅ ← 当前进度
     ├─ 5.x Tool Registry + 权限 + approval_required + Audit
     └─ 7.x Model Provider/Config + Key 加密
 P1  ── Workflow 持久化/版本、Application
@@ -961,6 +966,40 @@ P3  ── MCP 完整接入/鉴权、Planner、高级 Memory
 **本轮发现、有意没修**：`kb_knowledge_base.status` 的"禁用后不参与检索"承诺，
 只在新的 Agent 工具路径兑现；RAG 链路仍不读它（"禁用一个库"对 RAG 问答不生效）。
 RAG 链路属 §六十五 保护区，且语义边界值得单独一个增量 + 自己的回归，故记录而不顺手改。
+
+### 9.5 增量 4.2 完成记录（2026-09-30，Agent 管理页 + 会话选 Agent）
+
+| 项 | 结果 |
+| --- | --- |
+| 状态 | ✅ 前后端完成（编译 / 全量测试 / `npm run build` / 真机栈 E2E 全绿），**试跑与真实模型两条腿未验证**（本机无可用模型） |
+| 目标 | §十五/§十六/§十八 的界面落地：Agent 全生命周期在浏览器里可走通（新建 → 配置 → 发布 → 选用 → 停用 → 删除），会话能选/换 Agent |
+| 新增前端 | `web/src/views/AgentsView.vue`（管理页，四个弹窗：新建/配置/试跑）、`web/src/api/agents.ts`（8 个接口 + 类型，`AgentTestResult` 按后端 `AgentAnswer` 实际字段写） |
+| 改写前端 | `AgentView.vue`（AGENT 模式的 Agent 选择器 + "N 个不可选用"提示 + 发送时带 `agentId`）、`api/chat.ts`（`Conversation.agentId`、`bindAgent`、`resetConversationAgent`）、`api/client.ts`（**错误抛后端原话**，见下）、`router/index.ts`（`/agents`，路径用复数与 `/agent` 区分）、`App.vue`（导航项） |
+| 改写后端 | `UpdateConversationRequest`（新增 `resetAgent`）、`ConversationServiceImpl`（`resetAgent` 分支 + 抽出共用 `requireAgentMode`） |
+| 配置 / 数据库 | **无迁移**：`resetAgent` 是请求侧信号，复用了 V12 既有的 `chat_conversation.agent_id` |
+| API | `PUT /api/chat/conversations/{id}` 新增 `resetAgent:true`（回到内置默认 Agent）；与 `agentId` 同传 → 400/1001 |
+| 新增测试 | 1 条（`ConversationAgentBindingTest.resetAgentReturnsToBuiltin`，含两个 1001 分支；该类 7 → 8） |
+| 测试基线 | 334 → **335 运行 / 317 通过 / 0 失败 / 0 错误 / 18 跳过（7 个 live 类）**，BUILD SUCCESS（nexus-app 163 → 164） |
+| 前端构建 | `npm run build`（vue-tsc + vite）→ **PASSED** |
+| E2E 浏览器（真机栈） | `web/scripts/verify-agents.mjs`，11 条腿：①内置项可见且显示"全部知识库" ②新建落草稿（+ 按钮映射） ③配置提示词与绑库 ④复制为草稿 ⑤发布 ⑥对话页选择器列出它（截图） ⑦"草稿需先发布"提示 ⑨停用 ⑩停用后不再可选 ⑪清理 → **PASSED**（退出码 2，因第 ⑧ 条跳过） |
+| 未验证 | **试跑（腿 ⑧）SKIPPED**：本机无可用模型，后端原话 `模型 opencode:deepseek-v4-flash 未注册。已注册：[ollama:qwen3:7b]`（4006）；**真实模型跑一次 Agent / 真实检索 SKIPPED**；ES / pgvector / MySQL 真机 **UNAVAILABLE**（Docker 未运行）；头部选择器"绑定的 Agent 后被停用"这一分支只有构建层验证（E2E 未覆盖），见 B.36 §6 口径 |
+
+**界面逼出来的两个后端问题**（都不是本增量引入的，见 B.36 §3、§4）：
+
+1. **`agentId` 只进不出**：`PUT /api/chat/conversations/{id}` 是局部更新，`agentId:null` 已表示"不改"，
+   于是"清空选用的 Agent"没有任何表达方式——选过 Agent 的会话回不到内置默认。
+   在此之前没有界面会去点它，所以只是一条理论死路。修法是加显式信号 `resetAgent:true`，
+   两个字段同传报 1001（自相矛盾的请求，不猜意图）。
+2. **试跑的失败原因在界面上被丢掉**：后端把 4006 映射成 HTTP 502，axios 抛出
+   `Request failed with status code 502`，后端那句"模型 … 未注册。已注册：[…]"被丢在响应体里。
+   修在 `client.ts`：错误的 `message` 用后端原话，`status`/`code` 保留。这个坑同时让 E2E
+   无法判断"是不是环境缺模型"，只能误判。
+
+**与 §5 设计表的偏差**：界面上**没有**模型角色选择器——可选值应由服务端模型注册表决定，
+而"列出角色"的接口还没有，属 Model Config 增量。今天只读显示（`服务端默认` / 已配角色名），
+不做假下拉（与 B.35 §7 同一条原则：假旋钮比缺失更糟）。
+
+其余决策与实测记录见 decisions.md B.36。
 
 ---
 

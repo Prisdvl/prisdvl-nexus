@@ -165,6 +165,44 @@ class ConversationAgentBindingTest {
     }
 
     @Test
+    @DisplayName("清空 Agent：AGENT 会话回到内置默认（resetAgent）；与 agentId 同时传 1001；非 AGENT 被拒")
+    void resetAgentReturnsToBuiltin() throws Exception {
+        String token = registerAndLogin("conv-agent-reset");
+        String agentId = publishedAgent(token, "conv-reset-me");
+        String conversationId = createConversation(token, "AGENT", agentId);
+        String plainId = createConversation(token, "PLAIN", null);
+
+        // 没有这条路径时，选过 Agent 的会话回不到默认，"不用自定义 Agent 了"只能新建会话
+        mockMvc.perform(put("/api/chat/conversations/" + conversationId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"resetAgent":true}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.agentId").doesNotExist());
+
+        // 自相矛盾的请求要报错，而不是"按其中一个生效"——那是最难查的一类行为
+        mockMvc.perform(put("/api/chat/conversations/" + conversationId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"resetAgent":true,"agentId":%s}
+                                """.formatted(agentId)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(1001));
+
+        mockMvc.perform(put("/api/chat/conversations/" + plainId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"resetAgent":true}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(1001));
+    }
+
+    @Test
     @DisplayName("提问时 Agent 已被停用 → 409 + 5009，且不留下半条消息")
     void disabledAgentFailsBeforeAnySideEffect() throws Exception {
         String token = registerAndLogin("conv-agent-disabled");
