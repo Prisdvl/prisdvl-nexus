@@ -218,11 +218,19 @@ async function runTest() {
   }
 }
 
+/**
+ * 填一个示例问题。
+ *
+ * 必须**具体到有主题**——这一点是 E2E 抓出来的：原来绑定知识库时填的是
+ * "我的笔记里和这个问题相关的内容是什么？"，而"这个问题"没有指代对象。
+ * 模型于是反问"你指的是哪个问题"、一次都没检索，界面随即弹出
+ * "未使用工具……别急着发布"的警告——**对一份完全正常的配置误报**。
+ * 模型不检索是正确的行为，错的是样例本身。绑了库时范围已经确定，问得短一点即可。
+ */
 function applyTestQuestion() {
-  const sample = testTarget.value?.kbIds?.length
-    ? '我的笔记里和这个问题相关的内容是什么？'
+  testQuestion.value = testTarget.value?.kbIds?.length
+    ? '缓存击穿怎么解决？'
     : '我的笔记里缓存击穿怎么解决？'
-  testQuestion.value = sample
 }
 </script>
 

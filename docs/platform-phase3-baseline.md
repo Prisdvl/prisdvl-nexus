@@ -971,7 +971,7 @@ RAG 链路属 §六十五 保护区，且语义边界值得单独一个增量 + 
 
 | 项 | 结果 |
 | --- | --- |
-| 状态 | ✅ 前后端完成（编译 / 全量测试 / `npm run build` / 真机栈 E2E 全绿），**试跑与真实模型两条腿未验证**（本机无可用模型） |
+| 状态 | ✅ 前后端完成（编译 / 全量测试 / `npm run build` / 真机栈 E2E **无跳过、退出码 0**）；配好模型后试跑腿也真跑了（真模型 + 真工具，见下） |
 | 目标 | §十五/§十六/§十八 的界面落地：Agent 全生命周期在浏览器里可走通（新建 → 配置 → 发布 → 选用 → 停用 → 删除），会话能选/换 Agent |
 | 新增前端 | `web/src/views/AgentsView.vue`（管理页，四个弹窗：新建/配置/试跑）、`web/src/api/agents.ts`（8 个接口 + 类型，`AgentTestResult` 按后端 `AgentAnswer` 实际字段写） |
 | 改写前端 | `AgentView.vue`（AGENT 模式的 Agent 选择器 + "N 个不可选用"提示 + 发送时带 `agentId`）、`api/chat.ts`（`Conversation.agentId`、`bindAgent`、`resetConversationAgent`）、`api/client.ts`（**错误抛后端原话**，见下）、`router/index.ts`（`/agents`，路径用复数与 `/agent` 区分）、`App.vue`（导航项） |
@@ -981,8 +981,9 @@ RAG 链路属 §六十五 保护区，且语义边界值得单独一个增量 + 
 | 新增测试 | 1 条（`ConversationAgentBindingTest.resetAgentReturnsToBuiltin`，含两个 1001 分支；该类 7 → 8） |
 | 测试基线 | 334 → **335 运行 / 317 通过 / 0 失败 / 0 错误 / 18 跳过（7 个 live 类）**，BUILD SUCCESS（nexus-app 163 → 164） |
 | 前端构建 | `npm run build`（vue-tsc + vite）→ **PASSED** |
-| E2E 浏览器（真机栈） | `web/scripts/verify-agents.mjs`，11 条腿：①内置项可见且显示"全部知识库" ②新建落草稿（+ 按钮映射） ③配置提示词与绑库 ④复制为草稿 ⑤发布 ⑥对话页选择器列出它（截图） ⑦"草稿需先发布"提示 ⑨停用 ⑩停用后不再可选 ⑪清理 → **PASSED**（退出码 2，因第 ⑧ 条跳过） |
-| 未验证 | **试跑（腿 ⑧）SKIPPED**：本机无可用模型，后端原话 `模型 opencode:deepseek-v4-flash 未注册。已注册：[ollama:qwen3:7b]`（4006）；**真实模型跑一次 Agent / 真实检索 SKIPPED**；ES / pgvector / MySQL 真机 **UNAVAILABLE**（Docker 未运行）；头部选择器"绑定的 Agent 后被停用"这一分支只有构建层验证（E2E 未覆盖），见 B.36 §6 口径 |
+| E2E 浏览器（真机栈） | `web/scripts/verify-agents.mjs`，11 条腿全部执行：①内置项可见且显示"全部知识库" ②新建落草稿（+ 按钮映射） ③配置提示词与绑库 ④复制为草稿 ⑤发布 ⑥对话页选择器列出它 ⑦"草稿需先发布"提示 ⑧试跑（真模型 4 次工具调用） ⑨停用 ⑩停用后不再可选 ⑪清理 → **PASSED（退出码 0，无跳过）**；截图 `agents-list.png` / `agent-picker.png` / `agents-test.png` |
+| 真机（真模型 + 真工具） | 配好 `AI_CHAT_API_KEY` 后试跑跑通：`opencode:deepseek-v4-flash` 调用 `knowledge_search` 命中演示笔记内容，回答带来源 → **PASSED**（无 ES 时工具降级为"关键词匹配"并如实说明，**不等于**真 ES/pgvector 检索） |
+| 未验证 | ES / pgvector / MySQL 真机 **UNAVAILABLE**（Docker 未运行）；头部选择器"绑定的 Agent 后被停用"这一分支只有构建层验证（E2E 未覆盖），见 B.36 §6 口径 |
 
 **界面逼出来的两个后端问题**（都不是本增量引入的，见 B.36 §3、§4）：
 
@@ -994,6 +995,13 @@ RAG 链路属 §六十五 保护区，且语义边界值得单独一个增量 + 
    `Request failed with status code 502`，后端那句"模型 … 未注册。已注册：[…]"被丢在响应体里。
    修在 `client.ts`：错误的 `message` 用后端原话，`status`/`code` 保留。这个坑同时让 E2E
    无法判断"是不是环境缺模型"，只能误判。
+
+**E2E 抓到的第三个问题**（前两个见上面"界面逼出来的两个后端问题"，理由在 B.36 §3/§4）：
+配好模型后试跑腿失败于"没有使用任何工具"。
+查下来不是检索坏了——绑定知识库时"用示例问题"填的是"我的笔记里**和这个问题**相关的内容是什么？"，
+"这个问题"没有指代对象，模型正确地反问了"你指的是哪个问题"、一次都不检索，
+于是界面弹出一条**对正常配置的误报**："未使用工具……别急着发布"。修法：两种情况都填有主题的问题
+（绑库时范围已知，问得更短即可）。模型的行为是对的，错的是我给它的样例。
 
 **与 §5 设计表的偏差**：界面上**没有**模型角色选择器——可选值应由服务端模型注册表决定，
 而"列出角色"的接口还没有，属 Model Config 增量。今天只读显示（`服务端默认` / 已配角色名），

@@ -1896,6 +1896,15 @@ E2E 脚本，以及**做界面时才暴露出来的两个后端问题**（下面
 "这一轮模型没有检索……别急着发布"。带着知识库范围试跑却一次都没检索，
 "试跑通过"这个结论本身就是假的。
 
+> **这条警告后来真的报了一次误警，而它是对的**（E2E 抓到，已修）：配好模型再跑 E2E 时，
+> 试跑腿失败于"没有使用任何工具"。查下来不是检索坏了——`applyTestQuestion` 在
+> **绑了知识库时**填的示例问题是"我的笔记里**和这个问题**相关的内容是什么？"，
+> 而"这个问题"没有指代对象。模型的反应完全正确：它反问"你指的是哪个问题"、一次都不检索。
+> 错的是样例本身：绑了库的 Agent 恰恰最需要一个有主题的问题，而我给了它一个没有主题的。
+> 修法是两种情况都问具体的（绑库时范围已确定，可以更短：`缓存击穿怎么解决？`）。
+> 教训与 §1 上面那条相关：**界面上任何"自动填好"的内容都要能被直接执行**，
+> 否则用户按一下按钮就吃到一条误导性的警告。
+
 **2. 选择器只列已发布，但**不**静默隐藏草稿**
 
 对话页的 Agent 选择器只有两类项：**内置默认 Agent** + 自己**已发布**的 Agent。
@@ -1958,7 +1967,8 @@ axios 因此抛出 `Request failed with status code 502`，而真正有用的那
 几处刻意的设计：
 
 - **退出码三态**：`0` 全过 / `1` 真失败 / `2` 有跳过。没有可用模型时试跑跑不了（`4006`），
-  这与"Agent 配置是否正确"无关，报跳过而不是失败——否则每台没配 key 的机器都会看到一条假失败；
+  这与"Agent 配置是否正确"无关，报跳过而不是失败——否则每台没配 key 的机器都会看到一条假失败。
+  配好 key 后这条腿就会真的执行（本轮后来就是这样拿到退出码 0 的）；
 - **跳过前先验证错误形状**：若错误文案是 `Request failed with status code`（§4 那个坑回来了），
   判**失败**而不是跳过——那说明后端原因没有透出，属真问题；
 - **每次跑用新 code**（时间戳）：跑完会删，但中途失败也不会与上一轮残留撞名（`code` 唯一，撞了就 5007）；
@@ -1971,20 +1981,21 @@ axios 因此抛出 `Request failed with status code 502`，而真正有用的那
 | Contract（HTTP） | `ConversationAgentBindingTest` 8 项（原 7 + 新 1）：新增 `resetAgentReturnsToBuiltin` —— `resetAgent:true` 后 `agentId` 消失、`resetAgent`+`agentId` 同传 1001、PLAIN 模式 `resetAgent` 1001 | PASSED |
 | 全量回归 | `mvn -B test`：**335 运行 / 317 通过 / 18 跳过（7 个 live 类，环境变量门控）/ 0 失败 / 0 错误**，BUILD SUCCESS（nexus-common 14 / nexus-ai 35 / nexus-knowledge 122 / nexus-app 164） | PASSED |
 | 前端构建 | `npm run build`（vue-tsc + vite） | PASSED |
-| E2E 浏览器（真机栈：standalone + 演示数据 + Edge） | `verify-agents.mjs` 腿 ①–⑦、⑨–⑪ 全过（含两张截图 `docs/screenshots/agents-list.png`、`agent-picker.png`） | PASSED |
-| E2E 浏览器（试跑，腿 ⑧） | 本机未配可用模型，后端报 `模型 opencode:deepseek-v4-flash 未注册。已注册：[ollama:qwen3:7b]`（4006） | **SKIPPED**（退出码 2，脚本打印原话） |
-| 真机（真实模型跑一次 Agent、真实检索） | 需 `AI_CHAT_API_KEY` + ES/pgvector | **SKIPPED** |
+| E2E 浏览器（真机栈：standalone + 演示数据 + Edge） | `verify-agents.mjs` 腿 ①–⑪ **全部执行、全部通过**，**退出码 0（无跳过）**：试跑腿真的让真模型跑了 4 次 `knowledge_search` 并返回带来源的回答；截图 `agents-list.png` / `agent-picker.png` / `agents-test.png` | PASSED |
+| 真机（真实模型 + 真工具） | 内置默认 Agent 与新建 Agent 各跑一次试跑：真模型（`opencode:deepseek-v4-flash`）+ 真工具（检索到演示笔记内容、回答带来源） | PASSED |
 | ES / pgvector / MySQL 真机 | Docker（WSL2 后端）不可用 | **UNAVAILABLE** |
 | Vue 单测 | 前端无单测框架（历来靠 `npm run build` + 桩脚本 + E2E 三层） | **UNAVAILABLE**（不是本轮新缺） |
 
-**口径**：PASSED 的 E2E 是**真机栈**（真后端 + 真浏览器 + 演示数据）跑的，但**试跑这一条没跑成**——
-所以"Agent 管理页走通了新建→配置→发布→选用→停用→删除"是真的，
-"试跑能跑通并返回带工具痕迹的答案"**仍未验证**（缺模型，跳过），不得合并成一句"4.2 全绿"。
+**口径**：上表 E2E 与真机两行是**同一台机器、同一次会话里**从"无模型"升级到"有模型"后重跑的
+（第一次跑只有腿 ⑧ 跳过、退出码 2，同时抓到了上面的示例问题缺陷）。因此：
 
-另有一处**只有构建层验证、E2E 不覆盖**：头部选择器对"正绑着的 Agent 已被停用/退回草稿"这一情形的处理
-（`headerAgentOptions` + `boundAgentLabel`）。不做的后果是 el-select 把雪花 id 原样显示给用户，
-下拉里也没有当前值；修法是把那一项带状态后缀一起列出来。这条分支要造出"绑了再停用再看头部"的状态，
-E2E 没走这一步，因此判定只是 **PASSED（`npm run build` 类型检查 + 构建）**，不是 E2E 通过。
+- 本机**没有** ES / pgvector，但 `knowledge_search` 在精确检索不可用时**降级为关键词匹配**
+  并如实说明（工具结果里写着"精确检索不可用，已降级为关键词匹配（1 条）"）——
+  所以这次"真工具"是真的工具链路（含真实调用与痕迹），**不是**真的 ES/pgvector 检索。
+  首次因无模型而 SKIPPED 的那次记录不删，两轮都在这里，读者可以看到覆盖面是怎么变化的。
+- 头部选择器对"正绑着的 Agent 已被停用/退回草稿"这一情形（`headerAgentOptions` +
+  `boundAgentLabel`）**E2E 仍未覆盖**：它要造出"绑了再停用再看头部"的状态，脚本没走这一步。
+  该分支只有 **PASSED（`npm run build` 类型检查 + 构建）**，不算 E2E 通过。
 
 **7. 未做（有意留下）**
 

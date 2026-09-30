@@ -231,7 +231,8 @@ node scripts/verify-agents.mjs     # Agent 管理页：新建→配置→发布�
 > ——`standalone` 没有 Elasticsearch，RAG 在检索这一步就返回 4005，
 > 于是"检索到 N 个片段"相关的断言无法执行（`verify-agent-chat.mjs` 只跳过 RAG 腿，
 > `verify-stream.mjs` 整体跳过）；`verify-agents.mjs` 只跳过试跑那条腿
-> （没配可用的模型时 4006，`模型 … 未注册。已注册：[…]`），其余 10 条腿照跑。
+> （**没配 `AI_CHAT_API_KEY` 时**后端报 4006 `模型 … 未注册。已注册：[…]`，其余 10 条腿照跑；
+> 配好 key 后这条腿会真跑——本机实测 11 条腿全部执行、退出码 0）。
 > 脚本会打印 `⚠ SKIPPED` 与原因，
 > **跳过不等于通过**：要真验这一层，得用 `deploy/docker-compose.yml` 起 full 栈再跑一遍。
 
