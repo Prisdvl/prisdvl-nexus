@@ -3,12 +3,16 @@ package com.lky.nexus.app.chat.service.impl;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import com.lky.nexus.app.chat.mapper.ChatConversationMapper;
 import com.lky.nexus.app.chat.mapper.ChatMessageMapper;
 import com.lky.nexus.app.chat.model.MessageRole;
 import com.lky.nexus.app.chat.model.MessageStatus;
 import com.lky.nexus.app.chat.model.dto.AssistantReplyDraft;
 import com.lky.nexus.app.chat.model.dto.ChatMessageResponse;
+import com.lky.nexus.app.chat.model.dto.MessageToolCall;
 import com.lky.nexus.app.chat.model.entity.ChatConversationPO;
 import com.lky.nexus.app.chat.model.entity.ChatMessagePO;
 import com.lky.nexus.app.chat.service.ChatMessageService;
@@ -17,12 +21,15 @@ import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.api.PageQuery;
 import com.lky.nexus.common.api.PageResult;
 import com.lky.nexus.common.exception.BusinessException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 消息服务实现。
@@ -39,18 +46,26 @@ import java.util.List;
 @Service
 public class ChatMessageServiceImpl implements ChatMessageService {
 
+    private static final Logger log = LoggerFactory.getLogger(ChatMessageServiceImpl.class);
+
     private static final int AUTO_TITLE_LENGTH = 30;
+
+    /** metadata JSON 里工具痕迹的字段名（与前端约定，改这里等于改协议）。 */
+    private static final String TOOL_CALLS_FIELD = "toolCalls";
 
     private final ChatMessageMapper messageMapper;
     private final ChatConversationMapper conversationMapper;
     private final ConversationService conversationService;
+    private final JsonMapper jsonMapper;
 
     public ChatMessageServiceImpl(ChatMessageMapper messageMapper,
                                  ChatConversationMapper conversationMapper,
-                                 ConversationService conversationService) {
+                                 ConversationService conversationService,
+                                 JsonMapper jsonMapper) {
         this.messageMapper = messageMapper;
         this.conversationMapper = conversationMapper;
         this.conversationService = conversationService;
+        this.jsonMapper = jsonMapper;
     }
 
     @Override
@@ -102,6 +117,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         message.setRequestId(draft.requestId());
         message.setErrorMsg(draft.errorMsg());
         message.setStatus(StringUtils.hasText(draft.status()) ? draft.status() : MessageStatus.DONE.name());
+        message.setMetadata(toMetadata(draft.toolCalls()));
         message.setCreatedAt(LocalDateTime.now());
         messageMapper.insert(message);
 
@@ -152,6 +168,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         }
         if (draft.errorMsg() != null) {
             message.setErrorMsg(draft.errorMsg());
+        }
+        if (draft.toolCalls() != null) {
+            message.setMetadata(toMetadata(draft.toolCalls()));
         }
         // 刻意不调用 touchConversation：这条消息在流开始时已经计入 messageCount，
         // 否则"先插 STREAMING 再更新"会让计数翻倍。
@@ -221,6 +240,59 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 message.getFirstTokenMs(),
                 message.getStatus(),
                 message.getErrorMsg(),
-                message.getCreatedAt());
+                message.getCreatedAt(),
+                parseToolCalls(message.getMetadata()));
+    }
+
+    /**
+     * 工具痕迹 → metadata JSON。
+     *
+     * <p>序列化失败时返回 null 而不是抛异常：留档是<b>附加价值</b>，
+     * 不能因为它失败就让一条已经生成好的回答落不了库。
+     */
+    private String toMetadata(List<MessageToolCall> toolCalls) {
+        if (toolCalls == null || toolCalls.isEmpty()) {
+            return null;
+        }
+        try {
+            return jsonMapper.writeValueAsString(Map.of(TOOL_CALLS_FIELD, toolCalls));
+        } catch (Exception ex) {
+            log.warn("工具调用痕迹序列化失败，本次不留档：{}", ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * metadata JSON → 工具痕迹。解析失败按空列表处理（老消息、脏数据都不该让列表接口报错）。
+     *
+     * <p><b>为什么要多剥一层字符串节点</b>——H2 与 MySQL 对 {@code JSON} 列的处理不同，
+     * 这是实测踩到的（测试用例曾因此读到空列表，而库里明明有数据）：
+     * <ul>
+     *   <li>MySQL：写入 Java 字符串时，服务端把它<b>当作 JSON 文本解析</b>，存成对象；</li>
+     *   <li>H2（测试 profile 实际走的是 MySQL 迁移脚本，metadata 是 JSON 列）：
+     *       把字符串<b>当作字符串值序列化</b>，于是读出来是 {@code "{\"toolCalls\":…}"}
+     *       —— 一个内容为 JSON 的字符串节点。</li>
+     * </ul>
+     * 两种都接受，前端拿到的都是同一份数据。
+     */
+    private List<MessageToolCall> parseToolCalls(String metadata) {
+        if (!StringUtils.hasText(metadata)) {
+            return List.of();
+        }
+        try {
+            JsonNode root = jsonMapper.readTree(metadata);
+            if (root.isString()) {
+                root = jsonMapper.readTree(root.asString());
+            }
+            JsonNode node = root.path(TOOL_CALLS_FIELD);
+            if (!node.isArray()) {
+                return List.of();
+            }
+            return jsonMapper.readValue(node.toString(), new TypeReference<List<MessageToolCall>>() {
+            });
+        } catch (Exception ex) {
+            log.warn("消息 metadata 解析失败，按无工具痕迹处理：{}", ex.getMessage());
+            return List.of();
+        }
     }
 }

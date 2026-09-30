@@ -2,14 +2,33 @@
 import { computed } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import { Collection, SwitchButton } from '@element-plus/icons-vue'
+import { ChatDotRound, Collection, SwitchButton } from '@element-plus/icons-vue'
 import { isLoggedIn, logout, session } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
 
-// 登录页不套外壳；其余页面都是"左导航 + 主区"的常规产品布局
+/*
+ * 登录页不套外壳；其余页面都是"左导航 + 主区"的常规产品布局。
+ *
+ * 注意这里的 isLoggedIn() 读的是 client.ts 里的 tokenRef（响应式）。
+ * 早先它直接读 localStorage，导致这个 computed 没有任何响应式依赖、
+ * 值被永久缓存 —— 登录成功后外壳不挂载，必须整页刷新才恢复。
+ */
 const showShell = computed(() => isLoggedIn() && route.name !== 'login')
+
+const navItems = [
+  {
+    to: '/',
+    label: '知识库',
+    icon: Collection,
+    match: ['knowledge-bases', 'knowledge-base-detail']
+  },
+  { to: '/agent', label: 'Agent 对话', icon: ChatDotRound, match: ['agent'] }
+]
+
+/** 头像里的首字母：没有头像时比一个通用图标更能区分账号 */
+const initial = computed(() => (session.username || '?').slice(0, 1).toUpperCase())
 
 async function handleLogout() {
   await ElMessageBox.confirm('退出后需要重新登录。', '确认退出？', {
@@ -35,21 +54,32 @@ async function handleLogout() {
 
       <nav class="nav">
         <RouterLink
-          to="/"
+          v-for="item in navItems"
+          :key="item.to"
+          :to="item.to"
           class="nav-item"
-          :class="{ active: route.name === 'knowledge-bases' || route.name === 'knowledge-base-detail' }"
+          :class="{ active: item.match.includes(String(route.name)) }"
         >
-          <el-icon><Collection /></el-icon>
-          <span>知识库</span>
+          <el-icon><component :is="item.icon" /></el-icon>
+          <span>{{ item.label }}</span>
         </RouterLink>
       </nav>
 
       <div class="sidebar-foot">
         <div class="who">
-          <span class="dot" />
+          <span class="avatar" aria-hidden="true">{{ initial }}</span>
           <span class="truncate">{{ session.username || '未登录' }}</span>
         </div>
-        <el-button link size="small" :icon="SwitchButton" @click="handleLogout">退出</el-button>
+        <el-button
+          link
+          size="small"
+          class="logout"
+          :icon="SwitchButton"
+          aria-label="退出登录"
+          @click="handleLogout"
+        >
+          退出
+        </el-button>
       </div>
     </aside>
 
@@ -62,20 +92,27 @@ async function handleLogout() {
 </template>
 
 <style scoped>
+/* 外壳自己占满视口、内部各自滚动：
+ * 聊天页需要"输入框固定、消息区独立滚动"，这个结构同时满足了两种页面 */
 .shell {
   display: grid;
-  grid-template-columns: 232px 1fr;
-  min-height: 100vh;
+  grid-template-columns: 244px minmax(0, 1fr);
+  gap: var(--space-5);
+  height: 100vh;
+  padding: var(--space-5);
 }
 
-/* 侧栏用"浅色微染"而不是全深色——全深色侧栏是最常见的模板感来源 */
+/* 侧栏做成一块浮起来的圆角面板（而不是贴边的深色竖条）：
+ * 圆润路线的分层靠"面板 + 柔和投影"，不靠分隔线 */
 .sidebar {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  min-height: 0;
   padding: var(--space-5) var(--space-3);
-  background: var(--neutral-100);
-  border-right: 1px solid var(--neutral-200);
+  background: var(--surface-raised);
+  border-radius: var(--radius-overlay);
+  box-shadow: var(--shadow-card);
 }
 
 .brand {
@@ -88,51 +125,58 @@ async function handleLogout() {
 .mark {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  background: var(--accent-500);
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, var(--accent-400), var(--accent-600));
   color: #fff;
   font-weight: 700;
   font-size: 15px;
+  box-shadow: 0 8px 18px -10px rgb(58 143 136 / 90%);
 }
 
 .brand-text {
   display: flex;
   flex-direction: column;
-  line-height: 1.25;
+  line-height: 1.3;
 }
 
 .brand-text strong {
   font-size: 14px;
-  letter-spacing: -0.01em;
+  color: var(--text-strong);
 }
 
 .brand-text small {
-  color: var(--neutral-500);
+  color: var(--text-faint);
   font-size: 11px;
 }
 
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   flex: 1;
 }
 
+/* 导航项 = 胶囊：选中态用浅色填充 + 主色文字，不用左侧竖条（竖条是最模板化的做法） */
 .nav-item {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: 8px var(--space-3);
-  border-radius: var(--radius-input);
-  color: var(--neutral-700);
+  min-height: 38px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-chip);
+  color: var(--text-muted);
   font-size: 13.5px;
-  transition: background-color 120ms ease-out, color 120ms ease-out;
+  transition:
+    background-color var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft),
+    transform var(--dur-fast) var(--ease-soft);
 }
 
 .nav-item:hover {
-  background: var(--neutral-200);
+  background: var(--surface-sunken);
+  color: var(--text-strong);
 }
 
 .nav-item.active {
@@ -147,24 +191,29 @@ async function handleLogout() {
   justify-content: space-between;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-2) 0;
-  border-top: 1px solid var(--neutral-200);
+  border-top: 1px solid var(--border-soft);
 }
 
 .who {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   min-width: 0;
   font-size: 13px;
-  color: var(--neutral-600);
+  color: var(--text-muted);
 }
 
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ok);
+.avatar {
+  display: grid;
+  place-items: center;
   flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-chip);
+  background: var(--accent-50);
+  color: var(--accent-600);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .truncate {
@@ -173,8 +222,50 @@ async function handleLogout() {
   white-space: nowrap;
 }
 
+.logout {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.logout:hover {
+  color: var(--danger);
+}
+
 .main {
   min-width: 0;
-  padding: var(--space-6) var(--space-6) var(--space-7);
+  min-height: 0;
+  overflow: auto;
+}
+
+/* 窄屏：侧栏收成图标条，避免主区被挤扁 */
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 68px minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-3);
+  }
+
+  .sidebar {
+    padding: var(--space-4) var(--space-2);
+    align-items: center;
+  }
+
+  .brand-text,
+  .nav-item span,
+  .who .truncate,
+  .logout :deep(span) {
+    display: none;
+  }
+
+  .nav-item {
+    justify-content: center;
+    padding: 0;
+    width: 40px;
+  }
+
+  .sidebar-foot {
+    flex-direction: column;
+    gap: var(--space-2);
+  }
 }
 </style>

@@ -4,7 +4,9 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import 'element-plus/dist/index.css'
 // 代码高亮主题：与正文里 pre 的深色背景搭配（技术笔记大量出现代码块）
 import 'highlight.js/styles/github-dark.css'
+// 顺序不能反：令牌 → Element Plus 皮肤（皮肤靠同权重后置覆盖框架默认值）
 import './styles/tokens.css'
+import './styles/element.css'
 
 import App from './App.vue'
 import router from './router'

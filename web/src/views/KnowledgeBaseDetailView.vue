@@ -84,6 +84,21 @@ function stepType(status: string): 'success' | 'danger' | 'info' | 'warning' {
 const articleRef = ref<HTMLElement | null>(null)
 const renderedHtml = ref('')
 
+/**
+ * 正文里已经有同名 H1 时，不再重复渲染上方的标题。
+ *
+ * 笔记正文的第一行通常就是「# 标题」，而正文区上方已经挂了文章头，
+ * 不处理的话标题会连着出现两次（第一次看到会以为是渲染 bug）。
+ * 只在"确实重复"时隐藏上方标题，避免没有 H1 的笔记失去标题。
+ * 注意只隐藏 DOM 上的标题、不动正文，大纲锚点仍按渲染顺序一一对应。
+ */
+const showArticleTitle = computed(() => {
+  const title = (detail.value?.title || detail.value?.fileName || '').trim()
+  if (!title) return true
+  const firstHeading = detail.value?.content?.match(/^\s*#\s+(.+)$/m)
+  return !firstHeading || firstHeading[1].trim() !== title
+})
+
 const mode = ref<SearchMode>('hybrid')
 const query = ref('')
 const topK = ref(10)
@@ -538,7 +553,7 @@ watch(activeTab, () => {
                 <div v-if="!detail" class="empty">左侧选择一篇文档</div>
                 <template v-else>
                   <div class="article-head">
-                    <h2>{{ detail.title || detail.fileName }}</h2>
+                    <h2 v-if="showArticleTitle">{{ detail.title || detail.fileName }}</h2>
                     <div class="article-meta">
                       <span class="num">{{ detail.sourcePath }}</span>
                       <span class="num">{{ detail.chunkCount }} 切片</span>
@@ -785,6 +800,11 @@ watch(activeTab, () => {
 </template>
 
 <style scoped>
+/* 外壳已经提供了四周留白，这里只补页面自己的纵向节奏 */
+.page {
+  padding: var(--space-4) 0 var(--space-8);
+}
+
 .page-head {
   display: flex;
   align-items: flex-start;
@@ -795,8 +815,8 @@ watch(activeTab, () => {
 
 .back {
   display: inline-block;
-  margin-bottom: 6px;
-  color: var(--neutral-500);
+  margin-bottom: var(--space-1);
+  color: var(--text-muted);
   font-size: 12.5px;
 }
 
@@ -805,8 +825,8 @@ watch(activeTab, () => {
 }
 
 .sub {
-  margin: 6px 0 0;
-  color: var(--neutral-500);
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
   font-size: 13px;
 }
 
@@ -816,12 +836,13 @@ watch(activeTab, () => {
   flex-wrap: wrap;
 }
 
+/* 工作流面板：与外层卡片同一套"面板 + 柔投影"的语言 */
 .workflow {
   margin-top: var(--space-4);
-  padding: var(--space-3);
-  background: var(--neutral-0);
-  border: 1px solid var(--neutral-200);
-  border-radius: var(--radius-input);
+  padding: var(--space-4) var(--space-5);
+  background: var(--surface-raised);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
 }
 
 .workflow-head {
@@ -852,31 +873,32 @@ watch(activeTab, () => {
 }
 
 .wf-name {
-  color: var(--neutral-700);
+  color: var(--text);
 }
 
 .wf-ms {
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--neutral-500);
+  color: var(--text-muted);
 }
 
 .wf-msg {
-  color: var(--neutral-500);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
+/* 指标条：横线换成浅色圆角底（和列表页同一处理） */
 .metrics {
   display: flex;
   gap: var(--space-7);
   margin: 0 0 var(--space-4);
-  padding: var(--space-3) 0;
-  border-top: 1px solid var(--neutral-200);
-  border-bottom: 1px solid var(--neutral-200);
+  padding: var(--space-3) var(--space-5);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
 }
 
 .metrics dt {
-  color: var(--neutral-500);
+  color: var(--text-muted);
   font-size: 11.5px;
 }
 
@@ -884,7 +906,7 @@ watch(activeTab, () => {
   margin: 2px 0 0;
   font-size: 16px;
   font-weight: 600;
-  color: var(--neutral-900);
+  color: var(--text-strong);
 }
 
 /* 工作区：左列表固定宽，右侧内容自适应 */
@@ -902,11 +924,10 @@ watch(activeTab, () => {
 }
 
 .pane {
-  background: var(--neutral-0);
-  border: 1px solid var(--neutral-200);
+  background: var(--surface-raised);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
-  padding: var(--space-4);
+  padding: var(--space-5);
 }
 
 .pane-head {
@@ -917,7 +938,7 @@ watch(activeTab, () => {
 }
 
 .count {
-  color: var(--neutral-500);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -933,31 +954,36 @@ watch(activeTab, () => {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 8px 10px;
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-input);
   cursor: pointer;
-  transition: background-color 120ms ease-out;
+  transition: background-color var(--dur-fast) var(--ease-soft);
 }
 
 .docs li:hover {
-  background: var(--neutral-100);
+  background: var(--surface-sunken);
 }
 
+/* 选中态用浅色填充表达（不用左侧色条：色条是最模板化的做法） */
 .docs li.active {
   background: var(--accent-50);
-  box-shadow: inset 2px 0 0 var(--accent-500);
+}
+
+.docs li.active .doc-title {
+  color: var(--accent-600);
+  font-weight: 600;
 }
 
 .doc-title {
   font-size: 13.5px;
   font-weight: 500;
-  color: var(--neutral-800);
+  color: var(--text);
 }
 
 .doc-path,
 .doc-meta {
   font-size: 11.5px;
-  color: var(--neutral-500);
+  color: var(--text-muted);
 }
 
 .content {
@@ -978,11 +1004,13 @@ watch(activeTab, () => {
   }
 }
 
+/* 大纲：从"带右分隔线的列表"改成一块浅色圆角底 —— 圆润路线里分隔线越少越软 */
 .outline {
   position: sticky;
   top: var(--space-4);
-  border-right: 1px solid var(--neutral-200);
-  padding-right: var(--space-3);
+  padding: var(--space-3) var(--space-2);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
   max-height: 560px;
   overflow: auto;
 }
@@ -990,8 +1018,9 @@ watch(activeTab, () => {
 .outline-head {
   font-size: 11px;
   letter-spacing: 0.04em;
-  color: var(--neutral-400);
+  color: var(--text-faint);
   margin-bottom: var(--space-2);
+  padding: 0 var(--space-2);
 }
 
 .outline ul {
@@ -1001,11 +1030,11 @@ watch(activeTab, () => {
 }
 
 .outline li {
-  padding: 4px 0;
+  padding: var(--space-1) var(--space-2);
   font-size: 12.5px;
-  color: var(--neutral-600);
+  color: var(--text-muted);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   line-height: 1.45;
 }
 
@@ -1023,10 +1052,8 @@ watch(activeTab, () => {
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
-  margin: 8px 0 var(--space-4);
-  padding-bottom: var(--space-3);
-  border-bottom: 1px solid var(--neutral-200);
-  color: var(--neutral-500);
+  margin: var(--space-2) 0 var(--space-5);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -1035,7 +1062,7 @@ watch(activeTab, () => {
   max-width: 76ch;
   font-size: 14px;
   line-height: 1.75;
-  color: var(--neutral-800);
+  color: var(--text);
 }
 
 .markdown :deep(h1),
@@ -1070,15 +1097,15 @@ watch(activeTab, () => {
 .markdown :deep(code) {
   font-family: var(--font-mono);
   font-size: 12.5px;
-  background: var(--neutral-100);
-  border-radius: 4px;
-  padding: 1px 5px;
+  background: var(--surface-sunken);
+  border-radius: 6px;
+  padding: 2px 6px;
 }
 
 .markdown :deep(pre) {
-  background: var(--neutral-900);
-  border-radius: var(--radius-input);
-  padding: var(--space-4);
+  background: var(--text-strong);
+  border-radius: var(--radius-card);
+  padding: var(--space-4) var(--space-5);
   overflow: auto;
 }
 
@@ -1092,7 +1119,7 @@ watch(activeTab, () => {
   margin: 0.8em 0;
   padding: 2px 0 2px var(--space-4);
   border-left: 2px solid var(--accent-400);
-  color: var(--neutral-600);
+  color: var(--text-muted);
 }
 
 .markdown :deep(table) {
@@ -1104,13 +1131,13 @@ watch(activeTab, () => {
 
 .markdown :deep(th),
 .markdown :deep(td) {
-  border: 1px solid var(--neutral-200);
+  border: 1px solid var(--border-soft);
   padding: 6px 10px;
   text-align: left;
 }
 
 .markdown :deep(th) {
-  background: var(--neutral-100);
+  background: var(--surface-sunken);
   font-weight: 600;
 }
 
@@ -1131,9 +1158,11 @@ watch(activeTab, () => {
   gap: var(--space-3);
 }
 
+/* 切片做成浅色圆角块：比"左侧一条竖线"更能体现"这是一段独立内容" */
 .chunk {
-  border-left: 2px solid var(--neutral-200);
-  padding-left: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
 }
 
 .chunk header {
@@ -1142,16 +1171,16 @@ watch(activeTab, () => {
   gap: var(--space-2);
   flex-wrap: wrap;
   font-size: 12px;
-  color: var(--neutral-500);
+  color: var(--text-muted);
 }
 
 .idx {
   font-family: var(--font-mono);
-  color: var(--neutral-400);
+  color: var(--text-faint);
 }
 
 .path {
-  color: var(--neutral-700);
+  color: var(--text);
   font-weight: 500;
 }
 
@@ -1178,13 +1207,13 @@ watch(activeTab, () => {
 }
 
 .pip.off {
-  background: var(--neutral-300);
+  background: var(--border-strong);
 }
 
 .chunk-text {
   margin: 6px 0 0;
   font-size: 13px;
-  color: var(--neutral-700);
+  color: var(--text);
   white-space: pre-wrap;
   max-width: 76ch;
 }
@@ -1206,7 +1235,7 @@ watch(activeTab, () => {
 
 .hint,
 .empty {
-  color: var(--neutral-500);
+  color: var(--text-muted);
   font-size: 12.5px;
   line-height: 1.7;
 }
@@ -1226,16 +1255,17 @@ watch(activeTab, () => {
 }
 
 .hit {
-  padding: var(--space-3);
-  background: var(--neutral-50);
-  border: 1px solid var(--neutral-200);
-  border-radius: var(--radius-input);
+  padding: var(--space-4);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-card);
   cursor: pointer;
-  transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
+  transition:
+    background-color var(--dur-base) var(--ease-soft),
+    box-shadow var(--dur-base) var(--ease-soft);
 }
 
 .hit:hover {
-  border-color: var(--accent-400);
+  background: var(--accent-50);
   box-shadow: var(--shadow-card);
 }
 
@@ -1248,23 +1278,23 @@ watch(activeTab, () => {
 
 .matched {
   font-size: 11px;
-  color: var(--neutral-500);
-  background: var(--neutral-100);
-  border-radius: 4px;
-  padding: 1px 6px;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border-radius: var(--radius-chip);
+  padding: 2px 8px;
 }
 
 .score {
   margin-left: auto;
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--neutral-600);
+  color: var(--text-muted);
 }
 
 .bar {
   height: 3px;
   margin: 6px 0 8px;
-  background: var(--neutral-200);
+  background: var(--border);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -1279,13 +1309,13 @@ watch(activeTab, () => {
 .where {
   margin: 0;
   font-size: 12px;
-  color: var(--neutral-600);
+  color: var(--text-muted);
 }
 
 .snippet {
   margin: 6px 0 0;
   font-size: 12.5px;
-  color: var(--neutral-700);
+  color: var(--text);
   display: -webkit-box;
   -webkit-line-clamp: 4;
   line-clamp: 4;
@@ -1297,7 +1327,7 @@ watch(activeTab, () => {
 .links {
   margin-top: var(--space-6);
   padding-top: var(--space-4);
-  border-top: 1px solid var(--neutral-200);
+  border-top: 1px solid var(--border-soft);
   max-width: 76ch;
 }
 
@@ -1313,7 +1343,7 @@ watch(activeTab, () => {
 }
 
 .links-head .num {
-  color: var(--neutral-500);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -1334,12 +1364,14 @@ watch(activeTab, () => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--neutral-200);
-  border-radius: 999px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-chip);
   font-size: 12.5px;
-  background: var(--neutral-0);
-  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+  background: var(--surface-raised);
+  transition:
+    border-color var(--dur-fast) var(--ease-soft),
+    background-color var(--dur-fast) var(--ease-soft);
 }
 
 .link-group li:not(.unresolved):not(.external) {
@@ -1347,14 +1379,14 @@ watch(activeTab, () => {
 }
 
 .link-group li:not(.unresolved):not(.external):hover {
-  border-color: var(--accent-400);
+  border-color: var(--accent-200);
   background: var(--accent-50);
 }
 
 /* 未解析的引用是"待创建笔记"：虚线 + 弱化，且不可点（点了也没有目标） */
 .link-group li.unresolved {
   border-style: dashed;
-  color: var(--neutral-500);
+  color: var(--text-muted);
 }
 
 /* 外链不是内部关联，点击交给浏览器新开标签 */
@@ -1365,13 +1397,13 @@ watch(activeTab, () => {
 }
 
 .link-name {
-  color: var(--neutral-700);
+  color: var(--text);
 }
 
 /* 相关推荐的理由（如"互相链接 · 共同标签: java"）在条目内弱化显示 */
 .related-reasons {
   font-size: 11.5px;
-  color: var(--neutral-500);
+  color: var(--text-muted);
 }
 
 /* 问答块 */
@@ -1384,39 +1416,22 @@ watch(activeTab, () => {
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
-  color: var(--neutral-500);
+  color: var(--text-muted);
   font-size: 12px;
   margin-bottom: var(--space-2);
 }
 
+/* 回答块：浅主色底 + 大圆角。它和正文要一眼可分，所以用底色而不是左侧竖线 */
 .answer {
-  padding: var(--space-4);
-  background: var(--neutral-50);
-  border: 1px solid var(--neutral-200);
-  border-left: 2px solid var(--accent-400);
-  border-radius: var(--radius-input);
+  padding: var(--space-5);
+  background: var(--accent-50);
+  border-radius: var(--radius-card);
   max-width: 80ch;
 }
 
-/* 流式进行中：保留换行按原文显示，并在末尾给一个光标，让"还在生成"可见 */
+/* 流式进行中：保留换行按原文显示，末尾的呼吸光标见 tokens.css 的 .caret */
 .stream-text {
   white-space: pre-wrap;
-}
-
-.caret {
-  display: inline-block;
-  width: 7px;
-  height: 1em;
-  margin-left: 2px;
-  vertical-align: text-bottom;
-  background: var(--accent-500);
-  animation: caret-blink 1s steps(2) infinite;
-}
-
-@keyframes caret-blink {
-  50% {
-    opacity: 0;
-  }
 }
 
 .citations {
@@ -1437,16 +1452,15 @@ watch(activeTab, () => {
   grid-template-columns: 32px minmax(0, 1fr) auto;
   gap: var(--space-2);
   align-items: baseline;
-  padding: var(--space-2) var(--space-3);
-  background: var(--neutral-0);
-  border: 1px solid var(--neutral-200);
-  border-radius: var(--radius-input);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: border-color 120ms ease-out;
+  transition: background-color var(--dur-fast) var(--ease-soft);
 }
 
 .citations li:hover {
-  border-color: var(--accent-400);
+  background: var(--accent-50);
 }
 
 .ask-actions {
@@ -1459,7 +1473,7 @@ watch(activeTab, () => {
 .qa-history {
   margin-top: var(--space-5);
   padding-top: var(--space-4);
-  border-top: 1px solid var(--neutral-200);
+  border-top: 1px solid var(--border-soft);
 }
 
 .qa-history ul {
@@ -1480,7 +1494,7 @@ watch(activeTab, () => {
   border-radius: var(--radius-input);
   cursor: pointer;
   font-size: 12.5px;
-  color: var(--neutral-600);
+  color: var(--text-muted);
 }
 
 .qa-history li:hover {
@@ -1496,13 +1510,13 @@ watch(activeTab, () => {
 
 .cite-where {
   font-size: 12.5px;
-  color: var(--neutral-700);
+  color: var(--text);
 }
 
 .cite-snippet {
   grid-column: 2 / -1;
   font-size: 12px;
-  color: var(--neutral-500);
+  color: var(--text-muted);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;

@@ -1,5 +1,7 @@
 package com.lky.nexus.app.chat.model.dto;
 
+import java.util.List;
+
 /**
  * 助手回复的落库草稿（Step 1.6 的 AI 链路使用）。
  *
@@ -20,7 +22,9 @@ public record AssistantReplyDraft(
         String finishReason,
         String requestId,
         String status,
-        String errorMsg) {
+        String errorMsg,
+        // Agent 模式的工具调用痕迹（非工具场景为 null）：落进 chat_message.metadata
+        List<MessageToolCall> toolCalls) {
 
     /** 全部字段可空的构建器式工厂：先建骨架，边生成边补。 */
     public static AssistantReplyDraftBuilder builder() {
@@ -41,6 +45,7 @@ public record AssistantReplyDraft(
         private String requestId;
         private String status;
         private String errorMsg;
+        private List<MessageToolCall> toolCalls;
 
         public AssistantReplyDraftBuilder content(String value) {
             this.content = value;
@@ -90,9 +95,15 @@ public record AssistantReplyDraft(
             return this;
         }
 
+        public AssistantReplyDraftBuilder toolCalls(List<MessageToolCall> value) {
+            this.toolCalls = value;
+            return this;
+        }
+
         public AssistantReplyDraft build() {
             return new AssistantReplyDraft(content, model, provider, promptTokens, completionTokens,
-                    totalTokens, latencyMs, firstTokenMs, finishReason, requestId, status, errorMsg);
+                    totalTokens, latencyMs, firstTokenMs, finishReason, requestId, status, errorMsg,
+                    toolCalls);
         }
     }
 }

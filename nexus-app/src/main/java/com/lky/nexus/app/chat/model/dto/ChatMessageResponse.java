@@ -1,6 +1,7 @@
 package com.lky.nexus.app.chat.model.dto;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 消息视图。
@@ -20,5 +21,7 @@ public record ChatMessageResponse(
         Integer firstTokenMs,
         String status,
         String errorMsg,
-        LocalDateTime createdAt) {
+        LocalDateTime createdAt,
+        // Agent 模式下的工具调用痕迹（普通对话为空列表）：刷新后仍能看到"检索了什么"
+        List<MessageToolCall> toolCalls) {
 }

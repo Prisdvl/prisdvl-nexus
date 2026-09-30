@@ -87,6 +87,32 @@ class ChatStreamLiveTest {
     }
 
     @Test
+    @DisplayName("Agent 模式：实时推送 tool_call / tool_result，并把痕迹随消息留档")
+    void agentModeStreamsToolEventsAndPersistsTrace() throws Exception {
+        Session session = newSession("stream-agent");
+        Long conversationId = createConversation(session.token(), "AGENT");
+
+        StreamResult result = consumeStream(session, conversationId,
+                "我的笔记里缓存击穿怎么解决？请先检索我的知识库。", 0);
+
+        assertThat(result.errorData()).as("不应出现 error 事件").isNull();
+        assertThat(result.events()).as("Agent 模式必须带上工具事件").contains("tool_call", "tool_result");
+        assertThat(result.toolCalls().get(0)).as("tool_call 要说明调用的是哪个工具").contains("knowledge_search");
+        assertThat(result.deltaText()).as("最终仍需给出回答").isNotBlank();
+
+        PageResult<ChatMessageResponse> messages =
+                chatMessageService.listMessages(session.userId(), conversationId, 1, 20);
+        ChatMessageResponse assistant = messages.list().get(1);
+        assertThat(assistant.toolCalls())
+                .as("工具痕迹必须落库，刷新后仍可回看")
+                .isNotEmpty();
+        assertThat(assistant.toolCalls().get(0).tool()).isEqualTo("knowledge_search");
+
+        log.info("Agent 流式完成：工具调用 {} 次，回答长度={}", result.toolCalls().size(),
+                result.deltaText().length());
+    }
+
+    @Test
     @DisplayName("停止生成：收到若干分片后停止，上游被中断、部分内容以 STOPPED 落库")
     void stopInterruptsGenerationAndPersistsPartialContent() throws Exception {
         Session session = newSession("stream-stop");
@@ -139,6 +165,8 @@ class ChatStreamLiveTest {
         String doneData = null;
         String errorData = null;
         String requestId = null;
+        List<String> toolCalls = new ArrayList<>();
+        List<String> toolResults = new ArrayList<>();
         boolean cancelled = false;
         int deltaCount = 0;
 
@@ -167,8 +195,10 @@ class ChatStreamLiveTest {
                         case "usage" -> usageData = data;
                         case "done" -> doneData = data;
                         case "error" -> errorData = data;
+                        case "tool_call" -> toolCalls.add(data);
+                        case "tool_result" -> toolResults.add(data);
                         default -> {
-                            // 其它事件（retrieval / citation / tool_call 等）Phase 3+ 才会出现
+                            // 其它事件（retrieval / citation 等）Phase 3+ 才会出现
                         }
                     }
                 }
@@ -177,7 +207,7 @@ class ChatStreamLiveTest {
 
         assertThat(metaData).as("必须收到 meta 事件").isNotNull();
         return new StreamResult(events, deltaText.toString(), metaData, usageData, doneData, errorData,
-                deltaCount, cancelled);
+                deltaCount, cancelled, toolCalls, toolResults);
     }
 
     private boolean stopStream(String requestId, String token) throws Exception {
@@ -211,6 +241,14 @@ class ChatStreamLiveTest {
         return Long.valueOf(JsonPath.read(body, "$.data.id").toString());
     }
 
+    /** 指定模式的会话（Agent 模式需要走带工具的那条链路）。 */
+    private Long createConversation(String token, String mode) throws Exception {
+        String body = post("/api/chat/conversations", """
+                {"title":"流式测试","mode":"%s"}
+                """.formatted(mode), token);
+        return Long.valueOf(JsonPath.read(body, "$.data.id").toString());
+    }
+
     private String post(String path, String jsonBody, String token) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri(path))
                 .header("Content-Type", "application/json")
@@ -237,6 +275,8 @@ class ChatStreamLiveTest {
                                 String doneData,
                                 String errorData,
                                 int deltaCount,
-                                boolean cancelled) {
+                                boolean cancelled,
+                                List<String> toolCalls,
+                                List<String> toolResults) {
     }
 }

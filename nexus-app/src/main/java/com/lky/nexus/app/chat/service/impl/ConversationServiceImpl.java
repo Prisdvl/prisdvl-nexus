@@ -66,8 +66,12 @@ public class ConversationServiceImpl implements ConversationService {
         // title 为空说明要靠首轮消息自动生成
         conversation.setTitleAuto(!StringUtils.hasText(title));
         conversation.setMode(mode.name());
-        // 记下本会话使用的模型角色：换模型时历史会话仍能追溯到当初用的是哪个角色
-        conversation.setModelRole(AiModelProperties.Role.CHAT_DEFAULT);
+        // 记下本会话使用的模型角色：换模型时历史会话仍能追溯到当初用的是哪个角色。
+        // Agent 模式用专门的 chat.agent 角色——工具调用对模型能力的要求与普通对话不同，
+        // 两条链路分开配置才能在"日常对话用便宜模型、Agent 用强模型"之间取舍。
+        conversation.setModelRole(mode == ChatMode.AGENT
+                ? AiModelProperties.Role.CHAT_AGENT
+                : AiModelProperties.Role.CHAT_DEFAULT);
         conversation.setMessageCount(0);
         conversation.setPinned(false);
         LocalDateTime now = LocalDateTime.now();

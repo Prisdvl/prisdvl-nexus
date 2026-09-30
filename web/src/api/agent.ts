@@ -1,27 +1,12 @@
 import client from './client'
 
-/** 一次工具调用痕迹（"用户可控"的透明性：每一步做了什么都要看得见）。 */
-export interface ToolCallRecord {
-  tool: string
-  input: string
-  resultSummary: string
-}
-
-export interface AgentAnswer {
-  answer: string
-  toolCalls: ToolCallRecord[]
-  usedTools: boolean
-}
-
 /**
- * 问 Agent：模型先决定是否检索知识库（工具循环），再基于结果回答。
- * 工具调用痕迹随回答返回，前端把它们渲染成步骤条。
+ * Agent 评测接口。
+ *
+ * 问答本身走 {@code /api/chat/stream}（见 {@code api/chat.ts}）：
+ * Agent 对话是"会话 + 消息 + 流式"的通用链路，不该为它单开一套接口。
+ * 这里只保留评测——它是 Agent 质量的回归手段，与聊天界面无关。
  */
-export function askAgent(question: string) {
-  return client.post<never, AgentAnswer>('/agent/ask', { question })
-}
-
-/** 评测用例：问题 + 预期出现的要点（笔记中会原文出现的术语）。 */
 export interface EvalCase {
   question: string
   expectedPoints: string[]

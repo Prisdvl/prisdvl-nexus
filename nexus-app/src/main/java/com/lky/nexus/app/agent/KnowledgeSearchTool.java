@@ -10,9 +10,11 @@ import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -60,9 +62,13 @@ public class KnowledgeSearchTool {
                     + "不要凭模型自身的知识回答与知识库相关的问题。")
     public String search(
             @ToolParam(description = "检索关键词或问题，用中文自然语言表述") String query,
-            @ToolParam(description = "返回条数，默认 5，最大 10") int topK) {
-        Long userId = AgentContext.requireUserId();
+            @ToolParam(description = "返回条数，默认 5，最大 10") int topK,
+            ToolContext toolContext) {
+        Long userId = AgentContext.requireUserId(toolContext);
         int limit = Math.clamp(topK <= 0 ? 5 : topK, 1, 10);
+        // 先报"开始检索"：流式对话据此把"正在检索知识库…"实时推给用户，
+        // 而不是让用户对着空屏等几秒（检索本身要走 ES + pgvector）
+        AgentContext.call(toolContext, "knowledge_search", query);
 
         List<ChunkSearchService.SearchHit> all = new ArrayList<>();
         List<KnowledgeBasePO> knowledgeBases = knowledgeBaseMapper.selectList(
@@ -75,12 +81,12 @@ public class KnowledgeSearchTool {
                 if (!fallback.isEmpty()) {
                     all.addAll(fallback);
                     observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_DEGRADED);
-                    AgentContext.record(new AgentContext.ToolCallRecord("knowledge_search", query,
+                    AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query,
                             "知识库「" + kb.getName() + "」精确检索不可用，已降级为关键词匹配（"
                                     + fallback.size() + " 条）"));
                 } else {
                     observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_UNAVAILABLE);
-                    AgentContext.record(new AgentContext.ToolCallRecord("knowledge_search", query,
+                    AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query,
                             "知识库「" + kb.getName() + "」检索不可用：" + ex.getMessage()));
                 }
             }
@@ -92,15 +98,18 @@ public class KnowledgeSearchTool {
         out.append("检索到 ").append(take).append(" 条结果：\n");
         for (int i = 0; i < take; i++) {
             ChunkSearchService.SearchHit hit = all.get(i);
-            out.append("[").append(i + 1).append("] 来源: ")
-                    .append(hit.documentTitle()).append(" › ").append(hit.headingPath())
-                    .append('\n')
-                    .append(clip(hit.content(), 400)).append('\n');
+            out.append("[").append(i + 1).append("] 来源: ").append(hit.documentTitle());
+            // 标题路径可能没有（降级匹配、或文档无标题层级）：这时不能把 "null" 写进模型的上下文，
+            // 模型会照抄到回答里（实测出现过"来源: 缓存击穿 › null"这种用户可见的噪声）
+            if (StringUtils.hasText(hit.headingPath())) {
+                out.append(" › ").append(hit.headingPath());
+            }
+            out.append('\n').append(clip(hit.content(), 400)).append('\n');
         }
         if (take == 0) {
             out.append("（没有检索到相关结果。若问题确实与笔记无关，请如实说明。）");
         }
-        AgentContext.record(new AgentContext.ToolCallRecord("knowledge_search", query, take + " 条结果"));
+        AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query, take + " 条结果"));
         return out.toString();
     }
 
@@ -151,7 +160,11 @@ public class KnowledgeSearchTool {
                     .map(chunk -> new ChunkSearchService.SearchHit(
                             chunk.getId(), chunk.getDocumentId(),
                             titles.getOrDefault(chunk.getDocumentId(), "未命名文档"),
-                            null, chunk.getContent(), 0.1, "like", List.of("关键词匹配")))
+                            // 切片自带标题路径，降级路径也要带上：模型据此说明"资料出自哪一节"
+                            StringUtils.hasText(chunk.getHeadingPath())
+                                    ? chunk.getHeadingPath()
+                                    : chunk.getHeading(),
+                            chunk.getContent(), 0.1, "like", List.of("关键词匹配")))
                     .toList();
         } catch (Exception ex) {
             return List.of();

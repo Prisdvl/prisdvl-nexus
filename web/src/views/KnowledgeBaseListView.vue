@@ -259,6 +259,11 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
  * - 入场：错落淡入上移，每张延迟 40ms。只播一次，且只动 transform/opacity；
  * - 悬停：整体轻微上浮 + 一层跟随卡片的浅色高光。
  * 列表是高频访问的界面（每次回列表都触发），所以入场必须短、不能有持续动画。 */
+.page {
+  /* 外壳已经提供了四周留白，这里只补页面自己的纵向节奏 */
+  padding: var(--space-4) 0 var(--space-8);
+}
+
 .card {
   transition:
     transform var(--dur-base) var(--ease-out-expo),
@@ -268,6 +273,7 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
 .card:hover {
   transform: translate3d(0, -2px, 0);
 }
+
 .page-head {
   display: flex;
   align-items: flex-start;
@@ -277,8 +283,8 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
 }
 
 .sub {
-  margin: 6px 0 0;
-  color: var(--neutral-500);
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
   font-size: 13px;
 }
 
@@ -293,15 +299,13 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
   flex-direction: column;
   gap: var(--space-4);
   padding: var(--space-5);
-  background: var(--neutral-0);
-  border: 1px solid var(--neutral-200);
+  background: var(--surface-raised);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
-  transition: box-shadow 150ms ease-out, border-color 150ms ease-out;
+  transition: box-shadow var(--dur-base) var(--ease-out-expo);
 }
 
 .card:hover {
-  border-color: var(--neutral-300);
   box-shadow: var(--shadow-raised);
 }
 
@@ -321,24 +325,25 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
 }
 
 .desc {
-  margin: 6px 0 0;
-  color: var(--neutral-500);
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
   font-size: 13px;
   min-height: 20px;
 }
 
+/* 指标不再用上下分隔线（圆润路线里横线越少越软），改成一块浅色圆角底 */
 .metrics {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: var(--space-3);
   margin: 0;
-  padding: var(--space-3) 0;
-  border-top: 1px solid var(--neutral-200);
-  border-bottom: 1px solid var(--neutral-200);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
 }
 
 .metrics dt {
-  color: var(--neutral-500);
+  color: var(--text-muted);
   font-size: 11.5px;
 }
 
@@ -346,7 +351,7 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
   margin: 2px 0 0;
   font-size: 19px;
   font-weight: 600;
-  color: var(--neutral-900);
+  color: var(--text-strong);
   letter-spacing: -0.02em;
 }
 
@@ -355,18 +360,18 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
   align-items: center;
   gap: 6px;
   margin: 0;
-  color: var(--neutral-500);
+  color: var(--text-faint);
   font-size: 12.5px;
 }
 
 .task {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .task-text {
-  color: var(--neutral-500);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -383,13 +388,13 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
 
 .empty-hint {
   margin: 0 0 var(--space-4);
-  color: var(--neutral-500);
+  color: var(--text-muted);
   font-size: 13px;
 }
 
 .hint {
   margin: 0;
-  color: var(--neutral-500);
+  color: var(--text-muted);
   font-size: 12.5px;
   line-height: 1.6;
 }

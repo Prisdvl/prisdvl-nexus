@@ -1,0 +1,400 @@
+/*
+ * Element Plus 皮肤（Soft & Rounded）
+ *
+ * 只做三件事：把 Element Plus 的变量对齐到我们的令牌、把圆角/阴影调柔、把交互反馈改成
+ * "填充色变化"而不是"边框变深"。**不覆盖组件结构**（尺寸、间距、DOM 顺序都不动），
+ * 这样升级 Element Plus 时这份文件几乎不需要改。
+ *
+ * 引入顺序很重要：必须在 element-plus/dist/index.css 之后，同权重下后者生效。
+ */
+
+/* ============================================================
+ * 1. 变量对齐：Element Plus 的默认蓝 + 硬边框，全部换成我们的令牌
+ * ============================================================ */
+:root {
+  /* 主色：与 --accent-* 同一套值，避免出现"框架蓝 + 自定青"两个强调色 */
+  --el-color-primary: var(--accent-500);
+  --el-color-primary-light-3: var(--accent-400);
+  --el-color-primary-light-5: var(--accent-300);
+  --el-color-primary-light-7: var(--accent-200);
+  --el-color-primary-light-8: var(--accent-100);
+  --el-color-primary-light-9: var(--accent-50);
+  --el-color-primary-dark-2: var(--accent-600);
+
+  --el-color-success: var(--ok);
+  --el-color-success-light-9: var(--ok-soft);
+  --el-color-warning: var(--warn);
+  --el-color-warning-light-9: var(--warn-soft);
+  --el-color-danger: var(--danger);
+  --el-color-danger-light-9: var(--danger-soft);
+  --el-color-error: var(--danger);
+  --el-color-error-light-9: var(--danger-soft);
+  --el-color-info: var(--info);
+  --el-color-info-light-9: var(--info-soft);
+
+  --el-text-color-primary: var(--text-strong);
+  --el-text-color-regular: var(--text);
+  --el-text-color-secondary: var(--text-muted);
+  --el-text-color-placeholder: var(--text-faint);
+  --el-text-color-disabled: var(--text-faint);
+  --el-text-color-primary-foreground: #ffffff;
+
+  --el-border-color: var(--border);
+  --el-border-color-light: var(--border);
+  --el-border-color-lighter: var(--border-soft);
+  --el-border-color-extra-light: var(--border-soft);
+  --el-border-color-dark: var(--border-strong);
+  --el-border-color-darker: var(--border-strong);
+
+  --el-fill-color: var(--surface-hover);
+  --el-fill-color-light: var(--surface-sunken);
+  --el-fill-color-lighter: var(--surface-sunken);
+  --el-fill-color-extra-light: var(--surface-raised);
+  --el-fill-color-blank: var(--surface-raised);
+
+  --el-bg-color: var(--surface-raised);
+  --el-bg-color-page: var(--surface-page);
+  --el-bg-color-overlay: var(--surface-raised);
+
+  /* 圆角：整站抬一档，这是"柔和圆润"最大的单一来源 */
+  --el-border-radius-base: var(--radius-input);
+  --el-border-radius-small: var(--radius-sm);
+  --el-border-radius-round: var(--radius-chip);
+  --el-border-radius-circle: 50%;
+
+  --el-box-shadow: var(--shadow-raised);
+  --el-box-shadow-light: var(--shadow-card);
+  --el-box-shadow-lighter: var(--shadow-xs);
+  --el-box-shadow-dark: var(--shadow-pop);
+
+  --el-font-family: var(--font-sans);
+  --el-transition-duration: var(--dur-base);
+  /* 组件高度略增：圆角变大后，同样的高度会显得扁 */
+  --el-component-size: 34px;
+  --el-component-size-large: 42px;
+  --el-component-size-small: 28px;
+}
+
+/* ============================================================
+ * 2. 基础件：按钮 / 输入 / 卡片 / 浮层
+ * ============================================================ */
+
+/* 按钮：胶囊化不彻底——全用胶囊会显得"营销页"；用输入框同档圆角 + 更柔的投影 */
+.el-button {
+  --el-button-hover-bg-color: var(--accent-400);
+  --el-button-hover-border-color: var(--accent-400);
+  --el-button-active-bg-color: var(--accent-600);
+  --el-button-active-border-color: var(--accent-600);
+  border-radius: var(--radius-input);
+  font-weight: 500;
+  transition:
+    background-color var(--dur-fast) var(--ease-soft),
+    border-color var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft),
+    box-shadow var(--dur-fast) var(--ease-soft);
+}
+
+.el-button--primary {
+  box-shadow: 0 8px 18px -10px rgb(58 143 136 / 70%);
+}
+
+.el-button--primary:hover {
+  box-shadow: 0 10px 22px -10px rgb(58 143 136 / 80%);
+}
+
+/* 默认按钮：去掉硬边框感，靠填充色表达可点 */
+.el-button--default {
+  background: var(--surface-raised);
+  border-color: var(--border);
+}
+
+.el-button--default:hover {
+  background: var(--accent-50);
+  border-color: var(--accent-200);
+  color: var(--accent-600);
+}
+
+.el-button.is-link,
+.el-button.is-text {
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.el-button + .el-button {
+  margin-left: var(--space-2);
+}
+
+/* 输入类：默认内阴影当边框，聚焦时是"柔和光圈"而不是"黑边变蓝边" */
+.el-input__wrapper,
+.el-textarea__inner {
+  border-radius: var(--radius-input);
+  background-color: var(--surface-raised);
+  box-shadow: 0 0 0 1px var(--border) inset;
+  transition: box-shadow var(--dur-fast) var(--ease-soft);
+}
+
+.el-input__wrapper:hover,
+.el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px var(--border-strong) inset;
+}
+
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus {
+  box-shadow:
+    0 0 0 1px var(--accent-400) inset,
+    0 0 0 4px var(--accent-50);
+}
+
+.el-select__wrapper {
+  border-radius: var(--radius-input);
+  box-shadow: 0 0 0 1px var(--border) inset;
+}
+
+.el-select__wrapper.is-focused {
+  box-shadow:
+    0 0 0 1px var(--accent-400) inset,
+    0 0 0 4px var(--accent-50);
+}
+
+/* 卡片 / 面板：圆润路线下靠阴影分层，不靠边框 */
+.el-card {
+  border: none;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+/* 对话框 / 抽屉 / 气泡：大圆角 + 大范围投影 */
+.el-dialog {
+  border-radius: var(--radius-overlay);
+  box-shadow: var(--shadow-pop);
+  padding: var(--space-5);
+}
+
+.el-dialog__header {
+  padding: 0 0 var(--space-4);
+  margin-right: 0;
+}
+
+.el-dialog__title {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.el-dialog__body {
+  padding: 0;
+}
+
+.el-dialog__footer {
+  padding: var(--space-5) 0 0;
+}
+
+.el-drawer {
+  border-radius: var(--radius-overlay) 0 0 var(--radius-overlay);
+}
+
+.el-popper.is-light,
+.el-dropdown__popper,
+.el-select__popper {
+  border-radius: var(--radius-card) !important;
+  border-color: var(--border-soft) !important;
+  box-shadow: var(--shadow-raised) !important;
+}
+
+.el-dropdown-menu {
+  border-radius: var(--radius-card);
+  padding: var(--space-1);
+}
+
+.el-dropdown-menu__item {
+  border-radius: var(--radius-sm);
+}
+
+.el-message-box {
+  border-radius: var(--radius-overlay);
+  box-shadow: var(--shadow-pop);
+  padding: var(--space-5);
+}
+
+.el-message {
+  border-radius: var(--radius-chip);
+  border-color: var(--border-soft);
+  box-shadow: var(--shadow-raised);
+  padding: 10px var(--space-4);
+}
+
+.el-notification {
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-raised);
+}
+
+/* ============================================================
+ * 3. 数据展示：标签 / 进度 / 空状态 / 加载
+ * ============================================================ */
+
+/* 标签一律胶囊形：圆角体系里最容易"显硬"的就是小方块 */
+.el-tag {
+  border-radius: var(--radius-chip);
+  padding: 0 10px;
+  border-color: var(--border);
+  background-color: var(--surface-sunken);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.el-tag--success {
+  background-color: var(--ok-soft);
+  border-color: transparent;
+  color: var(--ok);
+}
+
+.el-tag--warning {
+  background-color: var(--warn-soft);
+  border-color: transparent;
+  color: var(--warn);
+}
+
+.el-tag--danger {
+  background-color: var(--danger-soft);
+  border-color: transparent;
+  color: var(--danger);
+}
+
+.el-tag--info {
+  background-color: var(--info-soft);
+  border-color: transparent;
+  color: var(--info);
+}
+
+.el-tag.is-plain {
+  background-color: var(--surface-raised);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+.el-progress-bar__outer,
+.el-progress-bar__inner {
+  border-radius: var(--radius-chip);
+}
+
+.el-empty {
+  --el-empty-fill-color-0: var(--surface-sunken);
+  --el-empty-fill-color-1: var(--surface-sunken);
+  --el-empty-fill-color-2: var(--surface-hover);
+  --el-empty-fill-color-3: var(--surface-sunken);
+  --el-empty-fill-color-4: var(--surface-hover);
+  padding: var(--space-7) var(--space-5);
+}
+
+.el-loading-mask {
+  background-color: rgb(251 250 248 / 72%);
+  border-radius: var(--radius-card);
+}
+
+/* ============================================================
+ * 4. 导航类：标签页 / 单选按钮组 / 开关
+ * ============================================================ */
+
+/* 标签页改成"胶囊分段控件"：去掉贯穿的下划线，激活项用浅色填充 */
+.el-tabs__nav-wrap::after {
+  display: none;
+}
+
+.el-tabs__header {
+  margin-bottom: var(--space-5);
+}
+
+.el-tabs__nav {
+  gap: var(--space-1);
+  background: var(--surface-sunken);
+  padding: var(--space-1);
+  border-radius: var(--radius-chip);
+}
+
+.el-tabs__item {
+  height: 30px;
+  line-height: 30px;
+  padding: 0 var(--space-4) !important;
+  border-radius: var(--radius-chip);
+  color: var(--text-muted);
+  font-weight: 500;
+  transition:
+    background-color var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft);
+}
+
+.el-tabs__item:hover {
+  color: var(--accent-600);
+  background: var(--surface-raised);
+}
+
+.el-tabs__item.is-active {
+  color: var(--accent-600);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-xs);
+}
+
+.el-tabs__active-bar {
+  display: none;
+}
+
+.el-radio-group {
+  gap: var(--space-1);
+}
+
+.el-radio-button__inner {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-weight: 500;
+  box-shadow: none !important;
+}
+
+.el-radio-button:first-child .el-radio-button__inner {
+  border-radius: var(--radius-chip) 0 0 var(--radius-chip);
+}
+
+.el-radio-button:last-child .el-radio-button__inner {
+  border-radius: 0 var(--radius-chip) var(--radius-chip) 0;
+}
+
+.el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background: var(--accent-500);
+  border-color: var(--accent-500);
+  color: #fff;
+  box-shadow: none !important;
+}
+
+.el-switch.is-checked .el-switch__core {
+  background-color: var(--accent-500);
+  border-color: var(--accent-500);
+}
+
+/* ============================================================
+ * 5. 滚动条：细、圆、只在悬停时明显（聊天区大量滚动，默认样式太抢眼）
+ * ============================================================ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid transparent;
+  border-radius: var(--radius-chip);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: content-box;
+}

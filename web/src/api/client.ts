@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 /**
@@ -22,16 +23,36 @@ export interface PageResult<T> {
 
 const TOKEN_KEY = 'nexus.token'
 
-export function getToken(): string {
+/**
+ * 令牌的<b>响应式</b>镜像。
+ *
+ * <p>踩过的坑：localStorage 不是响应式的。`App.vue` 的 `showShell` 曾经直接调
+ * `getToken()`，而它读的是 localStorage —— 这个 computed 因此<b>没有任何依赖</b>，
+ * 值只在首次求值时算一次并永久缓存。后果是登录成功后外壳（侧栏 + 主区）不挂载、
+ * 页面看起来"样式全乱"（因为只剩一个没有布局的裸列表），必须 F5 整页刷新才恢复。
+ *
+ * <p>修法不是在 App.vue 里补一个 watch（那只是把症状挪个地方），而是让令牌本身可被追踪：
+ * 所有读写都经过这里，写入时同步更新 ref，computed / 模板自然会在登录、退出、
+ * 401 过期时立即重算。
+ */
+export const tokenRef = ref(readToken())
+
+function readToken(): string {
   return localStorage.getItem(TOKEN_KEY) ?? ''
+}
+
+export function getToken(): string {
+  return tokenRef.value
 }
 
 export function setToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token)
+  tokenRef.value = token
 }
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY)
+  tokenRef.value = ''
 }
 
 const client = axios.create({

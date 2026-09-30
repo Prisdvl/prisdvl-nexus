@@ -1,4 +1,5 @@
-import client, { getToken, type PageResult } from './client'
+import client, { type PageResult } from './client'
+import { postSse } from '@/utils/sse'
 
 /*
  * 说明：所有 id 都是 string。
@@ -345,9 +346,7 @@ export interface StreamHandlers {
 /**
  * 流式问答（SSE over POST）。
  *
- * 为什么不用 EventSource：它只支持 GET，而问答需要 POST 带 body ✓
- * 因此用 fetch + ReadableStream 手工解析 SSE 帧（event:/data: 两种行）。
- *
+ * 帧的解析规则与 Agent 对话完全一样，因此复用 {@code utils/sse.ts}（解析只有一处实现）。
  * 事件顺序由后端保证：meta → delta… → done（done 里带引用与留档 id）。
  */
 export async function askQuestionStream(
@@ -358,46 +357,17 @@ export async function askQuestionStream(
   handlers: StreamHandlers,
   signal?: AbortSignal
 ): Promise<void> {
-  const response = await fetch(`/api/knowledge-bases/${id}/ask/stream`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${getToken()}`
-    },
-    body: JSON.stringify({ question, topK, history }),
-    signal
-  })
-  if (!response.ok || !response.body) {
-    throw new Error(`流式请求失败（HTTP ${response.status}）`)
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let buffer = ''
-  let eventName = ''
-
-  // 逐块读取：SSE 帧可能被 TCP 分片切开，因此要先缓冲、按换行切分、把最后一段留到下一轮
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
-    for (const line of lines) {
-      if (line.startsWith('event:')) {
-        eventName = line.slice(6).trim()
-      } else if (line.startsWith('data:')) {
-        const raw = line.slice(5).trim()
-        if (!raw) continue
-        try {
-          const payload = JSON.parse(raw)
-          if (eventName === 'meta') handlers.onMeta?.(payload as StreamMeta)
-          else if (eventName === 'delta') handlers.onDelta?.((payload as { text: string }).text ?? '')
-          else if (eventName === 'done') handlers.onDone?.(payload as StreamDone)
-        } catch {
-          // 非 JSON 行（心跳等）直接忽略，不影响流
-        }
+  await postSse(
+    `/api/knowledge-bases/${id}/ask/stream`,
+    { question, topK, history },
+    {
+      signal,
+      onFrame: ({ event, data }) => {
+        const payload = data as never
+        if (event === 'meta') handlers.onMeta?.(payload as StreamMeta)
+        else if (event === 'delta') handlers.onDelta?.((payload as { text: string }).text ?? '')
+        else if (event === 'done') handlers.onDone?.(payload as StreamDone)
       }
     }
-  }
+  )
 }

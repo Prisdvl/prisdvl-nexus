@@ -54,11 +54,12 @@ async function submit() {
 <template>
   <div class="auth">
     <div class="grid-backdrop" aria-hidden="true"></div>
+
     <div class="panel">
       <div class="head">
         <span class="mark">N</span>
         <h1 class="shine">Prisdvl-Nexus</h1>
-        <p class="sub">个人知识库 · 混合检索（BM25 + 向量）</p>
+        <p class="sub">知识库 · 混合检索 · Agent 对话</p>
       </div>
 
       <el-form
@@ -111,57 +112,70 @@ async function submit() {
   display: grid;
   place-items: center;
   min-height: 100vh;
-  background: var(--neutral-100);
   padding: var(--space-5);
+  /* 顶部一层极浅的主色晕染（不是模糊光斑：只有颜色渐变，没有大范围 blur） */
+  background:
+    radial-gradient(120% 60% at 50% 0%, var(--accent-50) 0%, transparent 60%),
+    var(--surface-page);
 }
 
 .panel {
   width: 100%;
-  max-width: 380px;
-  padding: var(--space-6);
-  background: var(--neutral-0);
-  border: 1px solid var(--neutral-200);
+  max-width: 400px;
+  padding: var(--space-7) var(--space-6) var(--space-6);
+  background: var(--surface-raised);
   border-radius: var(--radius-overlay);
-  box-shadow: var(--shadow-raised);
+  box-shadow: var(--shadow-pop);
 }
 
 .head {
   text-align: center;
-  margin-bottom: var(--space-5);
+  margin-bottom: var(--space-6);
 }
 
 .mark {
   display: inline-grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 11px;
-  background: var(--accent-500);
+  width: 46px;
+  height: 46px;
+  border-radius: 16px;
+  background: linear-gradient(145deg, var(--accent-400), var(--accent-600));
   color: #fff;
   font-weight: 700;
-  font-size: 18px;
-  margin-bottom: var(--space-3);
+  font-size: 20px;
+  margin-bottom: var(--space-4);
+  box-shadow: 0 14px 28px -14px rgb(58 143 136 / 90%);
 }
 
 h1 {
-  font-size: 19px;
+  font-size: 20px;
 }
 
 .sub {
-  margin: 6px 0 0;
-  color: var(--neutral-500);
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
   font-size: 13px;
 }
 
+/* 登录按钮做成胶囊：页面上唯一的"实心大色块"，圆润一点更像邀请而不是命令 */
 .submit {
   width: 100%;
+  height: 44px;
   margin-top: var(--space-2);
+  border-radius: var(--radius-chip);
+  font-size: 15px;
 }
 
 .switch {
-  margin-top: var(--space-4);
+  margin-top: var(--space-5);
   text-align: center;
   font-size: 13px;
-  color: var(--neutral-500);
+  color: var(--text-muted);
+}
+
+:deep(.el-form-item__label) {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  padding-bottom: var(--space-1);
 }
 </style>

@@ -2,8 +2,13 @@ package com.lky.nexus.app.chat.service.impl;
 
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.app.agent.AgentContext;
+import com.lky.nexus.app.agent.AgentPrompts;
+import com.lky.nexus.app.agent.KnowledgeSearchTool;
+import com.lky.nexus.app.chat.model.ChatMode;
 import com.lky.nexus.app.chat.model.MessageStatus;
 import com.lky.nexus.app.chat.model.dto.AssistantReplyDraft;
+import com.lky.nexus.app.chat.model.dto.MessageToolCall;
 import com.lky.nexus.app.chat.model.entity.ChatConversationPO;
 import com.lky.nexus.app.chat.model.entity.ChatMessagePO;
 import com.lky.nexus.app.chat.service.ChatMemoryKeys;
@@ -20,6 +25,7 @@ import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -28,7 +34,10 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -63,23 +72,35 @@ public class ChatStreamServiceImpl implements ChatStreamService {
     private final ChatClientFactory chatClientFactory;
     private final ChatMemory chatMemory;
     private final StreamCancellationRegistry cancellationRegistry;
+    private final KnowledgeSearchTool knowledgeSearchTool;
 
     public ChatStreamServiceImpl(ConversationService conversationService,
                                  ChatMessageService chatMessageService,
                                  ChatClientFactory chatClientFactory,
                                  ChatMemory chatMemory,
-                                 StreamCancellationRegistry cancellationRegistry) {
+                                 StreamCancellationRegistry cancellationRegistry,
+                                 KnowledgeSearchTool knowledgeSearchTool) {
         this.conversationService = conversationService;
         this.chatMessageService = chatMessageService;
         this.chatClientFactory = chatClientFactory;
         this.chatMemory = chatMemory;
         this.cancellationRegistry = cancellationRegistry;
+        this.knowledgeSearchTool = knowledgeSearchTool;
     }
 
     @Override
     public SseEmitter stream(Long userId, Long conversationId, String content) {
         // 归属校验放在最前面：异常会走全局异常处理器返回统一 JSON，而不是开一个 SSE 再报错
         ChatConversationPO conversation = conversationService.requireOwned(userId, conversationId);
+        // 模式决定这条链路要不要挂工具：PLAIN/RAG 是纯生成，AGENT 是"模型自己决定检索什么"
+        ChatMode mode = ChatMode.parse(conversation.getMode());
+        String modelRole = StringUtils.hasText(conversation.getModelRole())
+                ? conversation.getModelRole()
+                : defaultRole(mode);
+        // 取模型放在落库之前：模型未注册（4006）属于配置问题，必须在<b>产生副作用之前</b>失败。
+        // 否则会留下一条用户消息 + 一条永远停在 STREAMING 的空助手消息，用户看到的是"消息凭空多了一条"。
+        ChatClient chatClient = chatClientFactory.get(modelRole);
+
         String requestId = resolveRequestId();
 
         ChatMessagePO userMessage = chatMessageService.appendUserMessage(userId, conversationId, content, requestId);
@@ -91,10 +112,6 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                         .status(MessageStatus.STREAMING.name())
                         .build());
 
-        String modelRole = StringUtils.hasText(conversation.getModelRole())
-                ? conversation.getModelRole()
-                : AiModelProperties.Role.CHAT_DEFAULT;
-
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MILLIS);
         cancellationRegistry.register(requestId, userId);
         // 客户端主动断开 / 超时 / 出错时都要清理登记，否则内存里会留下悬挂条目
@@ -103,25 +120,37 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         emitter.onError(throwable -> cancellationRegistry.clear(requestId));
 
         StreamSession session = new StreamSession(userId, conversationId, assistantMessage.getId(),
-                requestId, modelRole, emitter);
+                requestId, modelRole, mode, emitter);
         session.sendMeta(userMessage.getId(), assistantMessage.getId());
 
-        ChatClient chatClient = chatClientFactory.get(modelRole);
         MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
+        boolean agentMode = mode == ChatMode.AGENT;
 
-        Flux<ChatResponse> flux = chatClient.prompt()
-                .user(content)
-                .advisors(spec -> spec.advisors(memoryAdvisor)
-                        .param(ChatMemory.CONVERSATION_ID, ChatMemoryKeys.of(conversationId)))
-                .stream()
-                .chatResponse();
+        // Flux.defer：整条 prompt 的构建推迟到"订阅那一刻"，这样工具循环才落在
+        // boundedElastic 的工作线程上（而不是 MVC 请求线程）
+        Flux<ChatResponse> modelFlux = Flux.defer(() -> {
+            ChatClient.ChatClientRequestSpec request = chatClient.prompt()
+                    .user(content)
+                    .advisors(a -> a.advisors(memoryAdvisor)
+                            .param(ChatMemory.CONVERSATION_ID, ChatMemoryKeys.of(conversationId)));
+            if (agentMode) {
+                // toolContext 是工具拿"当前用户"的唯一通道（详见 AgentContext 的类注释：
+                // 流式链路上工具的执行线程与订阅线程不是同一个，ThreadLocal 会静默丢用户）。
+                // 把 session 一起塞进去，工具执行时就能实时把"检索中 / 检索完成"推给前端。
+                request = request.system(AgentPrompts.AGENT_SYSTEM)
+                        .toolContext(AgentContext.of(userId, session))
+                        .tools(ToolCallbacks.from(knowledgeSearchTool));
+            }
+            return request.stream().chatResponse();
+        });
 
         // subscribeOn：分片读取可能阻塞，必须离开 MVC 请求线程
-        Disposable subscription = flux.subscribeOn(Schedulers.boundedElastic())
+        Disposable subscription = modelFlux.subscribeOn(Schedulers.boundedElastic())
                 .subscribe(session::onChunk, session::onError, session::onComplete);
         session.attach(subscription);
 
-        log.info("开始流式生成 requestId={}, conversationId={}, modelRole={}", requestId, conversationId, modelRole);
+        log.info("开始流式生成 requestId={}, conversationId={}, mode={}, modelRole={}",
+                requestId, conversationId, mode, modelRole);
         return emitter;
     }
 
@@ -137,19 +166,30 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                 : UUID.randomUUID().toString().replace("-", "");
     }
 
+    /** 会话没记模型角色时的兜底：Agent 模式用 chat.agent，其余用 chat.default。 */
+    private String defaultRole(ChatMode mode) {
+        return mode == ChatMode.AGENT
+                ? AiModelProperties.Role.CHAT_AGENT
+                : AiModelProperties.Role.CHAT_DEFAULT;
+    }
+
     /**
      * 一次流式会话的可变状态与终止逻辑。
      *
      * <p>做成内部类而不是把十几个局部变量塞进 lambda：终止路径有四条
      * （正常结束 / 用户停止 / 异常 / 客户端断开），状态放在对象里才能让"只终止一次"这件事清晰可读。
+     *
+     * <p>同时实现 {@link AgentContext.ToolCallListener}：工具执行在别的线程上，
+     * 由它把"开始检索 / 检索完成"实时转成 SSE 事件，并留一份痕迹用于落库。
      */
-    private final class StreamSession {
+    private final class StreamSession implements AgentContext.ToolCallListener {
 
         private final Long userId;
         private final Long conversationId;
         private final Long assistantMessageId;
         private final String requestId;
         private final String modelRole;
+        private final ChatMode mode;
         private final SseEmitter emitter;
 
         private final StringBuilder assembled = new StringBuilder();
@@ -157,18 +197,21 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         private final AtomicLong firstTokenNanos = new AtomicLong();
         private final AtomicBoolean finalized = new AtomicBoolean(false);
         private final AtomicReference<Disposable> subscription = new AtomicReference<>();
+        /** 工具调用痕迹：工具在订阅线程上执行、结束时在订阅线程上落库，但仍然按并发安全的容器声明 */
+        private final List<MessageToolCall> toolCalls = Collections.synchronizedList(new ArrayList<>());
 
         private volatile Usage lastUsage;
         private volatile String model;
         private volatile String finishReason;
 
         private StreamSession(Long userId, Long conversationId, Long assistantMessageId,
-                              String requestId, String modelRole, SseEmitter emitter) {
+                              String requestId, String modelRole, ChatMode mode, SseEmitter emitter) {
             this.userId = userId;
             this.conversationId = conversationId;
             this.assistantMessageId = assistantMessageId;
             this.requestId = requestId;
             this.modelRole = modelRole;
+            this.mode = mode;
             this.emitter = emitter;
         }
 
@@ -184,7 +227,26 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             payload.put("userMessageId", userMessageId);
             payload.put("assistantMessageId", assistantMessageId);
             payload.put("modelRole", modelRole);
+            payload.put("mode", mode.name());
             send(SseEventNames.META, payload);
+        }
+
+        // ---------- Agent 工具事件 ----------
+
+        @Override
+        public void onCall(String tool, String input) {
+            send(SseEventNames.TOOL_CALL, Map.of("tool", tool, "input", input));
+        }
+
+        @Override
+        public void onResult(AgentContext.ToolCallRecord record) {
+            MessageToolCall call = new MessageToolCall(record.tool(), record.input(), record.resultSummary());
+            toolCalls.add(call);
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("tool", call.tool());
+            payload.put("input", call.input());
+            payload.put("resultSummary", call.resultSummary());
+            send(SseEventNames.TOOL_RESULT, payload);
         }
 
         private void onChunk(ChatResponse chunk) {
@@ -256,6 +318,10 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                     ? null
                     : (int) ((firstTokenNanos.get() - startNanos) / 1_000_000);
             Usage usage = lastUsage;
+            List<MessageToolCall> trace;
+            synchronized (toolCalls) {
+                trace = List.copyOf(toolCalls);
+            }
             chatMessageService.updateAssistantMessage(userId, assistantMessageId, AssistantReplyDraft.builder()
                     .content(assembled.toString())
                     .model(model)
@@ -268,6 +334,8 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                     .requestId(requestId)
                     .status(status.name())
                     .errorMsg(errorMsg)
+                    // 工具痕迹随消息落库：刷新页面后"当时检索了什么"仍然可查
+                    .toolCalls(trace.isEmpty() ? null : trace)
                     .build());
         }
 

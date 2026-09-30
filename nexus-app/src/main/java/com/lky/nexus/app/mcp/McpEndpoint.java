@@ -131,39 +131,35 @@ public class McpEndpoint {
     private ObjectNode toolsCall(JsonNode id, JsonNode params, Long userId) {
         String toolName = params.path("name").asString("");
         JsonNode arguments = params.path("arguments");
-        Long previous = AgentContext.begin(userId);
-        try {
-            String text;
-            switch (toolName) {
-                case "knowledge_search" -> {
-                    String query = arguments.path("query").asString("");
-                    int topK = arguments.path("topK").asInt(5);
-                    if (query.isBlank()) {
-                        return error(id, -32602, "knowledge_search 缺少 query 参数");
-                    }
-                    text = knowledgeSearchTool.search(query, topK);
+        String text;
+        switch (toolName) {
+            case "knowledge_search" -> {
+                String query = arguments.path("query").asString("");
+                int topK = arguments.path("topK").asInt(5);
+                if (query.isBlank()) {
+                    return error(id, -32602, "knowledge_search 缺少 query 参数");
                 }
-                case "qa_ask" -> {
-                    String question = arguments.path("question").asString("");
-                    if (question.isBlank()) {
-                        return error(id, -32602, "qa_ask 缺少 question 参数");
-                    }
-                    text = agentService.ask(userId, question).answer();
-                }
-                default -> {
-                    return error(id, -32601, "Unknown tool: " + toolName);
-                }
+                // MCP 是外部直接调工具（不经过模型），上下文由我们显式构造
+                text = knowledgeSearchTool.search(query, topK, AgentContext.toolContext(userId));
             }
-            ObjectNode content = jsonMapper.createObjectNode();
-            ObjectNode textItem = jsonMapper.createObjectNode();
-            textItem.put("type", "text");
-            textItem.put("text", text);
-            content.putArray("content").add(textItem);
-            content.put("isError", false);
-            return result(id, content);
-        } finally {
-            AgentContext.end(previous);
+            case "qa_ask" -> {
+                String question = arguments.path("question").asString("");
+                if (question.isBlank()) {
+                    return error(id, -32602, "qa_ask 缺少 question 参数");
+                }
+                text = agentService.ask(userId, question).answer();
+            }
+            default -> {
+                return error(id, -32601, "Unknown tool: " + toolName);
+            }
         }
+        ObjectNode content = jsonMapper.createObjectNode();
+        ObjectNode textItem = jsonMapper.createObjectNode();
+        textItem.put("type", "text");
+        textItem.put("text", text);
+        content.putArray("content").add(textItem);
+        content.put("isError", false);
+        return result(id, content);
     }
 
     private ObjectNode result(JsonNode id, ObjectNode value) {
