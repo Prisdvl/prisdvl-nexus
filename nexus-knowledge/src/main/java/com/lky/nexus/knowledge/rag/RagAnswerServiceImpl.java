@@ -1,5 +1,7 @@
 package com.lky.nexus.knowledge.rag;
 
+import com.lky.nexus.common.observe.ObservabilityRegistry;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ChatClientFactory;
@@ -69,6 +71,7 @@ public class RagAnswerServiceImpl implements RagAnswerService {
     private final QaRecordMapper qaRecordMapper;
     private final JsonMapper jsonMapper;
     private final int contextTokenBudget;
+    private final ObservabilityRegistry observabilityRegistry;
 
     public RagAnswerServiceImpl(KnowledgeBaseService knowledgeBaseService,
                                 ChunkSearchService chunkSearchService,
@@ -77,6 +80,7 @@ public class RagAnswerServiceImpl implements RagAnswerService {
                                 ChatClientFactory chatClientFactory,
                                 QaRecordMapper qaRecordMapper,
                                 JsonMapper jsonMapper,
+                                ObservabilityRegistry observabilityRegistry,
                                 @Value("${nexus.rag.context-token-budget:2000}") int contextTokenBudget) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.chunkSearchService = chunkSearchService;
@@ -85,6 +89,7 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         this.chatClientFactory = chatClientFactory;
         this.qaRecordMapper = qaRecordMapper;
         this.jsonMapper = jsonMapper;
+        this.observabilityRegistry = observabilityRegistry;
         this.contextTokenBudget = contextTokenBudget;
     }
 
@@ -311,7 +316,8 @@ public class RagAnswerServiceImpl implements RagAnswerService {
             return new RagAnswer(record.getId(), answer, citations, contextTokens, truncated, reranked,
                     result.costMillis());
         } catch (Exception ex) {
-            // 留档失败不该影响用户拿到回答
+            // 留档失败不该影响用户拿到回答——但必须计数，否则这种被吞掉的失败等于没发生
+            observabilityRegistry.increment(ObservabilityRegistry.RAG_RECORD_FAILED);
             log.warn("问答记录写入失败（忽略）：{}", ex.getMessage());
             return result;
         }

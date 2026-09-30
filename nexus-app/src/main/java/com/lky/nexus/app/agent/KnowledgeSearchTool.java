@@ -1,7 +1,7 @@
 package com.lky.nexus.app.agent;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.lky.nexus.app.observe.ObservabilityRegistry;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.knowledge.mapper.ChunkMapper;
 import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;

@@ -1,5 +1,7 @@
 package com.lky.nexus.app.observe;
 
+import com.lky.nexus.common.observe.ObservabilityRegistry;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

@@ -1,5 +1,7 @@
 package com.lky.nexus.app.observe;
 
+import com.lky.nexus.common.observe.ObservabilityRegistry;
+
 import com.lky.nexus.app.auth.security.CurrentUser;
 import com.lky.nexus.common.api.Result;
 import org.springframework.web.bind.annotation.GetMapping;
