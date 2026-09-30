@@ -20,3 +20,34 @@ export interface AgentAnswer {
 export function askAgent(question: string) {
   return client.post<never, AgentAnswer>('/agent/ask', { question })
 }
+
+/** 评测用例：问题 + 预期出现的要点（笔记中会原文出现的术语）。 */
+export interface EvalCase {
+  question: string
+  expectedPoints: string[]
+}
+
+export interface EvalResult {
+  testCase: EvalCase
+  answer: string
+  missingPoints: string[]
+  citationsValid: boolean
+  citationCount: number
+  pointRecall: number
+}
+
+export interface EvalReport {
+  results: EvalResult[]
+  avgPointRecall: number
+  passed: number
+}
+
+/** 默认评测集（演示用；接口支持传入任意用例）。 */
+export const DEFAULT_EVAL_CASES: EvalCase[] = [
+  { question: '我的笔记里缓存击穿怎么解决？', expectedPoints: ['SETNX', '逻辑过期'] }
+]
+
+/** 跑评测：对每个用例走一遍 Agent，报告要点命中率与引用有效性。 */
+export function runEval(kbId: string, cases: EvalCase[]) {
+  return client.post<never, EvalReport>(`/eval/kb/${kbId}`, { cases })
+}

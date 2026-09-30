@@ -2,8 +2,9 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Promotion } from '@element-plus/icons-vue'
-import { askAgent, type AgentAnswer } from '@/api/agent'
+import { ArrowLeft, DataAnalysis, Promotion } from '@element-plus/icons-vue'
+import { askAgent, DEFAULT_EVAL_CASES, runEval, type AgentAnswer, type EvalReport } from '@/api/agent'
+import { listKnowledgeBases } from '@/api/knowledge'
 import { renderMarkdown } from '@/utils/markdown'
 
 const router = useRouter()
@@ -26,6 +27,28 @@ async function ask() {
     ElMessage.error('Agent 请求失败：' + (error instanceof Error ? error.message : String(error)))
   } finally {
     asking.value = false
+  }
+}
+
+/** 评测：对默认评测集跑一遍 Agent，报告要点命中率与引用有效性（用第一个知识库）。 */
+const evalRunning = ref(false)
+const evalReport = ref<EvalReport | null>(null)
+const evalKbName = ref('')
+
+async function runEvaluation() {
+  evalRunning.value = true
+  try {
+    const kbs = (await listKnowledgeBases()).list
+    if (!kbs.length) {
+      ElMessage.warning('还没有知识库，先导一份笔记再评测')
+      return
+    }
+    evalKbName.value = kbs[0].name
+    evalReport.value = await runEval(kbs[0].id, DEFAULT_EVAL_CASES)
+  } catch (error) {
+    ElMessage.error('评测失败：' + (error instanceof Error ? error.message : String(error)))
+  } finally {
+    evalRunning.value = false
   }
 }
 </script>
@@ -71,6 +94,37 @@ async function ask() {
       </template>
       <div v-else class="empty">问一个涉及你笔记的问题，看 Agent 如何检索并基于笔记回答</div>
     </div>
+
+    <!-- 评测：把"回答质量"变成可反复点、能看出回归的数字 -->
+    <section class="eval-box">
+      <div class="eval-head">
+        <h3>评测</h3>
+        <el-button size="small" :icon="DataAnalysis" :loading="evalRunning" @click="runEvaluation">
+          跑评测集
+        </el-button>
+      </div>
+      <p class="hint">
+        对「问题 + 预期要点」跑一遍 Agent，报告要点命中率与引用有效性
+        <template v-if="evalKbName">（知识库：{{ evalKbName }}）</template>
+      </p>
+
+      <div v-if="evalReport" class="eval-report">
+        <div class="eval-summary">
+          <span class="num">平均命中率 <b>{{ evalReport.avgPointRecall.toFixed(2) }}</b></span>
+          <span class="num">通过 <b>{{ evalReport.passed }}</b> / {{ evalReport.results.length }}</span>
+        </div>
+        <ul>
+          <li v-for="(result, index) in evalReport.results" :key="index">
+            <span class="eval-q">{{ result.testCase.question }}</span>
+            <el-tag size="small" :type="result.pointRecall === 1 ? 'success' : 'warning'">
+              {{ result.pointRecall.toFixed(2) }}
+            </el-tag>
+            <el-tag v-if="result.citationsValid" size="small" effect="plain" type="success">有来源</el-tag>
+            <span v-if="result.missingPoints.length" class="eval-missing">缺：{{ result.missingPoints.join('、') }}</span>
+          </li>
+        </ul>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -138,5 +192,68 @@ async function ask() {
   color: var(--neutral-400);
   border: 1px dashed var(--neutral-200);
   border-radius: var(--radius-input);
+}
+
+.eval-box {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--neutral-200);
+}
+
+.eval-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.eval-head h3 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.eval-report {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--neutral-0);
+  border: 1px solid var(--neutral-200);
+  border-radius: var(--radius-input);
+}
+
+.eval-summary {
+  display: flex;
+  gap: var(--space-5);
+  font-size: 13px;
+  color: var(--neutral-600);
+}
+
+.eval-summary b {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--neutral-900);
+}
+
+.eval-report ul {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.eval-report li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12.5px;
+}
+
+.eval-q {
+  color: var(--neutral-700);
+}
+
+.eval-missing {
+  color: var(--neutral-500);
+  font-size: 12px;
 }
 </style>
