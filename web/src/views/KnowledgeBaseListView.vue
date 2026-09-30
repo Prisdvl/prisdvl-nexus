@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
-import { Document, FolderOpened, Plus, UploadFilled } from '@element-plus/icons-vue'
+import { Cpu, Document, FolderOpened, Plus, UploadFilled } from '@element-plus/icons-vue'
 import {
   createKnowledgeBase,
   getImportTask,
@@ -139,7 +139,10 @@ function taskType(kb: KnowledgeBase): 'success' | 'warning' | 'danger' | 'info' 
         <h1>知识库</h1>
         <p class="sub">导入 Obsidian Vault / Markdown 笔记，切分成切片后用于混合检索</p>
       </div>
-      <el-button type="primary" :icon="Plus" @click="createVisible = true">新建知识库</el-button>
+      <div class="actions">
+        <el-button :icon="Cpu" @click="router.push('/agent')">问 Agent</el-button>
+        <el-button type="primary" :icon="Plus" @click="createVisible = true">新建知识库</el-button>
+      </div>
     </header>
 
     <div v-loading="loading" class="content">

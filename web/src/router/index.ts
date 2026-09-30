@@ -21,6 +21,12 @@ const routes: RouteRecordRaw[] = [
     name: 'knowledge-base-detail',
     component: () => import('@/views/KnowledgeBaseDetailView.vue'),
     meta: { title: '知识库详情' }
+  },
+  {
+    path: '/agent',
+    name: 'agent',
+    component: () => import('@/views/AgentView.vue'),
+    meta: { title: 'Agent' }
   }
 ]
 
