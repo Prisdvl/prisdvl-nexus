@@ -1,5 +1,7 @@
 package com.lky.nexus.knowledge.model.dto;
 
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -11,7 +13,8 @@ import jakarta.validation.constraints.Size;
  * <p>注意这里<b>不接受</b>嵌入模型参数：嵌入模型由配置里的 {@code embedding.default} 角色决定，
  * 并在建库时冻结（ADR-008）。让客户端指定模型，等于允许把两种维度的向量混进同一个库。
  *
- * <p>切分参数可选，缺省用系统默认值（400 / 50）。
+ * <p>切分参数可选，缺省用系统默认值（400 / 50）；
+ * 检索参数（retrievalTopK / similarityThreshold）同样可选，缺省 5 / 0.7（§十七）。
  */
 public record CreateKnowledgeBaseRequest(
 
@@ -22,6 +25,9 @@ public record CreateKnowledgeBaseRequest(
         @Size(max = 512, message = "描述长度不能超过 512")
         String description,
 
+        @Size(max = 512, message = "图标长度不能超过 512")
+        String icon,
+
         /** MARKDOWN_HEADING（默认，按标题结构切） / RECURSIVE（按段落递归切）。 */
         String chunkStrategy,
 
@@ -31,5 +37,13 @@ public record CreateKnowledgeBaseRequest(
 
         @Min(value = 0, message = "chunkOverlap 不能为负")
         @Max(value = 500, message = "chunkOverlap 不能大于 500")
-        Integer chunkOverlap) {
+        Integer chunkOverlap,
+
+        @Min(value = 1, message = "retrievalTopK 不能小于 1")
+        @Max(value = 50, message = "retrievalTopK 不能大于 50")
+        Integer retrievalTopK,
+
+        @DecimalMin(value = "0.0", message = "similarityThreshold 不能小于 0")
+        @DecimalMax(value = "1.0", message = "similarityThreshold 不能大于 1")
+        Double similarityThreshold) {
 }

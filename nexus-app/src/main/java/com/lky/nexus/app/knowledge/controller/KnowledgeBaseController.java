@@ -1,6 +1,7 @@
 package com.lky.nexus.app.knowledge.controller;
 
 import com.lky.nexus.app.auth.security.CurrentUser;
+import com.lky.nexus.app.workspace.WorkspaceService;
 import com.lky.nexus.common.api.PageResult;
 import com.lky.nexus.common.api.Result;
 import com.lky.nexus.knowledge.model.dto.CreateKnowledgeBaseRequest;
@@ -29,14 +30,21 @@ import org.springframework.web.bind.annotation.RestController;
 public class KnowledgeBaseController {
 
     private final KnowledgeBaseService knowledgeBaseService;
+    private final WorkspaceService workspaceService;
 
-    public KnowledgeBaseController(KnowledgeBaseService knowledgeBaseService) {
+    public KnowledgeBaseController(KnowledgeBaseService knowledgeBaseService,
+                                   WorkspaceService workspaceService) {
         this.knowledgeBaseService = knowledgeBaseService;
+        this.workspaceService = workspaceService;
     }
 
     @PostMapping
     public Result<KnowledgeBaseResponse> create(@Valid @RequestBody CreateKnowledgeBaseRequest request) {
-        return Result.ok(knowledgeBaseService.create(CurrentUser.requireId(), request));
+        // 平台化 Phase 2：知识库归属 workspace。workspaceId 由 app 层解析
+        // （knowledge 模块不依赖 app 的工作区服务，故由 Controller 传入）。
+        Long userId = CurrentUser.requireId();
+        Long workspaceId = workspaceService.requirePersonalWorkspace(userId);
+        return Result.ok(knowledgeBaseService.create(userId, workspaceId, request));
     }
 
     @GetMapping

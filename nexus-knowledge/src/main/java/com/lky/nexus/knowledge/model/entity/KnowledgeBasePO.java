@@ -24,9 +24,24 @@ public class KnowledgeBasePO {
     /** 所有者：所有查询必须带此条件。 */
     private Long userId;
 
+    /** 所属工作区（平台化 Phase 2）：资源归属从 user 上移到 workspace。 */
+    private Long workspaceId;
+
     private String name;
 
     private String description;
+
+    /** 图标（URL 或 emoji）。 */
+    private String icon;
+
+    /** ENABLED / DISABLED：禁用后不参与检索。 */
+    private String status;
+
+    /** RAG 检索 TopK（按库持久化，Agent/Application 可覆盖）。 */
+    private Integer retrievalTopK;
+
+    /** 相似度阈值。 */
+    private Double similarityThreshold;
 
     /** MANUAL / OBSIDIAN / MIXED */
     private String sourceType;

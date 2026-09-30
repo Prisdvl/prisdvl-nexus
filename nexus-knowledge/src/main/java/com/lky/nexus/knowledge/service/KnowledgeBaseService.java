@@ -15,7 +15,13 @@ import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
  */
 public interface KnowledgeBaseService {
 
-    KnowledgeBaseResponse create(Long userId, CreateKnowledgeBaseRequest request);
+    /**
+     * 建库。
+     *
+     * <p>{@code workspaceId} 由 app 层解析后传入（知识库属于哪个工作区）。
+     * knowledge 模块不依赖 app 的工作区服务，因此归属 id 只能由调用方给。
+     */
+    KnowledgeBaseResponse create(Long userId, Long workspaceId, CreateKnowledgeBaseRequest request);
 
     PageResult<KnowledgeBaseResponse> list(Long userId, int pageNum, int pageSize);
 

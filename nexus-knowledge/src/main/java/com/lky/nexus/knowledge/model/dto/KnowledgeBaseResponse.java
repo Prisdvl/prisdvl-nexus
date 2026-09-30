@@ -10,8 +10,11 @@ import java.time.LocalDateTime;
  */
 public record KnowledgeBaseResponse(
         Long id,
+        Long workspaceId,
         String name,
         String description,
+        String icon,
+        String status,
         String sourceType,
         String embeddingProvider,
         String embeddingModel,
@@ -19,6 +22,8 @@ public record KnowledgeBaseResponse(
         String chunkStrategy,
         Integer chunkSize,
         Integer chunkOverlap,
+        Integer retrievalTopK,
+        Double similarityThreshold,
         Integer docCount,
         Integer chunkCount,
         Long totalTokens,

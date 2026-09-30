@@ -58,17 +58,20 @@ public class AuthServiceImpl implements AuthService {
     private final SysUserRoleMapper sysUserRoleMapper;
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokenService;
+    private final com.lky.nexus.app.workspace.WorkspaceService workspaceService;
 
     public AuthServiceImpl(SysUserMapper sysUserMapper,
                            SysRoleMapper sysRoleMapper,
                            SysUserRoleMapper sysUserRoleMapper,
                            PasswordEncoder passwordEncoder,
-                           TokenService tokenService) {
+                           TokenService tokenService,
+                           com.lky.nexus.app.workspace.WorkspaceService workspaceService) {
         this.sysUserMapper = sysUserMapper;
         this.sysRoleMapper = sysRoleMapper;
         this.sysUserRoleMapper = sysUserRoleMapper;
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
+        this.workspaceService = workspaceService;
     }
 
     @Override
@@ -100,7 +103,10 @@ public class AuthServiceImpl implements AuthService {
         userRole.setRoleId(defaultRole.getId());
         sysUserRoleMapper.insert(userRole);
 
-        log.info("用户注册成功 userId={}, username={}", user.getId(), username);
+        // 平台化 Phase 2：注册即拥有个人工作区（User → Workspace → 资源 的起点）
+        Long personalWorkspaceId = workspaceService.requirePersonalWorkspace(user.getId());
+        log.info("用户注册成功 userId={}, username={}, personalWorkspaceId={}",
+                user.getId(), username, personalWorkspaceId);
         return toUserInfo(user, List.of(RoleCode.USER));
     }
 

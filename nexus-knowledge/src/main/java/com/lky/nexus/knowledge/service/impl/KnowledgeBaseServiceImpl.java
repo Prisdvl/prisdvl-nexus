@@ -12,6 +12,7 @@ import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.DocumentTagMapper;
 import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;
 import com.lky.nexus.knowledge.model.ChunkStrategy;
+import com.lky.nexus.knowledge.model.KnowledgeBaseStatus;
 import com.lky.nexus.knowledge.model.KnowledgeSourceType;
 import com.lky.nexus.knowledge.model.dto.CreateKnowledgeBaseRequest;
 import com.lky.nexus.knowledge.model.dto.KnowledgeBaseResponse;
@@ -48,6 +49,8 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
 
     private static final int DEFAULT_CHUNK_SIZE = 400;
     private static final int DEFAULT_CHUNK_OVERLAP = 50;
+    private static final int DEFAULT_RETRIEVAL_TOP_K = 5;
+    private static final double DEFAULT_SIMILARITY_THRESHOLD = 0.7;
 
     private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final DocumentMapper documentMapper;
@@ -66,7 +69,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
 
     @Override
     @Transactional
-    public KnowledgeBaseResponse create(Long userId, CreateKnowledgeBaseRequest request) {
+    public KnowledgeBaseResponse create(Long userId, Long workspaceId, CreateKnowledgeBaseRequest request) {
         String name = request.name().trim();
         if (existsName(userId, name)) {
             throw new BusinessException(ErrorCode.KNOWLEDGE_BASE_NAME_DUPLICATED,
@@ -81,12 +84,19 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                     "chunkOverlap(%d) 必须小于 chunkSize(%d)，否则切片会无限重叠".formatted(chunkOverlap, chunkSize));
         }
 
+        int retrievalTopK = request.retrievalTopK() == null ? DEFAULT_RETRIEVAL_TOP_K : request.retrievalTopK();
+        double similarityThreshold = request.similarityThreshold() == null
+                ? DEFAULT_SIMILARITY_THRESHOLD : request.similarityThreshold();
+
         FrozenEmbedding embedding = resolveEmbedding();
 
         KnowledgeBasePO entity = new KnowledgeBasePO();
         entity.setUserId(userId);
+        entity.setWorkspaceId(workspaceId);
         entity.setName(name);
         entity.setDescription(StringUtils.hasText(request.description()) ? request.description().trim() : null);
+        entity.setIcon(StringUtils.hasText(request.icon()) ? request.icon().trim() : null);
+        entity.setStatus(KnowledgeBaseStatus.DEFAULT.name());
         entity.setSourceType(KnowledgeSourceType.MANUAL.name());
         entity.setEmbeddingProvider(embedding.provider());
         entity.setEmbeddingModel(embedding.model());
@@ -94,6 +104,8 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         entity.setChunkStrategy(chunkStrategy.name());
         entity.setChunkSize(chunkSize);
         entity.setChunkOverlap(chunkOverlap);
+        entity.setRetrievalTopK(retrievalTopK);
+        entity.setSimilarityThreshold(similarityThreshold);
         entity.setDocCount(0);
         entity.setChunkCount(0);
         entity.setTotalTokens(0L);
@@ -102,8 +114,8 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         entity.setUpdatedAt(now);
 
         knowledgeBaseMapper.insert(entity);
-        log.info("创建知识库 id={}, userId={}, name={}, embedding={}:{} ({}维), chunk={}/{}",
-                entity.getId(), userId, name, embedding.provider(), embedding.model(),
+        log.info("创建知识库 id={}, userId={}, workspaceId={}, name={}, embedding={}:{} ({}维), chunk={}/{}",
+                entity.getId(), userId, workspaceId, name, embedding.provider(), embedding.model(),
                 embedding.dimensions(), chunkSize, chunkOverlap);
         return toResponse(entity);
     }
@@ -142,6 +154,18 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         }
         if (request.description() != null) {
             entity.setDescription(StringUtils.hasText(request.description()) ? request.description().trim() : null);
+        }
+        if (request.icon() != null) {
+            entity.setIcon(StringUtils.hasText(request.icon()) ? request.icon().trim() : null);
+        }
+        if (StringUtils.hasText(request.status())) {
+            entity.setStatus(KnowledgeBaseStatus.parse(request.status()).name());
+        }
+        if (request.retrievalTopK() != null) {
+            entity.setRetrievalTopK(request.retrievalTopK());
+        }
+        if (request.similarityThreshold() != null) {
+            entity.setSimilarityThreshold(request.similarityThreshold());
         }
         entity.setUpdatedAt(LocalDateTime.now());
         knowledgeBaseMapper.updateById(entity);
@@ -215,8 +239,11 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     private KnowledgeBaseResponse toResponse(KnowledgeBasePO entity) {
         return new KnowledgeBaseResponse(
                 entity.getId(),
+                entity.getWorkspaceId(),
                 entity.getName(),
                 entity.getDescription(),
+                entity.getIcon(),
+                entity.getStatus(),
                 entity.getSourceType(),
                 entity.getEmbeddingProvider(),
                 entity.getEmbeddingModel(),
@@ -224,6 +251,8 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                 entity.getChunkStrategy(),
                 entity.getChunkSize(),
                 entity.getChunkOverlap(),
+                entity.getRetrievalTopK(),
+                entity.getSimilarityThreshold(),
                 entity.getDocCount(),
                 entity.getChunkCount(),
                 entity.getTotalTokens(),

@@ -99,14 +99,33 @@ CREATE INDEX IF NOT EXISTS SPRING_AI_CHAT_MEMORY_CONVERSATION_ID_TIMESTAMP_IDX
 CREATE INDEX IF NOT EXISTS SPRING_AI_CHAT_MEMORY_CONVERSATION_ID_SEQUENCE_ID_IDX
     ON SPRING_AI_CHAT_MEMORY (conversation_id, sequence_id);
 
+-- ---------- 工作区（平台化 Phase 2）----------
+-- 与 Flyway V9 保持语义一致。注册时自动建个人工作区，资源归属挂到 workspace。
+CREATE TABLE IF NOT EXISTS workspace (
+    id          BIGINT       NOT NULL PRIMARY KEY,
+    user_id     BIGINT       NOT NULL,
+    name        VARCHAR(128) NOT NULL,
+    description VARCHAR(512),
+    type        VARCHAR(16)  NOT NULL DEFAULT 'PERSONAL',
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted     TINYINT      NOT NULL DEFAULT 0,
+    CONSTRAINT uk_ws_user_type UNIQUE (user_id, type, deleted)
+);
+
 -- ---------- 知识库与文档（Phase 2）----------
 -- 与 Flyway V4 保持语义一致（H2 无 ENGINE/COLLATE/ON UPDATE，故各自书写）
 CREATE TABLE IF NOT EXISTS kb_knowledge_base (
-    id                 BIGINT       NOT NULL PRIMARY KEY,
-    user_id            BIGINT       NOT NULL,
-    name               VARCHAR(128) NOT NULL,
-    description        VARCHAR(512),
-    source_type        VARCHAR(16)  NOT NULL DEFAULT 'MANUAL',
+    id                   BIGINT       NOT NULL PRIMARY KEY,
+    user_id              BIGINT       NOT NULL,
+    workspace_id         BIGINT,
+    icon                 VARCHAR(512),
+    status               VARCHAR(16)  NOT NULL DEFAULT 'ENABLED',
+    retrieval_top_k      INT          NOT NULL DEFAULT 5,
+    similarity_threshold DOUBLE       NOT NULL DEFAULT 0.7,
+    name                 VARCHAR(128) NOT NULL,
+    description          VARCHAR(512),
+    source_type          VARCHAR(16)  NOT NULL DEFAULT 'MANUAL',
     embedding_provider VARCHAR(32)  NOT NULL,
     embedding_model    VARCHAR(64)  NOT NULL,
     embedding_dim      INT          NOT NULL,
@@ -121,6 +140,8 @@ CREATE TABLE IF NOT EXISTS kb_knowledge_base (
     deleted            TINYINT      NOT NULL DEFAULT 0,
     CONSTRAINT uk_kb_user_name UNIQUE (user_id, name, deleted)
 );
+
+CREATE INDEX IF NOT EXISTS idx_kb_workspace ON kb_knowledge_base (workspace_id, deleted);
 
 CREATE TABLE IF NOT EXISTS kb_document (
     id             BIGINT        NOT NULL PRIMARY KEY,

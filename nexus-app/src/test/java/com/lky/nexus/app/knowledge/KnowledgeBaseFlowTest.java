@@ -54,7 +54,14 @@ class KnowledgeBaseFlowTest {
                 .andExpect(jsonPath("$.data.chunkSize").value(400))
                 .andExpect(jsonPath("$.data.chunkOverlap").value(50))
                 .andExpect(jsonPath("$.data.sourceType").value("MANUAL"))
-                .andExpect(jsonPath("$.data.docCount").value(0));
+                .andExpect(jsonPath("$.data.docCount").value(0))
+                // 平台化 Phase 2：知识库归属工作区（注册时自动建个人工作区并回填）
+                .andExpect(jsonPath("$.data.workspaceId").isString())
+                .andExpect(jsonPath("$.data.workspaceId").isNotEmpty())
+                .andExpect(jsonPath("$.data.status").value("ENABLED"))
+                // §十七：检索参数按库持久化，缺省 5 / 0.7
+                .andExpect(jsonPath("$.data.retrievalTopK").value(5))
+                .andExpect(jsonPath("$.data.similarityThreshold").value(0.7));
     }
 
     @Test
@@ -121,11 +128,17 @@ class KnowledgeBaseFlowTest {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"name":"新名字","description":"改过了"}
+                                {"name":"新名字","description":"改过了","icon":"https://cdn/icon.png",
+                                 "status":"DISABLED","retrievalTopK":12,"similarityThreshold":0.85}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.name").value("新名字"))
                 .andExpect(jsonPath("$.data.description").value("改过了"))
+                // 检索参数与启停状态可改（只影响"怎么查"，不影响库里存了什么）
+                .andExpect(jsonPath("$.data.icon").value("https://cdn/icon.png"))
+                .andExpect(jsonPath("$.data.status").value("DISABLED"))
+                .andExpect(jsonPath("$.data.retrievalTopK").value(12))
+                .andExpect(jsonPath("$.data.similarityThreshold").value(0.85))
                 // 改名不应影响已冻结的嵌入模型
                 .andExpect(jsonPath("$.data.embeddingModel").value("bge-m3"));
 
