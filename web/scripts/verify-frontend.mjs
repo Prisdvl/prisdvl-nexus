@@ -1,5 +1,5 @@
 /**
- * 前端界面验证（standalone 模式，不依赖 Docker）。
+ * 前端界面验证（不需要 Docker；standalone 后端也能跑完本脚本）。
  *
  * 覆盖：知识库列表 → 正文（Markdown + 大纲 + **关联面板**）→ 切片。
  * 检索/问答两个页签需要 ES/pgvector/Ollama，standalone 下不可用，因此不在本脚本范围内。
@@ -81,4 +81,4 @@ if (failures.length > 0) {
   console.error('失败项：' + failures.join('; '))
   process.exit(1)
 }
-console.log('\n前端界面验证通过（standalone，无 Docker）。')
+console.log('\n前端界面验证通过（依赖已启动的后端与演示数据；本脚本只覆盖不涉及检索/问答的页面）。')

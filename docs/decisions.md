@@ -2008,6 +2008,174 @@ axios 因此抛出 `Request failed with status code 502`，而真正有用的那
 
 ---
 
+### B.37 真机栈（`local` profile）首次跑通：两个后端死路 + 一张"看不见的卡片"
+
+**背景**：Phase 4.2 收尾时 Docker（WSL2 后端）还不可用，所以 ES / pgvector / MySQL 那一层一直记着
+**UNAVAILABLE**，RAG 腿在 E2E 里只能跳过。用户把 Docker 起来后，第一次用 `local` profile 跑真机栈
+（MySQL 3307 / ES 9200 + analysis-ik / pgvector 5433 / Redis / RabbitMQ）。
+
+结果：**同一台机器、同一套代码，只换 profile，就逼出三个缺陷**——两个"只要走真链路就必现"的后端死路，
+一个真机才看得见的前端缺陷。这三个都不是 4.2 引入的，而是此前被"无 ES + 无真模型"的环境掩盖着。
+
+**1. `local` 下所有流式对话直接失败：ChatMemory 的方言与执行取到了两个不同的数据源（已修）**
+
+现象：`local` 下任何流式对话都在第一轮就失败，同步接口却正常。
+
+```
+bad SQL grammar [SELECT content, type, `timestamp` FROM SPRING_AI_CHAT_MEMORY …]
+Caused by: org.postgresql.util.PSQLException: ERROR: syntax error at or near "FROM"
+```
+
+方言按 **MySQL** 生成（反引号），SQL 却发到 **Postgres** 执行。根因在 Spring AI 自动配置那个 Bean 的
+签名（`javap` 读出来）：
+
+```java
+JdbcChatMemoryRepository jdbcChatMemoryRepository(JdbcTemplate jdbcTemplate, DataSource dataSource)
+// 内部：builder().jdbcTemplate(jdbcTemplate).dialect(JdbcChatMemoryRepositoryDialect.from(dataSource))
+```
+
+它是**分别注入两个 bean** 的——本项目有两个数据源（业务 MySQL + 向量 Postgres），而上下文里唯一的
+`JdbcTemplate` 是 `vectorJdbcTemplate`（Postgres），`@Primary` 的则是业务 DataSource，于是两者错位。
+
+Spring AI 其实启动时就警告过，只是夹在 INFO 里：
+
+```
+WARN JdbcChatMemoryRepository$Builder - Explicitly set dialect MysqlChatMemoryRepositoryDialect will be
+     used instead of detected dialect PostgresChatMemoryRepositoryDialect from datasource
+```
+
+**为什么只有 `local` 中招**：`standalone` / `test` 里 `nexus.vector.enabled=false` 关掉了第二个数据源，
+只剩一个 `JdbcTemplate`，两者天然一致——测试全绿，问题藏到最后一刻。修法是 `ChatMemoryConfig`
+里显式声明仓库，方言与执行都从**同一个** DataSource 推导（见该类的 javadoc），并显式
+`@Qualifier("dataSource")` 而不是靠 `@Primary` 兜底——本次故障的成因正是"靠上下文里的唯一候选去猜"。
+
+**教训**：`PrimaryDataSourceConfig` 里那条既定规则（**多数据源场景不要依赖自动配置**）又一次适用；
+另外"启动时的 WARN 不是噪音"，它当时就把答案写出来了。
+
+**2. `local` 下工具调用里的嵌入模型永久失效：虚拟线程的 TCCL 看不见 fat jar 里的资源（已修）**
+
+Agent 腿的流式对话超时，日志里是一条看着莫名其妙的链：
+
+```
+ToolExecutionException
+Caused by: ExceptionInInitializerError
+Caused by: IllegalStateException: the embedding dimensions properties file must exist
+    at AbstractEmbeddingModel.loadKnownModelDimensions(AbstractEmbeddingModel.java:80)
+    at AbstractEmbeddingModel.<clinit>(AbstractEmbeddingModel.java:47)
+    at EmbeddingClientFactory.buildOllamaEmbeddingModel(EmbeddingClientFactory.java:98)
+```
+
+而**同一个 JVM** 里 `POST /api/knowledge-bases/{id}/embed`（Tomcat 请求线程）刚刚成功过——
+所以不是"资源不存在"。加探针实测（构建时临时往 `create()` 里打一行，测完删除）：
+
+```
+PROBE thread=VirtualThread[#152,loomBoundedElastic-14]/runnable@ForkJoinPool-1-worker-2
+      isVirtual=true
+      ambientTCCL=jdk.internal.loader.ClassLoaders$AppClassLoader@6bc7c054      ambientResolves=false
+      appLoader  =org.springframework.boot.loader.launch.LaunchedClassLoader@1a6c5a9e appResolves=true
+```
+
+链条完全对上了：
+
+1. `AbstractEmbeddingModel` 的**静态初始化**要读
+   `new ClassPathResource("/embedding/embedding-model-dimensions.properties")`（`javap` 读了它的
+   `<clinit>`），而 `ClassPathResource` 内部走 `ClassUtils.getDefaultClassLoader()`，**优先取 TCCL**；
+2. Boot 的 fat jar 里这个资源在 `BOOT-INF/lib/spring-ai-model-2.0.1.jar` **内部**，只有
+   `LaunchedClassLoader` 看得见。实测：`ClassLoader.getSystemResource(…)` 对该路径返回 `null`
+   （同一 classpath 下 `BOOT-INF/lib/spring-ai-model-2.0.1.jar` 本身可见）;
+3. `spring.threads.virtual.enabled: true` 让 Reactor 的 `boundedElastic` 变成**虚拟线程**调度器
+   （`reactor-core-3.8.7` 的 `META-INF/versions/21/BoundedElasticSchedulerSupplier` 里就是
+   `Thread.ofVirtual().name("loomBoundedElastic-",1)…factory()`，日志里的线程名正是 `loomBoundedElastic-14`），
+   而工具调用就发生在 `FluxSubscribeOn → BoundedElasticThreadPerTaskScheduler$SchedulerTask.run` 上；
+   实测该虚拟线程的 TCCL 是 JDK 的 `AppClassLoader`，**不是** Boot 的 LaunchedClassLoader；
+4. 于是静态初始化失败。**而它是一次性且全局的**：类初始化失败后整个 JVM 里该类永久不可用，
+   之后连 Tomcat 线程上的"向量化"接口也一起变成
+   `NoClassDefFoundError: Could not initialize class org.springframework.ai.ollama.OllamaEmbeddingModel`
+   （这也是"为什么第一次是 IllegalStateException、再点就是 NoClassDefFoundError"的原因）。
+
+顺带用 `jshell` 把 JDK 语义测清楚了（避免写成"猜"）：虚拟线程**可以**改 TCCL；`Thread.ofVirtual()`
+直接 `start()` 会继承调用方 TCCL；而用 builder `factory()` 造线程时，
+`inheritInheritableThreadLocals(false)` 会让它落到**系统类加载器**——也就是说这条链路的 TCCL 取决于
+"谁先造出第一个线程"，本身就不该被依赖。
+
+**修法**：不再赌"第一个请求从哪条线程进来"，在 `EmbeddingClientFactory` 构建模型期间显式把 TCCL
+换成应用类加载器（`buildWithApplicationClassLoader`，try/finally 还原）。**没有**去改
+`Schedulers.boundedElastic()`：那会影响所有流式链路与三条 profile 的既有行为，爆炸半径远大于问题本身。
+
+**3. RAG 的"检索到 N 个片段"在真机上只活 41ms（前端已修；彻底修法见 §7）**
+
+`verify-agent-chat.mjs` 的 RAG 腿（**首次真正执行**，此前因无 ES 一直跳过）超时，但后端日志显示
+retrieval 事件正常发出、回答也落库了。在页面里装了个 5ms 轮询的记录器，量到的生命周期是：
+
+```
+streaming START @64ms    card APPEAR @6389ms (answerLen=43)    streaming END @6389ms    card GONE @6430ms
+```
+
+**41 毫秒**。原因两件事叠在一起：本地服务 + 本地模型下整段回答几乎一口气到达，所有 SSE 帧在同一个
+tick 里被派发（Vue 只渲染一次，卡片和整段回答同时出现）；紧接着 `send()` 的 `finally` 会用服务端数据
+"校正"一次列表，而**命中片段没有落库**（`toItems` 的注释里写着这个缺口），于是卡片刚画出来就被覆盖掉。
+用户等于从没见过它——这条腿存在的意义正是抓这种"接口全绿、用户啥也看不到"的情况。
+
+修法：本次流的命中片段按 `assistantMessageId`（meta 事件里就有）贴回校正后的那条消息，
+至少保证**本次会话内回看得到**；刷新页面仍会丢，那是同一个已知缺口，不是新问题。
+
+**4. `verify-agents.mjs` 腿⑩ 是一条假失败（测试自身的竞态，已修测试）**
+
+腿⑩ 报的是"下拉项没出现"，很容易被当成产品缺陷。实际是脚本自己的问题：它点完"对话"直接去点
+`.composer-options` 里的选择器，而页面挂载后会**自动选中最近一次会话**，一经选中
+`.composer-options` 就被头部选择器取代——点开的下拉随 DOM 被换掉而消失。同一脚本的腿⑥ 之所以没事，
+是因为它在前面多点了 `.rail .new-chat`。修法是让腿⑩ 也先点"新对话"（这同时会把 `pickedByUser` 置位，
+自动选中不再覆盖——用的是应用自己的既定机制），**没有改产品代码**。
+
+**5. 两个流程陷阱（不是代码问题，但会白烧一整轮）**
+
+- **fat jar 会静默不更新**：后端 JVM 正在从 `nexus-app-*.jar` 启动时，Windows 下该文件被占用，
+  `mvn -B package` 仍然打印 `BUILD SUCCESS` 与 `Replacing main artifact …`，但产物**根本没变**——
+  于是"改了代码、跑起来还是老行为"。可靠的判据有三条：`spring-boot:repackage` 的**耗时**
+  （真：14.7–17.6s；假：2.0s）、jar 的 mtime/大小、以及把 `BOOT-INF/lib/nexus-ai-*.jar` 拆出来
+  `grep` 新加的字符串。正确流程：**先停后端 → package → 验证产物真的变了 → 再启动**。
+  （本轮早先还见过它的另一个形态：`Unable to rename …jar to …jar.original`，直接构建失败。）
+- **`web/.demo-token` 是 30 分钟 TTL**（`exp-iat=1800`）：一轮长验证跑到后半程会突然 401，
+  表现是页面报"未认证或凭证缺失"而不是断言失败。重新 `POST /api/auth/login`
+  （`demo` / `Demo@12345`，见 `verify-login.mjs`）刷新即可。
+
+**6. 验证（如实记录，按层分开，不合并口径）**
+
+| 层次 | 内容 | 判定 |
+| --- | --- | --- |
+| 全量回归 | `mvn -B test`：**335 运行 / 317 通过 / 18 跳过 / 0 失败 / 0 错误**，BUILD SUCCESS（nexus-common 14 / nexus-ai 35 / nexus-knowledge 122 / nexus-app 164）——与 B.36 §6 同一数字，说明本记录两处修法**没有回归** | PASSED |
+| Live 真机测试（此前全部 SKIPPED） | `AI_VECTOR_LIVE=true AI_SEARCH_LIVE=true AI_EMBEDDING_LIVE=true`：`LiveEmbeddingTest` 2 + `LiveModelCallTest` 2 + `LiveChunkIndexTest` 5 + `LiveVectorStoreTest` 4 = **13 项全过**；另 `ChatStreamLiveTest` 3 项全过（真实模型流式） | PASSED |
+| 真机检索（ES + pgvector + 真嵌入） | 直接读 SSE 原始帧：`event:retrieval` 在第一个 `delta` **之前**到达，`count=4`、`hits[].source="hybrid"`（BM25 与向量两路都命中，例：`缓存击穿 > 互斥锁方案`）、`contextTokens=108`；知识库向量化 4 切片、ES 建索引 4 切片均实测成功 | PASSED |
+| E2E 浏览器 `verify-agent-chat.mjs`（真机栈 + Edge） | **Agent 腿**（工具卡片 → 检索 5 条 → 228 字回答 → 刷新后痕迹仍在）与 **RAG 腿**（检索卡片 4 片段且在回答之前 → 46 字回答）**全部执行、退出码 0**——RAG 腿是**首次真正执行**（此前 SKIPPED） | PASSED |
+| E2E 浏览器 `verify-stream.mjs` | 首次真正执行（此前整体 SKIPPED）：逐字增长 + 引用 4 条 + 生成期间出现过"检索到 4 个片段"，退出码 0 | PASSED |
+| E2E 浏览器 `verify-agents.mjs` | 11 条腿全部执行、退出码 0（含腿⑧ 真模型试跑：用了 2 次工具） | PASSED |
+| 其余界面验证 | `verify-login.mjs` / `verify-frontend.mjs` 退出码 0；`verify-retrieval-ui.mjs` 退出码 0（**桩**：手写 SSE 帧验渲染契约，不证明后端真的发这套帧，也不证明真机检索可用——后两件事本表上面两行各自单独证明） | PASSED |
+| 前端构建 | `npm run build`（`vue-tsc --noEmit` + vite） | PASSED |
+| Docker 部署形态（容器里跑应用 / nginx 提供前端） | 本轮只把 **Docker 当基础设施**用（MySQL/ES/PG/Redis/MQ），应用仍是本机 `java -jar` + Vite dev server | **UNAVAILABLE**（未验，别把它算进上面任何一行） |
+| Vue 单测 | 前端无单测框架（历来靠 `npm run build` + 桩脚本 + E2E 三层） | **UNAVAILABLE**（不是本轮新缺） |
+| 头部选择器"绑了再停用"分支 | 见 B.36 §6 最后一条，**E2E 仍未覆盖** | 仅构建/类型检查 PASSED |
+
+**口径**：上表把「后端回归」「live 真机测试」「E2E 浏览器」「真机检索」「前端构建」**分开列**，
+是因为它们证明的是不同的事（B.36 §6 的同一条要求）：live 测试证明适配器对真实 ES/pgvector 正确，
+E2E 证明界面在真机上真的把过程显示给用户，两者互相不能替代。
+另外 `verify-frontend.mjs` 原来那句结束语写着"（standalone，无 Docker）"——它其实是跑在**已启动的**
+后端上、与 profile 无关，本轮改成如实描述（依赖已启动的后端与演示数据）。
+
+截图留档：`docs/screenshots/agent-chat-rag.png`（RAG 腿成功现场：「检索到 4 个片段」列出 4 条命中，
+回答带 `[1]` 引用）、`agent-chat-failure.png`（失败现场：问题已发出、回答区一片空白——
+§1/§2 两类死路在界面上都是这个形状，截图本身分不出是哪一次）、
+`agents-failure.png`（§4 腿⑩ 的假失败现场）。
+
+**7. 未做（有意留下）**
+
+- **命中片段落库**：把 `retrieval` 与工具痕迹一样写进消息（`chat_message` 已有 tool 痕迹的位置），
+  就能删掉前端 §3 那段"贴回来"的特例，也能让刷新后可回放。属下一个增量，不在本轮；
+- **Tool Definition（§十九，P0 下一项）**：`AgentRuntime.configure` 里写死的
+  `ToolCallbacks.from(knowledgeSearchTool)` 仍未换成按 Definition 组装；
+- **Docker 部署形态**：`deploy/` 里的 Dockerfile / nginx 仍未实际验证（本轮 Docker 只跑基础设施）。
+
+---
+
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
 
 | # | 决策项 | 结论 |

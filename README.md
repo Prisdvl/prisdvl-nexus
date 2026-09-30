@@ -100,10 +100,11 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | Phase 2 | 领域模型：`workspace`（个人工作区）+ 知识库平台字段（icon/status/检索参数） | ✅ 完成（迁移 V9/V10；见 decisions.md B.30） |
 | Phase 3.1 | Retriever 端口抽象：检索拆成策略实现族（Vector/Keyword/Hybrid/Reranked）+ 新旧行为一致性测试 | ✅ 完成（对外行为不变；见 decisions.md B.31） |
 | Phase 3.2 | 检索参数真正可配置：知识库的 `retrieval_top_k` / `similarity_threshold` 生效 + 全局默认值收敛到 `nexus.retrieval.*` | ✅ 完成（阈值统一为 0.25；见 decisions.md B.32） |
-| Phase 3.3 | 元数据过滤：`tags` / `folder` / `documentId` 下推到 ES `filter` 与 pgvector `WHERE`（向量路先解析成文档 id） | ✅ 完成（ES/pgvector 真机 `UNAVAILABLE`；见 decisions.md B.33） |
-| Phase 3.4 | RAG 模式的会话流式：`retrieval` 事件先于第一个字、会话绑定知识库（`kb_ids`）、多轮历史走 ChatMemory、前端"检索到 N 个片段" | ✅ 完成（真浏览器只验到 Agent 腿；RAG 腿因本地无 ES 跳过；见 decisions.md B.34） |
+| Phase 3.3 | 元数据过滤：`tags` / `folder` / `documentId` 下推到 ES `filter` 与 pgvector `WHERE`（向量路先解析成文档 id） | ✅ 完成（当时 ES/pgvector 真机 `UNAVAILABLE`；2026-09-30 真机栈已补验 `kb_id` 一路，见 decisions.md B.37 / baseline §9.6） |
+| Phase 3.4 | RAG 模式的会话流式：`retrieval` 事件先于第一个字、会话绑定知识库（`kb_ids`）、多轮历史走 ChatMemory、前端"检索到 N 个片段" | ✅ 完成（当时 RAG 腿因本地无 ES 跳过；2026-09-30 真机栈首次真跑、退出码 0，见 decisions.md B.37） |
 | Phase 4.1 | Agent 配置化（后端）：`agent` 表 + Definition/Runtime 分离 + `/api/agents` CRUD/复制/试跑 + 会话选 Agent + Agent 绑定知识库决定检索范围 | ✅ 后端完成（迁移 V12；见 decisions.md B.35） |
 | Phase 4.2 | Agent 配置化（前端）：Agent 管理页（生命周期全流程）+ 对话页 Agent 选择器 + `resetAgent`（回到内置默认）+ E2E 脚本 | ✅ 完成（真机栈 E2E 全过；试跑因本机无模型 `SKIPPED`；见 decisions.md B.36） |
+| 真机栈补验 | Docker 起来后用 `local`（真 MySQL/ES/pgvector/Redis/RabbitMQ）重跑：13 项 live + 3 项流式 live 全过、三条 E2E 脚本**无跳过退出码 0**；同时逼出两个后端死路与一个界面缺陷 | ✅ 完成（见 decisions.md B.37 / baseline §9.6） |
 | Phase 3+ | RAG/Agent/Workflow/Application/Model 的抽象上移与用户可配置化 | ⏳ 见分析文档第 12 节 |
 
 ## 7. 本地环境要求
@@ -206,7 +207,9 @@ npm run dev            # http://localhost:5173（/api 由 Vite 代理到后端 8
 （显示队列/处理中/完成进度）、向量化 / 建索引 / 重建索引、文档与切片浏览
 （切片带标题路径、Token 数，以及**向量与索引状态**——排查"为什么搜不到"的第一手信息）、
 关键词检索（每条命中显示来源标签与相关性得分），**Agent 对话**
-（模型自己决定检索什么：检索过程实时可见、工具痕迹随消息落库、随时可停），
+（模型自己决定检索什么：检索过程实时可见、工具痕迹随消息落库、随时可停；RAG 会话的
+**"检索到 N 个片段"卡片只在本次会话内保留**——命中片段还没随消息落库，刷新后会消失，
+这是已知缺口而非渲染问题，见 decisions.md B.37），
 以及 **Agent 管理**（`/agents`：新建 → 试跑 → 发布 → 在对话页选用 → 停用 → 删除；
 配提示词与可检索的知识库；草稿不能选用，选择器里会说明原因）。
 
@@ -233,8 +236,14 @@ node scripts/verify-agents.mjs     # Agent 管理页：新建→配置→发布�
 > `verify-stream.mjs` 整体跳过）；`verify-agents.mjs` 只跳过试跑那条腿
 > （**没配 `AI_CHAT_API_KEY` 时**后端报 4006 `模型 … 未注册。已注册：[…]`，其余 10 条腿照跑；
 > 配好 key 后这条腿会真跑——本机实测 11 条腿全部执行、退出码 0）。
-> 脚本会打印 `⚠ SKIPPED` 与原因，
-> **跳过不等于通过**：要真验这一层，得用 `deploy/docker-compose.yml` 起 full 栈再跑一遍。
+> 脚本会打印 `⚠ SKIPPED` 与原因，**跳过不等于通过**。
+>
+> **full 栈已经跑过**（Docker 起 MySQL/ES/pgvector/Redis/RabbitMQ，后端
+> `--spring.profiles.active=local`，2026-09-30）：上面几个脚本的**跳过腿全部真跑、退出码 0**，
+> 另有 13 项 live 真机测试 + 3 项流式 live 测试通过。结果与口径见
+> `docs/platform-phase3-baseline.md` §9.6，过程与踩到的坑见 `docs/decisions.md` B.37。
+> **注意 full 栈仍不等于"部署形态也验了"**：Docker 在这里只是基础设施，
+> 应用本身还是本机 `java -jar` + Vite dev server；容器化部署（Dockerfile/nginx）**未验**。
 
 > **`verify-retrieval-ui.mjs` 是桩验证，不是 E2E**：它把 `/api/chat/stream` 换成
 > 手写的 SSE 帧（形状取自 `docs/api.md` §5.2），用来单独验"前端拿到这套帧渲染成什么样"
@@ -245,6 +254,8 @@ node scripts/verify-agents.mjs     # Agent 管理页：新建→配置→发布�
 > 这两个脚本的意义不只是截图：**"服务返回了 HTML"不等于"页面渲染正常"**。
 > 本项目就是靠它发现了一个真实问题（前端 `@` 别名只配了 tsconfig、没配 Vite，
 > 页面直接白屏报错），以及一个后端问题（新增接口后忘了重新打包，请求落到了静态资源处理器）。
+> 真机栈上又抓到第三个（见 B.37 §3）：RAG 的"检索到 N 个片段"卡片在真机上**只存在 41ms**
+> ——接口帧完全正确、单元测试全绿，只有真浏览器 + 真服务能看出用户其实从没看见它。
 
 ## 11. 开发约定（重要）
 

@@ -231,6 +231,11 @@ try {
 
   // 停用后对话页不能再列出它（列出来就是在骗用户"能选"）
   await page.click('.nav-item:has-text("对话")')
+  // 必须像第 ⑥ 段那样先点"新对话"：页面挂载后会"自动选中最近会话"，
+  // 一旦选中，`.composer-options` 就被头部的选择器取代——这条腿曾因此假失败
+  // （点开的下拉随 DOM 被换掉而消失，报的是"下拉项没出现"，看着像产品缺陷）。
+  // 点"新对话"同时把 pickedByUser 置位，自动选中不再覆盖：用的是应用自己的既定机制。
+  await page.click('.rail .new-chat')
   await page.waitForSelector('.composer-options', { timeout: 15000 })
   await page.click('.composer-options .kb-select')
   await options.first().waitFor({ timeout: 15000 })

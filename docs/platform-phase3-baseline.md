@@ -824,7 +824,8 @@ UNAVAILABLE：MySQL / ES / pgvector / RabbitMQ 未验证（本机 Docker WSL2 �
 处于 `UNAVAILABLE`，与 `Validated` 严格区分。
 
 > 上表是**规划当轮**的快照（199 运行）。每个增量落地后的当前数字在各增量的完成记录里
-> （§9.1 起逐级递增，最新为 §9.5 的 **335 运行 / 317 通过 / 18 跳过 / 0 失败 / 0 错误**）。
+> （§9.1 起逐级递增，最新为 §9.5 的 **335 运行 / 317 通过 / 18 跳过 / 0 失败 / 0 错误**；
+> 真机栈的补验结果见 **§9.6**）。
 > 本表保留原样不改，避免"历史基线被后来的数字覆盖"这种文档造假。
 
 ---
@@ -895,7 +896,7 @@ P3  ── MCP 完整接入/鉴权、Planner、高级 Memory
 | 新增测试 | 16 条（`ChunkSearchServiceKnowledgeConfigTest` 6 / `RetrievalQueryFactoryTest` 5 / `RagAnswerServiceRerankFlagTest` 5） |
 | 测试基线 | 232 → **248 通过 / 0 失败 / 0 错误 / 18 跳过** |
 | 运行时验证 | `standalone` + 演示数据：配置 12/0.25 生效、请求 topK=3 覆盖、7/0.42 到达 VectorStore、不传参数建库得 5/0.25（原 0.7） |
-| 未验证 | ES / pgvector / Ollama 真机（本机 Docker/WSL2 不可用）→ **UNAVAILABLE**；故"结果质量随参数变化"未验证，只验证了参数下推 |
+| 未验证 | ES / pgvector / Ollama 真机（本机 Docker/WSL2 不可用）→ **UNAVAILABLE**；故"结果质量随参数变化"未验证，只验证了参数下推 ｜ **2026-09-30 补**：真机栈已跑通（阈值与 topK 在真 pgvector 上实测，见 §9.6），但"排序质量随参数变化"的对比仍未做 |
 
 **与 §三 设计稿的偏差（如实记录）**：设计稿只说"`retrieval_top_k` 生效"，未提默认值冲突。
 实施中发现表默认 0.7 与检索默认 0.25 **从来不一致**，故本增量包含一次默认值统一
@@ -919,7 +920,7 @@ P3  ── MCP 完整接入/鉴权、Planner、高级 Memory
 | 测试基线 | 290 → **306 运行 / 288 通过 / 0 失败 / 0 错误 / 18 跳过（7 个 live 类）**，BUILD SUCCESS |
 | 运行时验证（真机） | `standalone` + 演示数据 + Edge：Agent 腿全过（默认模式 Agent、工具卡片、真实摘要、275 字回答、刷新后痕迹 4→4）；RAG 会话从界面创建时确实带上了 `kbIds` |
 | 运行时验证（桩帧） | `web/scripts/verify-retrieval-ui.mjs`：桩掉 `/api/chat/stream`，真浏览器里断言检索卡片渲染（文案 / 命中列表 2 条带文档名与标题路径 / `已重排` / **卡片在回答之前** / 请求体带 `conversationId`）、零命中分支（`知识库里没有命中`）、以及"服务端校正后卡片消失、答案仍在"这一已知缺口 → **PASSED**（退出码 0） |
-| 未验证 | **真机上的检索链路本身**：`standalone` 无 ES，`/ask/stream` 与 RAG 会话流式在检索处即 4005 → **SKIPPED**（退出码 2，脚本明确打印原因）；ES / pgvector / MySQL 真机 → **UNAVAILABLE**（Docker 未运行） |
+| 未验证 | **真机上的检索链路本身**：`standalone` 无 ES，`/ask/stream` 与 RAG 会话流式在检索处即 4005 → **SKIPPED**（退出码 2，脚本明确打印原因）；ES / pgvector / MySQL 真机 → **UNAVAILABLE**（Docker 未运行） ｜ **2026-09-30 补**：真机栈已补验——RAG 腿与 `verify-stream.mjs` 首次真跑、退出码 0，见 §9.6 |
 
 **与 §八 测试方案的偏差**：方案里的两条都落地了（`RagStreamRetrievalEventTest` 为 Contract 层；
 `verify-stream.mjs` 已升级为断言"检索到 N 个片段"，且加了"生成期间轮询记录器"以避免
@@ -955,7 +956,7 @@ P3  ── MCP 完整接入/鉴权、Planner、高级 Memory
 | 新增测试 | 27 条（`AgentDefinitionTest` 6 / `AgentResourceTest` 9 / `ConversationAgentBindingTest` 7 / `KnowledgeSearchToolScopeTest` 5） |
 | 测试基线 | 306 → **333 运行 / 315 通过 / 0 失败 / 0 错误 / 18 跳过（7 个 live 类）**，BUILD SUCCESS |
 | 前端构建 | 本轮未改前端 → **未执行**（4.2 已补跑：`npm run build` PASSED，见 §9.5） |
-| 运行时验证（真机） | **SKIPPED**：真实模型跑一次 Agent 需 `AI_CHAT_API_KEY`（`AgentLoopTest` 门控，本机未设置）；真实检索需 ES/pgvector（本机 Docker 不可用） |
+| 运行时验证（真机） | **SKIPPED**：真实模型跑一次 Agent 需 `AI_CHAT_API_KEY`（`AgentLoopTest` 门控，本机未设置）；真实检索需 ES/pgvector（本机 Docker 不可用） ｜ **2026-09-30 补**：两项都已真跑（13 项 live + 3 项流式 live，见 §9.6） |
 | E2E 浏览器 | **UNAVAILABLE**：Agent 管理页尚未实现（4.2 已补：`verify-agents.mjs` 腿 ①–⑦、⑨–⑪ PASSED，试跑 SKIPPED，见 §9.5） |
 
 **与 §5.2 设计表的偏差**（三处，理由见 B.35 §7 与 database.md §6.0）：
@@ -982,8 +983,8 @@ RAG 链路属 §六十五 保护区，且语义边界值得单独一个增量 + 
 | 测试基线 | 334 → **335 运行 / 317 通过 / 0 失败 / 0 错误 / 18 跳过（7 个 live 类）**，BUILD SUCCESS（nexus-app 163 → 164） |
 | 前端构建 | `npm run build`（vue-tsc + vite）→ **PASSED** |
 | E2E 浏览器（真机栈） | `web/scripts/verify-agents.mjs`，11 条腿全部执行：①内置项可见且显示"全部知识库" ②新建落草稿（+ 按钮映射） ③配置提示词与绑库 ④复制为草稿 ⑤发布 ⑥对话页选择器列出它 ⑦"草稿需先发布"提示 ⑧试跑（真模型 4 次工具调用） ⑨停用 ⑩停用后不再可选 ⑪清理 → **PASSED（退出码 0，无跳过）**；截图 `agents-list.png` / `agent-picker.png` / `agents-test.png` |
-| 真机（真模型 + 真工具） | 配好 `AI_CHAT_API_KEY` 后试跑跑通：`opencode:deepseek-v4-flash` 调用 `knowledge_search` 命中演示笔记内容，回答带来源 → **PASSED**（无 ES 时工具降级为"关键词匹配"并如实说明，**不等于**真 ES/pgvector 检索） |
-| 未验证 | ES / pgvector / MySQL 真机 **UNAVAILABLE**（Docker 未运行）；头部选择器"绑定的 Agent 后被停用"这一分支只有构建层验证（E2E 未覆盖），见 B.36 §6 口径 |
+| 真机（真模型 + 真工具） | 配好 `AI_CHAT_API_KEY` 后试跑跑通：`opencode:deepseek-v4-flash` 调用 `knowledge_search` 命中演示笔记内容，回答带来源 → **PASSED**（无 ES 时工具降级为"关键词匹配"并如实说明，**不等于**真 ES/pgvector 检索）｜ **2026-09-30 补**：真机栈（`local`，ES + pgvector 就绪）上重跑通过，见 §9.6 |
+| 未验证 | ES / pgvector / MySQL 真机 **UNAVAILABLE**（Docker 未运行）｜ **2026-09-30 补**：真机栈已补验，见 §9.6；头部选择器"绑定的 Agent 后被停用"这一分支**仍**只有构建层验证（E2E 未覆盖），见 B.36 §6 口径 |
 
 **界面逼出来的两个后端问题**（都不是本增量引入的，见 B.36 §3、§4）：
 
@@ -1011,6 +1012,34 @@ RAG 链路属 §六十五 保护区，且语义边界值得单独一个增量 + 
 
 ---
 
+### 9.6 真机栈验证补记（2026-09-30，Docker + `local`）
+
+**为什么单独记**：§9.3–§9.5 的"未验证"行里都写着同一句环境前提——"本机 Docker（WSL2 后端）不可用"。
+Docker 起来之后，用 `local` profile（真 MySQL 3307 / ES 9200 + analysis-ik / pgvector 5433 / Redis / RabbitMQ）
+把这几行重新跑了一遍。本节只记**结果**与**口径**；这一轮逼出来的三个缺陷（两个后端死路、
+一张"只活 41ms"的界面卡片）见 decisions.md **B.37**。
+
+| 层次 | 结果 |
+| --- | --- |
+| 全量回归 | **335 运行 / 317 通过 / 18 跳过 / 0 失败 / 0 错误**，BUILD SUCCESS——与 §9.5 同一数字，说明本轮两处修法**没有回归** |
+| Live 真机测试（此前 18 个跳过里的 13 个） | `LiveEmbeddingTest` 2 / `LiveModelCallTest` 2 / `LiveChunkIndexTest` 5 / `LiveVectorStoreTest` 4 = **13 项全过**；另 `ChatStreamLiveTest` **3 项全过**（真实模型流式 + 落库 + 中断） |
+| 真机 ES：（IK 分词 / BM25 / 字段权重 / `kb_id` 过滤） | `usesIkAnalyzer`（"缓存击穿与互斥锁"切出「缓存」「击穿」，且**不**退化成单字）、`searchesChineseByBm25`、`titleBoostAffectsRanking`（标题 3 倍权重生效）、`filtersByKnowledgeBase`（**双库对照**：同内容两个库，不串库；按库删除不影响别人）→ **PASSED** |
+| 真机 pgvector（余弦排序 / 阈值 / 按库过滤 / 缓存） | `upsertAndSearchByCosineSimilarity`（1.0 / 0.6 / 0.0 精确排序，**另一库里的相同向量检索不到**）、`respectsScoreThresholdAndDeletion`、`upsertIsIdempotent`、`cachesEmbeddingsByHash` → **PASSED** |
+| 真机 RAG 检索链路（端到端） | RAG 会话流式：`retrieval` 事件**先于第一个字**、`count=4`、`hits[].source="hybrid"`（BM25 与向量两路都命中，例：`缓存击穿 > 互斥锁方案`）、`contextTokens=108`；知识库向量化 4 切片、ES 建索引 4 切片均实测成功 |
+| E2E 浏览器（真机栈 + Edge） | `verify-agent-chat.mjs`（Agent 腿 + **RAG 腿首次真跑**）、`verify-stream.mjs`（**首次真跑**）、`verify-agents.mjs`（11 腿全执行）→ 三者**退出码均为 0，无跳过** |
+| 前端构建 | `npm run build`（vue-tsc + vite）→ **PASSED** |
+| **仍未验（别把本节读成"全都验过了"）** | ① **应用自身的 Docker 部署形态**（Dockerfile / nginx 提供前端）——本轮 Docker 只当**基础设施**用，应用仍是本机 `java -jar` + Vite dev server；② `tags` / `folder` / `documentIds` **三个过滤字段仍只有代码级验证**（真机跑的是 `kb_id` 单键过滤，ES 侧是 `.term()` 等值；多值 `terms` 形态未单独验）；③ Vue 单测（前端无框架）；④ 头部选择器"绑定的 Agent 后被停用"分支的 E2E |
+
+**口径（§四十八，三件事不合并）**：live 测试证明**适配器对真 ES/pgvector 正确**；
+E2E 证明**界面在真机上把过程显示给用户**；真机 SSE 原始帧证明**端到端链路**。任一条都不能替代另外两条。
+本节升级的是"那几个 `UNAVAILABLE` 的**当前状态**"，**不改写** §9.3–§9.5 已写下的历史判定
+——那几行的环境前提（当时确实没有 Docker）是真的。
+
+截图证据：`docs/screenshots/agent-chat-rag.png`（RAG 腿：「检索到 4 个片段」+ 带 `[1]` 引用的回答）、
+`agent-chat-failure.png` / `agents-failure.png`（失败现场留档，说明见 B.37 §6）。
+
+---
+
 ## 十、未确认项（如实列出，不假装已核实）
 
 1. ~~**H2 的 DDL 来源**~~ ✅ **4.1（V12）已实测关闭**：test 与 standalone 两个 profile 的启动日志都显示
@@ -1018,8 +1047,12 @@ RAG 链路属 §六十五 保护区，且语义边界值得单独一个增量 + 
    `All configured schemas are empty`）→ Flyway 先跑、`db/h2/schema.sql` 成空操作（§1.7 已按实测改写）。
    **遗留清理项（本轮有意没做）**：`db/h2/schema.sql` 与两个 profile 里的 `spring.sql.init` 已成死代码，
    删除它要连带动 `spring.sql.init.schema-locations` 与 standalone 的启动回归，属独立增量。
-2. **ES / pgvector 真机行为**：本机 Docker（WSL2 后端）不可用，本文关于 ES `filter` 与 `kb_id = ANY()` 的结论
-   来自 mapping 与 SQL 代码阅读，**未在真机跑过**。3.3 落地时若无 ES 环境，需明确标注"仅代码级验证"。
+2. ~~**ES / pgvector 真机行为**~~ ✅ **2026-09-30 实测关闭（部分）**：Docker 起来后用 `local` profile 跑真机，
+   `kb_id` 过滤在**真 ES**（双库对照：同内容两个库不串库）与**真 pgvector**（另一库里的相同向量检索不到）
+   上都生效；IK 分词、BM25 中文排序、标题 3 倍权重同样是实测而非读代码（详见 §9.6）。
+   **仍未覆盖**：`tags` / `folder` / `documentIds` 三个过滤字段只有代码级验证
+   （`ElasticsearchChunkIndex.metadataClauses`），真机只跑了 `kb_id`；ES 侧走的是 `.term()` 等值，
+   多值 `terms` 形态未单独验。
 3. **Spring AI 工具循环的迭代上限**：`AgentRuntime` 的 Javadoc 说由 `ToolCallingManager` 限步，
    **仍未读框架源码确认默认上限值与超限时的异常类型**。4.1 因此**没有**把 `max_iterations` 做成字段
    （无机制读它 = 假旋钮）；要真做成可配置，必须先确认上限在哪一层、超限时抛什么异常。

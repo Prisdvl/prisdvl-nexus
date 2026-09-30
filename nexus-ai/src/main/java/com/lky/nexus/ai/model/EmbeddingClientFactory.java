@@ -14,6 +14,7 @@ import org.springframework.util.StringUtils;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * 嵌入客户端工厂：业务代码通过<b>逻辑角色</b>获取 {@link EmbeddingClient}（ADR-003）。
@@ -73,17 +74,55 @@ public class EmbeddingClientFactory {
                     "模型 %s 未声明 EMBEDDING 能力，不能用于嵌入角色 %s".formatted(ref.value(), role));
         }
 
-        EmbeddingModel model = switch (provider.getType()) {
+        EmbeddingModel model = buildWithApplicationClassLoader(() -> switch (provider.getType()) {
             case OLLAMA -> buildOllamaEmbeddingModel(provider, entry);
             case OPENAI_COMPATIBLE -> throw new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
                     ("嵌入角色 %s 指向了 OpenAI 兼容协议的模型 %s，这是当前尚未支持的路径"
                             + "（Spring AI 2.0 需要自行构建官方 SDK 客户端）。"
                             + "请把 embedding.default 指向 Ollama 模型，例如 ollama:bge-m3。")
                             .formatted(role, ref.value()));
-        };
+        });
 
         log.info("为角色 {} 构建嵌入客户端：{}（声明维度 {}）", role, ref.value(), entry.getDimensions());
         return new EmbeddingClient(ref.value(), model, entry.getDimensions());
+    }
+
+    /**
+     * 在**应用类加载器**下执行模型构建（这里只有构建，没有网络调用）。
+     *
+     * <p><b>为什么需要这段"换类加载器"的代码</b>——`local` profile 实测踩到，2026-09-30：
+     * Spring AI 的 {@code AbstractEmbeddingModel} 在<b>静态初始化</b>里要读一张"已知模型维度表"：
+     * <pre>
+     * new ClassPathResource("/embedding/embedding-model-dimensions.properties")
+     * </pre>
+     * 而 {@code ClassPathResource} 内部走 {@code ClassUtils.getDefaultClassLoader()}，**优先取线程上下文类加载器（TCCL）**。
+     * 在 Spring Boot 可执行 jar 里，这个资源在 {@code BOOT-INF/lib/spring-ai-model-*.jar} <b>内部</b>，
+     * 只有 Boot 的 {@code LaunchedClassLoader} 看得见；而工具调用跑在 Reactor {@code boundedElastic} 的
+     * **虚拟线程**上，实测那里的 TCCL 是 JDK 的 {@code AppClassLoader}（只看得见 fat jar 根目录）：
+     * <pre>
+     * PROBE thread=VirtualThread[#152,loomBoundedElastic-14]/runnable@ForkJoinPool-1-worker-2
+     *       ambientTCCL=jdk.internal.loader.ClassLoaders$AppClassLoader@6bc7c054 ambientResolves=false
+     *       appLoader  =org.springframework.boot.loader.launch.LaunchedClassLoader@1a6c5a9e appResolves=true
+     * </pre>
+     * 于是静态初始化直接抛
+     * {@code IllegalStateException: the embedding dimensions properties file must exist}；
+     * 更麻烦的是这个失败**一次性且全局**：类初始化失败后整个 JVM 里该类永久不可用，
+     * 之后连 Tomcat 线程上的"向量化"接口也一起变成
+     * {@code NoClassDefFoundError: Could not initialize class org.springframework.ai.ollama.OllamaEmbeddingModel}。
+     *
+     * <p>也就是说：谁先第一次碰到这个类，就决定了整条链路能不能用——而这不该取决于"第一个请求从哪条线程进来"。
+     * 这里在构建期间显式把 TCCL 换成应用类加载器，把结果变成确定的：HTTP 线程、流式虚拟线程、
+     * 以后的定时任务都一样能读到那个资源（虚拟线程允许改 TCCL，JDK 21 实测可行）。
+     */
+    private EmbeddingModel buildWithApplicationClassLoader(Supplier<EmbeddingModel> builder) {
+        Thread thread = Thread.currentThread();
+        ClassLoader original = thread.getContextClassLoader();
+        try {
+            thread.setContextClassLoader(EmbeddingClientFactory.class.getClassLoader());
+            return builder.get();
+        } finally {
+            thread.setContextClassLoader(original);
+        }
     }
 
     /** Ollama 原生协议：模型名可带冒号（如 {@code bge-m3}），base-url 由 {@link OllamaApi} 承载。 */

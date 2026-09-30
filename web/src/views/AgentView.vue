@@ -220,16 +220,18 @@ async function loadConversations() {
  * 注意：这里不带 retrieval。RAG 的命中片段目前<b>只在本次流里可见</b>——它没有随消息落库
  * （chat_message 只存正文与工具痕迹），因此刷新后不显示。这是已知缺口，不是渲染 bug：
  * 若要回放，需要把命中片段写进消息 metadata（与 Agent 的工具痕迹同一处）。
+ * 本次会话内不丢：见 send() 结尾按 assistantMessageId 把命中片段贴回来的那几行。
  */
 function toItems(list: Array<{ id: string; role: string; content: string | null; toolCalls: MessageToolCall[] }>) {
   return list
     .filter((message) => message.role === 'USER' || message.role === 'ASSISTANT')
     .filter((message) => (message.content ?? '').length > 0 || message.toolCalls.length > 0)
-    .map((message) => ({
+    .map((message): ChatItem => ({
       id: message.id,
       role: message.role as 'USER' | 'ASSISTANT',
       content: message.content ?? '',
       toolCalls: message.toolCalls ?? [],
+      retrieval: null,
       streaming: false
     }))
 }
@@ -325,6 +327,9 @@ async function send(preset?: string) {
   const controller = new AbortController()
   abortController.value = controller
 
+  // 本轮的助手消息 id（meta 事件给）：流结束后要用它把检索卡片贴回"校正过"的那条消息
+  let assistantMessageId = ''
+
   try {
     await streamChat(
       conversationId,
@@ -332,6 +337,7 @@ async function send(preset?: string) {
       {
         onMeta: (meta) => {
           requestId.value = meta.requestId
+          assistantMessageId = meta.assistantMessageId
         },
         onRetrieval: (retrieval) => {
           // 检索事件早于第一个 delta：用户先看到"检索到 N 个片段"，再看回答逐字出现
@@ -380,6 +386,16 @@ async function send(preset?: string) {
     abortController.value = null
     // 用服务端数据校正一次（真实 id、真实工具痕迹），同时刷新会话列表的顺序与标题
     await reloadActiveConversation()
+    // 检索卡片必须活过这次校正：服务端不存命中片段（见 toItems 的注释），校正会把本地这份冲掉。
+    // 这一点是**真机跑出来的**（2026-09-30，见 decisions.md B.37）：本地服务+本地模型下
+    // 整段回答一口气到达，卡片在 DOM 里只活了 41ms 就被冲掉——用户等于从没见过它；
+    // 而在无 ES 的 standalone 里这条链路根本走不到，所以之前没暴露。
+    // 按 assistantMessageId 贴回去，至少保证"本次会话里回看得到"；刷新页面仍会丢，
+    // 那是同一个已知缺口（要彻底解决得把命中片段落库，与工具痕迹同处）。
+    if (answer.retrieval && assistantMessageId) {
+      const reloaded = items.value.find((item) => item.id === assistantMessageId)
+      if (reloaded) reloaded.retrieval = answer.retrieval
+    }
   }
 }
 
