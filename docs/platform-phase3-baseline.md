@@ -944,7 +944,7 @@ P3  ── MCP 完整接入/鉴权、Planner、高级 Memory
 
 | 项 | 结果 |
 | --- | --- |
-| 状态 | ✅ 后端完成（编译 / 全量测试 全绿）；**前端（Agent 管理页）留到 4.2** |
+| 状态 | ✅ 后端完成（编译 / 全量测试 全绿）；**前端（Agent 管理页）留到 4.2**（已在 §9.5 补完） |
 | 目标 | §十五–§十八：Agent 可创建/修改/删除/启停/复制、可绑知识库、可配提示词与模型角色；§十七：Definition 与 Runtime 分离 |
 | 新增主代码 | `nexus-ai`：`ai/agent/AgentDefinition`（纯值对象） |
 | 新增主代码 | `nexus-app`：`agent/AgentService`（资源服务）、`agent/AgentRuntime`（运行，即改名前的 `AgentService`）、`agent/AgentResourceController`、`agent/model/{AgentStatus, dto×4, entity×2}`、`agent/mapper×2` |
@@ -954,9 +954,9 @@ P3  ── MCP 完整接入/鉴权、Planner、高级 Memory
 | 错误码 | 新增 `5006`（404）/ `5007`·`5008`·`5009`·`5010`（409） |
 | 新增测试 | 27 条（`AgentDefinitionTest` 6 / `AgentResourceTest` 9 / `ConversationAgentBindingTest` 7 / `KnowledgeSearchToolScopeTest` 5） |
 | 测试基线 | 306 → **333 运行 / 315 通过 / 0 失败 / 0 错误 / 18 跳过（7 个 live 类）**，BUILD SUCCESS |
-| 前端构建 | 本轮未改前端 → **未执行**（4.2 会跑） |
+| 前端构建 | 本轮未改前端 → **未执行**（4.2 已补跑：`npm run build` PASSED，见 §9.5） |
 | 运行时验证（真机） | **SKIPPED**：真实模型跑一次 Agent 需 `AI_CHAT_API_KEY`（`AgentLoopTest` 门控，本机未设置）；真实检索需 ES/pgvector（本机 Docker 不可用） |
-| E2E 浏览器 | **UNAVAILABLE**：Agent 管理页尚未实现（4.2） |
+| E2E 浏览器 | **UNAVAILABLE**：Agent 管理页尚未实现（4.2 已补：`verify-agents.mjs` 腿 ①–⑦、⑨–⑪ PASSED，试跑 SKIPPED，见 §9.5） |
 
 **与 §5.2 设计表的偏差**（三处，理由见 B.35 §7 与 database.md §6.0）：
 表名去掉了 `ai_` 前缀（`agent` 而非 `ai_agent`）；`max_iterations` / `timeout_ms` / `memory_config`

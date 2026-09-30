@@ -1810,7 +1810,7 @@ Agent 有两条真实链路：`AgentRuntime.ask`（一次性）与 `ChatStreamSe
 | Contract（工具范围） | `KnowledgeSearchToolScopeTest` 5 项：未绑定搜全部、绑定两个库时第三个库**一次都没被搜到**（`never()`）、禁用库被跳过且如实报告、全部不可用时明确说"检索不可用"+ 悬空绑定被指出、空列表等价于不限制 | PASSED |
 | 全量回归 | `mvn -B test`：**334 运行 / 316 通过 / 18 跳过（7 个 live 类，环境变量门控）/ 0 失败 / 0 错误**，BUILD SUCCESS（nexus-common 14 / nexus-ai 35 / nexus-knowledge 122 / nexus-app 163） | PASSED |
 | 真机冒烟（standalone，无 Docker） | 打包后用 `--spring.profiles.active=standalone --server.port=8099` 起服务：注册/登录取 token → `GET /api/agents` → `POST /api/agents`（落 DRAFT，返回 `kbIds:[]`）→ `GET /api/agents`（内置项置顶）→ `POST /api/agent/ask`（无 key → 4006，信息里列出已注册模型）。见 §11 | PASSED |
-| 前端构建 | 本轮**未改前端**，因此没有重跑 `npm run build` | **未执行**（4.2 会跑） |
+| 前端构建 | 本轮**未改前端**，因此没有重跑 `npm run build` | **未执行**（4.2 已补跑，见 B.36 §6） |
 | 真机（真实模型跑一次 Agent、真实检索） | 需 `AI_CHAT_API_KEY` + ES/pgvector；`AgentLoopTest` 被环境变量门控，本机未设置 | **SKIPPED** |
 | E2E 浏览器（Agent 管理页） | 页面尚不存在（4.2） | **UNAVAILABLE**（本轮不做） |
 
