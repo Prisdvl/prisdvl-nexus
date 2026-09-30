@@ -1,6 +1,7 @@
 package com.lky.nexus.app.agent;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.lky.nexus.app.observe.ObservabilityRegistry;
 import com.lky.nexus.knowledge.mapper.ChunkMapper;
 import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;
@@ -39,15 +40,18 @@ public class KnowledgeSearchTool {
     private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final ChunkMapper chunkMapper;
     private final DocumentMapper documentMapper;
+    private final ObservabilityRegistry observabilityRegistry;
 
     public KnowledgeSearchTool(ChunkSearchService chunkSearchService,
                                KnowledgeBaseMapper knowledgeBaseMapper,
                                ChunkMapper chunkMapper,
-                               DocumentMapper documentMapper) {
+                               DocumentMapper documentMapper,
+                               ObservabilityRegistry observabilityRegistry) {
         this.chunkSearchService = chunkSearchService;
         this.knowledgeBaseMapper = knowledgeBaseMapper;
         this.chunkMapper = chunkMapper;
         this.documentMapper = documentMapper;
+        this.observabilityRegistry = observabilityRegistry;
     }
 
     @Tool(name = "knowledge_search",
@@ -70,10 +74,12 @@ public class KnowledgeSearchTool {
                 List<ChunkSearchService.SearchHit> fallback = likeSearch(kb.getId(), query, 5);
                 if (!fallback.isEmpty()) {
                     all.addAll(fallback);
+                    observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_DEGRADED);
                     AgentContext.record(new AgentContext.ToolCallRecord("knowledge_search", query,
                             "知识库「" + kb.getName() + "」精确检索不可用，已降级为关键词匹配（"
                                     + fallback.size() + " 条）"));
                 } else {
+                    observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_UNAVAILABLE);
                     AgentContext.record(new AgentContext.ToolCallRecord("knowledge_search", query,
                             "知识库「" + kb.getName() + "」检索不可用：" + ex.getMessage()));
                 }
