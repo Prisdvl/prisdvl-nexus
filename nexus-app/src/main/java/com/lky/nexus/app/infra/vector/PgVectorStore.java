@@ -72,17 +72,13 @@ public class PgVectorStore implements VectorStore {
     }
 
     @Override
-    public List<VectorSearchHit> search(Long knowledgeBaseId, float[] queryEmbedding,
-                                        int topK, double minScore) {
-        String literal = toVectorLiteral(queryEmbedding);
-        List<VectorSearchHit> hits = jdbcTemplate.query("""
-                SELECT chunk_id, 1 - (embedding <=> CAST(? AS vector)) AS score
-                FROM kb_vector
-                WHERE kb_id = ?
-                ORDER BY embedding <=> CAST(? AS vector)
-                LIMIT ?
-                """, (rs, rowNum) -> new VectorSearchHit(rs.getLong("chunk_id"), rs.getDouble("score")),
-                literal, knowledgeBaseId, literal, topK);
+    public List<VectorSearchHit> search(Long knowledgeBaseId, float[] queryEmbedding, int topK,
+                                        double minScore, Collection<Long> documentIds) {
+        SearchStatement statement = buildSearchStatement(
+                knowledgeBaseId, toVectorLiteral(queryEmbedding), topK, documentIds);
+        List<VectorSearchHit> hits = jdbcTemplate.query(statement.sql(),
+                (rs, rowNum) -> new VectorSearchHit(rs.getLong("chunk_id"), rs.getDouble("score")),
+                statement.arguments());
 
         List<VectorSearchHit> filtered = hits.stream().filter(hit -> hit.score() >= minScore).toList();
         if (filtered.size() < hits.size()) {
@@ -90,6 +86,48 @@ public class PgVectorStore implements VectorStore {
                     hits.size(), minScore, hits.size() - filtered.size());
         }
         return filtered;
+    }
+
+    /**
+     * 组装检索语句（SQL + 按序参数）。
+     *
+     * <p>把 SQL 拼装从执行里拆出来，是为了让它可被验证：本地没有 pgvector
+     * （Docker/WSL2 不可用），真机检索只能标 UNAVAILABLE，但"限定文档范围时
+     * 到底发了哪条 SQL、参数顺序对不对"是纯字符串与数组的问题，可以脱离数据库断言。
+     * 参数顺序尤其值得钉住——{@code CAST(? AS vector)} 在这条语句里出现两次
+     * （算分一次、排序一次），插错位置不会报错，只会静默返回错误结果。
+     *
+     * <p>{@code document_id} 的限定直接写进 WHERE：pgvector 的 HNSW 索引 + 过滤
+     * 会先取近邻再过滤，可能返回不足 topK 条（见类注释里的已知召回率细节），
+     * 但"先检索再在内存里按文档筛"更糟——那会把 topK 变成"筛之前的前 K 条"。
+     */
+    static SearchStatement buildSearchStatement(Long knowledgeBaseId, String literal, int topK,
+                                                Collection<Long> documentIds) {
+        List<Long> ids = documentIds == null ? List.of() : List.copyOf(documentIds);
+        StringBuilder sql = new StringBuilder("""
+                SELECT chunk_id, 1 - (embedding <=> CAST(? AS vector)) AS score
+                FROM kb_vector
+                WHERE kb_id = ?
+                """);
+        List<Object> arguments = new java.util.ArrayList<>();
+        arguments.add(literal);
+        arguments.add(knowledgeBaseId);
+        if (!ids.isEmpty()) {
+            String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+            sql.append("  AND document_id IN (").append(placeholders).append(")\n");
+            arguments.addAll(ids);
+        }
+        sql.append("""
+                ORDER BY embedding <=> CAST(? AS vector)
+                LIMIT ?
+                """);
+        arguments.add(literal);
+        arguments.add(topK);
+        return new SearchStatement(sql.toString(), arguments.toArray());
+    }
+
+    /** 一条可执行的检索语句：SQL 文本 + 与占位符一一对应的参数。 */
+    record SearchStatement(String sql, Object[] arguments) {
     }
 
     @Override

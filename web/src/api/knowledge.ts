@@ -302,14 +302,24 @@ export function search(id: string, q: string, topK = 10, mode: SearchMode = 'hyb
   })
 }
 
-/** RAG 问答：检索 → 重排 → 组装 → 生成，返回带引用的回答。 */
+/**
+ * RAG 问答：检索 → 重排 → 组装 → 生成，返回带引用的回答。
+ *
+ * `topK` **不传就是不传**（不要在这里补默认值）：服务端按"请求 > 知识库配置 > 全局默认"
+ * 解析，不传时用该知识库的 `retrieval_top_k`。原先这里写死 12，
+ * 等于让知识库的检索参数对问答永远无效——按库调好的参数只对调试检索面板有用。
+ */
 export function askQuestion(
   id: string,
   question: string,
-  topK = 12,
+  topK?: number,
   history: Array<{ question: string; answer: string }> = []
 ) {
-  return client.post<never, RagAnswer>(`/knowledge-bases/${id}/ask`, { question, topK, history })
+  return client.post<never, RagAnswer>(`/knowledge-bases/${id}/ask`, {
+    question,
+    ...(topK ? { topK } : {}),
+    history
+  })
 }
 
 /** 问答历史（含引用），用于回看"当时依据了哪些资料"。 */
@@ -352,14 +362,15 @@ export interface StreamHandlers {
 export async function askQuestionStream(
   id: string,
   question: string,
-  topK: number,
+  topK: number | undefined,
   history: Array<{ question: string; answer: string }>,
   handlers: StreamHandlers,
   signal?: AbortSignal
 ): Promise<void> {
   await postSse(
     `/api/knowledge-bases/${id}/ask/stream`,
-    { question, topK, history },
+    // topK 不传 = 用知识库配置（与同步路径同一套解析规则）
+    { question, ...(topK ? { topK } : {}), history },
     {
       signal,
       onFrame: ({ event, data }) => {

@@ -2,6 +2,7 @@ package com.lky.nexus.ai.config;
 
 import com.lky.nexus.ai.model.AiModelRegistry;
 import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.ai.rag.retriever.RetrievalDefaults;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,7 +14,7 @@ import org.springframework.context.annotation.Configuration;
  * Phase 7 的 nexus-mcp-server 也能直接复用（它同样扫描 {@code com.lky.nexus}，或显式 import 本配置）。
  */
 @Configuration
-@EnableConfigurationProperties(AiModelProperties.class)
+@EnableConfigurationProperties({AiModelProperties.class, RetrievalDefaults.class})
 public class AiConfiguration {
 
     @Bean

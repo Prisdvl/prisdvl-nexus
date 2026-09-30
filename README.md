@@ -98,6 +98,9 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | --- | --- | --- |
 | Phase 1 | 架构分析（**未改代码**） | ✅ 完成（[docs/platform-upgrade-phase1-analysis.md](docs/platform-upgrade-phase1-analysis.md)） |
 | Phase 2 | 领域模型：`workspace`（个人工作区）+ 知识库平台字段（icon/status/检索参数） | ✅ 完成（迁移 V9/V10；见 decisions.md B.30） |
+| Phase 3.1 | Retriever 端口抽象：检索拆成策略实现族（Vector/Keyword/Hybrid/Reranked）+ 新旧行为一致性测试 | ✅ 完成（对外行为不变；见 decisions.md B.31） |
+| Phase 3.2 | 检索参数真正可配置：知识库的 `retrieval_top_k` / `similarity_threshold` 生效 + 全局默认值收敛到 `nexus.retrieval.*` | ✅ 完成（阈值统一为 0.25；见 decisions.md B.32） |
+| Phase 3.3 | 元数据过滤：`tags` / `folder` / `documentId` 下推到 ES `filter` 与 pgvector `WHERE`（向量路先解析成文档 id） | ✅ 完成（ES/pgvector 真机 `UNAVAILABLE`；见 decisions.md B.33） |
 | Phase 3+ | RAG/Agent/Workflow/Application/Model 的抽象上移与用户可配置化 | ⏳ 见分析文档第 12 节 |
 
 ## 7. 本地环境要求

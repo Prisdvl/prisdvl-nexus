@@ -29,8 +29,19 @@ public interface VectorStore {
      * @param queryEmbedding  查询向量
      * @param topK            返回条数
      * @param minScore        最低相似度（过滤明显不相关的结果）
+     * @param documentIds     限定文档范围；为空表示不限定。<b>语义是"只在这些文档里找"，
+     *                        而不是"顺带过滤"</b>——空集合必须解释成"没有限定"，
+     *                        因此调用方想要表达"匹配到零篇文档"时，应当直接不调用本方法
+     *                        （返回空结果），而不是传一个空集合进来（那会变成全库检索）。
      */
-    List<VectorSearchHit> search(Long knowledgeBaseId, float[] queryEmbedding, int topK, double minScore);
+    List<VectorSearchHit> search(Long knowledgeBaseId, float[] queryEmbedding, int topK, double minScore,
+                                 Collection<Long> documentIds);
+
+    /** 不限定文档范围的检索。 */
+    default List<VectorSearchHit> search(Long knowledgeBaseId, float[] queryEmbedding, int topK,
+                                         double minScore) {
+        return search(knowledgeBaseId, queryEmbedding, topK, minScore, null);
+    }
 
     /** 按内容哈希批量查缓存（命中则无需再调用嵌入模型）。 */
     Map<String, float[]> findCachedEmbeddings(Collection<String> contentHashes);

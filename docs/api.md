@@ -110,7 +110,10 @@ POST /api/auth/login
 | `icon` | String(≤512) | null | 图标（URL 或 emoji） |
 | `status` | String | `ENABLED` | `ENABLED` / `DISABLED` |
 | `retrievalTopK` | Integer(1–50) | 5 | 该库的检索 TopK |
-| `similarityThreshold` | Double(0–1) | 0.7 | 相似度阈值 |
+| `similarityThreshold` | Double(0–1) | 0.25 | 相似度阈值 |
+
+> 上表默认值即 `nexus.retrieval.*`（Phase 3.2 起为唯一来源）。检索时的优先级是
+> **请求参数 > 知识库配置 > 全局默认**；问答/检索接口的 `topK` **不传**即表示"用该知识库的 `retrievalTopK`"。
 
 
 ### 3.2 文档
@@ -155,9 +158,46 @@ GET /api/import-tasks/9001
 
 ## 4. 检索与调试（Phase 3）
 
+### 4.1 已实现：知识库内检索（带元数据过滤）
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/search` | 统一检索：`mode=VECTOR\|BM25\|HYBRID`、`topK`、`rerank`、filters（kbIds/tags/folder/documentId） |
+| POST | `/api/knowledge-bases/{id}/index` | 为待索引切片建索引（幂等，`batchLimit` 默认 500） |
+| POST | `/api/knowledge-bases/{id}/index/recreate` | 重建索引：新建物理索引 → 原子切别名 |
+| GET | `/api/knowledge-bases/{id}/search` | 检索：`q`（必填）、`mode`、`topK`、`tags`、`folder`、`documentId` |
+
+查询参数语义（Phase 3.3）：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `q` | ✅ | 查询串 |
+| `mode` | — | `bm25` / `vector` / `hybrid`（默认 hybrid）。不认识的值 → **400 + 1001**，不静默退回 hybrid |
+| `topK` | — | **不传 = 用该知识库的 `retrievalTopK`**（优先级：请求 > 知识库配置 > `nexus.retrieval`）。越界夹到 1–100 |
+| `tags` | — | 标签过滤，多个标签之间是 **OR**（与 Obsidian `tag:#a OR tag:#b` 一致）。支持 `?tags=a,b` 与 `?tags=a&tags=b`，两者可混用 |
+| `folder` | — | 目录过滤，**包含子目录**（`算法` 匹配 `算法` 及 `算法/…`；不匹配 `算法入门`） |
+| `documentId` | — | 限定文档，`?documentId=7&documentId=8` 或 `?documentId=7,8`；非数字 → 400 + 1001 |
+
+> 多个条件同时给是 **AND**（逐个求交集）；标签内部是 OR；空值/空白项都表示"该条件不参与"。
+> ⚠️ 与"条件给了、但在库内一篇都没命中"是两回事：后者**必须返回空结果**，
+> 绝不能退化成"不过滤"（否则过滤会静默消失）。实现见 `RetrievalFilterResolver`。
+
+```http
+GET /api/knowledge-bases/1/search?q=缓存击穿&mode=hybrid&tags=Redis,缓存&folder=Redis
+
+200 OK
+{ "code": 0, "data": [
+  { "chunkId": 20001, "documentId": 100, "documentTitle": "缓存击穿.md",
+    "headingPath": "Redis > 缓存 > 缓存击穿", "content": "……互斥锁方案……",
+    "score": 0.0324, "source": "hybrid", "matchedBy": ["BM25 #2", "向量 #1"] } ] }
+```
+
+### 4.2 规划中（尚未实现）
+
+下表是目标形态，当前代码里**没有**这两个端点（`/api/knowledge-bases/{id}/search` 是今天的实际入口）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/search` | 统一检索（跨库 `kbIds`）：`mode=VECTOR\|BM25\|HYBRID`、`topK`、`rerank`、filters（kbIds/tags/folder/documentId） |
 | POST | `/api/search/explain` | 调试接口：返回两路原始结果、融合后的排名、重排分数（用于调参与面试演示） |
 
 ```http
@@ -172,6 +212,18 @@ POST /api/search
     "snippet": "……互斥锁方案……", "vectorScore": 0.83, "bm25Score": 12.4,
     "rrfScore": 0.032, "rerankScore": 8.7, "finalRank": 1 } ] } }
 ```
+
+### 4.3 RAG 问答（已实现）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/knowledge-bases/{id}/ask` | 检索 → 重排 → 组装 → 生成，返回**带引用**的回答（同步） |
+| POST | `/api/knowledge-bases/{id}/ask/stream` | 同上，SSE 流式（`text/event-stream`） |
+| GET | `/api/knowledge-bases/{id}/qa-history` | 该库的问答留档（B.27） |
+
+> `topK` 同样是"不传 = 用该知识库的 `retrievalTopK`"。
+> 两者的关系与分工见 decisions.md B.31 第 7 条：**会话流式（`/api/chat/stream`）是主链路**，
+> 这里的知识库问答接口是"单次问答/调试"入口，保留但不再叠加会话与记忆。
 
 ---
 

@@ -1238,7 +1238,7 @@ ollama 镜像与 bge-m3 模型（1.08 GB）最终都拉取成功，因此**真�
    因此归属解析放在**控制器**（app 层）——先把 `workspaceId` 解出来，再调
    `knowledgeBaseService.create(userId, workspaceId, request)`。知识库模块保持"只认 userId/workspaceId 两个数字"。
 3. 知识库平台字段（V10）：`icon` / `status`(ENABLED|DISABLED，默认 ENABLED) /
-   `retrieval_top_k`(默认 5) / `similarity_threshold`(默认 0.7)，校验边界在 DTO 上
+   `retrieval_top_k`(默认 5) / `similarity_threshold`(默认 0.7 —— **Phase 3.2 起改为 0.25，见 B.32**)，校验边界在 DTO 上
    （`@Min(1)@Max(50)`、`@DecimalMin("0.0")@DecimalMax("1.0")`）。
    **迁移四条独立的 `ADD COLUMN`**：H2 不接受逗号连写的 `ADD COLUMN`，一次一条才能在 `test`/`standalone` 上同样跑通。
 
@@ -1278,6 +1278,270 @@ MCP 的 `tools/call` 是"我们自己直接调工具"，显式 `new ToolContext(
 资料里出现 `来源: 缓存击穿 › null`，模型把它**照抄进回答**（用户可见的脏数据）。
 修法：降级路径改用切片自带的 `heading_path`/`heading`，拼装时对空值直接不输出该段。
 教训：**给模型的上下文同样要按"用户可见"的标准要求**，模型会忠实复制里面的噪声。
+
+### B.31 Phase 3.1 实现记录（Retriever 端口抽象）与"行为不变"的机器证明
+
+平台化 Phase 3 的第一个增量：把检索从"一个什么都知道的 Service"拆成**端口 + 策略实现族**。
+对外行为**一字未改**，改动全部发生在结构上。
+
+**1. 端口放 `nexus-ai`，实现放 `nexus-knowledge`**
+
+这是模块依赖方向倒逼出来的唯一解：`common ← ai ← knowledge ← app`，knowledge 依赖 ai，
+**ai 不能依赖 knowledge**。所以 `Retriever` / `RetrievalQuery` / `RetrievedDocument` /
+`RetrievalStrategy` / `RetrieverRegistry` 放 ai（纯接口与数据，无基础设施），
+四个实现放 knowledge（要碰 ES / pgvector / 嵌入模型），app 通过 Spring 自动装配做组合根
+（`scanBasePackages = "com.lky.nexus"` 使跨模块 bean 注册零成本）。
+Phase 4/5 的 Tool / Workflow 抽象走同一条路。
+
+**2. 策略与实现一一对应，越界即响亮失败**
+
+`RetrieverRegistry` 收集所有 `Retriever` bean，按 `strategies()` 建策略 → 实现的映射，两条规则：
+
+- **同一策略被两个实现认领 → 启动即抛 `IllegalStateException`**。这种情况没有"合理默认行为"可退
+  （选错实现不会报错，只会让检索结果静默变差），不如让应用起不来。报错里同时给"实现名 + 类名"：
+  只给类名的话，同一个类的两个不同配置实例会打印出一模一样的两串字，等于什么都没说。
+- **请求了没人认领的策略 → 抛 1001**，而不是返回空列表。"没有结果"和"这个策略没实现"是两回事——
+  返回空会让上游据此回答"资料中没有相关内容"，而真正的原因是配置写错了。
+
+**3. `SearchMode`（用户可见）与 `RetrievalStrategy`（内部）刻意分成两个枚举**
+
+`SearchMode` 是前端下拉框里的三个选项（bm25 / vector / hybrid）；`RetrievalStrategy` 多了
+`HYBRID_RERANK`，未来还会有 GRAPH / SQL。用户不需要知道"重排"的存在，内部却需要把它当成一种策略
+来派发。**把内部枚举直接暴露成 API 契约，等于以后每加一种策略都要做一次接口变更**——
+所以在边界处做一次显式映射（`ChunkSearchServiceImpl.toStrategy`），两侧各自演进。
+
+**4. 参数与上限收进 `RetrievalQuery`，不散在各个实现里**
+
+`topK` 上限 100、召回深度倍数 3、候选深度上限 200、相似度下限默认 0.25 全是**检索契约的一部分**
+（"topK 超过 100 一律按 100 算"）。放在每个 Retriever 里迟早两路不一致，而那种不一致不会报错，
+只会让某一路悄悄多召回或少召回。记录对象同时让"这次检索按什么条件做的"可以被完整落日志、回放、进评测集。
+
+**5. `HybridRetriever` 不持有 ES，也不持有 pgvector**
+
+它只调用另外两个 Retriever 的**召回方法**（`recall`，只返回 chunkId + 分数，不回表），
+拿到两路原始排名后做 RRF，再统一回表。好处：融合层不认识任何基础设施；
+"新增一路召回"= 加一个实现 + 在这里多接一路，而不是在融合代码里加 if。
+
+**6. `ChunkSearchServiceImpl` 退化为门面——这是本增量最重要的一个决定**
+
+对外签名、`SearchHit` 结构、异常语义**一字未改**，因此五个调用点
+（检索接口、RAG 问答、Agent 工具、引用构建、上下文组装）零改动。这不是"懒得改"，
+而是**先让重构可被证明**：调用方一行不改，才谈得上"改前改后行为一致"。
+
+**7. 重排（`RerankedRetriever`）已实现，但 RAG 暂未切过去**
+
+`HYBRID_RERANK` 已能被注册表派发、有 7 条单测，但 `RagAnswerServiceImpl` 仍走原来的内联重排。
+原因：那里有一个**语义差异必须单独处理**——旧代码用
+`reranked = scores.size() == RERANK_CANDIDATES`（硬比常量 8）判断"是否重排成功"，
+当召回不足 8 条时它永远判为 false（重排其实跑了，却被记为"降级"）。
+新实现按"候选实际条数"判断。这是**修正而非平移**，必须连带更新 RAG 侧的行为期望与测试，
+不能顺手藏在端口拆分里——否则一次提交里同时有"结构变了"和"行为变了"，出问题无法归因。
+
+**8. "行为不变"怎么被证明（本轮最值得复用的一条）**
+
+把改造前的实现**逐字固化进测试代码**（`ChunkSearchServiceLegacyReference`，只存在于 test 目录，
+头部写明"禁止修改"），让新旧两个实现在同一份假数据上跑同一组场景、逐字段比对。
+断言分两层：
+
+1. **先断言具体期望值**（顺序、分数、来源、命中说明、回表请求的 id）；
+2. **再断言新旧完全一致**。
+
+只有第 2 层，会退化成"两边都错成一样也能过"；只有第 1 层，则无法防止后续有人无意中偏离。
+两层叠加才既非空洞、又能长期保护。被钉住的隐蔽语义（这些都是"改了不会报错"的东西）：
+
+- 重复命中只取第一次出现的分数，**但仍消耗一个名次**（`BM25 #3` 而不是 `#2`）；
+- 命中已删除的切片时**跳过**，导致返回条数可能少于 limit，而不是补位或报错；
+- 正文取 `rawContent`，只有为空时才退回参与嵌入的 `content`；
+- RRF 平局按 `chunkId` 升序稳定排序（否则同一查询两次可能给出不同顺序）；
+- `limit` 在**回表之前**生效（不多查用不上的切片）；
+- BM25 单路不碰向量库与嵌入模型（多打一次嵌入调用 = 白花的钱与延迟）；
+- 归属校验在"空查询短路"**之前**（越权 + 空查询仍报 3001，不能悄悄变成空结果）。
+
+**9. 本轮环境实测（如实记录）**
+
+`standalone`（H2 + 无 ES / 无 Ollama）下三种模式分别返回 **4005 / 4005 / 4004**，
+且都是领域错误码而不是 500——说明新的实现族把基础设施不可用**原样**翻译成了既有错误语义，
+与改造前一致。启动日志确认四种策略注册成功：
+`{VECTOR=vector, HYBRID_RERANK=hybrid-rerank, HYBRID=hybrid, KEYWORD=keyword}`。
+**ES / pgvector 真机行为未验证（本机 Docker/WSL2 不可用），标 `UNAVAILABLE`。**
+
+**10. 顺带修掉的**：`web/scripts/verify-login.mjs` 的默认口令是 `Passw0rd!23`，
+而 `scripts/seed-demo.mjs` 种的是 `Demo@12345`——两个脚本描述同一个演示用户却各写各的默认值，
+表现为"种了数据却登不进去"，且报错只是"登录超时"（很难定位）。已对齐。
+
+### B.32 Phase 3.2 实现记录（检索参数真正可配置 + 默认值收敛到一处）
+
+知识库表里的 `retrieval_top_k` / `similarity_threshold` 从 Phase 2 就存在，但**一直是死字段**：
+建库时会写进去，检索时没人读。本增量让它们真正生效，并把散落各处的"默认值"收敛到一个来源。
+
+**1. 先确认"死字段"到底死在哪——三处各写各的默认值**
+
+改动前，同一次检索的条数由三个互不相干的地方决定：
+
+| 入口 | 条数来源 | 值 |
+| --- | --- | --- |
+| 检索接口 `/search` | Controller 的 `@RequestParam(defaultValue = "10")` | 10 |
+| RAG 问答 | `KnowledgeRagController` 里写死的 `12` | 12 |
+| Agent 工具 | `KnowledgeSearchTool` 的常量 | 5 |
+| **知识库配置 `retrieval_top_k`** | **没人读** | — |
+
+也就是说：用户在知识库设置里把 topK 调到 20，三个入口谁都不理他。更糟的是阈值：
+建库默认写 0.7，而实际检索用的默认是 0.25（`RetrievalQuery.DEFAULT_SIMILARITY_THRESHOLD`）——
+**表里存的配置和跑起来的配置从一开始就是两个不同的数**，且没有任何一处会报错。
+
+**2. 阈值按 0.25 统一，不是按 0.7**
+
+两个值里选哪个，不靠"哪个看起来更合理"，靠已记录的一次真实测量（B.25）：
+真实查询的 **top-1 余弦相似度是 0.7458**。若下限取 0.7，只有 0.046 的余量——
+命中与否几乎由噪声决定，而 0.5–0.7 之间的**合法命中会被静默丢掉**
+（表现为"明明导进去了却答不出来"，且日志里什么异常都没有）。
+取 0.25 意味着全局默认是"噪声下限"，**收紧是每个库自己的事**（这正是 `similarity_threshold` 该有的用法）。
+凡是把默认值往严改的，都得先拿出这种量级的证据，否则就是在用配置掩盖检索质量问题。
+
+**3. 唯一解析入口 `RetrievalQueryFactory`，优先级写死为 请求 > 知识库 > 全局**
+
+调用方传 `null` 表示"没指定"（而不是 0 或 -1 这类哨兵）。`topK` 因此从 `int` 变成 `Integer`
+——这一步不能用哨兵糊过去：`topK=0` 在既有 parity 测试里被钉死为"钳到 1（召回深度 3）"，
+拿它当"未指定"会悄悄改掉已钉住的行为。宁可改签名，也不改已证明的语义。
+
+生效范围（**"知识库配置"这一层只在门面里解析一次**）：`ChunkSearchServiceImpl` 拿得到 `KnowledgeBasePO`，
+所以 `ChunkSearchService` 的 `topK` 参数语义变成"null = 用这个库自己的配置"。
+RAG 问答与 Agent 工具都不再各自实现一遍优先级——两处各写一遍的优先级，迟早会有第三处写错。
+
+**4. 日志打在召回之前**
+
+解析后的参数（`topK=12 threshold=0.25`）在调用 Retriever **之前**打日志。原因很实际：
+调参时最常问的是"我改了配置怎么没反应"，只有解析后的值能回答（请求传了 10 还是"没传"，事后从日志里看不出区别）；
+而检索失败（ES / 向量库不可用）会直接抛异常，日志留在失败之后的话，**最需要排查参数的那条路径反而什么都没有**。
+
+**5. 顺带修掉 `reranked` 的静默误报（3.2 才让它可达）**
+
+`RagAnswerServiceImpl` 原本用 `scores.size() == RERANK_CANDIDATES`（硬比 8）判断"重排是否成功"。
+召回不足 8 条时恒为 false：**重排确实跑了、顺序也确实变了，界面却显示"未重排"**。
+B.31 记录过它是"修正而非平移"，当时不可达（默认 topK ≥ 8）；3.2 让知识库 topK 生效后
+（demo 库就是 12，用户可设更小），它立刻变成可达路径。改为按候选实际条数判断。
+
+**6. 参数钳制而不是抛错**
+
+`topK=999` → 按 `RetrievalQuery.MAX_TOP_K`(100) 取；`topK=0` → 1；非正阈值 → 回落全局默认。
+理由：检索参数是"调参"而不是"契约"，越界时给一个可预测的上界比 400 更有用；
+但**上界必须只有一处定义**（`RetrievalQuery`），否则两路召回各自钳制，会出现"某一路悄悄少召回"。
+
+**7. `ChunkSearchServiceParityTest` 的冻结参照物与接口解耦**
+
+`topK` 从 `int` 变 `Integer` 后，冻结的旧实现（`ChunkSearchServiceLegacyReference`）
+不再 `implements ChunkSearchService`，`SearchHit` 也改用限定名。
+**它的检索逻辑一字未改**，改的只是它如何与一个正在演进的接口相处。
+同时把 parity 夹具的 KB 参数显式设为 `null`，让解析落到全局默认 0.25 ——
+即改造前硬编码的那个值，从而保持逐字段一致（否则这个测试会因为"参数来源变了"而失败，
+而它本该证明的是"重构没改检索逻辑"）。
+
+**8. 本轮环境实测（如实记录）**
+
+| 场景 | 日志/返回 | 判定 |
+| --- | --- | --- |
+| demo 库（配置 12 / 0.25），不传 topK | `topK=12 threshold=0.25（知识库 … 的配置 12 / 0.25）` | PASSED |
+| 同上，请求 `topK=3` | `topK=3 threshold=0.25`（知识库配置仍为 12） | PASSED（请求优先） |
+| 新建库（7 / 0.42），`mode=vector` | `topK=7 threshold=0.42` | PASSED（阈值已到达 VectorStore） |
+| 不传任何参数新建的库 | 解析为 5 / 0.25 | PASSED（原为 0.7） |
+| `/ask` 不带 topK | 解析出 12 后返回 **4005**（ES 未启用），非 500 | PASSED（新增日志在失败路径同样可见） |
+
+**ES / pgvector / Ollama 真机行为仍为 `UNAVAILABLE`（本机 Docker/WSL2 不可用）**，
+故"检索结果质量随参数变化的实际效果"未验证——已验证的是**参数确实解析并下推到了 VectorStore 入参**
+（`ChunkSearchServiceKnowledgeConfigTest` 直接断言 `search(kbId, vector, 12, 0.25)`）。
+
+**9. 未做（有意留下）**：`status = DISABLED` 的知识库仍会参与检索（本增量只动参数解析，不动"是否参与"）；
+知识库参数目前只能通过 API 改，没有设置界面；`RagAnswerServiceImpl` 仍未切到 `RerankedRetriever`（理由同 B.31 第 7 条）。
+
+### B.33 Phase 3.3 实现记录（元数据过滤：tags / folder / documentId）
+
+检索此前只有"按相似度取前 K 条"。真实使用里大量查询要带限定——"只在这几篇里找"、
+"只要 #算法 这个标签的"、"只看某个目录下的"。本增量把三个条件下推到索引/SQL 侧，
+并处理它们最危险的失败方式：**过滤条件静默消失**。
+
+**1. 端口只接受它真能兑现的条件——`VectorStore` 收 documentIds，不收 `RetrievalFilters`**
+
+ES 索引里 `tags` / `folder` 是 keyword、`document_id` 是 long，三个条件都能在索引侧精确过滤
+（放在 `filter` 上下文里还不参与打分、能吃 filter cache）；而 pgvector 表只有 `kb_id` / `document_id` 两列。
+如果给 `VectorStore` 一个 `RetrievalFilters`，它唯一能做的就是**忽略 tags 和 folder**——
+用户在混合检索里按标签筛，关键词那一路筛对了、向量那一路返回全库，
+融合之后"筛了等于没筛"，且不报错。所以签名上只给它 documentIds，
+标签/目录必须先由 `RetrievalFilterResolver` 在关系库里翻译成文档 id。
+**端口类型即约束**：让一个实现无法"假装支持"，比在文档里写"请不要忽略它"可靠。
+
+**2. 关系库是标签/目录的唯一事实来源**
+
+解析走 `kb_document_tag` 与 `kb_document.folder`，而不是 ES 索引里的同名副本。
+ES 里那份是索引时的快照，重打标签后要等重新索引才一致；用关系库解析保证"昨天改的标签今天就能筛"。
+代价是两条腿可能短暂不一致（关键词腿按快照、向量腿按当前值）——可接受，因为改标签会改变文档
+hash，本来就会触发重新索引（B.20 的 SHA-256 对账）。
+
+**3. `matchNothing` 与"没有条件"必须分开——这是本增量最核心的一个区别**
+
+按标签筛、而这个标签在库内谁都没有，结果必须是**空**。若把"解析不到"当成"没有条件"，
+过滤会静默消失，用户看到的是"筛了等于没筛"的全库结果。
+所以 `RetrievalFilterResolver.resolve()` 返回 `FilterPlan`，`nothing()` 与 `none()` 是两个不同的值，
+`VectorRetriever` / `HybridRetriever` 收到 `matchNothing` 时**直接返回空、连检索都不发起**。
+（`FilterPlan.nothing()` 不能叫 `matchNothing()`：会与 record 分量访问器同签名冲突。）
+
+**4. 目录匹配含子目录，且 LIKE 的通配符必须转义**
+
+在目录树上点一个节点，用户预期是"这下面所有的东西"，所以 `folder` 匹配本身 + `folder/` 前缀，
+ES 侧是 `should(term, prefix)` 并显式写 `minimum_should_match: 1`（bool 里只有 should 时默认就是"至少一个"，
+显式写出来才不会在以后加子句时被悄悄改掉语义）。
+前缀用 `!` 作转义字符（避开 MySQL 字符串字面量的二次转义），**`_` 与 `%` 都要转**：
+`_` 在笔记命名里很常见（`day_01`），不转义会把 `day101` 也匹配进来。这条有 H2 真 SQL 测试。
+
+**5. `limit` 在回表之前生效，过滤也在索引侧生效（不许"先检索再内存筛"）**
+
+内存筛会让 `topK` 的语义悄悄变成"筛之前的前 K 条"——本来相关的第 11 条永远回不来。
+同理 BM25 单路不会因为过滤而多打一次嵌入调用。
+
+**6. "行为不变"仍然被 parity 测试保护**
+
+`ChunkSearchServiceFilterTest` 里有一条 `noFiltersKeepsOldBehaviour`：不带过滤时，
+向量路收到的仍是"空的范围（= 全库）"，与改造前一致。过滤是新增维度，不是对既有语义的改写。
+
+**7. HTTP 边界上抓到的两个真实缺陷（都是本增量的测试发现的，不是猜的）**
+
+写 `KnowledgeSearchControllerFilterTest` 时，第一版断言就红了，红了两次：
+
+| 现象 | 根因 | 修法 |
+| --- | --- | --- |
+| `?tags=Redis,算法&tags=Redis` 得到标签 `"Redis, 算法"`（字面量，谁也匹配不到） | Spring 只在参数**只出现一次**时才把 `String` 按逗号拆成 `List`；同名参数出现两次时每个值都当整体 | 拆分责任移到边界：`splitMultiValue()` 对每个元素再按逗号拆并 trim/丢弃空项 |
+| `documentIds` 不去重（`describe()` 把 2 篇报成"限定 3 篇"） | `RetrievalFilters` 对 tags 做了 `distinct()`，对 documentIds 只做了 `copyOf` | 同样去重（两者都是集合语义） |
+
+第一个是典型的"过滤条件静默变成一个不存在的标签"：不报错、只返回空结果，
+与"库里真的没有相关内容"完全无法区分——正是本增量最想消灭的失败方式。
+`documentId` 因此也从 `List<Long>` 改成 `List<String>` + 自行解析：
+`?documentId=7,8` 在旧签名下会因元素 `"7,8"` 无法转成 `Long` 而绑定失败，
+失败信息是框架的类型转换异常，对使用者毫无指向性；自己解析能说清"哪个值不对"。
+
+**8. 顺带修掉的：参数类型写错返回 500（把客户端笔误记成服务端 BUG）**
+
+`GlobalExceptionHandler` 原本没有接 `MethodArgumentTypeMismatchException`，
+于是 `?topK=abc` 落进兜底处理器 → **HTTP 500 + 一条带堆栈的 ERROR 日志**。
+这不是本增量引入的，但被本增量的边界测试撞上了（同一类参数）。已补处理器：返回 400 + 1001，
+提示带上参数名、实际值与期望类型。**"客户端错误"与"服务端 BUG"必须在日志和状态码上分得清**，
+否则告警会被参数笔误淹没。
+
+**9. 本轮验证（如实记录）**
+
+| 层次 | 内容 | 判定 |
+| --- | --- | --- |
+| Unit | ES 查询 DSL（terms/前缀/AND/空标签）、pgvector 语句（`document_id IN` 的位置、占位符数、`LIMIT` 居末） | PASSED |
+| Unit | `ChunkSearchServiceFilterTest`：两路下推、`matchNothing` 短路、不过滤时行为不变 | PASSED |
+| Contract（H2 真 SQL） | `RetrievalFilterResolutionH2Test`：标签 any-of、目录含子目录且不误匹配兄弟目录、`_`/`%` 字面量、逻辑删除、不跨库、命中零篇 ≠ 不过滤、三条件 AND | PASSED |
+| Contract（HTTP） | `KnowledgeSearchControllerFilterTest`：多值参数三种写法归一、folder 透传、不过滤 = `none()`、`topK` 语义与钳制、mode 严格解析、非法参数 400 而非 500 | PASSED |
+| 全量回归 | `mvn -B test`：290 通过 / 18 跳过（7 个 live 类）/ 0 失败 | PASSED |
+| 真机 | ES `filter` 下推的实际行为、pgvector `WHERE` 的实际行为 | **UNAVAILABLE**（Docker 守护进程未运行：`docker ps` 连不上 `dockerDesktopLinuxEngine`） |
+
+**口径**：本增量在 ES / pgvector 上的结论是**代码级 + 查询构造级**验证，
+"真机上过滤确实生效、且过滤后 topK 语义正确"未验证。按 §四十八，不得据此声称生产链路已验证。
+
+**10. 未做（有意留下）**：过滤目前只有 API 入口，前端检索面板没有标签/目录筛选控件
+（界面上的筛选该长什么样还没定，先不加半成品）；RAG 问答与 Agent 工具仍按 `none()` 调用
+（"按标签问"要等 Agent 侧的工具参数化，属 Phase 5）；`kbIds` 多库过滤未做（那是 3.5 工作区隔离的事）。
 
 ---
 

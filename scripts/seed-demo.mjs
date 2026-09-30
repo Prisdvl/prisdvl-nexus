@@ -57,18 +57,29 @@ const { accessToken } = await api('/api/auth/login', { method: 'POST', body: { u
 writeFileSync(resolve(here, '../web/.demo-token'), accessToken, 'utf8')
 console.log('✓ 已写入 web/.demo-token')
 
-// ③ 知识库：同名复用，避免反复运行堆出一排空库
+// ③ 知识库：同名复用，避免反复运行堆出一排空库。
+// 检索参数显式写在这里（Phase 3.2 起检索按知识库配置走）：
+// 问答链路不再由服务端写死条数，而是用知识库的 retrieval_top_k；
+// 阈值 0.25 是放宽的噪声下限（详见 application.yml 里 nexus.retrieval 的说明）。
+const kbRetrieval = { retrievalTopK: 12, similarityThreshold: 0.25 }
 const existing = (await api('/api/knowledge-bases', { token: accessToken })).list
 let knowledgeBase = existing.find((item) => item.name === kbName)
 if (knowledgeBase) {
   console.log(`· 复用知识库「${kbName}」(${knowledgeBase.id})`)
+  // 复用也要对齐参数：老库可能是"建库默认值"那版数据，参数不一致会让演示结果莫名其妙
+  knowledgeBase = await api(`/api/knowledge-bases/${knowledgeBase.id}`, {
+    method: 'PUT',
+    token: accessToken,
+    body: kbRetrieval
+  })
+  console.log('· 已对齐演示检索参数：topK 12 / threshold 0.25')
 } else {
   knowledgeBase = await api('/api/knowledge-bases', {
     method: 'POST',
     token: accessToken,
-    body: { name: kbName, description: '演示：Redis / JVM / Spring 笔记' }
+    body: { name: kbName, description: '演示：Redis / JVM / Spring 笔记', ...kbRetrieval }
   })
-  console.log(`✓ 已建知识库「${kbName}」(${knowledgeBase.id})`)
+  console.log(`✓ 已建知识库「${kbName}」(${knowledgeBase.id})，检索参数 topK 12 / threshold 0.25`)
 }
 
 // ④ 导入演示笔记（ZIP：Obsidian vault 结构）

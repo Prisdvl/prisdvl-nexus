@@ -187,8 +187,8 @@ CREATE TABLE workspace (
 | `name` / `description` | VARCHAR | |
 | `icon` | VARCHAR(512) NULL | 图标（URL 或 emoji，V10 加入） |
 | `status` | VARCHAR(16) | `ENABLED`（默认）/ `DISABLED`；禁用后不参与检索（V10 加入） |
-| `retrieval_top_k` | INT | 该库的检索 TopK，默认 5（V10 加入；生效在 Phase 3 的 Retriever） |
-| `similarity_threshold` | DOUBLE | 相似度阈值，默认 0.7（V10 加入） |
+| `retrieval_top_k` | INT | 该库的检索 TopK，默认 5（V10 加入；**Phase 3.2 起真正生效**于 Retriever） |
+| `similarity_threshold` | DOUBLE | 相似度阈值，默认 0.25（V10 加入。列默认原为 0.7，与检索实际默认的 0.25 长期不一致，Phase 3.2 统一，见 decisions.md B.32） |
 | `source_type` | VARCHAR(16) | `MANUAL` / `OBSIDIAN` / `MIXED` |
 | `embedding_provider` / `embedding_model` / `embedding_dim` | VARCHAR / INT | **建库时冻结**；改 embedding 模型必须重建库（见 docs/decisions.md ADR-008） |
 | `chunk_strategy` | VARCHAR(32) | `MARKDOWN_HEADING` / `RECURSIVE`（默认前者） |

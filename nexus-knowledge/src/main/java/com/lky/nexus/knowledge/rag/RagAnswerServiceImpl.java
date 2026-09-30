@@ -106,7 +106,7 @@ public class RagAnswerServiceImpl implements RagAnswerService {
     }
 
     @Override
-    public RagAnswer ask(Long userId, Long knowledgeBaseId, String question, int topK,
+    public RagAnswer ask(Long userId, Long knowledgeBaseId, String question, Integer topK,
                          List<RagTurn> history) {
         long start = System.currentTimeMillis();
         knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
@@ -119,6 +119,8 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         //    直接拿它去检索几乎召回不到东西——实测会返回"资料中没有相关内容"。
         //    这里用最省的启发式（拼上一轮问题），不额外调模型；更彻底的做法是
         //    先用 LLM 把追问改写为独立问题（代价是多一次调用，留作后续优化）。
+        //    topK 为 null（调用方没指定）时由检索层用知识库配置的 retrieval_top_k，
+        //    这里不写死数字——"按库调检索参数"必须对问答同样生效。
         String retrievalQuery = buildRetrievalQuery(question, history);
         List<ChunkSearchService.SearchHit> hits =
                 chunkSearchService.search(userId, knowledgeBaseId, retrievalQuery, topK, SearchMode.HYBRID);
@@ -131,9 +133,10 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         //    重排是最贵的一步（一次 LLM 调用），而靠后的候选本来也很难进最终资料块，
         //    把范围收窄能显著缩短端到端延迟，召回深度不受影响。
         long rerankStart = System.currentTimeMillis();
-        List<Double> scores = reranker.score(question, candidatesOf(headWithin(hits)));
+        List<ChunkSearchService.SearchHit> head = headWithin(hits);
+        List<Double> scores = reranker.score(question, candidatesOf(head));
         long rerankMs = System.currentTimeMillis() - rerankStart;
-        boolean reranked = scores.size() == RERANK_CANDIDATES;
+        boolean reranked = rerankSucceeded(scores, head.size());
         List<ChunkSearchService.SearchHit> ordered = reranked ? reorder(hits, scores) : hits;
 
         // ③ 组装上下文
@@ -167,6 +170,20 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         return hits.size() > RERANK_CANDIDATES ? hits.subList(0, RERANK_CANDIDATES) : hits;
     }
 
+    /**
+     * 重排到底成功没有——判据是"送进去几条就回来几个分数"。
+     *
+     * <p><b>这里修掉了一个静默错报</b>：原判据是 {@code scores.size() == RERANK_CANDIDATES}（8），
+     * 它隐含假设"候选永远够 8 条"。而候选条数来自知识库的 retrieval_top_k——
+     * 默认是 5。于是"按库把 topK 调小"会让重排明明做成功了却报 {@code reranked=false}，
+     * 界面上显示"未重排"，实际顺序已经变过：看到的顺序和讲解对不上，最难查的一类不一致。
+     * 正确判据与候选数无关：{@link Reranker} 的契约是"给几个候选就回几个分数"，
+     * 失败（超时/模型抽风）时才返回空列表。
+     */
+    private static boolean rerankSucceeded(List<Double> scores, int candidateCount) {
+        return candidateCount > 0 && scores.size() == candidateCount;
+    }
+
     /** 追问的检索查询 = 上一轮问题 + 当前问题（消解省略主语的指代）。 */
     private String buildRetrievalQuery(String question, List<RagTurn> history) {
         if (history == null || history.isEmpty()) {
@@ -193,7 +210,7 @@ public class RagAnswerServiceImpl implements RagAnswerService {
     }
 
     @Override
-    public PreparedAnswer prepare(Long userId, Long knowledgeBaseId, String question, int topK,
+    public PreparedAnswer prepare(Long userId, Long knowledgeBaseId, String question, Integer topK,
                                   List<RagTurn> history) {
         knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
         if (question == null || question.isBlank()) {
@@ -205,8 +222,9 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         if (hits.isEmpty()) {
             return PreparedAnswer.none();
         }
-        List<Double> scores = reranker.score(question, candidatesOf(headWithin(hits)));
-        boolean reranked = scores.size() == RERANK_CANDIDATES;
+        List<ChunkSearchService.SearchHit> head = headWithin(hits);
+        List<Double> scores = reranker.score(question, candidatesOf(head));
+        boolean reranked = rerankSucceeded(scores, head.size());
         List<ChunkSearchService.SearchHit> ordered = reranked ? reorder(hits, scores) : hits;
 
         ContextAssembler.AssembledContext context = contextAssembler.assemble(ordered, contextTokenBudget);

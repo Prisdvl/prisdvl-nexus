@@ -38,6 +38,11 @@ import java.util.stream.Collectors;
 @Component
 public class KnowledgeSearchTool {
 
+    /** 模型没给条数时的最终上限（给模型看的条数，不是每个库的召回深度）。 */
+    private static final int DEFAULT_PRESENT_LIMIT = 5;
+    /** 给模型看的条数上限：再多会挤占上下文，也超出"让模型看一眼"的需要。 */
+    private static final int MAX_PRESENT_LIMIT = 10;
+
     private final ChunkSearchService chunkSearchService;
     private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final ChunkMapper chunkMapper;
@@ -65,7 +70,7 @@ public class KnowledgeSearchTool {
             @ToolParam(description = "返回条数，默认 5，最大 10") int topK,
             ToolContext toolContext) {
         Long userId = AgentContext.requireUserId(toolContext);
-        int limit = Math.clamp(topK <= 0 ? 5 : topK, 1, 10);
+        int limit = Math.clamp(topK <= 0 ? DEFAULT_PRESENT_LIMIT : topK, 1, MAX_PRESENT_LIMIT);
         // 先报"开始检索"：流式对话据此把"正在检索知识库…"实时推给用户，
         // 而不是让用户对着空屏等几秒（检索本身要走 ES + pgvector）
         AgentContext.call(toolContext, "knowledge_search", query);
@@ -74,10 +79,14 @@ public class KnowledgeSearchTool {
         List<KnowledgeBasePO> knowledgeBases = knowledgeBaseMapper.selectList(
                 Wrappers.<KnowledgeBasePO>lambdaQuery().eq(KnowledgeBasePO::getUserId, userId));
         for (KnowledgeBasePO kb : knowledgeBases) {
+            // 召回条数交给知识库自己的 retrieval_top_k（topK 传 null = 没指定），
+            // 而不是在这里写死 5：工具的参数是"最终给模型看几条"，
+            // 与"每个库召回多深"不是同一件事，混在一起会让按库调参对 Agent 无效
+            int recallTopK = kb.getRetrievalTopK() == null ? DEFAULT_PRESENT_LIMIT : kb.getRetrievalTopK();
             try {
-                all.addAll(chunkSearchService.search(userId, kb.getId(), query, 5, SearchMode.HYBRID));
+                all.addAll(chunkSearchService.search(userId, kb.getId(), query, null, SearchMode.HYBRID));
             } catch (Exception ex) {
-                List<ChunkSearchService.SearchHit> fallback = likeSearch(kb.getId(), query, 5);
+                List<ChunkSearchService.SearchHit> fallback = likeSearch(kb.getId(), query, recallTopK);
                 if (!fallback.isEmpty()) {
                     all.addAll(fallback);
                     observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_DEGRADED);

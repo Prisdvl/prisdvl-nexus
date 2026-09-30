@@ -14,6 +14,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.stream.Collectors;
 
@@ -74,6 +75,22 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public ResponseEntity<Result<Void>> handleMissingParameter(MissingServletRequestParameterException ex) {
         return badRequest(ErrorCode.MISSING_PARAMETER, "缺少必要参数: " + ex.getParameterName());
+    }
+
+    /**
+     * {@code @RequestParam} / {@code @PathVariable} 类型不匹配（如 {@code ?topK=abc}）。
+     *
+     * <p>必须单独接住：它是 {@code TypeMismatchException} 而不是
+     * {@code MethodArgumentNotValidException}，不加这条就会被兜底处理器接走，
+     * 结果是<b>客户端写错参数、服务端返回 500 并记一条带堆栈的 ERROR 日志</b>——
+     * 把"调用方笔误"记成"服务端 BUG"，真正的问题反而被淹没，告警也会失准。
+     * 提示里带上参数名与实际值，省掉"到底是哪个参数写错了"的来回猜测。
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Result<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        String expected = ex.getRequiredType() == null ? "?" : ex.getRequiredType().getSimpleName();
+        return badRequest(ErrorCode.PARAM_INVALID,
+                "参数类型不正确: %s=%s（需要 %s）".formatted(ex.getName(), ex.getValue(), expected));
     }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)

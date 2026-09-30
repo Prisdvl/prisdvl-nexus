@@ -41,9 +41,20 @@ public class KnowledgeRagController {
     @PostMapping("/{knowledgeBaseId}/ask")
     public Result<RagAnswer> ask(@PathVariable Long knowledgeBaseId,
                                  @RequestBody AskRequest request) {
-        int topK = request.topK() == null ? 12 : Math.clamp(request.topK(), 1, MAX_TOP_K);
         return Result.ok(ragAnswerService.ask(CurrentUser.requireId(), knowledgeBaseId,
-                request.question(), topK, toTurns(request.history())));
+                request.question(), requestedTopK(request), toTurns(request.history())));
+    }
+
+    /**
+     * 调用方没传 topK 就返回 null（= 用知识库配置），而不是由控制器补一个写死的数。
+     *
+     * <p>原先这里写死 {@code 12}，于是知识库的 {@code retrieval_top_k} 永远没机会生效——
+     * 界面上的"检索条数"只对调试检索面板有用，对问答完全不起作用。
+     * 现在"没传"是一等公民：请求 &gt; 知识库配置 &gt; 全局默认。
+     * 传了值仍然夹到 [1, MAX_TOP_K]（问答的召回条数直接决定成本，这里不能放任）。
+     */
+    private Integer requestedTopK(AskRequest request) {
+        return request.topK() == null ? null : Math.clamp(request.topK(), 1, MAX_TOP_K);
     }
 
     /** 前端只传"上一轮的问题 + 回答开头"，避免把上下文撑爆（多轮不等于无限塞历史）。 */
@@ -72,11 +83,11 @@ public class KnowledgeRagController {
     public org.springframework.web.servlet.mvc.method.annotation.SseEmitter askStream(
             @PathVariable Long knowledgeBaseId,
             @RequestBody AskRequest request) {
-        int topK = request.topK() == null ? 12 : Math.clamp(request.topK(), 1, MAX_TOP_K);
         return ragStreamService.stream(CurrentUser.requireId(), knowledgeBaseId,
-                request.question(), topK, toTurns(request.history()));
+                request.question(), requestedTopK(request), toTurns(request.history()));
     }
 
+    /** {@code topK} 可省略：省略时用知识库自身的 {@code retrieval_top_k}。 */
     public record AskRequest(@NotBlank String question, Integer topK, List<HistoryTurn> history) {
     }
 

@@ -8,8 +8,10 @@
 import { chromium } from 'playwright-core'
 
 const base = process.env.WEB_BASE ?? 'http://localhost:5173'
+// 默认账号必须与 scripts/seed-demo.mjs 保持一致：两个脚本描述的是同一个演示用户，
+// 各写各的默认值会变成"种了数据却登不进去"，而且报错只是"登录超时"，很难看出原因
 const username = process.env.DEMO_USER ?? 'demo'
-const password = process.env.DEMO_PASSWORD ?? 'Passw0rd!23'
+const password = process.env.DEMO_PASSWORD ?? 'Demo@12345'
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 const page = await browser.newPage({ viewport: { width: 1440, height: 980 } })

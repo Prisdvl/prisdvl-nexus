@@ -101,7 +101,9 @@ const showArticleTitle = computed(() => {
 
 const mode = ref<SearchMode>('hybrid')
 const query = ref('')
-const topK = ref(10)
+// 只作用于"检索"面板的对照条数：问答不再用它（问答按知识库的 retrieval_top_k 召回），
+// 原先两边共用一个 ref，结果是一个面板上的开关会悄悄影响另一个面板
+const searchTopK = ref(10)
 const searching = ref(false)
 const hits = ref<SearchHit[]>([])
 const searchedFor = ref('')
@@ -205,7 +207,7 @@ async function doSearch() {
   }
   searching.value = true
   try {
-    hits.value = await search(kbId, query.value.trim(), topK.value, mode.value)
+    hits.value = await search(kbId, query.value.trim(), searchTopK.value, mode.value)
     searchedFor.value = query.value.trim()
     activeTab.value = 'search'
     if (hits.value.length === 0) {
@@ -257,7 +259,8 @@ async function doAsk() {
     if (useStream.value) {
       await askStreaming(asked, history)
     } else {
-      const answer = await askQuestion(kbId, asked, topK.value, history)
+      // topK 不传：召回条数按知识库的检索参数（界面上的 topK 只属于"检索"面板）
+      const answer = await askQuestion(kbId, asked, undefined, history)
       ragAnswer.value = answer
       answerHtml.value = renderMarkdown(answer.answer)
       await nextTick()
@@ -284,7 +287,7 @@ async function askStreaming(asked: string, history: Array<{ question: string; an
   let truncated = 0
   let reranked = false
 
-  await askQuestionStream(kbId, asked, topK.value, history, {
+  await askQuestionStream(kbId, asked, undefined, history, {
     onMeta: (meta) => {
       citations = meta.citations.map((item, index) => ({
         index: index + 1,
@@ -672,7 +675,7 @@ watch(activeTab, () => {
                 <el-radio-button value="bm25">BM25</el-radio-button>
                 <el-radio-button value="vector">向量</el-radio-button>
               </el-radio-group>
-              <el-radio-group v-model="topK" size="small">
+              <el-radio-group v-model="searchTopK" size="small">
                 <el-radio-button :value="5">5</el-radio-button>
                 <el-radio-button :value="10">10</el-radio-button>
                 <el-radio-button :value="20">20</el-radio-button>

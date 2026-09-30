@@ -122,7 +122,9 @@ CREATE TABLE IF NOT EXISTS kb_knowledge_base (
     icon                 VARCHAR(512),
     status               VARCHAR(16)  NOT NULL DEFAULT 'ENABLED',
     retrieval_top_k      INT          NOT NULL DEFAULT 5,
-    similarity_threshold DOUBLE       NOT NULL DEFAULT 0.7,
+    -- 与 nexus.retrieval.similarity-threshold 同值：这里只是"绕过 API 直接插数据"时的兜底，
+    -- 正常情况下建库走服务，写的是配置值（曾长期与检索用的 0.25 不一致，Phase 3.2 统一）
+    similarity_threshold DOUBLE       NOT NULL DEFAULT 0.25,
     name                 VARCHAR(128) NOT NULL,
     description          VARCHAR(512),
     source_type          VARCHAR(16)  NOT NULL DEFAULT 'MANUAL',

@@ -51,7 +51,7 @@ public class RagStreamServiceImpl implements RagStreamService {
     }
 
     @Override
-    public SseEmitter stream(Long userId, Long knowledgeBaseId, String question, int topK,
+    public SseEmitter stream(Long userId, Long knowledgeBaseId, String question, Integer topK,
                              List<RagAnswerService.RagTurn> history) {
         long start = System.currentTimeMillis();
         String requestId = RequestIdHolder.current();

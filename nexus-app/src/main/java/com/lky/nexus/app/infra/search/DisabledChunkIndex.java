@@ -1,5 +1,6 @@
 package com.lky.nexus.app.infra.search;
 
+import com.lky.nexus.ai.rag.retriever.RetrievalFilters;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
 import com.lky.nexus.knowledge.search.ChunkIndex;
@@ -48,7 +49,8 @@ public class DisabledChunkIndex implements ChunkIndex {
     }
 
     @Override
-    public List<ChunkSearchHit> search(Long knowledgeBaseId, String query, int topK) {
+    public List<ChunkSearchHit> search(Long knowledgeBaseId, String query, int topK,
+                                       RetrievalFilters filters) {
         throw new BusinessException(ErrorCode.VECTOR_STORE_UNAVAILABLE, MESSAGE);
     }
 

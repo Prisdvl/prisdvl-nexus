@@ -59,9 +59,11 @@ class KnowledgeBaseFlowTest {
                 .andExpect(jsonPath("$.data.workspaceId").isString())
                 .andExpect(jsonPath("$.data.workspaceId").isNotEmpty())
                 .andExpect(jsonPath("$.data.status").value("ENABLED"))
-                // §十七：检索参数按库持久化，缺省 5 / 0.7
+                // 检索参数按库持久化；缺省值 = nexus.retrieval.* 的配置值（Phase 3.2 起同源）。
+                // 阈值曾长期是 0.7，但检索侧实际用的是 0.25 —— 两个默认值打架，
+                // 结果是"新知识库几乎召不回内容且不报错"。现在建库与检索同读一处配置。
                 .andExpect(jsonPath("$.data.retrievalTopK").value(5))
-                .andExpect(jsonPath("$.data.similarityThreshold").value(0.7));
+                .andExpect(jsonPath("$.data.similarityThreshold").value(0.25));
     }
 
     @Test

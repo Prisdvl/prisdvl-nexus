@@ -124,6 +124,16 @@ nexus:
     rerank-timeout-ms: ${NEXUS_RAG_RERANK_TIMEOUT_MS:5000}
     # 送进模型的资料块 Token 预算：超出时从最低分开始丢，并如实告知被截断的段数
     context-token-budget: ${NEXUS_RAG_CONTEXT_BUDGET:2000}
+  retrieval:
+    # 检索参数的**全局默认值**（Phase 3.2）：知识库没配、调用方也没传时用它。
+    # 优先级：请求参数 > 知识库的 retrieval_top_k / similarity_threshold > 这里。
+    # 建库时的默认值也读这里 —— 两处同源，避免"建库写 0.7、检索用 0.25"这种打架。
+    top-k: ${NEXUS_RETRIEVAL_TOP_K:5}
+    # 相似度下限默认取宽松值 0.25：阈值是"挡掉明显无关"的噪声下限，不是精排。
+    # 真实联调中「缓存击穿怎么解决」的向量第一名是 0.7458，0.7 这条线离一条完全
+    # 正确的命中只差 0.05，收紧会让 0.5~0.7 区间的正确笔记被静默丢弃
+    # （表现是"知识库里明明有却答不出来"）。要收紧请按库调 similarity_threshold。
+    similarity-threshold: ${NEXUS_RETRIEVAL_SIMILARITY_THRESHOLD:0.25}
 
 # ============================================================
 # 模型可替换层（ADR-003）

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ModelRef;
+import com.lky.nexus.ai.rag.retriever.RetrievalDefaults;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.api.PageQuery;
 import com.lky.nexus.common.api.PageResult;
@@ -49,22 +50,23 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
 
     private static final int DEFAULT_CHUNK_SIZE = 400;
     private static final int DEFAULT_CHUNK_OVERLAP = 50;
-    private static final int DEFAULT_RETRIEVAL_TOP_K = 5;
-    private static final double DEFAULT_SIMILARITY_THRESHOLD = 0.7;
 
     private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final DocumentMapper documentMapper;
     private final DocumentTagMapper documentTagMapper;
     private final AiModelProperties aiModelProperties;
+    private final RetrievalDefaults retrievalDefaults;
 
     public KnowledgeBaseServiceImpl(KnowledgeBaseMapper knowledgeBaseMapper,
                                     DocumentMapper documentMapper,
                                     DocumentTagMapper documentTagMapper,
-                                    AiModelProperties aiModelProperties) {
+                                    AiModelProperties aiModelProperties,
+                                    RetrievalDefaults retrievalDefaults) {
         this.knowledgeBaseMapper = knowledgeBaseMapper;
         this.documentMapper = documentMapper;
         this.documentTagMapper = documentTagMapper;
         this.aiModelProperties = aiModelProperties;
+        this.retrievalDefaults = retrievalDefaults;
     }
 
     @Override
@@ -84,9 +86,13 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                     "chunkOverlap(%d) 必须小于 chunkSize(%d)，否则切片会无限重叠".formatted(chunkOverlap, chunkSize));
         }
 
-        int retrievalTopK = request.retrievalTopK() == null ? DEFAULT_RETRIEVAL_TOP_K : request.retrievalTopK();
+        // 建库时的检索参数默认值与检索时"没指定就用什么"必须同源（Phase 3.2）：
+        // 早先这里是写死的 5 / 0.7，而检索侧实际用的是 0.25——两处默认值打架，
+        // 结果是"新库按 0.7 过滤，几乎什么都召不回来"，且没有任何报错。
+        int retrievalTopK = request.retrievalTopK() == null
+                ? retrievalDefaults.getTopK() : request.retrievalTopK();
         double similarityThreshold = request.similarityThreshold() == null
-                ? DEFAULT_SIMILARITY_THRESHOLD : request.similarityThreshold();
+                ? retrievalDefaults.getSimilarityThreshold() : request.similarityThreshold();
 
         FrozenEmbedding embedding = resolveEmbedding();
 

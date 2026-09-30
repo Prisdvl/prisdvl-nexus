@@ -2,6 +2,8 @@ package com.lky.nexus.app.infra.search;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.FieldValue;
+import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
+import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch._types.query_dsl.TextQueryType;
 import co.elastic.clients.elasticsearch.core.BulkRequest;
 import co.elastic.clients.elasticsearch.core.BulkResponse;
@@ -9,6 +11,7 @@ import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.bulk.BulkResponseItem;
 import co.elastic.clients.elasticsearch.indices.GetAliasResponse;
 import co.elastic.clients.elasticsearch.indices.update_aliases.Action;
+import com.lky.nexus.ai.rag.retriever.RetrievalFilters;
 import com.lky.nexus.knowledge.search.ChunkIndex;
 import com.lky.nexus.knowledge.search.ChunkSearchHit;
 import com.lky.nexus.knowledge.search.IndexedChunk;
@@ -143,7 +146,8 @@ public class ElasticsearchChunkIndex implements ChunkIndex {
     }
 
     @Override
-    public List<ChunkSearchHit> search(Long knowledgeBaseId, String query, int topK) {
+    public List<ChunkSearchHit> search(Long knowledgeBaseId, String query, int topK,
+                                       RetrievalFilters filters) {
         try {
             SearchResponse<Void> response = client.search(s -> s
                     .index(alias)
@@ -154,10 +158,12 @@ public class ElasticsearchChunkIndex implements ChunkIndex {
                                     // 标题权重最高：标题命中通常意味着整篇都相关
                                     .fields("title^3", "heading_path^2", "content^1")
                                     .type(TextQueryType.BestFields)))
-                            // 过滤放在 filter 里：不参与打分，还能吃到 filter cache
-                            .filter(f -> f.term(t -> t
+                            // 过滤放在 filter 里：不参与打分，还能吃到 filter cache。
+                            // 知识库条件始终在，其余按用户给的条件追加
+                            .filter(kb -> kb.term(t -> t
                                     .field("knowledge_base_id")
-                                    .value(FieldValue.of(knowledgeBaseId)))))), Void.class);
+                                    .value(FieldValue.of(knowledgeBaseId.longValue()))))
+                            .filter(metadataClauses(filters)))), Void.class);
 
             return response.hits().hits().stream()
                     .map(hit -> new ChunkSearchHit(Long.valueOf(hit.id()),
@@ -168,12 +174,66 @@ public class ElasticsearchChunkIndex implements ChunkIndex {
         }
     }
 
+    /**
+     * 元数据过滤子句（标签 / 目录 / 指定文档）。
+     *
+     * <p>抽成独立的 <b>package-private 静态方法</b>是为了能在这台机器上真正验证它：
+     * 本地没有 Elasticsearch（Docker/WSL2 不可用），检索本身只能标 UNAVAILABLE，
+     * 但"过滤条件有没有被拼进查询、拼成了什么"是纯字符串/结构问题，可以脱离 ES 断言。
+     * 否则整个过滤下推就只有"读代码"这一种验证方式。
+     *
+     * <p>三个条件的形态：
+     * <ul>
+     *   <li><b>标签</b>：{@code terms}（any-of）。{@code tags} 映射为 keyword，
+     *       天然支持精确多值匹配，不需要 nested（我们只关心"有没有这个标签"，
+     *       不关心标签在数组中的位置）；</li>
+     *   <li><b>目录</b>：{@code should(folder = X, folder prefix "X/")}——点目录树上的节点
+     *       应当包含子目录；{@code minimum_should_match=1} 让这个 should 变成硬条件
+     *       （bool 里只有 should 时默认就是"至少一个"，但显式写出来才不会在
+     *       以后有人往里加 must 时被静默降级成"可选"）；</li>
+     *   <li><b>指定文档</b>：{@code terms} on document_id。</li>
+     * </ul>
+     *
+     * <p>没有任何条件时返回 {@code match_all}：ES 的 {@code filter} 需要一个子句，
+     * 传 null 会 NPE，而 {@code match_all} 在 filter 上下文里是零开销的（会被直接优化掉）。
+     */
+    static Query metadataClauses(RetrievalFilters filters) {
+        if (filters == null || filters.isEmpty()) {
+            return Query.of(q -> q.matchAll(m -> m));
+        }
+        BoolQuery.Builder bool = new BoolQuery.Builder();
+        if (filters.hasTags()) {
+            List<FieldValue> tags = filters.tags().stream().map(FieldValue::of).toList();
+            bool.filter(f -> f.terms(t -> t.field("tags").terms(tt -> tt.value(tags))));
+        }
+        if (filters.hasFolder()) {
+            String folder = filters.folder();
+            bool.filter(f -> f.bool(b -> b
+                    .should(s -> s.term(t -> t.field("folder").value(FieldValue.of(folder))))
+                    // 子目录：文件夹路径用 "/" 分隔（见 vault 导入的相对路径），
+                    // 因此 "算法" 的子目录形如 "算法/动态规划"
+                    .should(s -> s.prefix(p -> p.field("folder").value(folder + "/")))
+                    .minimumShouldMatch("1")));
+        }
+        if (filters.hasDocumentIds()) {
+            // 注意 longValue()：FieldValue 既有 of(long) 也有 of(Object)，
+            // 对**装箱**的 Long 来说，of(Object) 更具体因此会被选中，产出一个 "Any" 变体
+            // （序列化仍能工作，但类型校验/断言都拿不到 long 变体）。显式取基本类型才是 of(long)。
+            List<FieldValue> documentIds = filters.documentIds().stream()
+                    .map(id -> FieldValue.of(id.longValue())).toList();
+            bool.filter(f -> f.terms(t -> t.field("document_id").terms(tt -> tt.value(documentIds))));
+        }
+        return Query.of(q -> q.bool(bool.build()));
+    }
+
     @Override
     public void deleteByDocumentIds(List<Long> documentIds) {
         if (documentIds == null || documentIds.isEmpty()) {
             return;
         }
-        deleteByQuery("document_id", documentIds.stream().map(FieldValue::of).toList());
+        // longValue()：同样是避开 FieldValue.of(Object) 对装箱 Long 的更具体匹配（见 metadataClauses）
+        deleteByQuery("document_id", documentIds.stream()
+                .map(id -> FieldValue.of(id.longValue())).toList());
     }
 
     @Override
@@ -181,7 +241,7 @@ public class ElasticsearchChunkIndex implements ChunkIndex {
         if (knowledgeBaseId == null) {
             return;
         }
-        deleteByQuery("knowledge_base_id", List.of(FieldValue.of(knowledgeBaseId)));
+        deleteByQuery("knowledge_base_id", List.of(FieldValue.of(knowledgeBaseId.longValue())));
     }
 
     @Override
@@ -191,7 +251,7 @@ public class ElasticsearchChunkIndex implements ChunkIndex {
                     .index(alias)
                     .query(q -> q.term(t -> t
                             .field("knowledge_base_id")
-                            .value(FieldValue.of(knowledgeBaseId))))).count();
+                            .value(FieldValue.of(knowledgeBaseId.longValue()))))).count();
         } catch (IOException ex) {
             throw new IllegalStateException("ES 统计失败：" + ex.getMessage(), ex);
         }

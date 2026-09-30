@@ -18,8 +18,9 @@ public interface RagStreamService {
     /**
      * 流式回答。
      *
+     * @param topK 召回条数；null = 用知识库配置的 retrieval_top_k
      * @return SSE 发射器（由 Spring MVC 负责写出）
      */
-    SseEmitter stream(Long userId, Long knowledgeBaseId, String question, int topK,
+    SseEmitter stream(Long userId, Long knowledgeBaseId, String question, Integer topK,
                       List<RagAnswerService.RagTurn> history);
 }

@@ -44,8 +44,8 @@ public class DisabledVectorStore implements VectorStore {
     }
 
     @Override
-    public List<VectorSearchHit> search(Long knowledgeBaseId, float[] queryEmbedding,
-                                        int topK, double minScore) {
+    public List<VectorSearchHit> search(Long knowledgeBaseId, float[] queryEmbedding, int topK,
+                                        double minScore, Collection<Long> documentIds) {
         throw new BusinessException(ErrorCode.VECTOR_STORE_UNAVAILABLE, MESSAGE);
     }
 
