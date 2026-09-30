@@ -14,7 +14,7 @@ import java.util.Map;
  * 拿不到"当前用户"，而 {@code knowledge_search} 必须知道"搜谁的库"。
  *
  * <p><b>为什么是 ToolContext 而不是 ThreadLocal</b>——这是一次真实踩坑的记录：
- * 最初用 ThreadLocal 绑定当前用户，一次性调用（{@link AgentService#ask}）跑得通，
+ * 最初用 ThreadLocal 绑定当前用户，一次性调用（{@code AgentService#ask}）跑得通，
  * 流式对话却静默失效。根因是流式链路上工具的执行线程<b>不是</b>绑定上下文的那个线程
  * （订阅发生在 boundedElastic，而工具由响应式 HTTP 客户端在聚合完 tool_calls 之后执行）。
  * 工具读不到用户 id，抛"缺少用户上下文"，框架把这句异常当作<b>工具结果</b>回填给模型，
@@ -23,11 +23,18 @@ import java.util.Map;
  *
  * <p>上下文里的内容只在我们自己的进程内流转，<b>不会发给模型</b>：框架生成工具入参 schema 时
  * 会跳过 {@code ToolContext} 参数（已核对 Spring AI 2.0.1 的 {@code JsonSchemaGenerator}）。
+ *
+ * <p>Phase 4.1 新增 {@link #KB_IDS}：Agent 可以绑定知识库，工具据此把检索范围从
+ * "该用户全部库"收窄到"这个 Agent 绑定的库"。它与用户 id 一样属于<b>上下文</b>而不是工具入参——
+ * 让模型自己填知识库 id 既没用（它不知道 id）也不安全（可以填别人的）。
  */
 public final class AgentContext {
 
     /** 用户 id 在 ToolContext 里的键。 */
     public static final String USER_ID = "nexus.userId";
+
+    /** 知识库范围在 ToolContext 里的键；<b>不存在或为空 = 不限制</b>（搜索该用户全部知识库）。 */
+    public static final String KB_IDS = "nexus.kbIds";
 
     /** 过程监听器在 ToolContext 里的键（流式对话用它把"正在检索…"实时推给前端）。 */
     public static final String LISTENER = "nexus.toolCallListener";
@@ -47,8 +54,16 @@ public final class AgentContext {
      * 收的就是它，框架再把它包成 {@link ToolContext} 注入工具方法。
      */
     public static Map<String, Object> of(Long userId, ToolCallListener listener) {
+        return of(userId, null, listener);
+    }
+
+    /** 带用户、知识库范围与过程监听器的上下文（空 kbIds = 不限制）。 */
+    public static Map<String, Object> of(Long userId, List<Long> kbIds, ToolCallListener listener) {
         Map<String, Object> context = new HashMap<>();
         context.put(USER_ID, userId);
+        if (kbIds != null && !kbIds.isEmpty()) {
+            context.put(KB_IDS, List.copyOf(kbIds));
+        }
         if (listener != null) {
             context.put(LISTENER, listener);
         }
@@ -72,6 +87,23 @@ public final class AgentContext {
                     "工具调用缺少用户上下文（ToolContext 里没有 %s）".formatted(USER_ID));
         }
         return (Long) value;
+    }
+
+    /**
+     * 取当前工具调用的知识库范围。
+     *
+     * <p>返回 {@code null} 表示<b>不限制</b>（搜索该用户的全部知识库）——这是"没绑定"与
+     * "绑定了零个库"共用的语义，也是 Phase 4.1 之前唯一的行为，所以老链路不需要改。
+     * 若返回空列表就意味着"绑了 0 个库，谁都搜不了"，那会和"不限制"撞在一起，
+     * 因此这里把空集合统一收敛成 null。
+     */
+    @SuppressWarnings("unchecked")
+    public static List<Long> kbIds(ToolContext toolContext) {
+        Object value = toolContext == null ? null : toolContext.getContext().get(KB_IDS);
+        if (!(value instanceof List<?> list) || list.isEmpty()) {
+            return null;
+        }
+        return (List<Long>) list;
     }
 
     /**

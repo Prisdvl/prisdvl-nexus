@@ -3,6 +3,7 @@ package com.lky.nexus.app.chat.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lky.nexus.ai.config.AiModelProperties;
+import com.lky.nexus.app.agent.AgentService;
 import com.lky.nexus.app.chat.mapper.ChatConversationMapper;
 import com.lky.nexus.app.chat.mapper.ChatMessageMapper;
 import com.lky.nexus.app.chat.model.ChatMode;
@@ -51,15 +52,18 @@ public class ConversationServiceImpl implements ConversationService {
     private final ChatConversationMapper conversationMapper;
     private final ChatMessageMapper messageMapper;
     private final KnowledgeBaseService knowledgeBaseService;
+    private final AgentService agentService;
     private final JsonMapper jsonMapper;
 
     public ConversationServiceImpl(ChatConversationMapper conversationMapper,
                                    ChatMessageMapper messageMapper,
                                    KnowledgeBaseService knowledgeBaseService,
+                                   AgentService agentService,
                                    JsonMapper jsonMapper) {
         this.conversationMapper = conversationMapper;
         this.messageMapper = messageMapper;
         this.knowledgeBaseService = knowledgeBaseService;
+        this.agentService = agentService;
         this.jsonMapper = jsonMapper;
     }
 
@@ -78,9 +82,12 @@ public class ConversationServiceImpl implements ConversationService {
         // 绑定在落库前校验：越权/不存在的知识库必须在这里就被拒绝，
         // 否则会话会带着一个"别人的知识库 id"存下来，等到提问时才炸（甚至悄悄检索不到）
         conversation.setKbIds(resolveKbIds(userId, mode, request.kbIds()));
+        conversation.setAgentId(resolveAgentId(userId, mode, request.agentId()));
         // 记下本会话使用的模型角色：换模型时历史会话仍能追溯到当初用的是哪个角色。
         // Agent 模式用专门的 chat.agent 角色——工具调用对模型能力的要求与普通对话不同，
         // 两条链路分开配置才能在"日常对话用便宜模型、Agent 用强模型"之间取舍。
+        // 注意这里记的是"会话默认值"：AGENT 模式下真正执行的模型取自 Agent 定义
+        // （见 ChatStreamServiceImpl），本字段退化成一个可追溯的历史记录。
         conversation.setModelRole(mode == ChatMode.AGENT
                 ? AiModelProperties.Role.CHAT_AGENT
                 : AiModelProperties.Role.CHAT_DEFAULT);
@@ -135,9 +142,13 @@ public class ConversationServiceImpl implements ConversationService {
         if (request.pinned() != null) {
             conversation.setPinned(request.pinned());
         }
+        ChatMode mode = ChatMode.parse(conversation.getMode());
         if (request.kbIds() != null) {
             // null = 不改（局部更新约定）；空列表 = 解绑
-            conversation.setKbIds(resolveKbIds(userId, ChatMode.parse(conversation.getMode()), request.kbIds()));
+            conversation.setKbIds(resolveKbIds(userId, mode, request.kbIds()));
+        }
+        if (request.agentId() != null) {
+            conversation.setAgentId(resolveAgentId(userId, mode, request.agentId()));
         }
         conversation.setUpdatedAt(LocalDateTime.now());
 
@@ -184,8 +195,9 @@ public class ConversationServiceImpl implements ConversationService {
      *
      * <p>三条规则都是"宁可不做、也不装作做了"：
      * <ol>
-     *   <li><b>只有 RAG 能用</b>：PLAIN 绑了没用；AGENT 的检索范围由模型自己决定
-     *       （工具会扫该用户的全部知识库）。写进去只会让人误以为检索被限定了；</li>
+     *   <li><b>只有 RAG 能用</b>：PLAIN 绑了没用；AGENT 的检索范围由所选 Agent 决定
+     *       （Phase 4.1 起 Agent 绑定自己的知识库，见 {@code AgentService}）。
+     *       写进会话字段只会让人误以为检索被限定了；</li>
      *   <li><b>最多一个</b>：检索侧目前是单库签名（{@code ChunkSearchService} 吃一个 kbId），
      *       绑多个只能"取第一个"，这属于静默丢条件，必须显式拒绝；</li>
      *   <li><b>必须是自己的库</b>：走 {@code requireOwned}，别人的库返回 3001，
@@ -202,7 +214,7 @@ public class ConversationServiceImpl implements ConversationService {
         if (mode != ChatMode.RAG) {
             throw new BusinessException(ErrorCode.PARAM_INVALID,
                     "只有 RAG 会话可以绑定知识库（当前模式 " + mode + "）；"
-                            + "Agent 模式的检索范围由模型自行决定");
+                            + "Agent 模式的检索范围由所选 Agent 的知识库绑定决定");
         }
         if (kbIds.size() > 1) {
             throw new BusinessException(ErrorCode.PARAM_INVALID,
@@ -210,6 +222,35 @@ public class ConversationServiceImpl implements ConversationService {
         }
         knowledgeBaseService.requireOwned(userId, kbIds.get(0));
         return ConversationKbIds.write(jsonMapper, kbIds);
+    }
+
+    /**
+     * 校验会话选用的 Agent（仅 AGENT 模式）。
+     *
+     * <p>三条规则，与 {@link #resolveKbIds} 是同一种"写入口就把话说清楚"的思路：
+     * <ol>
+     *   <li>{@code null} 是<b>合法</b>的，表示用内置默认 Agent（运行期解析，见
+     *       {@code AgentService.resolveDefault}）；</li>
+     *   <li><b>只有 AGENT 模式能选</b>：PLAIN/RAG 挂一个 Agent 进去不会生效，
+     *       静默忽略比报错更坏——用户会以为提示词变了而实际没变；</li>
+     *   <li><b>必须是自己的、且已发布</b>：走 {@code requireDefinition}（DRAFT 报 5008、
+     *       DISABLED 报 5009、别人的报 5006→404）。在这里挡住，是为了让"选了草稿 Agent"
+     *       在<b>选的时候</b>就失败，而不是等提问时才炸。</li>
+     * </ol>
+     *
+     * <p>运行期仍会再解析一次（{@code ChatStreamServiceImpl}）：本方法只能保证"选的那刻"是
+     * PUBLISHED，之后被停用的 Agent 必须在那时被拦住，否则停用就形同虚设。
+     */
+    private Long resolveAgentId(Long userId, ChatMode mode, Long rawAgentId) {
+        if (rawAgentId == null) {
+            return null;
+        }
+        if (mode != ChatMode.AGENT) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "只有 AGENT 会话可以选用 Agent（当前模式 " + mode + "）");
+        }
+        agentService.requireDefinition(userId, rawAgentId);
+        return rawAgentId;
     }
 
     private ConversationResponse toResponse(ChatConversationPO conversation) {
@@ -222,6 +263,7 @@ public class ConversationServiceImpl implements ConversationService {
                 conversation.getLastMessageAt(),
                 conversation.getPinned(),
                 ConversationKbIds.parse(jsonMapper, conversation.getKbIds()),
+                conversation.getAgentId(),
                 conversation.getCreatedAt(),
                 conversation.getUpdatedAt());
     }

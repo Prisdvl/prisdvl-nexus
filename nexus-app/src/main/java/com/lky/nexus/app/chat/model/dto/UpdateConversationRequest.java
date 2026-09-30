@@ -22,5 +22,15 @@ public record UpdateConversationRequest(
         Boolean pinned,
 
         /** 绑定的知识库 id（仅 RAG 模式）；空列表表示解绑，null 表示不改。 */
-        List<Long> kbIds) {
+        List<Long> kbIds,
+
+        /**
+         * 换一个 Agent（仅 AGENT 模式）。
+         *
+         * <p>与 {@code kbIds} 同理，"换 Agent 再问"是常见操作：Agent 是<b>执行者</b>，
+         * 换掉只影响后续轮次由谁来答，不改 mode，历史回答的可比性不受影响。
+         * null = 不改；这里没有"解绑"一说——传 null 只能是"不改"，要回到默认请新建会话，
+         * 否则"null 既是不改又是解绑"就分不清了。
+         */
+        Long agentId) {
 }

@@ -1,7 +1,7 @@
 package com.lky.nexus.app.eval;
 
 import com.lky.nexus.app.agent.AgentAnswer;
-import com.lky.nexus.app.agent.AgentService;
+import com.lky.nexus.app.agent.AgentRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -33,10 +33,10 @@ public class EvalService {
 
     private static final Logger log = LoggerFactory.getLogger(EvalService.class);
 
-    private final AgentService agentService;
+    private final AgentRuntime agentRuntime;
 
-    public EvalService(AgentService agentService) {
-        this.agentService = agentService;
+    public EvalService(AgentRuntime agentRuntime) {
+        this.agentRuntime = agentRuntime;
     }
 
     /** 一个评测用例：问题 + 预期出现的要点（笔记中会原文出现的术语/短语）。 */
@@ -77,7 +77,7 @@ public class EvalService {
     public EvalReport run(Long userId, Long knowledgeBaseId, List<EvalCase> cases) {
         List<EvalResult> results = new ArrayList<>(cases.size());
         for (EvalCase testCase : cases) {
-            AgentAnswer answer = agentService.ask(userId, testCase.question());
+            AgentAnswer answer = agentRuntime.askWithDefault(userId, testCase.question());
             List<String> missing = testCase.expectedPoints().stream()
                     .filter(point -> !answer.answer().contains(point))
                     .toList();

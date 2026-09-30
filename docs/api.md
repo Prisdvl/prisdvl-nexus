@@ -233,11 +233,12 @@ POST /api/search
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/chat/conversations` | 新建会话（title 可空，首轮后自动生成标题；可指定 mode/kbIds） |
+| POST | `/api/chat/conversations` | 新建会话（title 可空，首轮后自动生成标题；可指定 mode/kbIds/agentId） |
 | — | — | `mode` ∈ `PLAIN` / `RAG` / `AGENT`；`kbIds` 只在 `RAG` 下有意义，且**最多一个**（多库检索未实现，传多个直接 1001 而不是取第一个） |
+| — | — | `agentId`（Phase 4.1）只在 `AGENT` 下有意义，且必须是**自己已发布**的 Agent（草稿 5008、停用 5009、别人的 5006→404）；不传 = 用内置默认 Agent |
 | GET | `/api/chat/conversations` | 会话列表（分页、置顶优先、按最后消息时间倒序） |
-| GET | `/api/chat/conversations/{id}` | 会话详情（含配置：mode、kbIds、模型角色、prompt 版本） |
-| PUT | `/api/chat/conversations/{id}` | 改标题 / 置顶 / 绑定知识库 |
+| GET | `/api/chat/conversations/{id}` | 会话详情（含配置：mode、kbIds、agentId、模型角色、prompt 版本） |
+| PUT | `/api/chat/conversations/{id}` | 改标题 / 置顶 / 绑定知识库 / 换 Agent（`agentId` 为 null = 不改） |
 | DELETE | `/api/chat/conversations/{id}` | 删除会话（逻辑删除 + 清理 ChatMemory 窗口） |
 | GET | `/api/chat/messages/{conversationId}` | 历史消息（分页，含引用、Token、耗时） |
 | POST | `/api/chat/messages` | 非流式发送（用于简单场景与自动化测试） |
@@ -312,14 +313,42 @@ Content-Type: application/json
 
 ## 6. Agent 与工具（Phase 5–6）
 
+### 6.0 已实现：Agent 资源（平台化 Phase 4.1）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/agents` | 我的 Agent 列表（内置默认 Agent 置顶；`pageNum` / `pageSize`） |
+| POST | `/api/agents` | 创建 Agent：`{code, name, description?, systemPrompt?, modelRole?, kbIds?}` → 落 `DRAFT` |
+| GET | `/api/agents/{agentId}` | 详情（含绑定知识库 `kbIds`） |
+| PUT | `/api/agents/{agentId}` | 局部更新（null = 不改）：`{name?, description?, systemPrompt?, modelRole?, status?, kbIds?}`；`kbIds: []` = 解绑 |
+| POST | `/api/agents/{agentId}/duplicate` | 复制（服务端生成 `-copy` 标识，副本回到 `DRAFT`） |
+| DELETE | `/api/agents/{agentId}` | 删除（内置默认 Agent → 5010） |
+| POST | `/api/agents/{agentId}/test-chat` | 试跑：`{question}` → 与 `/api/agent/ask` 同形的答案 + 工具痕迹。**不受发布状态限制**（草稿正是要被测试的） |
+| POST | `/api/agent/ask` | 用**内置默认 Agent** 跑一次（旧接口，路径保持单数） |
+| POST | `/api/chat/stream` | AGENT 模式会话按所选 Agent 的提示词/模型/检索范围执行 |
+
+要点：
+
+- `code` 是**稳定标识**（`[a-z0-9][a-z0-9._-]{1,63}`，同一个用户下唯一），显示名可随时改；
+- 状态：`DRAFT`（新建默认，**不能被会话选用** → 5008）/ `PUBLISHED`（可用）/ `DISABLED`（明确报错 5009，不静默降级）；
+- 内置默认 Agent（`code=builtin.default`）不可删除、不可停用（5010），但可改名、改提示词——
+  AGENT 模式因此永远有可用的兜底；`agentId` 为空的 AGENT 会话在执行时解析到它；
+- `kbIds` 为空 = **不限制**（检索该用户全部知识库，注意与 RAG 会话的 kbIds 语义相反）；
+- 错误码：`5006` 不存在/非本人（HTTP 404，不泄露存在性）、`5007` 标识重复、`5008` 未发布、
+  `5009` 已停用、`5010` 内置项只读（后四个 HTTP 409，语义是"请求格式没问题、资源状态不允许"）。
+
+```http
+PUT /api/agents/12
+{ "status": "PUBLISHED", "kbIds": [3, 7] }
+```
+
+### 6.1 规划中（尚未实现）
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/tools` | 工具列表（来源 BUILTIN/MCP、权限级别、是否需确认、启用状态） |
 | GET | `/api/tools/{code}` | 工具详情（入参 JSON Schema、最近调用记录） |
-| POST | `/api/agents` | 创建 Agent（名称、系统提示词、模型角色、最大步数、超时、工具白名单） |
-| GET | `/api/agents` | Agent 列表 |
-| GET | `/api/agents/{id}` | Agent 详情（含权限矩阵） |
-| PUT | `/api/agents/{id}/tools` | 配置工具白名单与确认策略 |
+| PUT | `/api/agents/{id}/tools` | 配置工具白名单与确认策略（等 Tool 体系落地；今天工具白名单写死为内置 `knowledge_search`） |
 | POST | `/api/agent/runs` | 发起一次 Agent 任务 → `runId`（可流式，同 SSE 协议） |
 | GET | `/api/agent/runs/{runId}` | 运行状态（RUNNING/WAITING_APPROVAL/DONE/FAILED/MAX_ITERATIONS） |
 | GET | `/api/agent/runs/{runId}/steps` | 完整步骤轨迹（THINK/TOOL_CALL/OBSERVATION/ANSWER） |

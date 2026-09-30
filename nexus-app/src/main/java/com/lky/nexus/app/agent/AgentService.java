@@ -1,25 +1,52 @@
 package com.lky.nexus.app.agent;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.lky.nexus.ai.agent.AgentDefinition;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.app.agent.mapper.AgentKnowledgeBaseMapper;
+import com.lky.nexus.app.agent.mapper.AgentMapper;
+import com.lky.nexus.app.agent.model.AgentStatus;
+import com.lky.nexus.app.agent.model.dto.AgentResponse;
+import com.lky.nexus.app.agent.model.dto.CreateAgentRequest;
+import com.lky.nexus.app.agent.model.dto.UpdateAgentRequest;
+import com.lky.nexus.app.agent.model.entity.AgentKnowledgeBasePO;
+import com.lky.nexus.app.agent.model.entity.AgentPO;
+import com.lky.nexus.app.workspace.WorkspaceService;
+import com.lky.nexus.common.api.ErrorCode;
+import com.lky.nexus.common.api.PageQuery;
+import com.lky.nexus.common.api.PageResult;
+import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.knowledge.service.KnowledgeBaseService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
- * Agent 服务（Phase 5.1）：一次完整的"工具循环"。
+ * Agent 资源服务（平台化 Phase 4.1，§十五–§十八）：用户可配置的 Agent 的增删改查与绑定。
  *
- * <p>循环由 Spring AI 的 ToolCallingManager 执行（声明了工具就会自动完成
- * "模型要工具 → 执行 → 结果回填 → 模型继续"，并有轮数上限），
- * 我们的职责是三个"用户可控"点：
+ * <p>与 {@link AgentRuntime} 的分工是本增量最重要的一条线：
+ * <b>本类只碰数据库与准入规则，一行"怎么跑 Agent"的逻辑都没有</b>；
+ * 跑循环的是 {@code AgentRuntime}，它只认 {@link AgentDefinition}。
+ * 两者之间由 {@link #requireDefinition} / {@link #resolveDefault} 搭桥——这也是 §十七
+ * "不要把数据库 Entity 直接塞给 Agent Loop"的落点。
+ *
+ * <p>三个刻意的设计：
  * <ol>
- *   <li><b>可见</b>：每次工具调用都写入 {@link AgentContext} 痕迹并随回答返回；</li>
- *   <li><b>有界</b>：工具循环受框架轮数上限约束，不会无限自调用；</li>
- *   <li><b>可降级</b>：检索基础设施不可用/失败时工具返回明确说明，模型如实回答而不是硬编。
+ *   <li><b>内置默认 Agent 是真实一行</b>，而不是代码里的 if-else 兜底。这样"AGENT 模式用哪个
+ *       Agent"永远只有一条路径（查库），用户在界面上也看得见、改得动它的提示词——
+ *       写死在代码里的兜底恰恰是 §六十七 禁止的"硬编码 Agent"；</li>
+ *   <li><b>状态机有实际后果</b>：DRAFT 不能被会话选用（先测试再发布），DISABLED 不是"悄悄换回默认"
+ *       而是明确报错；</li>
+ *   <li><b>访问他人资源返回 404</b>（3001/5006 语义一致），不泄露资源存在性。</li>
  * </ol>
  */
 @Service
@@ -27,29 +54,370 @@ public class AgentService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentService.class);
 
+    private final AgentMapper agentMapper;
+    private final AgentKnowledgeBaseMapper agentKbMapper;
+    private final KnowledgeBaseService knowledgeBaseService;
+    private final WorkspaceService workspaceService;
     private final ChatClientFactory chatClientFactory;
-    private final KnowledgeSearchTool knowledgeSearchTool;
 
-    public AgentService(ChatClientFactory chatClientFactory, KnowledgeSearchTool knowledgeSearchTool) {
+    public AgentService(AgentMapper agentMapper,
+                        AgentKnowledgeBaseMapper agentKbMapper,
+                        KnowledgeBaseService knowledgeBaseService,
+                        WorkspaceService workspaceService,
+                        ChatClientFactory chatClientFactory) {
+        this.agentMapper = agentMapper;
+        this.agentKbMapper = agentKbMapper;
+        this.knowledgeBaseService = knowledgeBaseService;
+        this.workspaceService = workspaceService;
         this.chatClientFactory = chatClientFactory;
-        this.knowledgeSearchTool = knowledgeSearchTool;
     }
 
-    public AgentAnswer ask(Long userId, String question) {
-        long start = System.currentTimeMillis();
-        // 痕迹由监听器收进本次调用的私有列表：不共享状态，天然并发安全
-        List<AgentContext.ToolCallRecord> trace = new ArrayList<>();
-        String answer = chatClientFactory.get(AiModelProperties.Role.CHAT_AGENT)
-                .prompt()
-                .system(AgentPrompts.AGENT_SYSTEM)
-                .user(question)
-                .toolContext(AgentContext.of(userId, AgentContext.collector(trace)))
-                .tools(ToolCallbacks.from(knowledgeSearchTool))
-                .call()
-                .content();
+    // ------------------------------------------------------------------
+    // 读
+    // ------------------------------------------------------------------
 
-        log.info("Agent 回答 userId={} 问题「{}」→ 工具调用 {} 次，耗时 {} ms",
-                userId, question, trace.size(), System.currentTimeMillis() - start);
-        return new AgentAnswer(answer, List.copyOf(trace), !trace.isEmpty());
+    public PageResult<AgentResponse> list(Long userId, int pageNum, int pageSize) {
+        int safePageNum = PageQuery.normalizePageNum(pageNum);
+        int safePageSize = PageQuery.normalizePageSize(pageSize);
+
+        // 先补齐内置默认 Agent 那一行。它是**按需创建**的（注册流程不预置），
+        // 如果只有执行路径会触发补齐，新用户的列表就会是空的——
+        // 而界面上的 Agent 选择器、"我的 Agent"列表都读这里，
+        // 于是"AGENT 模式永远有兜底"这句在列表里看不出来，用户只能靠猜。
+        // 补齐是幂等的（同一用户至多一行），所以放在读路径上不会写出脏数据。
+        resolveDefault(userId);
+
+        Page<AgentPO> page = new Page<>(safePageNum, safePageSize);
+        Page<AgentPO> result = agentMapper.selectPage(page, Wrappers.<AgentPO>lambdaQuery()
+                // 内置默认 Agent 置顶（它是 AGENT 模式的兜底，不该被埋在第二页）
+                .eq(AgentPO::getOwnerId, userId)
+                .orderByDesc(AgentPO::getBuiltin)
+                .orderByDesc(AgentPO::getUpdatedAt));
+
+        List<AgentResponse> list = result.getRecords().stream().map(this::toResponse).toList();
+        return PageResult.of(list, result.getTotal(), safePageNum, safePageSize);
+    }
+
+    public AgentResponse detail(Long userId, Long agentId) {
+        AgentPO agent = requireOwned(userId, agentId);
+        return toResponse(agent);
+    }
+
+    public AgentPO requireOwned(Long userId, Long agentId) {
+        if (agentId == null) {
+            throw new BusinessException(ErrorCode.AGENT_NOT_FOUND);
+        }
+        // user_id 进 SQL 条件，而不是查出来再比对（与知识库/会话同一套隔离约定）
+        AgentPO agent = agentMapper.selectOne(Wrappers.<AgentPO>lambdaQuery()
+                .eq(AgentPO::getId, agentId)
+                .eq(AgentPO::getOwnerId, userId));
+        if (agent == null) {
+            throw new BusinessException(ErrorCode.AGENT_NOT_FOUND);
+        }
+        return agent;
+    }
+
+    /** 该 Agent 绑定的知识库 id（按绑定顺序）。 */
+    public List<Long> kbIdsOf(Long agentId) {
+        return agentKbMapper.selectList(Wrappers.<AgentKnowledgeBasePO>lambdaQuery()
+                        .eq(AgentKnowledgeBasePO::getAgentId, agentId)
+                        .orderByAsc(AgentKnowledgeBasePO::getId))
+                .stream().map(AgentKnowledgeBasePO::getKbId).toList();
+    }
+
+    // ------------------------------------------------------------------
+    // 写
+    // ------------------------------------------------------------------
+
+    @Transactional
+    public AgentResponse create(Long userId, CreateAgentRequest request) {
+        String code = request.code().trim();
+        if (existsCode(userId, code)) {
+            throw new BusinessException(ErrorCode.AGENT_CODE_DUPLICATED, "已存在同名标识的 Agent：" + code);
+        }
+        requireConfiguredModelRole(request.modelRole() == null
+                ? AiModelProperties.Role.CHAT_AGENT : request.modelRole().trim());
+
+        AgentPO agent = new AgentPO();
+        agent.setWorkspaceId(workspaceService.requirePersonalWorkspace(userId));
+        agent.setOwnerId(userId);
+        agent.setCode(code);
+        applyEditableFields(agent, request.name(), request.description(),
+                request.systemPrompt(), request.modelRole());
+        // 不自动发布：§十八 要求"用户可以先测试 Agent，再发布"，DRAFT 就是那个"先"
+        agent.setStatus(AgentStatus.DEFAULT.name());
+        agent.setBuiltin(false);
+        LocalDateTime now = LocalDateTime.now();
+        agent.setCreatedAt(now);
+        agent.setUpdatedAt(now);
+        agentMapper.insert(agent);
+
+        // 绑定在落库前校验（越权/不存在的库必须在这里被拒，不然会存下一个查不到数据的 id）
+        replaceKnowledgeBases(userId, agent.getId(), request.kbIds());
+        log.info("创建 Agent id={}, userId={}, code={}, 绑定知识库 {} 个",
+                agent.getId(), userId, code, kbIdsOf(agent.getId()).size());
+        return toResponse(agent);
+    }
+
+    @Transactional
+    public AgentResponse update(Long userId, Long agentId, UpdateAgentRequest request) {
+        AgentPO agent = requireOwned(userId, agentId);
+
+        // 局部更新：内部逐个字段判 null（null = 不改）
+        applyEditableFields(agent, request.name(), request.description(),
+                request.systemPrompt(), request.modelRole());
+        if (StringUtils.hasText(request.status())) {
+            AgentStatus target = AgentStatus.parse(request.status());
+            requireStatusChangeAllowed(agent, target);
+            agent.setStatus(target.name());
+        }
+        agent.setUpdatedAt(LocalDateTime.now());
+        agentMapper.updateById(agent);
+
+        if (request.kbIds() != null) {
+            // null = 不改；空列表 = 解绑（回到"不限制"）
+            replaceKnowledgeBases(userId, agentId, request.kbIds());
+        }
+        log.info("更新 Agent id={}, userId={}, status={}, 绑定知识库 {} 个",
+                agentId, userId, agent.getStatus(), kbIdsOf(agentId).size());
+        return toResponse(agent);
+    }
+
+    /** 复制一个 Agent（§十五）：新 code 由服务端生成，副本回到 DRAFT——复制品未经测试不该直接生效。 */
+    @Transactional
+    public AgentResponse duplicate(Long userId, Long agentId) {
+        AgentPO source = requireOwned(userId, agentId);
+
+        AgentPO copy = new AgentPO();
+        copy.setWorkspaceId(source.getWorkspaceId() == null
+                ? workspaceService.requirePersonalWorkspace(userId) : source.getWorkspaceId());
+        copy.setOwnerId(userId);
+        copy.setCode(nextAvailableCode(userId, source.getCode()));
+        copy.setName(cut(source.getName() + " 副本", 128));
+        copy.setDescription(source.getDescription());
+        copy.setSystemPrompt(source.getSystemPrompt());
+        copy.setModelRole(source.getModelRole());
+        copy.setStatus(AgentStatus.DRAFT.name());
+        // 副本不是内置项：用户复制出来就是为了改
+        copy.setBuiltin(false);
+        LocalDateTime now = LocalDateTime.now();
+        copy.setCreatedAt(now);
+        copy.setUpdatedAt(now);
+        agentMapper.insert(copy);
+
+        replaceKnowledgeBases(userId, copy.getId(), kbIdsOf(agentId));
+        log.info("复制 Agent 源 id={} → 新 id={}, code={}", agentId, copy.getId(), copy.getCode());
+        return toResponse(copy);
+    }
+
+    @Transactional
+    public void delete(Long userId, Long agentId) {
+        AgentPO agent = requireOwned(userId, agentId);
+        if (Boolean.TRUE.equals(agent.getBuiltin())) {
+            throw new BusinessException(ErrorCode.AGENT_BUILTIN_READONLY,
+                    "内置默认 Agent 不可删除（AGENT 模式需要它兜底）；可以改名、改提示词，或新建自己的 Agent");
+        }
+        agentMapper.deleteById(agentId);
+        // 绑定是物理行，随 Agent 一起清掉，避免留下指向已删 Agent 的无主数据
+        agentKbMapper.delete(Wrappers.<AgentKnowledgeBasePO>lambdaQuery()
+                .eq(AgentKnowledgeBasePO::getAgentId, agentId));
+        log.info("删除 Agent id={}, userId={}", agentId, userId);
+    }
+
+    // ------------------------------------------------------------------
+    // Definition 装配（资源 → 值对象，运行期的唯一入口）
+    // ------------------------------------------------------------------
+
+    /**
+     * 取<b>可被使用</b>的 Agent 定义：会话选用它时会走这里。
+     *
+     * <p>三道检查都必须在"提问之前"做，而不是让链路带着一个不可用的 Agent 跑下去：
+     * 归属（404）、发布状态（DRAFT 5008 / DISABLED 5009）。
+     */
+    public AgentDefinition requireDefinition(Long userId, Long agentId) {
+        AgentPO agent = requireOwned(userId, agentId);
+        AgentStatus status = AgentStatus.parse(agent.getStatus());
+        if (status == AgentStatus.DRAFT) {
+            throw new BusinessException(ErrorCode.AGENT_NOT_PUBLISHED,
+                    "Agent「%s」还是草稿（DRAFT），先测试再发布后才能用于对话".formatted(agent.getName()));
+        }
+        if (status == AgentStatus.DISABLED) {
+            throw new BusinessException(ErrorCode.AGENT_DISABLED,
+                    "Agent「%s」已停用，重新启用后才能用于对话".formatted(agent.getName()));
+        }
+        return toDefinition(agent);
+    }
+
+    /**
+     * 取<b>用于试跑</b>的 Agent 定义（§十八 Test Chat）：只校验归属，<b>不校验状态</b>。
+     *
+     * <p>为什么这里和 {@link #requireDefinition} 不一样：§十八 的流程是"先测试再发布"，
+     * 草稿必须能被跑起来，否则发布就成了盲盒。反过来，DISABLED 的 Agent 也允许试跑——
+     * 用户停用它之后仍需要能确认"是不是它的问题"。
+     *
+     * <p>宽松的边界很明确：<b>只放宽状态，归属一步不让</b>（越权仍然是 404）。
+     */
+    public AgentDefinition testDefinition(Long userId, Long agentId) {
+        return toDefinition(requireOwned(userId, agentId));
+    }
+
+    /**
+     * 取该用户的<b>内置默认 Agent</b>（AGENT 会话未指定 Agent 时用）。
+     *
+     * <p>幂等：缺失（首次使用、或被人为清库）时按 {@code AgentPrompts} 的默认值补一行出来，
+     * 与 {@code WorkspaceService.requirePersonalWorkspace} 是同一种"按需补齐"做法。
+     * 内置项不可删除/停用，所以这里取到的必然是 PUBLISHED。
+     */
+    @Transactional
+    public AgentDefinition resolveDefault(Long userId) {
+        AgentPO builtin = agentMapper.selectOne(Wrappers.<AgentPO>lambdaQuery()
+                .eq(AgentPO::getOwnerId, userId)
+                .eq(AgentPO::getCode, AgentPrompts.BUILTIN_CODE)
+                .last("LIMIT 1"));
+        if (builtin == null) {
+            builtin = createBuiltin(userId);
+        } else if (!AgentStatus.PUBLISHED.name().equals(builtin.getStatus())) {
+            // 历史数据/直接造库可能留下非 PUBLISHED 的内置行：就地纠正，
+            // 否则 AGENT 模式会莫名其妙不可用，而用户什么都没改过
+            builtin.setStatus(AgentStatus.PUBLISHED.name());
+            builtin.setUpdatedAt(LocalDateTime.now());
+            agentMapper.updateById(builtin);
+        }
+        return toDefinition(builtin);
+    }
+
+    /** 内置默认 Agent 的那一行；不暴露为 API，只由 {@link #resolveDefault} 按需补齐。 */
+    private AgentPO createBuiltin(Long userId) {
+        AgentPO agent = new AgentPO();
+        agent.setWorkspaceId(workspaceService.requirePersonalWorkspace(userId));
+        agent.setOwnerId(userId);
+        agent.setCode(AgentPrompts.BUILTIN_CODE);
+        agent.setName(AgentPrompts.BUILTIN_NAME);
+        agent.setDescription(AgentPrompts.BUILTIN_DESCRIPTION);
+        agent.setSystemPrompt(AgentPrompts.AGENT_SYSTEM);
+        agent.setModelRole(AiModelProperties.Role.CHAT_AGENT);
+        agent.setStatus(AgentStatus.PUBLISHED.name());
+        agent.setBuiltin(true);
+        LocalDateTime now = LocalDateTime.now();
+        agent.setCreatedAt(now);
+        agent.setUpdatedAt(now);
+        agentMapper.insert(agent);
+        log.info("创建内置默认 Agent id={}, userId={}", agent.getId(), userId);
+        return agent;
+    }
+
+    /**
+     * 实体 → 值对象。空提示/空角色在这里补默认值，<b>运行期不再兜底</b>：
+     * 只有一个地方决定"没配时用什么"，就不会出现"两条链路各兜各的、结果行为不一致"。
+     */
+    private AgentDefinition toDefinition(AgentPO agent) {
+        return new AgentDefinition(
+                agent.getId(),
+                agent.getCode(),
+                agent.getName(),
+                StringUtils.hasText(agent.getSystemPrompt())
+                        ? agent.getSystemPrompt() : AgentPrompts.AGENT_SYSTEM,
+                StringUtils.hasText(agent.getModelRole())
+                        ? agent.getModelRole() : AiModelProperties.Role.CHAT_AGENT,
+                kbIdsOf(agent.getId()),
+                Boolean.TRUE.equals(agent.getBuiltin()));
+    }
+
+    // ------------------------------------------------------------------
+    // 内部校验
+    // ------------------------------------------------------------------
+
+    private void applyEditableFields(AgentPO agent, String name, String description,
+                                     String systemPrompt, String modelRole) {
+        if (StringUtils.hasText(name)) {
+            agent.setName(name.trim());
+        }
+        if (description != null) {
+            agent.setDescription(StringUtils.hasText(description) ? description.trim() : null);
+        }
+        if (systemPrompt != null) {
+            // 空字符串 = 回到默认提示（与"不改"区分开：null 才是不改）
+            agent.setSystemPrompt(StringUtils.hasText(systemPrompt) ? systemPrompt.trim() : null);
+        }
+        if (StringUtils.hasText(modelRole)) {
+            String role = modelRole.trim();
+            requireConfiguredModelRole(role);
+            agent.setModelRole(role);
+        }
+    }
+
+    /**
+     * 模型角色必须是 {@code ai.roles} 里真实存在的 key。
+     *
+     * <p>为什么在写入口就校验：不校验的话，用户能存下一个不存在的角色，
+     * 直到提问时才报 4006——那时用户会以为"Agent 坏了"，而不是"我填错了角色"。
+     */
+    private void requireConfiguredModelRole(String role) {
+        if (!chatClientFactory.configuredRoles().contains(role)) {
+            throw new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
+                    "模型角色 %s 未配置。已配置：%s".formatted(role, chatClientFactory.configuredRoles()));
+        }
+    }
+
+    private void requireStatusChangeAllowed(AgentPO agent, AgentStatus target) {
+        if (Boolean.TRUE.equals(agent.getBuiltin()) && target != AgentStatus.PUBLISHED) {
+            throw new BusinessException(ErrorCode.AGENT_BUILTIN_READONLY,
+                    "内置默认 Agent 不能停用或退回草稿：AGENT 模式需要它兜底。"
+                            + "若要停用检索类行为，请新建一个自己的 Agent 并选用它");
+        }
+    }
+
+    private void replaceKnowledgeBases(Long userId, Long agentId, List<Long> rawKbIds) {
+        List<Long> kbIds = rawKbIds == null ? List.of() : new ArrayList<>(new LinkedHashSet<>(rawKbIds));
+        // 越权/不存在的库在这里就被拒绝：绑上别人的库不会报错，只会"检索不到东西"，
+        // 那种失败模式最难排查（与 RAG 会话绑库的做法一致）
+        for (Long kbId : kbIds) {
+            knowledgeBaseService.requireOwned(userId, kbId);
+        }
+        agentKbMapper.delete(Wrappers.<AgentKnowledgeBasePO>lambdaQuery()
+                .eq(AgentKnowledgeBasePO::getAgentId, agentId));
+        for (Long kbId : kbIds) {
+            AgentKnowledgeBasePO link = new AgentKnowledgeBasePO();
+            link.setAgentId(agentId);
+            link.setKbId(kbId);
+            link.setCreatedAt(LocalDateTime.now());
+            agentKbMapper.insert(link);
+        }
+    }
+
+    private boolean existsCode(Long userId, String code) {
+        return agentMapper.selectCount(Wrappers.<AgentPO>lambdaQuery()
+                .eq(AgentPO::getOwnerId, userId)
+                .eq(AgentPO::getCode, code)) > 0;
+    }
+
+    /** 副本的 code：{@code source-copy}、{@code source-copy-2}…直到不冲突。 */
+    private String nextAvailableCode(Long userId, String sourceCode) {
+        String base = cut(sourceCode + "-copy", 64);
+        String candidate = base;
+        for (int i = 2; existsCode(userId, candidate); i++) {
+            String suffix = "-" + i;
+            candidate = cut(base, 64 - suffix.length()) + suffix;
+        }
+        return candidate;
+    }
+
+    private String cut(String value, int max) {
+        return value.length() <= max ? value : value.substring(0, max);
+    }
+
+    private AgentResponse toResponse(AgentPO agent) {
+        return new AgentResponse(
+                agent.getId(),
+                agent.getCode(),
+                agent.getName(),
+                agent.getDescription(),
+                agent.getSystemPrompt(),
+                agent.getModelRole(),
+                agent.getStatus(),
+                agent.getBuiltin(),
+                kbIdsOf(agent.getId()),
+                agent.getCreatedAt(),
+                agent.getUpdatedAt());
     }
 }

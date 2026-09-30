@@ -4,8 +4,10 @@
 # 用途：在 Docker / MySQL / Redis 尚未就绪时，也能把整应用跑起来调接口、连前端。
 #   mvn -pl nexus-app spring-boot:run -Dspring-boot.run.profiles=standalone
 #
-# 与测试 profile 共用同一份 H2 建表脚本（src/main/resources/db/h2/schema.sql），
-# 避免"测试用的表结构"和"本地开发用的表结构"两套 DDL 漂移。
+# 表结构由 Flyway 迁移（src/main/resources/db/migration）建——与 local（MySQL）用同一套脚本，
+# 因此在 standalone 上验证过的字段/索引就是 MySQL 上那一套（H2 以 MODE=MySQL 执行）。
+# 与 test profile 共用的 db/h2/schema.sql 实测已成空操作（复核见 Phase 4.1 的启动日志，
+# 详见 docs/platform-phase3-baseline.md §1.7），保留只为最小改动。
 # ============================================================
 spring:
   datasource:
@@ -16,9 +18,13 @@ spring:
   sql:
     init:
       mode: always
+      # ⚠️ 实测（复核于 Phase 4.1）：这份脚本不会生效，表实际是 Flyway 建的，见文件头的说明。
       schema-locations: classpath:db/h2/schema.sql
   flyway:
-    # H2 下不使用迁移脚本（迁移是 MySQL 方言）；生产迁移见 Step 0.6
+    # ⚠️ 同上：这个开关关不掉主库迁移（那是 PrimaryDataSourceConfig 手工声明的 Bean）。
+    # 实测日志：Successfully applied 11 migrations to schema "public", now at version v12。
+    # 迁移虽是 MySQL 方言，但在 H2 MODE=MySQL 下能跑通——所以 standalone 的表结构与 MySQL 一致，
+    # 这是"本地能跑通就等于 MySQL 上也对"的依据。
     enabled: false
   h2:
     console:

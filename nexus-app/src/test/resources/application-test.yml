@@ -15,10 +15,16 @@ spring:
   sql:
     init:
       mode: always
-      # 与 standalone 开发 profile 共用同一份建表脚本，避免两套 DDL 漂移
+      # ⚠️ 实测（复核于 Phase 4.1）：下面这份脚本**已经不会生效**——表是 Flyway 迁移建的，
+      # 它全篇 CREATE TABLE IF NOT EXISTS，执行时全是空操作，且内容比迁移旧。
+      # 保留它只为"改动面最小"，删除属独立清理项（见 docs/platform-phase3-baseline.md §1.7/§十.1）。
       schema-locations: classpath:db/h2/schema.sql
   flyway:
-    # 迁移脚本是 MySQL 方言，H2 测试中关闭；真实迁移在 Step 0.6 用 MySQL 验证
+    # ⚠️ 这个开关**只关掉 Boot 自动配置的那套 Flyway**，关不掉主库迁移：
+    # 主库 Flyway 是 PrimaryDataSourceConfig 手工声明的 Bean + FlywayMigrationInitializer，
+    # 不看这个属性。实测启动日志里依旧 "Successfully applied 11 migrations … now at version v12"，
+    # H2 测试库的表结构其实就是 MySQL 方言的迁移脚本（H2 MODE=MySQL 下能跑）。
+    # 要真正关闭得给那个 Bean 加条件，而不是改这里。
     enabled: false
 
 # 测试专用 JWT 密钥：仅测试使用，绝不用于任何真实环境

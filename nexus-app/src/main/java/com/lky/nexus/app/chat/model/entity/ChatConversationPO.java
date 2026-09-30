@@ -39,6 +39,15 @@ public class ChatConversationPO {
     /** 绑定的知识库 id 列表（JSON 数组字符串）；Phase 3 起启用 */
     private String kbIds;
 
+    /**
+     * 该会话选用的 Agent（Phase 4.1）；仅 AGENT 模式有值。
+     *
+     * <p>为 {@code null} 表示"用内置默认 Agent"——不落一个具体 id，是为了让
+     * "默认"这件事只有一处定义（{@code AgentService.resolveDefault}），
+     * 而不是把某一次解析出来的 id 固化进历史会话。
+     */
+    private Long agentId;
+
     /** 该会话使用的模型逻辑角色，如 chat.default */
     private String modelRole;
 

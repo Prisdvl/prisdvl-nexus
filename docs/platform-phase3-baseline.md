@@ -175,11 +175,29 @@ V1 `vector_store` → `kb_vector`（PK=`chunk_id`，`vector(1024)`，HNSW `m=16,
 - 另有 `db/h2/schema.sql`（290 行，`CREATE TABLE IF NOT EXISTS` 风格）由
   `spring.sql.init` 在 H2 profile 加载。
 
-> **更正**：迁移脚本用的是**不带 `IF NOT EXISTS`** 的 `CREATE TABLE`（V1–V10 全部如此），
+> **更正（4.1 已实测复核）**：迁移脚本用的是**不带 `IF NOT EXISTS`** 的 `CREATE TABLE`（V1–V12 全部如此），
 > 而 `schema.sql` 全部是 `IF NOT EXISTS`。若 `schema.sql` 先执行，无 `IF NOT EXISTS` 的迁移必然报"表已存在"；
-> 测试长期全绿说明 **Flyway 先执行、`schema.sql` 随后成为近乎空操作**。
-> **结论：Phase 3 起新增表/列只需写一个 Flyway 迁移**（H2 会自动跟着迁移走）。
-> 本条属"高置信推断"，落地第一个新迁移时以 `target/` 日志实测复核（见 §10 待验证项 1）。
+> 测试长期全绿说明 **Flyway 先执行、`schema.sql` 随后成为空操作**。
+>
+> 4.1（V12）时直接读了启动日志，结论成立且两条 profile 都验了：
+>
+> | profile | 命令 | 日志证据 |
+> | --- | --- | --- |
+> | test | `mvn -pl nexus-app -am -Dtest=AgentResourceTest test` | `All configured schemas are empty; a baseline marker will not be added`（Flyway 面对的是**空库**）→ `Migrating schema "public" to version "1 - auth baseline"` … `to version "12 - agent"` → `Successfully applied 11 migrations to schema "public", now at version v12` |
+> | standalone | `java -jar nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=standalone` | 同上，`Successfully applied 11 migrations … now at version v12` |
+>
+> 注意版本号是 1–10、12（**没有 V11**），这与 `db/migration/` 目录一致。
+>
+> **结论三条**：
+> 1. Phase 3 起新增表/列只需写一个 Flyway 迁移，H2 会自动跟着迁移走；
+> 2. `db/h2/schema.sql` 如今是**完全冗余的死文件**（15 张表在迁移里都有，且它比迁移旧——
+>    没有 `agent`/`agent_knowledge_base`，也没有 V10 加的平台列），真实 DDL 来源只有迁移。
+>    4.1 只更正了它的文件头注释与两个 profile 的注释，**没删**：删它要连带动 `spring.sql.init`，
+>    属独立清理项（见 §10 待验证项 1）；
+> 3. `application-test.yml` / `application-standalone.yml` 里 `spring.flyway.enabled: false` 配的是
+>    Boot 的自动配置，**对主库迁移无效**——主库 Flyway 是 `PrimaryDataSourceConfig` 手工声明的 Bean +
+>    `FlywayMigrationInitializer`，不看这个属性。这是"迁移照跑"能发生的原因，也是那两处注释
+>    （"H2 测试中关闭"）与现实不符的原因；若要真的关掉，得给那个 Bean 加条件，而不是改 yml。
 
 ### 1.8 API 面
 
@@ -574,6 +592,13 @@ agent(表) → AgentDefinition(不可变配置对象) → AgentRuntime(每次运
   `AiModelProperties.Role.CHAT_AGENT` → `model_role`；`ToolCallbacks.from(knowledgeSearchTool)` → `toolCodes` 白名单。
 - 状态机：`DRAFT / PUBLISHED / DISABLED`（§十八），`PUBLISHED` 才可被 Application 引用。
 
+> **落地情况（4.1，见 §9.4）**：实际建的 `AgentDefinition` 只有
+> `agentId / code / name / systemPrompt / modelRole / kbIds / builtin` 七个字段。
+> `maxIterations / timeoutMs / memoryConfig / toolCodes` **没有建**——今天没有任何机制会读它们
+> （轮数上限在框架的 `ToolCallingManager`，超时在 HTTP 层，工具白名单只有内置一个）。
+> 这条偏差的理由写在 decisions.md B.35 §7：**存下来但没人读的配置比没有这个配置更糟**。
+> 另：内置默认 Agent 是数据库里的真实一行（不是代码兜底），`kbIds` 为空 = 不限制。
+
 ### 5.2 表（§十六，建表时直接带 workspace/owner，§4.3 顺序）
 
 ```sql
@@ -585,6 +610,11 @@ agent_run(id, agent_id, conversation_id, user_id, status, input, output,
           iterations, started_at, finished_at, error_msg)       -- §二十二 审计的运行维度
 agent_run_step(id, run_id, seq, type, tool_code, input, output, status, latency_ms, created_at)
 ```
+
+> **落地情况（4.1，V12）**：只建了 `agent`（去掉 `max_iterations` / `timeout_ms` / `memory_config`
+> 三列）与 `agent_knowledge_base`，外加 `chat_conversation.agent_id`。
+> `agent_tool` / `agent_run` / `agent_run_step` 三表**未建**——它们分别要等 Tool 体系与
+> 可观测性阶段。实际列与理由见 `docs/database.md` §6.0。
 
 ### 5.3 Tool：Definition → Registry → Factory → Executor（§十九）
 
@@ -676,7 +706,7 @@ ALTER TABLE kb_knowledge_base ADD COLUMN retrieval_mode VARCHAR(16) NOT NULL DEF
 
 | 迁移 | 阶段 | 内容 |
 | --- | --- | --- |
-| V12 | 4 | `agent` / `agent_knowledge_base` / `agent_tool` |
+| V12 | 4 | ✅ 已落地（4.1）：`agent` / `agent_knowledge_base` / `chat_conversation.agent_id`；`agent_tool` 延后到 Tool 体系落地时（B.35 §7） |
 | V13 | 5 | `tool` / `tool_invocation` / `agent_approval` |
 | V14 | 6 | `workflow` / `workflow_version` / `workflow_execution` / `node_execution` |
 | V15 | 7 | `application` / `model_provider` / `model_config` + `chat_conversation.application_id` |
@@ -905,17 +935,47 @@ P3  ── MCP 完整接入/鉴权、Planner、高级 Memory
 
 其余设计决策与理由见 decisions.md B.34。
 
+### 9.4 增量 4.1 完成记录（2026-09-30，Agent Definition 后端）
+
+| 项 | 结果 |
+| --- | --- |
+| 状态 | ✅ 后端完成（编译 / 全量测试 全绿）；**前端（Agent 管理页）留到 4.2** |
+| 目标 | §十五–§十八：Agent 可创建/修改/删除/启停/复制、可绑知识库、可配提示词与模型角色；§十七：Definition 与 Runtime 分离 |
+| 新增主代码 | `nexus-ai`：`ai/agent/AgentDefinition`（纯值对象） |
+| 新增主代码 | `nexus-app`：`agent/AgentService`（资源服务）、`agent/AgentRuntime`（运行，即改名前的 `AgentService`）、`agent/AgentResourceController`、`agent/model/{AgentStatus, dto×4, entity×2}`、`agent/mapper×2` |
+| 改写 | `AgentContext`（新增 `KB_IDS` 与 `of(userId, kbIds, listener)`）、`KnowledgeSearchTool`（按 Agent 绑定的范围检索 + 跳过 DISABLED 库 + 如实报告跳过项）、`ChatStreamServiceImpl`（AGENT 分支改用 Definition）、`ConversationServiceImpl`（`agentId` 准入）、`ChatConversationPO` + 三个会话 DTO、`ErrorCodeHttpStatusMapper` |
+| 配置 / 数据库 | **V12**：`agent` + `agent_knowledge_base` 两张表、`chat_conversation.agent_id`。**刻意没建** `max_iterations` / `timeout_ms` / `memory_config` / `agent_tool`（无机制读它们，见 B.35 §7） |
+| API | 新增 `/api/agents` 7 个（CRUD + duplicate + test-chat）；`/api/agent/ask` 保留（改为读内置默认 Agent）；会话 DTO 多出 `agentId` |
+| 错误码 | 新增 `5006`（404）/ `5007`·`5008`·`5009`·`5010`（409） |
+| 新增测试 | 27 条（`AgentDefinitionTest` 6 / `AgentResourceTest` 9 / `ConversationAgentBindingTest` 7 / `KnowledgeSearchToolScopeTest` 5） |
+| 测试基线 | 306 → **333 运行 / 315 通过 / 0 失败 / 0 错误 / 18 跳过（7 个 live 类）**，BUILD SUCCESS |
+| 前端构建 | 本轮未改前端 → **未执行**（4.2 会跑） |
+| 运行时验证（真机） | **SKIPPED**：真实模型跑一次 Agent 需 `AI_CHAT_API_KEY`（`AgentLoopTest` 门控，本机未设置）；真实检索需 ES/pgvector（本机 Docker 不可用） |
+| E2E 浏览器 | **UNAVAILABLE**：Agent 管理页尚未实现（4.2） |
+
+**与 §5.2 设计表的偏差**（三处，理由见 B.35 §7 与 database.md §6.0）：
+表名去掉了 `ai_` 前缀（`agent` 而非 `ai_agent`）；`max_iterations` / `timeout_ms` / `memory_config`
+三列与 `agent_tool` / `agent_run` / `agent_run_step` 三表**本轮不建**——它们各自要等的机制
+（第二类工具、可观测性阶段）还没到，先建就是"假旋钮"。
+
+**本轮发现、有意没修**：`kb_knowledge_base.status` 的"禁用后不参与检索"承诺，
+只在新的 Agent 工具路径兑现；RAG 链路仍不读它（"禁用一个库"对 RAG 问答不生效）。
+RAG 链路属 §六十五 保护区，且语义边界值得单独一个增量 + 自己的回归，故记录而不顺手改。
+
 ---
 
 ## 十、未确认项（如实列出，不假装已核实）
 
-1. **H2 的 DDL 来源**：§1.7 的"Flyway 先跑、`schema.sql` 成空操作"是由"迁移无 `IF NOT EXISTS` + 测试全绿"推出的
-   **高置信推断**，未直接读启动日志的分步顺序。**落地 V11 时以实测复核**：若 H2 上 V11 生效，则结论成立
-   （那时也可以顺带决定 `db/h2/schema.sql` 的去留）。
+1. ~~**H2 的 DDL 来源**~~ ✅ **4.1（V12）已实测关闭**：test 与 standalone 两个 profile 的启动日志都显示
+   `Successfully applied 11 migrations … now at version v12`，且 Flyway 起点是**空库**（
+   `All configured schemas are empty`）→ Flyway 先跑、`db/h2/schema.sql` 成空操作（§1.7 已按实测改写）。
+   **遗留清理项（本轮有意没做）**：`db/h2/schema.sql` 与两个 profile 里的 `spring.sql.init` 已成死代码，
+   删除它要连带动 `spring.sql.init.schema-locations` 与 standalone 的启动回归，属独立增量。
 2. **ES / pgvector 真机行为**：本机 Docker（WSL2 后端）不可用，本文关于 ES `filter` 与 `kb_id = ANY()` 的结论
    来自 mapping 与 SQL 代码阅读，**未在真机跑过**。3.3 落地时若无 ES 环境，需明确标注"仅代码级验证"。
-3. **Spring AI 工具循环的迭代上限**：`AgentService` 的 Javadoc 说由 `ToolCallingManager` 限步，
-   本轮**未读框架源码确认默认上限值与超限时的异常类型**。Phase 4 做 `max_iterations` 可配置时需先确认。
+3. **Spring AI 工具循环的迭代上限**：`AgentRuntime` 的 Javadoc 说由 `ToolCallingManager` 限步，
+   **仍未读框架源码确认默认上限值与超限时的异常类型**。4.1 因此**没有**把 `max_iterations` 做成字段
+   （无机制读它 = 假旋钮）；要真做成可配置，必须先确认上限在哪一层、超限时抛什么异常。
 4. **`RagStreamService`（独立 RAG 流式）与 `/api/chat/stream`（会话流式）的功能重叠**：两者都能"流式 RAG"，
    但今天只有前者检索、只有后者有会话/记忆。Phase 3 的 3.4 必须明确"哪个是主链路"（我倾向以会话流式为主链路，
    知识库独立接口保留为调试/单次问答入口），此决策需要在动手前与你确认。

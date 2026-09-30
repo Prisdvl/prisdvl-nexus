@@ -1,10 +1,11 @@
 package com.lky.nexus.app.chat.service.impl;
 
+import com.lky.nexus.ai.agent.AgentDefinition;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.agent.AgentContext;
-import com.lky.nexus.app.agent.AgentPrompts;
-import com.lky.nexus.app.agent.KnowledgeSearchTool;
+import com.lky.nexus.app.agent.AgentRuntime;
+import com.lky.nexus.app.agent.AgentService;
 import com.lky.nexus.app.chat.model.ChatMode;
 import com.lky.nexus.app.chat.model.MessageStatus;
 import com.lky.nexus.app.chat.model.dto.AssistantReplyDraft;
@@ -73,7 +74,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *   <li>{@code RAG} —— 先按会话绑定的知识库检索（{@link RagAnswerService#prepare}），
  *       发 {@code retrieval} 事件，再走与 {@code /ask/stream} <b>同一份</b>提示词；
  *       历史从 ChatMemory 取（见 {@link ChatMemoryTurns}，那里解释了为什么不挂 advisor）；</li>
- *   <li>{@code AGENT} —— 系统提示 + 知识库检索工具，由模型决定检索什么。</li>
+ *   <li>{@code AGENT} —— 会话所选 Agent 的提示词/模型/知识库范围 + 知识库检索工具，
+ *       由模型决定检索什么（Phase 4.1 起不再是写死的系统提示）。</li>
  * </ul>
  */
 @Service
@@ -89,8 +91,9 @@ public class ChatStreamServiceImpl implements ChatStreamService {
     private final ChatClientFactory chatClientFactory;
     private final ChatMemory chatMemory;
     private final StreamCancellationRegistry cancellationRegistry;
-    private final KnowledgeSearchTool knowledgeSearchTool;
     private final RagAnswerService ragAnswerService;
+    private final AgentService agentService;
+    private final AgentRuntime agentRuntime;
     private final JsonMapper jsonMapper;
 
     public ChatStreamServiceImpl(ConversationService conversationService,
@@ -98,16 +101,18 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                                  ChatClientFactory chatClientFactory,
                                  ChatMemory chatMemory,
                                  StreamCancellationRegistry cancellationRegistry,
-                                 KnowledgeSearchTool knowledgeSearchTool,
                                  RagAnswerService ragAnswerService,
+                                 AgentService agentService,
+                                 AgentRuntime agentRuntime,
                                  JsonMapper jsonMapper) {
         this.conversationService = conversationService;
         this.chatMessageService = chatMessageService;
         this.chatClientFactory = chatClientFactory;
         this.chatMemory = chatMemory;
         this.cancellationRegistry = cancellationRegistry;
-        this.knowledgeSearchTool = knowledgeSearchTool;
         this.ragAnswerService = ragAnswerService;
+        this.agentService = agentService;
+        this.agentRuntime = agentRuntime;
         this.jsonMapper = jsonMapper;
     }
 
@@ -117,9 +122,19 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         ChatConversationPO conversation = conversationService.requireOwned(userId, conversationId);
         // 模式决定这条链路走法：PLAIN 纯生成、RAG 先检索再回答、AGENT 由模型自己决定检索什么
         ChatMode mode = ChatMode.parse(conversation.getMode());
-        String modelRole = StringUtils.hasText(conversation.getModelRole())
-                ? conversation.getModelRole()
-                : defaultRole(mode);
+        // Agent 定义同样在落库之前解析：会话选了 DRAFT/DISABLED 的 Agent 时，
+        // 用户应当看到一条明确的报错，而不是"先多出一条消息、再在 SSE 里半路失败"。
+        // 未指定 Agent（agentId 为空）走内置默认——AGENT 模式永远有兜底，不存在"没有 Agent"的状态。
+        AgentDefinition agentDefinition = mode == ChatMode.AGENT
+                ? resolveAgentDefinition(userId, conversation)
+                : null;
+        // AGENT 模式下模型角色取自 Agent 定义（Agent 自己声明它需要什么模型），
+        // 会话上的 model_role 只是创建时记下的历史值（见 ConversationServiceImpl）
+        String modelRole = agentDefinition != null
+                ? agentDefinition.modelRole()
+                : StringUtils.hasText(conversation.getModelRole())
+                        ? conversation.getModelRole()
+                        : defaultRole(mode);
         // 取模型放在落库之前：模型未注册（4006）属于配置问题，必须在<b>产生副作用之前</b>失败。
         // 否则会留下一条用户消息 + 一条永远停在 STREAMING 的空助手消息，用户看到的是"消息凭空多了一条"。
         ChatClient chatClient = chatClientFactory.get(modelRole);
@@ -173,7 +188,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         }
 
         Flux<ChatResponse> modelFlux = buildFlux(userId, chatClient, session, conversationId, content,
-                ragMode, prepared, history);
+                ragMode, prepared, history, agentDefinition);
         // subscribeOn：分片读取可能阻塞，必须离开 MVC 请求线程
         Disposable subscription = modelFlux.subscribeOn(Schedulers.boundedElastic())
                 .subscribe(session::onChunk, session::onError, session::onComplete);
@@ -193,7 +208,8 @@ public class ChatStreamServiceImpl implements ChatStreamService {
      */
     private Flux<ChatResponse> buildFlux(Long userId, ChatClient chatClient, StreamSession session,
                                          Long conversationId, String content, boolean ragMode,
-                                         PreparedAnswer prepared, List<RagAnswerService.RagTurn> history) {
+                                         PreparedAnswer prepared, List<RagAnswerService.RagTurn> history,
+                                         AgentDefinition agentDefinition) {
         boolean agentMode = session.mode == ChatMode.AGENT;
         // RAG 模式不挂记忆 advisor（它会把组装后的【资料】块原样存进记忆，见 ChatMemoryTurns）；
         // PLAIN / AGENT 保持原样——它们的用户消息就是用户原话，交给 advisor 既省事又正确。
@@ -211,12 +227,11 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                                 .param(ChatMemory.CONVERSATION_ID, ChatMemoryKeys.of(conversationId)));
             }
             if (agentMode) {
-                // toolContext 是工具拿"当前用户"的唯一通道（详见 AgentContext 的类注释：
-                // 流式链路上工具的执行线程与订阅线程不是同一个，ThreadLocal 会静默丢用户）。
-                // 把 session 一起塞进去，工具执行时就能实时把"检索中 / 检索完成"推给前端。
-                request = request.system(AgentPrompts.AGENT_SYSTEM)
-                        .toolContext(AgentContext.of(userId, session))
-                        .tools(ToolCallbacks.from(knowledgeSearchTool));
+                // 提示词 + 工具 + ToolContext 的组装交给 AgentRuntime.configure：一次性调用
+                // （AgentRuntime.ask）走的是同一个方法。两条链路各写一份的话，将来给 Agent
+                // 加第二个工具时只改一处，症状会是"对话能用、流式不能用"——不报错、只是不生效。
+                // 这里传的 listener 是 session：工具执行时就能把"检索中 / 检索完成"实时推给前端。
+                request = agentRuntime.configure(request, userId, agentDefinition, session);
             }
             return request.stream().chatResponse();
         });
@@ -228,6 +243,23 @@ public class ChatStreamServiceImpl implements ChatStreamService {
      * <p>这条路径上<b>没有</b>"悄悄退化成不检索"这个选项：RAG 会话拿不到知识库时，
      * 用户真正想要的是"告诉我哪里没配好"，而不是一个看起来正常、其实没查过笔记的回答。
      */
+    /**
+     * 解析 AGENT 会话这次要用哪份 Agent 定义（Phase 4.1）。
+     *
+     * <p>两种来源：会话选定的 Agent，或内置默认 Agent。后者<b>不是</b>代码里的兜底常量，
+     * 而是数据库里的真实一行（{@code AgentService.resolveDefault}），所以它是用户在界面上
+     * 看得见、改得动的——写死的兜底恰恰是 §六十七 禁止的"硬编码 Agent"。
+     *
+     * <p>状态检查放在这里而不是只看创建会话那一次：会话建好之后 Agent 可能被停用/退回草稿，
+     * 那种情况必须<b>当下就报错</b>（5008/5009），而不是继续用一个"已经不该用"的 Agent 回答。
+     */
+    private AgentDefinition resolveAgentDefinition(Long userId, ChatConversationPO conversation) {
+        Long agentId = conversation.getAgentId();
+        return agentId == null
+                ? agentService.resolveDefault(userId)
+                : agentService.requireDefinition(userId, agentId);
+    }
+
     private Long requireKnowledgeBaseId(ChatConversationPO conversation) {
         List<Long> kbIds = ConversationKbIds.parse(jsonMapper, conversation.getKbIds());
         if (kbIds.isEmpty()) {

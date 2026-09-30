@@ -1,6 +1,17 @@
--- H2 测试库表结构（仅测试用，与 MySQL 迁移脚本 docs/database.md 的 sys_user 对齐）
+-- H2 建表脚本（历史文件）
+--
+-- ⚠️ 现状（Phase 4.1 实测复核，见 docs/platform-phase3-baseline.md §1.7）：
+--   本文件**已经不会生效**。test / standalone 两个 H2 profile 的表都是 Flyway 迁移
+--   （src/main/resources/db/migration，共 11 个：V1–V10、V12）建的，启动日志明确：
+--   `Successfully applied 11 migrations to schema "public", now at version v12`，
+--   而 Flyway 的起点是空库（`All configured schemas are empty`）——
+--   也就是说 Flyway 先执行，本文件随后执行时每条 CREATE TABLE IF NOT EXISTS 都是空操作。
+--   它也因此比迁移旧：没有 agent / agent_knowledge_base，也没有 V10 给知识库加的平台列。
+--
+--   所以：**新表/新列只写迁移，不要往这里加**。本文件的删除属独立清理项。
+--
 -- 注意：这里刻意不写 MySQL 专有语法（ENGINE / utf8mb4 / ON UPDATE CURRENT_TIMESTAMP），
---       生产迁移脚本见 Step 0.6 的 src/main/resources/db/migration/
+--       生产迁移脚本见 src/main/resources/db/migration/
 CREATE TABLE IF NOT EXISTS sys_user (
     id            BIGINT       NOT NULL PRIMARY KEY,
     username      VARCHAR(64)  NOT NULL,

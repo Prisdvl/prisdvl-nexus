@@ -68,6 +68,11 @@ public enum ErrorCode {
     APPROVAL_REJECTED(5003, "人工确认被拒绝"),
     TOOL_PERMISSION_DENIED(5004, "工具调用无权限"),
     MCP_SERVER_UNAVAILABLE(5005, "MCP 服务不可用"),
+    AGENT_NOT_FOUND(5006, "Agent 不存在"),
+    AGENT_CODE_DUPLICATED(5007, "Agent 标识已存在"),
+    AGENT_NOT_PUBLISHED(5008, "Agent 尚未发布"),
+    AGENT_DISABLED(5009, "Agent 已停用"),
+    AGENT_BUILTIN_READONLY(5010, "内置默认 Agent 不允许此操作"),
 
     // ---------- 6xxx 工作流 / 评测 ----------
     WORKFLOW_DEFINITION_INVALID(6001, "工作流定义非法"),

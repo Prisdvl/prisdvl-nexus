@@ -1,7 +1,7 @@
 package com.lky.nexus.app.mcp;
 
 import com.lky.nexus.app.agent.AgentContext;
-import com.lky.nexus.app.agent.AgentService;
+import com.lky.nexus.app.agent.AgentRuntime;
 import com.lky.nexus.app.agent.KnowledgeSearchTool;
 import com.lky.nexus.common.api.Result;
 import org.slf4j.Logger;
@@ -23,7 +23,7 @@ import tools.jackson.databind.node.ObjectNode;
  *
  * <p><b>身份模型（刻意简单且如实）</b>：这是一个<b>个人本机</b>的 MCP 服务，
  * 不是公开 API——调用方通过 `X-Nexus-User` 头指定用户 id（本机信任模型，文档里如实说明）。
- * 工具内部复用已两度 live 验证的 KnowledgeSearchTool / AgentService。
+ * 工具内部复用已两度 live 验证的 KnowledgeSearchTool / AgentRuntime。
  */
 @RestController
 public class McpEndpoint {
@@ -32,14 +32,14 @@ public class McpEndpoint {
     private static final String PROTOCOL_VERSION = "2025-03-26";
 
     private final KnowledgeSearchTool knowledgeSearchTool;
-    private final AgentService agentService;
+    private final AgentRuntime agentRuntime;
     private final JsonMapper jsonMapper;
 
     public McpEndpoint(KnowledgeSearchTool knowledgeSearchTool,
-                       AgentService agentService,
+                       AgentRuntime agentRuntime,
                        JsonMapper jsonMapper) {
         this.knowledgeSearchTool = knowledgeSearchTool;
-        this.agentService = agentService;
+        this.agentRuntime = agentRuntime;
         this.jsonMapper = jsonMapper;
     }
 
@@ -147,7 +147,7 @@ public class McpEndpoint {
                 if (question.isBlank()) {
                     return error(id, -32602, "qa_ask 缺少 question 参数");
                 }
-                text = agentService.ask(userId, question).answer();
+                text = agentRuntime.askWithDefault(userId, question).answer();
             }
             default -> {
                 return error(id, -32601, "Unknown tool: " + toolName);

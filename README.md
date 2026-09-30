@@ -102,6 +102,7 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | Phase 3.2 | 检索参数真正可配置：知识库的 `retrieval_top_k` / `similarity_threshold` 生效 + 全局默认值收敛到 `nexus.retrieval.*` | ✅ 完成（阈值统一为 0.25；见 decisions.md B.32） |
 | Phase 3.3 | 元数据过滤：`tags` / `folder` / `documentId` 下推到 ES `filter` 与 pgvector `WHERE`（向量路先解析成文档 id） | ✅ 完成（ES/pgvector 真机 `UNAVAILABLE`；见 decisions.md B.33） |
 | Phase 3.4 | RAG 模式的会话流式：`retrieval` 事件先于第一个字、会话绑定知识库（`kb_ids`）、多轮历史走 ChatMemory、前端"检索到 N 个片段" | ✅ 完成（真浏览器只验到 Agent 腿；RAG 腿因本地无 ES 跳过；见 decisions.md B.34） |
+| Phase 4.1 | Agent 配置化（后端）：`agent` 表 + Definition/Runtime 分离 + `/api/agents` CRUD/复制/试跑 + 会话选 Agent + Agent 绑定知识库决定检索范围 | ✅ 后端完成（迁移 V12；**前端管理页留到 4.2**；真模型与真检索 `SKIPPED`；见 decisions.md B.35） |
 | Phase 3+ | RAG/Agent/Workflow/Application/Model 的抽象上移与用户可配置化 | ⏳ 见分析文档第 12 节 |
 
 ## 7. 本地环境要求
@@ -122,7 +123,9 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 # 0) 准备（本机便携 JDK 21）
 $env:JAVA_HOME = 'D:\develop\jdk-21'
 
-# 1) 模型 Key（没有 Key 也能启动，只是问答会报 4001）
+# 1) 模型 Key（没有 Key 也能启动，只是问答会失败——实测是 4006 而不是 4001：
+#    空 api-key 的 opencode provider 不进注册表，chat.default 因此解析不到，
+#    错误信息里会列出"已注册：[ollama:qwen3:7b]"）
 $env:AI_CHAT_API_KEY = (Get-Content '.secrets\ai-key.txt' -Raw).Trim()
 
 # 2) 打包并启动（首次约 1-2 分钟）
@@ -145,6 +148,8 @@ node scripts\seed-demo.mjs
 | H2 控制台（直接看表数据） | http://localhost:8080/h2-console （JDBC URL 填 `jdbc:h2:mem:nexus_standalone`，用户名 `sa`，密码空） |
 | 注册 / 登录 | `POST /api/auth/register`、`POST /api/auth/login` |
 | 会话 | `POST/GET/PUT/DELETE /api/chat/conversations`、`GET /api/chat/conversations/{id}` |
+| Agent 管理（Phase 4.1） | `GET/POST /api/agents`、`GET/PUT/DELETE /api/agents/{agentId}`、`POST /api/agents/{agentId}/duplicate`、`POST /api/agents/{agentId}/test-chat`（试跑，不要求已发布） |
+| Agent 问答（用内置默认 Agent） | `POST /api/agent/ask` |
 | 问答（非流式） | `POST /api/chat/conversations/{id}/messages` |
 | 问答（SSE 流式） | `POST /api/chat/stream` |
 | 停止生成 | `POST /api/chat/stream/{requestId}/stop` |

@@ -22,5 +22,14 @@ public record CreateConversationRequest(
         String mode,
 
         /** 绑定的知识库 id（仅 RAG 模式）。可为空：允许"先建会话、再绑定"。 */
-        List<Long> kbIds) {
+        List<Long> kbIds,
+
+        /**
+         * 选用的 Agent（仅 AGENT 模式）；{@code null} = 用内置默认 Agent。
+         *
+         * <p>注意这里"不填"是<b>合法</b>的（走默认助手），而 RAG 的 {@code kbIds} 不填是错的
+         * （没有知识库的 RAG 会话答不出东西）。区别在于 AGENT 模式永远有一个可用的默认 Agent，
+         * 而 RAG 没有"默认知识库"这种东西——检索哪个库是用户的资料决定的，猜不得。
+         */
+        Long agentId) {
 }

@@ -53,6 +53,13 @@ public final class ErrorCodeHttpStatusMapper {
             case TOOL_EXECUTION_FAILED, AGENT_MAX_ITERATIONS_EXCEEDED, WORKFLOW_DEFINITION_INVALID,
                  WORKFLOW_NODE_FAILED, EVAL_DATASET_EMPTY, INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
 
+            // 5xxx Agent 资源的"用户操作错"：id 不存在 → 404（不泄露存在性，与其他资源一致）；
+            // 状态/归属类拒绝 → 409，语义是"当前资源状态不允许这个操作"，
+            // 与 1001 参数错误区分开——用户的请求格式是对的，是资源状态不对
+            case AGENT_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case AGENT_CODE_DUPLICATED, AGENT_NOT_PUBLISHED, AGENT_DISABLED, AGENT_BUILTIN_READONLY ->
+                    HttpStatus.CONFLICT;
+
             // 7xxx 限流
             case RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
 

@@ -5,6 +5,7 @@ import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.knowledge.mapper.ChunkMapper;
 import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;
+import com.lky.nexus.knowledge.model.KnowledgeBaseStatus;
 import com.lky.nexus.knowledge.model.entity.ChunkPO;
 import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
@@ -75,10 +76,37 @@ public class KnowledgeSearchTool {
         // 而不是让用户对着空屏等几秒（检索本身要走 ES + pgvector）
         AgentContext.call(toolContext, "knowledge_search", query);
 
-        List<ChunkSearchService.SearchHit> all = new ArrayList<>();
+        // 检索范围：Agent 绑定知识库时只搜绑定的那些；没绑定（scoped == null）沿用老行为搜全部。
+        // 范围来自 ToolContext 而不是工具入参——模型既不知道知识库 id，也不该有能力指定别人的库
+        List<Long> scoped = AgentContext.kbIds(toolContext);
         List<KnowledgeBasePO> knowledgeBases = knowledgeBaseMapper.selectList(
-                Wrappers.<KnowledgeBasePO>lambdaQuery().eq(KnowledgeBasePO::getUserId, userId));
+                Wrappers.<KnowledgeBasePO>lambdaQuery()
+                        .eq(KnowledgeBasePO::getUserId, userId)
+                        .in(scoped != null, KnowledgeBasePO::getId, scoped));
+
+        // 被禁用的库不参与检索（V10 起 status 字段的语义承诺），并把"跳过了什么"如实说出来：
+        // 悄悄少搜几个库的表现是"明明有资料却回答不知道"，用户无从判断是检索坏了还是库被禁了
+        List<KnowledgeBasePO> searchable = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
         for (KnowledgeBasePO kb : knowledgeBases) {
+            if (KnowledgeBaseStatus.parse(kb.getStatus()) == KnowledgeBaseStatus.DISABLED) {
+                skipped.add("「" + kb.getName() + "」已禁用");
+            } else {
+                searchable.add(kb);
+            }
+        }
+        if (scoped != null) {
+            // 绑定时校验过归属，但库之后可以被删：这种"绑定悬空"同样要说出来
+            Set<Long> existing = knowledgeBases.stream().map(KnowledgeBasePO::getId).collect(Collectors.toSet());
+            for (Long kbId : scoped) {
+                if (!existing.contains(kbId)) {
+                    skipped.add("知识库 #" + kbId + " 已不存在");
+                }
+            }
+        }
+
+        List<ChunkSearchService.SearchHit> all = new ArrayList<>();
+        for (KnowledgeBasePO kb : searchable) {
             // 召回条数交给知识库自己的 retrieval_top_k（topK 传 null = 没指定），
             // 而不是在这里写死 5：工具的参数是"最终给模型看几条"，
             // 与"每个库召回多深"不是同一件事，混在一起会让按库调参对 Agent 无效
@@ -104,6 +132,13 @@ public class KnowledgeSearchTool {
 
         int take = Math.min(limit, all.size());
         StringBuilder out = new StringBuilder();
+        if (scoped != null) {
+            out.append("检索范围：本 Agent 绑定的 ").append(scoped.size()).append(" 个知识库");
+            if (!skipped.isEmpty()) {
+                out.append("（已跳过：").append(String.join("、", skipped)).append("）");
+            }
+            out.append('\n');
+        }
         out.append("检索到 ").append(take).append(" 条结果：\n");
         for (int i = 0; i < take; i++) {
             ChunkSearchService.SearchHit hit = all.get(i);
@@ -116,9 +151,17 @@ public class KnowledgeSearchTool {
             out.append('\n').append(clip(hit.content(), 400)).append('\n');
         }
         if (take == 0) {
-            out.append("（没有检索到相关结果。若问题确实与笔记无关，请如实说明。）");
+            if (scoped != null && searchable.isEmpty()) {
+                // "绑了库但一个都搜不了"与"搜了但没命中"必须分开说：
+                // 前者模型只能如实说检索不可用，不能退回去用自身知识编造（那正是关掉幻觉的初衷）
+                out.append("（本 Agent 绑定的知识库当前都不可用，无法检索到任何资料。"
+                        + "请如实告知用户检索不可用，不要用你自己的知识回答。）");
+            } else {
+                out.append("（没有检索到相关结果。若问题确实与笔记无关，请如实说明。）");
+            }
         }
-        AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query, take + " 条结果"));
+        AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query,
+                take + " 条结果" + (skipped.isEmpty() ? "" : "（跳过 " + skipped.size() + " 个库）")));
         return out.toString();
     }
 

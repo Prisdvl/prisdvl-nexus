@@ -299,7 +299,7 @@ CREATE TABLE kb_chunk (
 
 | 表 | 关键列 | 说明 |
 | --- | --- | --- |
-| `chat_conversation` | `id`、`user_id`、`title`、`title_auto`、`mode`(`PLAIN`/`RAG`/`AGENT`)、`kb_ids`(JSON)、`model_role`、`prompt_template_id`、`message_count`、`last_message_at`、`pinned`、`deleted`、时间列 | 索引 `(user_id, deleted, last_message_at)` |
+| `chat_conversation` | `id`、`user_id`、`title`、`title_auto`、`mode`(`PLAIN`/`RAG`/`AGENT`)、`kb_ids`(JSON)、`agent_id`（Phase 4.1，仅 AGENT 模式；NULL = 用内置默认 Agent）、`model_role`、`prompt_template_id`、`message_count`、`last_message_at`、`pinned`、`deleted`、时间列 | 索引 `(user_id, deleted, last_message_at)` |
 | `chat_message` | `id`、`conversation_id`、`user_id`、`role`(`USER`/`ASSISTANT`/`SYSTEM`/`TOOL`)、`content`(MEDIUMTEXT)、`reasoning_content`、`model`、`provider`、`prompt_tokens`、`completion_tokens`、`total_tokens`、`latency_ms`、`first_token_ms`、`finish_reason`、`request_id`、`prompt_version_id`、`parent_message_id`、`status`(`STREAMING`/`DONE`/`STOPPED`/`FAILED`)、`error_msg`、`metadata`(JSON)、时间列 | 索引 `(conversation_id, created_at)`、`(request_id)` |
 | `chat_message_citation` | `id`、`message_id`、`citation_index`(正文中的 `[n]`)、`chunk_id`、`document_id`、`kb_id`、`score`、`rank`、`snippet` | 唯一键 `(message_id, citation_index)`；支撑"点击引用 → 打开文档定位标题" |
 | `chat_feedback` | `id`、`message_id`、`user_id`、`rating`(1/-1)、`comment` | 后续可回流评测集 |
@@ -319,11 +319,30 @@ CREATE TABLE kb_chunk (
 
 ## 6. 模型 / 提示词 / Agent / 工具（Phase 5–6 预留）
 
+### 6.0 已实现：`agent` / `agent_knowledge_base`（平台化 Phase 4.1，迁移 V12）
+
+| 表 | 关键列 | 说明 |
+| --- | --- | --- |
+| `agent` | `id`、`workspace_id`、`owner_id`、`code`、`name`、`description`、`system_prompt`(TEXT)、`model_role`、`status`(`DRAFT`/`PUBLISHED`/`DISABLED`)、`builtin`、时间列、`deleted` | 索引 `(owner_id, deleted, created_at)`、`(workspace_id, deleted, status)` |
+| `agent_knowledge_base` | `id`、`agent_id`、`kb_id`、`created_at` | 唯一键 `(agent_id, kb_id)`；物理表（改绑 = 删旧行 + 插新行，无逻辑删除） |
+
+三点与设计稿的**有意偏差**（详见 `docs/decisions.md` B.35）：
+
+1. **表名不带 `ai_` 前缀**：`agent` 而不是 `ai_agent`。它与 `chat_*` / `kb_*` 一样属于本项目的业务表
+   （由本项目的服务层管理生命周期），`ai_` 语义留给"AI 基础设施"（提示词版本、工具注册表）；
+2. **`code` 的唯一性在服务层按 `deleted = 0` 校验，不建唯一键**：软删表上的唯一键会让
+   "删掉 `helper` 再建一个 `helper`"直接冲突（`deleted=1` 那行还在），这是本项目一贯做法（与 `kb_knowledge_base` 同）；
+3. **刻意没建** `max_iterations` / `timeout_ms` / `memory_config`：今天没有任何机制会读它们
+   （轮数上限在 Spring AI 的 `ToolCallingManager`，超时在 HTTP 层，记忆策略由模式决定）。
+   存下来但没人读的配置比没有这个配置更糟——用户会以为配了就生效。
+   `agent_tool` 同理：现在只有一个内置工具，等 Tool 体系（P0 下一项）落地再建。
+
+### 6.1 设计稿（未实现的部分）
+
 | 表 | 关键列 | 说明 |
 | --- | --- | --- |
 | `ai_prompt_template` | `id`、`code`(如 `rag.answer`)、`name`、`description`、`scene` | 逻辑提示词 |
 | `ai_prompt_version` | `id`、`template_id`、`version`、`content`、`variables`(JSON)、`temperature`、`max_tokens`、`top_p`、`status`(`DRAFT`/`PUBLISHED`/`ARCHIVED`)、`published_at`、`created_by` | 唯一键 `(template_id, version)`；**每次 AI 调用都记录 `prompt_version_id`**，评测才能对比版本 |
-| `ai_agent` | `id`、`user_id`、`code`、`name`、`description`、`prompt_template_id`、`model_role`、`max_iterations`、`timeout_seconds`、`enabled` | Agent 定义 |
 | `ai_tool_registry` | `id`、`code`、`name`、`description`、`source`(`BUILTIN`/`MCP`)、`mcp_server_id`、`permission`(`READ`/`WRITE`/`DANGEROUS`)、`input_schema`(JSON)、`requires_approval`、`enabled` | 工具元数据（不仅是代码里的 `@Tool`） |
 | `ai_agent_tool` | `id`、`agent_id`、`tool_id`、`enabled`、`requires_approval` | **Agent 权限矩阵**：默认只挂 `READ` |
 | `ai_tool_invocation` | `id`、`agent_run_id`、`message_id`、`tool_code`、`arguments`(JSON)、`result_digest`、`success`、`duration_ms`、`permission`、`approval_status`(`NOT_REQUIRED`/`PENDING`/`APPROVED`/`REJECTED`)、`approved_by`、`error_msg` | **审计表**，任何工具执行可追溯 |

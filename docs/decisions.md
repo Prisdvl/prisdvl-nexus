@@ -1685,10 +1685,179 @@ RAG 模式自己读/写历史，两个理由：
 - `citation` 事件仍未实现（引用仍随 `done` / `meta.citations` 给出），`approval_required` 同理；
 - Agent 模式仍不支持绑定知识库（其检索范围由模型决定），若将来要"限定 Agent 的检索范围"，
   需要把工具参数化（标签/目录/文档）而不是复用会话绑定；
+  → **这一条已被 B.35（Phase 4.1）取代**：Agent 现在可以绑定自己的知识库，范围经 ToolContext 传给工具。
 - 没有给 RAG 流式加 live 测试腿：`ChatStreamLiveTest` 那一类除了 `AI_CHAT_API_KEY` 还需要
   一个**已建索引**的知识库（ES + pgvector），在大多数环境里必然失败，加了等于制造噪音。
   它的 SSE 顺序已由 MockMvc 契约测试覆盖（顺带更正了 `ChatStreamLiveTest` 的一条过时注释：
   MockMvc 并非"读不到完整事件"，它只是不能在流到达过程中逐行读，"中途停止"才是 live 的必要理由）。
+
+---
+
+### B.35 Phase 4.1 实现记录（Agent Definition：可配置、可绑定、可试跑）
+
+**0. 本增量是什么**
+
+§十五–§十八 要求"Agent 是用户可管理的资源"：创建 / 修改 / 启用停用 / 复制 / 绑定知识库 / 配置提示词与模型。
+本轮做**后端**（前端与 Agent 管理页是 4.2，单独一个增量）；同时把 §十七 的
+"Definition 与 Runtime 分离"真正落到代码结构上。
+
+**1. 分离落到文件上，而不是停在文档里**
+
+| 文件 | 职责 | 它碰数据库吗 |
+| --- | --- | --- |
+| `ai/agent/AgentDefinition` | 不可变配置值对象（纯 record） | 否 |
+| `app/agent/AgentService` | 资源服务：CRUD、准入规则、Entity ↔ Definition 装配 | 是 |
+| `app/agent/AgentRuntime` | 跑一次 Agent：装好提示词/工具/上下文，调用模型 | 否（只认 Definition） |
+| `app/agent/AgentResourceController` | `/api/agents` 管理面（CRUD/复制/试跑） | 否 |
+
+`AgentRuntime` 就是改名前那个写死配置的 `AgentService`，**Agent Loop 一行没动**（§六十七 明文禁止推翻）：
+仍是 Spring AI 的 `ToolCallingManager`，仍是 `ToolContext` 传用户（B.30 那个静默失效的教训）。
+改动只有三处：`AgentPrompts.AGENT_SYSTEM` → `definition.systemPrompt()`、
+`Role.CHAT_AGENT` → `definition.modelRole()`、工具"扫全部库" → 随 `definition.kbIds()` 收窄。
+
+`AgentDefinition` 放在 `nexus-ai` 而不是 `nexus-app`：它是"Agent 是什么"的抽象，与厂商、存储无关；
+依赖方向因此保持 `app → ai`，不需要倒挂。它**不是** MyBatis 实体——Entity 绝不进 Loop。
+
+**2. 内置默认 Agent 是数据库里的真实一行，不是代码里的 if-else 兜底**
+
+这是本增量最值得记的一条决策。「AGENT 会话没选 Agent」有两种实现：代码里 `if (agent == null) 用常量`，
+或者数据库里真的存一行"默认助手"。选了后者：
+
+- 写死的兜底**就是** §六十七 禁止的"硬编码 Agent"——用户改不动它，只能改代码；
+- 两套路径（"选了 Agent" / "没选 Agent"）意味着两处都要维护模型角色与提示词，迟早不一致；
+- 采用真实一行后，"用哪个 Agent"永远只有一条路径（查库），用户在管理页直接改默认助手的提示词，
+  `/api/agent/ask`、MCP 的 `qa_ask`、评测三条老入口的行为**一起**跟着变——这正是"可配置"的含义。
+
+配套约束：内置项不可删除、不可停用（5010），因此 `resolveDefault` 取到的必然是 `PUBLISHED`，
+AGENT 模式不会出现"没有可用 Agent"的状态。`resolveDefault` 幂等（缺失就补、状态被改坏就修回），
+与 `WorkspaceService.requirePersonalWorkspace` 是同一种"按需补齐"。
+
+**3. 状态机必须有后果，否则它只是三个字**
+
+§十八 给了 `DRAFT / PUBLISHED / DISABLED`。若只有存储没有作用，它就是装饰。本轮的落法：
+
+- **DRAFT 不能被会话选用**（5008）——这就是 §十八 "先测试、再发布"里那道闸；
+- **DISABLED 不是"悄悄换回默认"，而是明确报错**（5009）。静默降级会让用户以为"我选的 Agent 生效了"；
+- **两道校验，缺一不可**：创建/改绑会话时校验（错误在用户操作的那一刻出现），
+  **提问时再校验一次**。会话建好之后 Agent 可以被停用或退回草稿——只有第一道校验的话，
+  "停用"就形同虚设。测试 `disabledAgentFailsBeforeAnySideEffect` 同时断言
+  **失败发生在落库之前**（消息表仍为 0 条），否则会留下"一条用户消息 + 一条永远 STREAMING 的空助手消息"。
+
+错误码与 HTTP 状态：`AGENT_NOT_FOUND(5006)→404`（不泄露存在性，与知识库/会话同规矩）；
+`5007/5008/5009/5010→409`（请求格式没问题，是**资源状态**不允许）。
+`ErrorCodeHttpStatusMapper` 是穷举 switch 表达式，漏映射会**编译失败**，这条护栏本轮又生效了一次。
+
+**4. 检索范围进 ToolContext，而不是工具入参**
+
+Agent 绑定知识库后，`knowledge_search` 的搜索范围要收窄。范围**不能**做成工具参数：模型既不知道
+知识库 id，也没有任何理由允许它指定别人的库。做法是复用 B.30 那条通道——
+`AgentContext.of(userId, kbIds, listener)`，`kbIds` 与 `userId` 一起进 `ToolContext`，
+框架生成工具入参 schema 时会跳过它，所以始终不会发给模型。
+
+语义上有一条**刻意与 RAG 相反**的约定：`AgentDefinition.kbIds` **为空 = 不限制**（搜该用户全部库，
+也就是今天的行为），而 RAG 会话的 `kbIds` 为空是"必须先绑定才能提问"的硬错误。
+理由是控制点不同：RAG 的范围由用户显式指定，Agent 的范围是给模型的一个默认视野。
+这条差异有单元测试钉着（`emptyKbIdsMeansUnrestricted`），因为搞反的后果是
+"以为收窄了范围，其实搜了全部"——不报错，只是悄悄多喂了资料。
+
+顺带兑现一个**早就写在文档里、但一直没有代码兑现**的承诺：`kb_knowledge_base.status`
+（V10 引入，注释写着"禁用后不参与检索"）。工具现在跳过 DISABLED 的库，
+并把"跳过了谁"写进工具结果（`已跳过：「X」已禁用`）。为什么必须说出来：
+静默少搜几个库的表现是"明明有资料却回答不知道"，用户无从判断是检索坏了还是库被禁了。
+若绑定的库**全部**不可用，工具结果会明确写"本 Agent 绑定的知识库当前都不可用，
+请如实告知用户检索不可用"——不能让模型退回自身知识硬答，那正是关掉幻觉的初衷。
+
+**5. 试跑（`POST /api/agents/{id}/test-chat`）刻意不受发布状态限制**
+
+§十八 的流程是"先测试再发布"。若试跑也要求 `PUBLISHED`，草稿就永远无法被验证，
+发布就成了盲盒。因此 `testDefinition` 只校验归属、**不校验状态**；宽松的边界很明确——
+只放宽状态，归属一步不让（越权仍是 404）。DISABLED 的 Agent 也允许试跑：
+用户停用它之后仍然需要能确认"是不是它的问题"。
+
+**6. 两条 Agent 执行链路，组装收敛到一处**
+
+Agent 有两条真实链路：`AgentRuntime.ask`（一次性）与 `ChatStreamServiceImpl`（流式 SSE）。
+它们的差别只在终止操作（`call()` vs `stream()`），**提示词 + 工具 + ToolContext 的组装是同一件事**。
+所以抽成 `AgentRuntime.configure(request, userId, definition, listener)`，两条链路都调它。
+
+不抽的话，将来给 Agent 加第二个工具（P0 的下一项 Tool Definition 就会加）只改一处，
+症状是"对话能用、流式不能用"——不报错，只是某个入口不生效。这与 B.30 的教训同源：
+**同一件事有两份实现，迟早只改一份**。
+
+**7. 刻意不建的字段与表（"假旋钮"比缺失更糟）**
+
+方案文档 5.2 里列的 `agent` 完整字段是
+`… max_iterations, timeout_ms, memory_config JSON …`。本轮**只建了有机制读的**：
+
+| 没建 | 理由 |
+| --- | --- |
+| `max_iterations` | 轮数上限在框架的 `ToolCallingManager` 里，读了也没有生效路径 |
+| `timeout_ms` | 超时在 HTTP 层（SSE 超时常量），同样无处消费 |
+| `memory_config` | 记忆策略目前由模式决定（RAG 不用 advisor），没有第二套策略可选 |
+| `agent_tool` 表 | 现在只有一个内置工具，注册表要等 Tool 体系（P0 下一项）落地才有内容 |
+| `agent_run` / `agent_run_step` | §二十二 的审计属于可观测性阶段；痕迹今天落在 `chat_message.metadata` |
+
+存下来但没人读的配置**比没有这个配置更糟**：用户以为配了就生效。
+这些会随对应机制一起落地，届时是 `ALTER TABLE ADD COLUMN`（§四十九 只增不改）。
+
+**8. 验证（如实记录）**
+
+| 层次 | 内容 | 判定 |
+| --- | --- | --- |
+| Unit | `AgentDefinitionTest` 6 项：kbIds 防御性拷贝（改原列表不影响定义）、去重保序、空 kbIds = 不限制、null 被拒、身份字段缺失即失败、`describe()` 如实说范围 | PASSED |
+| Contract（HTTP） | `AgentResourceTest` 10 项：创建落 DRAFT/非内置/绑定随详情返回、内置置顶、**新用户的列表里就有内置项**、code 重复 5007、code 非法 1001、模型角色未配置 4006、绑别人的库 3001、发布后可用（5008→可用）与停用后 5009、状态值非法 1001、空列表解绑、复制（`-copy`/DRAFT/带绑定）、删除（自己可删、内置 5010、内置不可停用但可改名改提示词）、越权一律 404、`resolveDefault` 幂等 | PASSED |
+| Contract（HTTP） | `ConversationAgentBindingTest` 7 项：AGENT 选用已发布 Agent（创建与详情都带 agentId）、不选 Agent 时 agentId 为空、PLAIN/RAG 选用被拒 1001、草稿 5008、别人的 Agent 404/5006、改绑（AGENT 可、PLAIN 被拒）、**提问时 Agent 已停用 → 409/5009 且消息表仍为 0 条** | PASSED |
+| Contract（工具范围） | `KnowledgeSearchToolScopeTest` 5 项：未绑定搜全部、绑定两个库时第三个库**一次都没被搜到**（`never()`）、禁用库被跳过且如实报告、全部不可用时明确说"检索不可用"+ 悬空绑定被指出、空列表等价于不限制 | PASSED |
+| 全量回归 | `mvn -B test`：**334 运行 / 316 通过 / 18 跳过（7 个 live 类，环境变量门控）/ 0 失败 / 0 错误**，BUILD SUCCESS（nexus-common 14 / nexus-ai 35 / nexus-knowledge 122 / nexus-app 163） | PASSED |
+| 真机冒烟（standalone，无 Docker） | 打包后用 `--spring.profiles.active=standalone --server.port=8099` 起服务：注册/登录取 token → `GET /api/agents` → `POST /api/agents`（落 DRAFT，返回 `kbIds:[]`）→ `GET /api/agents`（内置项置顶）→ `POST /api/agent/ask`（无 key → 4006，信息里列出已注册模型）。见 §11 | PASSED |
+| 前端构建 | 本轮**未改前端**，因此没有重跑 `npm run build` | **未执行**（4.2 会跑） |
+| 真机（真实模型跑一次 Agent、真实检索） | 需 `AI_CHAT_API_KEY` + ES/pgvector；`AgentLoopTest` 被环境变量门控，本机未设置 | **SKIPPED** |
+| E2E 浏览器（Agent 管理页） | 页面尚不存在（4.2） | **UNAVAILABLE**（本轮不做） |
+
+**口径**：上表 PASSED 的三类都是**离线契约**——它们证明"接口的准入规则与范围计算是对的"，
+**不证明**"接上真实模型后 Agent 会正确调用工具"（那是 `AgentLoopTest` / live 层的事，本轮 SKIPPED），
+也**不证明**前端能用（页面还没写）。按 §四十八，不得把这三层合并成一句"Agent 配置化已验证通过"。
+
+**9. 本轮发现、但有意没修的问题**
+
+`kb_knowledge_base.status` 的语义承诺只在**新写的 Agent 工具路径**里兑现了；
+RAG 链路（`ChatRagModeServiceImpl` / `RagAnswerService` 的检索）仍然读不到它——
+也就是说"禁用一个库"对 RAG 问答不生效。没有顺手一起改的原因：
+RAG 链路是 §六十五 明列的保护区，且"禁用/启用的语义边界"值得单独一个增量 +
+自己的回归（用户可能期望的其实是"禁用的库连文档列表也不可检索"）。把它记在这里，
+而不是假装它已经一致。
+
+**10. 未做（有意留下）**
+
+- **前端（4.2）**：Agent 管理页（列表/新建/编辑/绑定知识库/启停/复制/试跑）、
+  创建 AGENT 会话时的 Agent 选择器、E2E 脚本；
+- **Tool Definition**（§十九，P0 的下一项）：`tool` 表 + Registry + Factory + Executor，
+  届时 `AgentRuntime.configure` 里那句写死的 `ToolCallbacks.from(knowledgeSearchTool)` 换成按 Definition 组装；
+- `agent_tool` / `agent_run` 两张表与 §二十二 审计；
+- `duplicate` 的 code 生成是 `-copy` / `-copy-2` 递增，未考虑用户手工占用了这些名字后的极端情形（会继续递增，不会冲突）；
+- Agent 的 `description` / `builtin` 未参与任何检索或提示词组装（纯展示字段）。
+
+**11. 打包后在 standalone 上冒烟（抓到两个"离线契约测不出来"的问题）**
+
+提交前把 jar 起在 8099 上真跑了一遍接口。两件事只有真机才暴露：
+
+1. **新用户的 Agent 列表是空的**（已修）。内置默认 Agent 是"按需创建"的，
+   而最先触发创建的只有**执行路径**（`resolveDefault` 被 `ask` / 会话执行调用）。
+   于是一个从没跑过 Agent 的用户打开列表看到 `total=0`——界面上看不出 AGENT 模式有兜底，
+   得先"盲跑一次"它才出现。修法：`AgentService.list` 先 `resolveDefault(userId)`
+   （幂等，同一用户至多一行），并补 `AgentResourceTest` 第 10 项钉住它。
+   之前那条测试是**手工调 `resolveDefault` 绕过**这个问题的（`// 内置默认 Agent 也在列表里`），
+   也就是说旧断言在"列表自己会补齐"这件事上是**假的通过**——现在把绕过删掉了，断言才算真的。
+2. **H2 profile 的表是 Flyway 建的，不是 `db/h2/schema.sql`**（只改注释与文档，见 §1.7）：
+   启动日志 `Successfully applied 11 migrations to schema "public", now at version v12`。
+   这解释了"`schema.sql` 里没有 `agent` 表，而 4.1 的测试照样能往 `agent` 里写"——
+   也让两个 profile 里那句 `spring.flyway.enabled: false`（"H2 下不使用迁移脚本"）
+   被证实是**注释与现实不符**：它只关自动配置，关不掉 `PrimaryDataSourceConfig` 手工声明的 Bean。
+   顺带的收获是**这其实是好事**：H2 用的就是 MySQL 那套 DDL，
+   "standalone 上验过"与"local 上验过"在表结构这一层是同一件事。
+
+> 记这两条的用意：它们是 §四十八 说的"验证层次不能合并"的实例——
+> 上面 PASSED 的 HTTP 契约测试全绿，仍然盖不住"第一次打开页面看到空列表"这种问题。
 
 ---
 

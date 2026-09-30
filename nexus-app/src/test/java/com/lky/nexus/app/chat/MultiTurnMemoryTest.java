@@ -54,7 +54,7 @@ class MultiTurnMemoryTest {
     @DisplayName("第二轮能记住第一轮给出的事实（记忆真的进了模型）")
     void secondTurnRemembersWhatWasSaidInTheFirst() {
         ConversationResponse conversation = conversationService.create(
-                USER_ID, new CreateConversationRequest("记忆测试", null, null));
+                USER_ID, new CreateConversationRequest("记忆测试", null, null, null));
         Long conversationId = conversation.id();
 
         ChatAnswerResponse first = chatService.ask(USER_ID, conversationId,

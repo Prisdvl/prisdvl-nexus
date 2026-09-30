@@ -2,8 +2,19 @@ package com.lky.nexus.app.agent;
 
 /**
  * Agent 的系统提示（集中一处，避免"流式"与"一次性"两条链路各写一份、改一处漏一处）。
+ *
+ * <p>Phase 4.1 起这些文本的角色变了：从"运行期写死的提示"变成<b>引导默认值</b>——
+ * 内置默认 Agent（{@link #BUILTIN_CODE}）创建时把它们写进数据库，此后用户在界面上改的是库里的行。
+ * 这与 Phase 7 处理模型配置的方式一致（yml 只做首次引导，事实来源是数据库）。
  */
 public final class AgentPrompts {
+
+    /** 内置默认 Agent 的稳定标识（AGENT 会话没指定 Agent 时用它）。 */
+    public static final String BUILTIN_CODE = "builtin.default";
+    /** 内置默认 Agent 的显示名。 */
+    public static final String BUILTIN_NAME = "默认助手";
+    /** 内置默认 Agent 的说明：同时告诉用户"检索范围不受限"。 */
+    public static final String BUILTIN_DESCRIPTION = "内置默认 Agent：可自由改名与提示词，检索全部知识库（未绑定具体库）";
 
     /**
      * 系统提示的核心约束：工具优先——与知识库相关的问题必须先用工具，再答。
