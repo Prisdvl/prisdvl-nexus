@@ -43,10 +43,11 @@ import com.nimbusds.jose.jwk.source.ImmutableSecret;
 @EnableConfigurationProperties(NexusJwtProperties.class)
 public class SecurityConfig {
 
-    /** 公开端点：注册与登录本身当然不能要求先登录。 */
+    /** 公开端点：注册与登录本身当然不能要求先登录；MCP 端点走"X-Nexus-User 头"的个人本机信任模型。 */
     private static final String[] PUBLIC_ENDPOINTS = {
             "/api/auth/register",
-            "/api/auth/login"
+            "/api/auth/login",
+            "/mcp"
     };
 
     /** 健康检查与错误页放行，供 Docker healthcheck、K8s 探针与统一错误处理使用。 */
