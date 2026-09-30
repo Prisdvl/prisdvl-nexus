@@ -1158,6 +1158,32 @@ ollama 镜像与 bge-m3 模型（1.08 GB）最终都拉取成功，因此**真�
 
 **测试总览（Phase 3.7/3.8/3.9）**：`nexus-common` 10 + `nexus-ai` 14 + `nexus-knowledge` 66 + `nexus-app` 79（16 跳过）= **169 通过 / 0 失败**。
 
+### B.29 Phase 5（Agent）与 Phase 6.1（评测）实现记录
+
+**Phase 5：模型工具循环（三个"用户可控"点）**
+1. 工具定义的 API 先验后写：`ToolCallbacks.from` 与 `@Tool`/`@ToolParam` 都在
+   `spring-ai-model`（2.0.1）里，**不需要**额外引入 `spring-ai-tool-calling` 模块。
+   守卫测试（AgentLoopTest）证明：OpenCode 网关 + deepseek-v4-flash **支持函数调用**
+   （若网关不支持，这条测试会如实失败——这是守卫测试存在的意义）。
+2. 工具执行发生在响应处理线程，没有请求上下文——用 `ThreadLocal`（AgentContext）
+   绑定"当前用户 + 本轮痕迹"，并测了双线程不串（工具在线程池里最易串）。
+3. **检索降级阶梯**（只有 Agent 工具有，`ChunkSearchService` 保持严格是刻意设计）：
+   混合检索 → SQL LIKE 关键词匹配 → 如实说明。第一版 LIKE 用完整问题做
+   `%LIKE%`（"缓存击穿怎么解决"不会出现在正文里）→ 空结果；修法是剥问句助词 +
+   按"前 6/4/2 字"逐级缩短，live 验证命中。
+
+**Phase 6.1：评测走 Agent 链路 + record 组件坑**
+- 评测若走 RAG 同步路径，standalone 下必然 4005（检索未启用是设计使然）；
+  改走 **Agent 链路**（自带降级阶梯）后**任何环境都能评**——"端到端质量"该有的样子。
+- 指标：要点命中率（子串匹配，确定性、不用 LLM 判分）+ 引用有效性（回答带来源标注）。
+- **JSON 坑**：record 的方法（`avgPointRecall()` 等）不会被 Jackson 序列化进 JSON——
+  报告指标必须做成 **record 组件 + 静态工厂计算**，否则前端/脚本读不到。
+- **环境坑**：H2 内存库重启即失，演示数据要重建（每轮都在做）；
+  Docker Desktop 常处于未启动状态（round 10），因此依赖容器的能力都要有降级路径。
+
+**说明**：B.27 之后阶段（4.x 知识关联、5.x Agent、6.1 评测）的细节主要在
+提交信息与各模块代码注释里，本节只记"可直接写在简历/面试里"的结论与坑。
+
 ### B.28 一个 bug 花了三轮：JSON 字段被二次编码 + 弱诊断断言
 
 **现象**：`DocumentQueryTest` 的 2 条用例失败——接口返回的文档 `tags` 与 `headings` 都是空数组，
