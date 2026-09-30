@@ -18,6 +18,7 @@ import {
   listDocuments,
   listKnowledgeBases,
   recreateIndex,
+  runWorkflow as runWorkflowApi,
   search,
   uploadVault,
   type ChunkView,
@@ -29,7 +30,8 @@ import {
   type KnowledgeBase,
   type RagAnswer,
   type SearchHit,
-  type SearchMode
+  type SearchMode,
+  type WorkflowStepResult
 } from '@/api/knowledge'
 import { applyHeadingAnchors, headingAnchor, highlightWithin, renderMarkdown } from '@/utils/markdown'
 
@@ -59,6 +61,26 @@ const detailLoading = ref(false)
 const chunks = ref<ChunkView[]>([])
 const links = ref<DocumentLinks | null>(null)
 const related = ref<RelatedDocument[]>([])
+const workflowRunning = ref(false)
+const workflowSteps = ref<WorkflowStepResult[]>([])
+
+async function runWorkflow() {
+  workflowRunning.value = true
+  try {
+    workflowSteps.value = await runWorkflowApi(kbId)
+  } catch (error) {
+    ElMessage.error('工作流执行失败：' + (error instanceof Error ? error.message : String(error)))
+  } finally {
+    workflowRunning.value = false
+  }
+}
+
+function stepType(status: string): 'success' | 'danger' | 'info' | 'warning' {
+  if (status === 'SUCCESS') return 'success'
+  if (status === 'FAILED') return 'danger'
+  if (status === 'SKIPPED') return 'info'
+  return 'warning'
+}
 const articleRef = ref<HTMLElement | null>(null)
 const renderedHtml = ref('')
 
@@ -453,6 +475,23 @@ watch(activeTab, () => {
       </div>
     </dl>
 
+    <!-- 知识工作流（Phase 6.2）：统计 → 向量化 → 建索引，每步状态可观测 -->
+    <div class="workflow">
+      <div class="workflow-head">
+        <h3>知识工作流</h3>
+        <el-button size="small" :loading="workflowRunning" @click="runWorkflow">跑工作流</el-button>
+      </div>
+      <ul v-if="workflowSteps.length">
+        <li v-for="(step, index) in workflowSteps" :key="step.name + index">
+          <el-tag size="small" :type="stepType(step.status)">{{ step.status }}</el-tag>
+          <span class="wf-name">{{ step.name }}</span>
+          <span class="wf-ms num">{{ step.durationMs }}ms</span>
+          <span class="wf-msg">{{ step.message }}</span>
+        </li>
+      </ul>
+      <p v-else class="hint">把「统计 → 向量化 → 建索引」固化成可复跑、可观测的步骤序列。能力缺失时步骤会如实降级而非失败。</p>
+    </div>
+
     <div class="workspace">
       <!-- 左：文档列表 -->
       <aside class="pane doc-list">
@@ -775,6 +814,56 @@ watch(activeTab, () => {
   display: flex;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+.workflow {
+  margin-top: var(--space-4);
+  padding: var(--space-3);
+  background: var(--neutral-0);
+  border: 1px solid var(--neutral-200);
+  border-radius: var(--radius-input);
+}
+
+.workflow-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.workflow-head h3 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.workflow ul {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.workflow li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12.5px;
+}
+
+.wf-name {
+  color: var(--neutral-700);
+}
+
+.wf-ms {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--neutral-500);
+}
+
+.wf-msg {
+  color: var(--neutral-500);
+  font-size: 12px;
 }
 
 .metrics {

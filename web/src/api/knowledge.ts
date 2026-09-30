@@ -280,6 +280,18 @@ export function getRelatedDocuments(id: string, documentId: string, limit = 5) {
   })
 }
 
+export interface WorkflowStepResult {
+  name: string
+  status: string
+  durationMs: number
+  message: string
+}
+
+/** 知识工作流（Phase 6.2）：统计 → 向量化 → 建索引，返回每步状态/耗时/消息。 */
+export function runWorkflow(id: string) {
+  return client.get<never, WorkflowStepResult[]>(`/workflow/run/${id}`)
+}
+
 /**
  * 检索。mode 三选一都开放——融合效果好不好，只有在能单独看每一路时才判断得了。
  */
