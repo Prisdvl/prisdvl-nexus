@@ -53,10 +53,11 @@ async function submit() {
 
 <template>
   <div class="auth">
+    <div class="grid-backdrop" aria-hidden="true"></div>
     <div class="panel">
       <div class="head">
         <span class="mark">N</span>
-        <h1>Prisdvl-Nexus</h1>
+        <h1 class="shine">Prisdvl-Nexus</h1>
         <p class="sub">个人知识库 · 混合检索（BM25 + 向量）</p>
       </div>
 
@@ -99,6 +100,13 @@ async function submit() {
 
 <style scoped>
 /* 认证页：中性色表面 + 单列表单（不做"品牌色大色块 + 表单"那种模板结构） */
+/* 点阵背景是 fixed 定位，按绘制顺序会盖在普通流内容之上；
+   因此把除背景外的内容抬到 z-index: 1，保证卡片在背景之前 */
+.auth > :not(.grid-backdrop) {
+  position: relative;
+  z-index: 1;
+}
+
 .auth {
   display: grid;
   place-items: center;

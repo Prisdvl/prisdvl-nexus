@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useCountUp } from '@/composables/useCountUp'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { MagicStick, Refresh, Search, UploadFilled } from '@element-plus/icons-vue'
@@ -34,6 +35,14 @@ const route = useRoute()
 const kbId = route.params.id as string
 
 const kb = ref<KnowledgeBase | null>(null)
+
+// 概览指标的数值滚动（仅在这三个数字变化时播一次；尊重 prefers-reduced-motion）
+const docCount = computed(() => kb.value?.docCount ?? 0)
+const chunkCount = computed(() => kb.value?.chunkCount ?? 0)
+const tokenCount = computed(() => kb.value?.totalTokens ?? 0)
+const { display: docDisplay } = useCountUp(docCount)
+const { display: chunkDisplay } = useCountUp(chunkCount)
+const { display: tokenDisplay } = useCountUp(tokenCount)
 const documents = ref<DocumentSummary[]>([])
 const loading = ref(false)
 const busy = ref('')
@@ -422,15 +431,15 @@ watch(activeTab, () => {
     <dl class="metrics">
       <div>
         <dt>文档</dt>
-        <dd class="num">{{ kb?.docCount ?? 0 }}</dd>
+        <dd class="num">{{ docDisplay }}</dd>
       </div>
       <div>
         <dt>切片</dt>
-        <dd class="num">{{ kb?.chunkCount ?? 0 }}</dd>
+        <dd class="num">{{ chunkDisplay }}</dd>
       </div>
       <div>
         <dt>Token 估算</dt>
-        <dd class="num">{{ kb?.totalTokens ?? 0 }}</dd>
+        <dd class="num">{{ tokenDisplay }}</dd>
       </div>
       <div v-if="task">
         <dt>最近导入</dt>
