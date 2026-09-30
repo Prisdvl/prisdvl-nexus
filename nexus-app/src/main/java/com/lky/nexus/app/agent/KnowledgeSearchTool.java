@@ -1,6 +1,11 @@
 package com.lky.nexus.app.agent;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.lky.nexus.knowledge.mapper.ChunkMapper;
+import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;
+import com.lky.nexus.knowledge.model.entity.ChunkPO;
+import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
@@ -10,25 +15,39 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 知识库检索工具（Phase 5）：让模型能主动检索用户的笔记。
  *
- * <p>跨全部知识库搜索（模型不知道用户的库 id，也不能要求它知道），
- * 命中结果带上"来源文档"，模型据此给出带出处的回答。
- * 正常情况下代理模型的工具调用是自动执行的（由 Spring AI 的 ToolCallingManager 完成，有轮数上限）。
+ * <p>检索的<b>降级阶梯</b>（能走到哪一层取决于部署环境，全部如实告知模型）：
+ * <ol>
+ *   <li>混合检索（BM25 + 向量 + RRF）——完整基础设施（ES + pgvector）；</li>
+ *   <li>SQL LIKE 关键词匹配——精确检索不可用时（例如 standalone / 内存库）的兜底，
+ *       质量更低但至少不要让模型"空手"；</li>
+ *   <li>两者都不可用 → 工具直接说明，模型如实回答"检索不可用"。</li>
+ * </ol>
  */
 @Component
 public class KnowledgeSearchTool {
 
     private final ChunkSearchService chunkSearchService;
     private final KnowledgeBaseMapper knowledgeBaseMapper;
+    private final ChunkMapper chunkMapper;
+    private final DocumentMapper documentMapper;
 
     public KnowledgeSearchTool(ChunkSearchService chunkSearchService,
-                               KnowledgeBaseMapper knowledgeBaseMapper) {
+                               KnowledgeBaseMapper knowledgeBaseMapper,
+                               ChunkMapper chunkMapper,
+                               DocumentMapper documentMapper) {
         this.chunkSearchService = chunkSearchService;
         this.knowledgeBaseMapper = knowledgeBaseMapper;
+        this.chunkMapper = chunkMapper;
+        this.documentMapper = documentMapper;
     }
 
     @Tool(name = "knowledge_search",
@@ -43,15 +62,21 @@ public class KnowledgeSearchTool {
 
         List<ChunkSearchService.SearchHit> all = new ArrayList<>();
         List<KnowledgeBasePO> knowledgeBases = knowledgeBaseMapper.selectList(
-                com.baomidou.mybatisplus.core.toolkit.Wrappers.<KnowledgeBasePO>lambdaQuery()
-                        .eq(KnowledgeBasePO::getUserId, userId));
+                Wrappers.<KnowledgeBasePO>lambdaQuery().eq(KnowledgeBasePO::getUserId, userId));
         for (KnowledgeBasePO kb : knowledgeBases) {
             try {
-                // 检索基础设施缺失时（如 standalone / H2），单库失败不能拖垮整个工具
                 all.addAll(chunkSearchService.search(userId, kb.getId(), query, 5, SearchMode.HYBRID));
             } catch (Exception ex) {
-                AgentContext.record(new AgentContext.ToolCallRecord("knowledge_search", query,
-                        "[跳过知识库 " + kb.getName() + "] 检索基础设施不可用：" + ex.getMessage()));
+                List<ChunkSearchService.SearchHit> fallback = likeSearch(kb.getId(), query, 5);
+                if (!fallback.isEmpty()) {
+                    all.addAll(fallback);
+                    AgentContext.record(new AgentContext.ToolCallRecord("knowledge_search", query,
+                            "知识库「" + kb.getName() + "」精确检索不可用，已降级为关键词匹配（"
+                                    + fallback.size() + " 条）"));
+                } else {
+                    AgentContext.record(new AgentContext.ToolCallRecord("knowledge_search", query,
+                            "知识库「" + kb.getName() + "」检索不可用：" + ex.getMessage()));
+                }
             }
         }
         all.sort(Comparator.comparingDouble(ChunkSearchService.SearchHit::score).reversed());
@@ -69,9 +94,62 @@ public class KnowledgeSearchTool {
         if (take == 0) {
             out.append("（没有检索到相关结果。若问题确实与笔记无关，请如实说明。）");
         }
-        // 每一次调用都留痕——"用户可控"的第一步是"用户可见"
         AgentContext.record(new AgentContext.ToolCallRecord("knowledge_search", query, take + " 条结果"));
         return out.toString();
+    }
+
+    /** 第二级降级：SQL LIKE 关键词匹配。
+     *
+     * <p>中文没有分词器时不能拿完整问题做 LIKE（"缓存击穿怎么解决"不会出现在正文里）。
+     * 做法：先剥掉问句助词，再按"整句 → 前 6 字 → 前 4 字 → 前 2 字"逐级缩短，
+     * 第一个命中的词就用它（"缓存击穿怎么解决" → "缓存击穿" → 命中正文里出现过的词）。
+     */
+    private List<ChunkSearchService.SearchHit> likeSearch(Long kbId, String query, int limit) {
+        String clean = query == null ? "" : query.trim()
+                .replaceAll("[的了吗呢么怎样怎么如何为啥为什么是什么有没有在和我则帮]", "");
+        if (clean.length() < 2) {
+            clean = query == null ? "" : query.trim();
+        }
+        int[] cuts = {clean.length(), Math.min(6, clean.length()),
+                Math.min(4, clean.length()), Math.min(2, clean.length())};
+        List<ChunkSearchService.SearchHit> last = List.of();
+        for (int cut : cuts) {
+            if (cut < 2 || cut > clean.length()) {
+                continue;
+            }
+            last = likeSingle(kbId, clean.substring(0, cut), limit);
+            if (!last.isEmpty()) {
+                return last;
+            }
+        }
+        return last;
+    }
+
+    private List<ChunkSearchService.SearchHit> likeSingle(Long kbId, String term, int limit) {
+        try {
+            List<ChunkPO> chunks = chunkMapper.selectList(Wrappers.<ChunkPO>lambdaQuery()
+                    .eq(ChunkPO::getKbId, kbId)
+                    .like(ChunkPO::getContent, term)
+                    .orderByDesc(ChunkPO::getCreatedAt)
+                    .last("LIMIT " + limit));
+            if (chunks.isEmpty()) {
+                return List.of();
+            }
+            Set<Long> documentIds = chunks.stream()
+                    .map(ChunkPO::getDocumentId).collect(Collectors.toSet());
+            Map<Long, String> titles = new HashMap<>();
+            for (DocumentPO document : documentMapper.selectBatchIds(documentIds)) {
+                titles.put(document.getId(), document.getTitle());
+            }
+            return chunks.stream()
+                    .map(chunk -> new ChunkSearchService.SearchHit(
+                            chunk.getId(), chunk.getDocumentId(),
+                            titles.getOrDefault(chunk.getDocumentId(), "未命名文档"),
+                            null, chunk.getContent(), 0.1, "like", List.of("关键词匹配")))
+                    .toList();
+        } catch (Exception ex) {
+            return List.of();
+        }
     }
 
     private String clip(String text, int max) {
