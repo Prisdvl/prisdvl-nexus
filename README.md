@@ -101,6 +101,7 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | Phase 3.1 | Retriever 端口抽象：检索拆成策略实现族（Vector/Keyword/Hybrid/Reranked）+ 新旧行为一致性测试 | ✅ 完成（对外行为不变；见 decisions.md B.31） |
 | Phase 3.2 | 检索参数真正可配置：知识库的 `retrieval_top_k` / `similarity_threshold` 生效 + 全局默认值收敛到 `nexus.retrieval.*` | ✅ 完成（阈值统一为 0.25；见 decisions.md B.32） |
 | Phase 3.3 | 元数据过滤：`tags` / `folder` / `documentId` 下推到 ES `filter` 与 pgvector `WHERE`（向量路先解析成文档 id） | ✅ 完成（ES/pgvector 真机 `UNAVAILABLE`；见 decisions.md B.33） |
+| Phase 3.4 | RAG 模式的会话流式：`retrieval` 事件先于第一个字、会话绑定知识库（`kb_ids`）、多轮历史走 ChatMemory、前端"检索到 N 个片段" | ✅ 完成（真浏览器只验到 Agent 腿；RAG 腿因本地无 ES 跳过；见 decisions.md B.34） |
 | Phase 3+ | RAG/Agent/Workflow/Application/Model 的抽象上移与用户可配置化 | ⏳ 见分析文档第 12 节 |
 
 ## 7. 本地环境要求
@@ -207,12 +208,26 @@ cd web
 node scripts/screenshot.mjs        # 生成 docs/screenshots/{login,kb-list,kb-detail,kb-search}.png
 node scripts/verify-login.mjs      # 真实走一遍登录表单，确认跳转与刷新后仍保持登录
 node scripts/verify-frontend.mjs   # 知识库列表 → 正文（Markdown/大纲/关联面板）→ 切片
-node scripts/verify-agent-chat.mjs # Agent 对话：工具卡片出现 → 结果非占位 → 回答渲染 → 刷新后痕迹仍在
+node scripts/verify-agent-chat.mjs # 对话页两条腿：Agent（工具卡片/真实摘要/刷新后痕迹仍在）+ RAG（"检索到 N 个片段"且先于回答）
+node scripts/verify-stream.mjs     # 知识库问答流式：逐字增长 + 引用 + 生成期间的"检索到 N 个片段"
+node scripts/verify-retrieval-ui.mjs # 检索卡片渲染契约：桩掉 /api/chat/stream，验"检索到 N 个片段"排在回答之前
 ```
 
-> 三个 `verify-*.mjs` 都要求后端已按上一节跑起来，并且**已经种好演示数据**
+> `verify-*.mjs` 都要求后端已按上一节跑起来，并且**已经种好演示数据**
 > （`node scripts/seed-demo.mjs`，`standalone` 重启后要重跑）。
 > 脚本会把截图写进 `docs/screenshots/`。
+
+> **退出码**：`0` 全部通过 / `1` 真实失败 / `2` 有跳过。跳过只在**环境能力缺失**时发生
+> ——`standalone` 没有 Elasticsearch，RAG 在检索这一步就返回 4005，
+> 于是"检索到 N 个片段"相关的断言无法执行（`verify-agent-chat.mjs` 只跳过 RAG 腿，
+> `verify-stream.mjs` 整体跳过）。脚本会打印 `⚠ SKIPPED` 与原因，
+> **跳过不等于通过**：要真验这一层，得用 `deploy/docker-compose.yml` 起 full 栈再跑一遍。
+
+> **`verify-retrieval-ui.mjs` 是桩验证，不是 E2E**：它把 `/api/chat/stream` 换成
+> 手写的 SSE 帧（形状取自 `docs/api.md` §5.2），用来单独验"前端拿到这套帧渲染成什么样"
+> ——这是本地无 ES 时唯一能验到那层 UI 的办法。它**不证明**后端真的发这套帧
+> （那是 `RagStreamRetrievalEventTest` 的事），也**不证明**真机检索可用（那是 full 栈的事）。
+> 三件事必须分开说，不能合并成一句"验证通过"。会话创建与消息列表仍走真接口。
 
 > 这两个脚本的意义不只是截图：**"服务返回了 HTML"不等于"页面渲染正常"**。
 > 本项目就是靠它发现了一个真实问题（前端 `@` 别名只配了 tsconfig、没配 Vite，

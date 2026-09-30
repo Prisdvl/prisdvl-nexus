@@ -59,7 +59,7 @@ async function submit() {
       <div class="head">
         <span class="mark">N</span>
         <h1 class="shine">Prisdvl-Nexus</h1>
-        <p class="sub">知识库 · 混合检索 · Agent 对话</p>
+        <p class="sub">知识库 · 混合检索 · 可追溯对话</p>
       </div>
 
       <el-form

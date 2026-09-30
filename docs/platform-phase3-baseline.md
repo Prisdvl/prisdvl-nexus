@@ -869,6 +869,42 @@ P3  ── MCP 完整接入/鉴权、Planner、高级 Memory
 **留给后续增量的**：`status=DISABLED` 的知识库仍参与检索（属"是否参与"而非"参数多少"，单独增量）；
 知识库检索参数暂无设置界面（仅 API）。
 
+### 9.3 增量 3.4 完成记录（2026-09-30）
+
+| 项 | 结果 |
+| --- | --- |
+| 状态 | ✅ 代码与测试完成（编译 / 全量测试 / 前端构建 全绿）；**浏览器 E2E 只完成一半**（见下） |
+| 目标 | `mode=RAG` 的 `/api/chat/stream` 走 `prepare()` 并先发 `retrieval`；`RagStreamServiceImpl` 也补发 |
+| 新增主代码 | `chat/stream/RetrievalEvent.java`（两条链路共用的 `retrieval` 事件构造器）、`chat/service/ConversationKbIds.java`（JSON 列读写与 H2/MySQL 形态差异）、`chat/service/ChatMemoryTurns.java`（RAG 的历史读/写） |
+| 改写 | `ChatStreamServiceImpl`（RAG 分支：读绑定 → 读历史 → `prepare()` → 发 `retrieval` → 零资料短路；提示词改调 `RagAnswerService`）、`ConversationServiceImpl`（`resolveKbIds` 三条准入规则）、`RagStreamServiceImpl`（补发 `retrieval`、改用共用构造器与 `EMPTY_ANSWER`）、`RagAnswerService(.Impl)`（`RagTurn` + `EMPTY_ANSWER` 收敛）、三个会话 DTO、`KnowledgeRagController`（历史窗口由"最早 3 轮"改为"最近 3 轮"） |
+| 配置 / 数据库 | **无迁移**（`chat_conversation.kb_ids` 是 V2 既有列） |
+| API | `retrieval` 事件由"预留"变为**已实现**（`hits` 是切片级，不是设计稿的 `documents`）；新建/更新/会话详情多出 `kbIds`；RAG 未绑库提问在开流前 400/1001 |
+| 前端 | 对话页新增模式/知识库选择与检索卡片；知识库问答页新增"检索到 N 个片段"；`streamAgentChat` 更名 `streamChat`（三种模式共用）；导航标签 `Agent 对话` → `对话`（`/agent` 路径与路由名不变） |
+| 新增测试 | 16 条（`RagTurnTest` 6 / `ChatRagModeTest` 7 / `RagStreamRetrievalEventTest` 3） |
+| 测试基线 | 290 → **306 运行 / 288 通过 / 0 失败 / 0 错误 / 18 跳过（7 个 live 类）**，BUILD SUCCESS |
+| 运行时验证（真机） | `standalone` + 演示数据 + Edge：Agent 腿全过（默认模式 Agent、工具卡片、真实摘要、275 字回答、刷新后痕迹 4→4）；RAG 会话从界面创建时确实带上了 `kbIds` |
+| 运行时验证（桩帧） | `web/scripts/verify-retrieval-ui.mjs`：桩掉 `/api/chat/stream`，真浏览器里断言检索卡片渲染（文案 / 命中列表 2 条带文档名与标题路径 / `已重排` / **卡片在回答之前** / 请求体带 `conversationId`）、零命中分支（`知识库里没有命中`）、以及"服务端校正后卡片消失、答案仍在"这一已知缺口 → **PASSED**（退出码 0） |
+| 未验证 | **真机上的检索链路本身**：`standalone` 无 ES，`/ask/stream` 与 RAG 会话流式在检索处即 4005 → **SKIPPED**（退出码 2，脚本明确打印原因）；ES / pgvector / MySQL 真机 → **UNAVAILABLE**（Docker 未运行） |
+
+**与 §八 测试方案的偏差**：方案里的两条都落地了（`RagStreamRetrievalEventTest` 为 Contract 层；
+`verify-stream.mjs` 已升级为断言"检索到 N 个片段"，且加了"生成期间轮询记录器"以避免
+标签消失后再采样的假阴性）。但**升级后的 `verify-stream.mjs` 在本地无法执行**——它本来就需要 full 栈
+（脚本注释记录的"前置阶段（检索 + 重排 + 组装）10~20 秒"就是这个原因）。
+
+为此补了一层**桩验证**（`verify-retrieval-ui.mjs`）：把 `retrieval` 事件的
+"后端发出"（契约测试）与"前端渲染"（桩帧 UI 测试）拆成两件事分别证明，
+剩下真正没验的只有"真机检索能跑通"这一条。三层口径写在 decisions.md B.34 的验证小节里，
+不得把桩验证说成真机 E2E。
+
+**顺带修掉的两个真问题**（都不是本增量引入的）：
+
+1. `PUT {"kbIds":[]}` 解绑静默失效（MyBatis-Plus `updateById` 跳过 null 字段）——
+   接口 200、返回体看着对、数据库没变；
+2. 对话页 `onMounted` 的"进来就选中最近会话"会覆盖用户在 RPC 期间的操作
+   （点了"新对话"却被跳回旧会话）——**由 E2E 脚本"跳出假通过"暴露**。
+
+其余设计决策与理由见 decisions.md B.34。
+
 ---
 
 ## 十、未确认项（如实列出，不假装已核实）

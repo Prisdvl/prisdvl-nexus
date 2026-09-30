@@ -1,0 +1,281 @@
+package com.lky.nexus.app.chat;
+
+import com.jayway.jsonpath.JsonPath;
+import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.knowledge.rag.PreparedAnswer;
+import com.lky.nexus.knowledge.rag.RagAnswer;
+import com.lky.nexus.knowledge.rag.RagAnswerService;
+import com.lky.nexus.knowledge.service.ChunkSearchService;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import reactor.core.publisher.Flux;
+
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * {@code retrieval} 事件（Phase 3.4）：两条流式链路的<b>事件顺序</b>与内容。
+ *
+ * <p><b>为什么这个顺序必须由测试钉住</b>：前端是靠"先收到 retrieval 再收到 delta"来决定
+ * 什么时候显示"检索到 N 个片段"的。若 retrieval 跑到 delta 之后（哪怕只晚一拍），
+ * 表现是"回答已经蹦字了，检索条数才突然冒出来"——看起来像界面抖动，
+ * 而根因在服务端事件顺序，前端怎么改都是错的。所以断言写成"索引大小关系"，
+ * 而不是"包含某个事件"。
+ *
+ * <p><b>为什么把 {@code RagAnswerService} 和 {@code ChatClientFactory} 都换成 mock</b>：
+ * 本类要断言的是<b>事件编排</b>，不是检索质量、也不是模型输出。
+ * test profile 下 ES 与 pgvector 都是 Disabled 实现（真检索必然报 4004/4005），
+ * 真实模型更是要花钱且不确定；两者 mock 掉之后，"检索到几条"与"模型吐了几个字"
+ * 都是已知输入，事件序列就成了唯一变量。
+ *
+ * <p>零资料的分支（{@code prepared.empty()}）是刻意覆盖的：它<b>不调用模型</b>，
+ * 但仍然必须走完 retrieval → delta → done，否则前端会一直停在"检索中"。
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
+@DisplayName("RAG 流式：retrieval 事件的顺序与内容")
+class RagStreamRetrievalEventTest {
+
+    private static final String PASSWORD = "Passw0rd!23";
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockitoBean
+    private RagAnswerService ragAnswerService;
+
+    @MockitoBean
+    private ChatClientFactory chatClientFactory;
+
+    @Test
+    @DisplayName("会话流式（mode=RAG）：meta → retrieval → delta… → usage → done，且用的是知识库问答那套提示词")
+    void chatStreamEmitsRetrievalBeforeFirstDelta() throws Exception {
+        String token = registerAndLogin("rag-stream-chat");
+        String kbId = createKnowledgeBase(token, "会话检索库");
+        String conversationId = createRagConversation(token, kbId);
+
+        PreparedAnswer prepared = preparedWithHits();
+        when(ragAnswerService.prepare(any(), any(), anyString(), any(), any())).thenReturn(prepared);
+        when(ragAnswerService.systemPrompt()).thenReturn("SYSTEM-PROMPT");
+        when(ragAnswerService.userMessage(anyString(), any(), any())).thenReturn("USER-PROMPT");
+        stubModel("缓存击穿", "可以用互斥锁。");
+
+        String body = streamBody(token, "/api/chat/stream", """
+                {"conversationId":%s,"content":"缓存击穿怎么解决？"}
+                """.formatted(conversationId));
+
+        assertThat(eventNames(body))
+                .as("事件顺序：retrieval 必须在第一个 delta 之前")
+                .containsSubsequence("meta", "retrieval", "delta", "usage", "done");
+        assertThat(orderIn(body, "retrieval")).isLessThan(orderIn(body, "delta"));
+
+        String retrieval = dataOf(body, "retrieval");
+        assertThat(JsonPath.<Integer>read(retrieval, "$.count")).isEqualTo(2);
+        assertThat(JsonPath.<String>read(retrieval, "$.hits[0].documentTitle")).isEqualTo("缓存击穿.md");
+        assertThat(JsonPath.<String>read(retrieval, "$.hits[0].headingPath")).isEqualTo("Redis > 缓存 > 缓存击穿");
+        assertThat(JsonPath.<String>read(retrieval, "$.knowledgeBaseId")).isEqualTo(kbId);
+        assertThat(JsonPath.<Boolean>read(retrieval, "$.empty")).isFalse();
+
+        // 两条链路共用同一份提示词构造：这里断言会话流式确实走的是 RagAnswerService 的方法，
+        // 而不是自己拼了一份 —— 否则同一个人问同一个问题会得到两种答案，且很难发现
+        verify(ragAnswerService).userMessage(eq("缓存击穿怎么解决？"), eq(prepared), any());
+        assertThat(body).as("delta 里应是模型吐出的内容").contains("互斥锁");
+    }
+
+    @Test
+    @DisplayName("知识库问答流式：同样先发 retrieval（前端一套解析逻辑）")
+    void askStreamEmitsRetrievalAsWell() throws Exception {
+        String token = registerAndLogin("rag-stream-ask");
+        String kbId = createKnowledgeBase(token, "问答检索库");
+
+        when(ragAnswerService.prepare(any(), any(), anyString(), any(), any())).thenReturn(preparedWithHits());
+        when(ragAnswerService.systemPrompt()).thenReturn("SYSTEM-PROMPT");
+        when(ragAnswerService.userMessage(anyString(), any(), any())).thenReturn("USER-PROMPT");
+        // 留档也要给个真值：mock 默认返回 null，而这条链路结束后会读 recordId / citations，
+        // 空值会在"结束时"炸掉（表现为 emitter 永不 complete、测试等到超时），
+        // 而不是在断言处失败——所以宁可显式造一条留档记录。
+        when(ragAnswerService.recordAnswer(any(), any(), anyString(), anyString(), any(), anyInt(), anyInt(),
+                anyBoolean(), anyLong())).thenReturn(recorded());
+        stubModel("互斥锁", "与逻辑过期。");
+
+        String body = streamBody(token, "/api/knowledge-bases/" + kbId + "/ask/stream", """
+                {"question":"缓存击穿怎么解决？"}
+                """);
+
+        assertThat(eventNames(body)).containsSubsequence("meta", "retrieval", "delta", "done");
+        assertThat(orderIn(body, "retrieval")).isLessThan(orderIn(body, "delta"));
+        assertThat(JsonPath.<Integer>read(dataOf(body, "retrieval"), "$.count")).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("零资料：retrieval(count=0) 照发，且不调用模型——前端不能停在\"检索中\"")
+    void emptyRetrievalIsStillAnnouncedWithoutCallingTheModel() throws Exception {
+        String token = registerAndLogin("rag-stream-empty");
+        String kbId = createKnowledgeBase(token, "空库");
+        String conversationId = createRagConversation(token, kbId);
+
+        when(ragAnswerService.prepare(any(), any(), anyString(), any(), any()))
+                .thenReturn(PreparedAnswer.none());
+        ChatClient.StreamResponseSpec streamSpec = stubModel("x", "y");
+
+        String body = streamBody(token, "/api/chat/stream", """
+                {"conversationId":%s,"content":"库里没有的问题"}
+                """.formatted(conversationId));
+
+        assertThat(eventNames(body)).containsSubsequence("meta", "retrieval", "delta", "done");
+        String retrieval = dataOf(body, "retrieval");
+        assertThat(JsonPath.<Integer>read(retrieval, "$.count")).isZero();
+        assertThat(JsonPath.<Boolean>read(retrieval, "$.empty")).isTrue();
+        assertThat(JsonPath.<List<?>>read(retrieval, "$.hits")).isEmpty();
+
+        // 没有资料就不调模型：既省钱，也从根上避免"无资料硬答"
+        verify(streamSpec, never()).chatResponse();
+        assertThat(body).as("仍要给出一句明确的回答，而不是空白").contains(RagAnswerService.EMPTY_ANSWER);
+        assertThat(JsonPath.<String>read(dataOf(body, "done"), "$.finishReason")).isEqualTo("empty");
+    }
+
+    // ------------------------------------------------------------------ 辅助
+
+    /** 命中两条、已重排的检索结果。 */
+    private PreparedAnswer preparedWithHits() {
+        return new PreparedAnswer("【1】互斥锁方案……\n【2】逻辑过期方案……",
+                List.of(hit(20001L, 100L, "缓存击穿.md", "Redis > 缓存 > 缓存击穿"),
+                        hit(20002L, 100L, "缓存击穿.md", "Redis > 缓存 > 逻辑过期")),
+                1200, 0, true, false);
+    }
+
+    /** 留档结果（流式结束时读它的 recordId 与 citations）。 */
+    private RagAnswer recorded() {
+        return new RagAnswer(9001L, "互斥锁与逻辑过期。", List.of(), 1200, 0, true, 3000L);
+    }
+
+    private ChunkSearchService.SearchHit hit(Long chunkId, Long documentId, String title, String heading) {
+        return new ChunkSearchService.SearchHit(chunkId, documentId, title, heading,
+                "互斥锁方案的正文……", 0.83, "hybrid", List.of("BM25 #1", "向量 #2"));
+    }
+
+    /** 把模型换成"吐指定文字"的假客户端，返回流式规范以便断言"到底调没调模型"。 */
+    private ChatClient.StreamResponseSpec stubModel(String first, String second) {
+        ChatClient chatClient = org.mockito.Mockito.mock(ChatClient.class);
+        ChatClient.ChatClientRequestSpec requestSpec = org.mockito.Mockito.mock(ChatClient.ChatClientRequestSpec.class);
+        ChatClient.StreamResponseSpec streamSpec = org.mockito.Mockito.mock(ChatClient.StreamResponseSpec.class);
+        when(chatClientFactory.get(anyString())).thenReturn(chatClient);
+        when(chatClient.prompt()).thenReturn(requestSpec);
+        when(requestSpec.system(anyString())).thenReturn(requestSpec);
+        when(requestSpec.user(anyString())).thenReturn(requestSpec);
+        when(requestSpec.stream()).thenReturn(streamSpec);
+        when(streamSpec.chatResponse()).thenReturn(Flux.just(chunk(first), chunk(second)));
+        return streamSpec;
+    }
+
+    private ChatResponse chunk(String text) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
+
+    /** 发起一次 SSE 请求并拿到完整响应体（SSE 是异步的，必须等 async 结束再取）。 */
+    private String streamBody(String token, String path, String json) throws Exception {
+        MvcResult result = mockMvc.perform(post(path)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content(json))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        mockMvc.perform(asyncDispatch(result)).andExpect(status().isOk());
+        return result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+    }
+
+    private List<String> eventNames(String body) {
+        return body.lines()
+                .filter(line -> line.startsWith("event:"))
+                .map(line -> line.substring("event:".length()).trim())
+                .toList();
+    }
+
+    private int orderIn(String body, String event) {
+        int index = body.indexOf("event:" + event);
+        assertThat(index).as("响应体里没有 %s 事件：\n%s", event, body).isNotNegative();
+        return index;
+    }
+
+    private String dataOf(String body, String event) {
+        String[] lines = body.split("\n");
+        for (int i = 0; i < lines.length - 1; i++) {
+            if (lines[i].startsWith("event:") && lines[i].substring("event:".length()).trim().equals(event)
+                    && lines[i + 1].startsWith("data:")) {
+                return lines[i + 1].substring("data:".length()).trim();
+            }
+        }
+        throw new AssertionError("响应体里没有 " + event + " 事件的数据：\n" + body);
+    }
+
+    private String createKnowledgeBase(String token, String name) throws Exception {
+        String response = mockMvc.perform(post("/api/knowledge-bases")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"%s"}
+                                """.formatted(name)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return JsonPath.read(response, "$.data.id");
+    }
+
+    private String createRagConversation(String token, String kbId) throws Exception {
+        String response = mockMvc.perform(post("/api/chat/conversations")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"RAG 会话","mode":"RAG","kbIds":[%s]}
+                                """.formatted(kbId)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return JsonPath.read(response, "$.data.id");
+    }
+
+    private String registerAndLogin(String username) throws Exception {
+        mockMvc.perform(post("/api/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"username":"%s","password":"%s"}
+                        """.formatted(username, PASSWORD)));
+
+        String loginBody = mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"%s","password":"%s"}
+                                """.formatted(username, PASSWORD)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return JsonPath.read(loginBody, "$.data.accessToken");
+    }
+}

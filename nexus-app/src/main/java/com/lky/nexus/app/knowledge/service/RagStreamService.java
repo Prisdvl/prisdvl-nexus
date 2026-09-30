@@ -11,7 +11,9 @@ import java.util.List;
  * <p>为什么流式对问答特别重要：实测一次问答端到端 28~172 秒，其中检索只占百毫秒级，
  * 时间全在模型生成上。非流式时用户面对的是三分钟白屏；流式则几百毫秒内就能看到第一个字。
  * 引用的处理有个约束：**回答结束前无法知道引用了哪几段**，
- * 因此事件顺序固定为 {@code meta → delta… → done(含引用)}。
+ * 因此事件顺序固定为 {@code meta → retrieval → delta… → done(含引用)}：
+ * {@code retrieval} 里带命中片段（供前端显示"检索到 N 个片段"），
+ * 引用正文仍要等回答结束才能解析，随 {@code done} 一起给。
  */
 public interface RagStreamService {
 

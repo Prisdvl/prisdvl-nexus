@@ -11,16 +11,19 @@ import com.lky.nexus.app.chat.model.dto.CreateConversationRequest;
 import com.lky.nexus.app.chat.model.dto.UpdateConversationRequest;
 import com.lky.nexus.app.chat.model.entity.ChatConversationPO;
 import com.lky.nexus.app.chat.model.entity.ChatMessagePO;
+import com.lky.nexus.app.chat.service.ConversationKbIds;
 import com.lky.nexus.app.chat.service.ConversationService;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.api.PageQuery;
 import com.lky.nexus.common.api.PageResult;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.knowledge.service.KnowledgeBaseService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -47,11 +50,17 @@ public class ConversationServiceImpl implements ConversationService {
 
     private final ChatConversationMapper conversationMapper;
     private final ChatMessageMapper messageMapper;
+    private final KnowledgeBaseService knowledgeBaseService;
+    private final JsonMapper jsonMapper;
 
     public ConversationServiceImpl(ChatConversationMapper conversationMapper,
-                                   ChatMessageMapper messageMapper) {
+                                   ChatMessageMapper messageMapper,
+                                   KnowledgeBaseService knowledgeBaseService,
+                                   JsonMapper jsonMapper) {
         this.conversationMapper = conversationMapper;
         this.messageMapper = messageMapper;
+        this.knowledgeBaseService = knowledgeBaseService;
+        this.jsonMapper = jsonMapper;
     }
 
     @Override
@@ -66,6 +75,9 @@ public class ConversationServiceImpl implements ConversationService {
         // title 为空说明要靠首轮消息自动生成
         conversation.setTitleAuto(!StringUtils.hasText(title));
         conversation.setMode(mode.name());
+        // 绑定在落库前校验：越权/不存在的知识库必须在这里就被拒绝，
+        // 否则会话会带着一个"别人的知识库 id"存下来，等到提问时才炸（甚至悄悄检索不到）
+        conversation.setKbIds(resolveKbIds(userId, mode, request.kbIds()));
         // 记下本会话使用的模型角色：换模型时历史会话仍能追溯到当初用的是哪个角色。
         // Agent 模式用专门的 chat.agent 角色——工具调用对模型能力的要求与普通对话不同，
         // 两条链路分开配置才能在"日常对话用便宜模型、Agent 用强模型"之间取舍。
@@ -123,6 +135,10 @@ public class ConversationServiceImpl implements ConversationService {
         if (request.pinned() != null) {
             conversation.setPinned(request.pinned());
         }
+        if (request.kbIds() != null) {
+            // null = 不改（局部更新约定）；空列表 = 解绑
+            conversation.setKbIds(resolveKbIds(userId, ChatMode.parse(conversation.getMode()), request.kbIds()));
+        }
         conversation.setUpdatedAt(LocalDateTime.now());
 
         conversationMapper.updateById(conversation);
@@ -163,6 +179,39 @@ public class ConversationServiceImpl implements ConversationService {
         return StringUtils.hasText(rawTitle) ? rawTitle.trim() : null;
     }
 
+    /**
+     * 校验并序列化绑定的知识库。
+     *
+     * <p>三条规则都是"宁可不做、也不装作做了"：
+     * <ol>
+     *   <li><b>只有 RAG 能用</b>：PLAIN 绑了没用；AGENT 的检索范围由模型自己决定
+     *       （工具会扫该用户的全部知识库）。写进去只会让人误以为检索被限定了；</li>
+     *   <li><b>最多一个</b>：检索侧目前是单库签名（{@code ChunkSearchService} 吃一个 kbId），
+     *       绑多个只能"取第一个"，这属于静默丢条件，必须显式拒绝；</li>
+     *   <li><b>必须是自己的库</b>：走 {@code requireOwned}，别人的库返回 3001，
+     *       不留"绑定成功但检索为空"这种无法解释的状态。</li>
+     * </ol>
+     */
+    private String resolveKbIds(Long userId, ChatMode mode, List<Long> rawKbIds) {
+        List<Long> kbIds = ConversationKbIds.normalize(rawKbIds);
+        if (kbIds.isEmpty()) {
+            // 注意不能返回 null：updateById 会跳过 null 字段，"解绑"就会静默失效
+            // （详见 ConversationKbIds.write 的说明）
+            return ConversationKbIds.write(jsonMapper, List.of());
+        }
+        if (mode != ChatMode.RAG) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "只有 RAG 会话可以绑定知识库（当前模式 " + mode + "）；"
+                            + "Agent 模式的检索范围由模型自行决定");
+        }
+        if (kbIds.size() > 1) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "暂只支持绑定一个知识库（多库检索尚未实现），收到 " + kbIds.size() + " 个");
+        }
+        knowledgeBaseService.requireOwned(userId, kbIds.get(0));
+        return ConversationKbIds.write(jsonMapper, kbIds);
+    }
+
     private ConversationResponse toResponse(ChatConversationPO conversation) {
         return new ConversationResponse(
                 conversation.getId(),
@@ -172,6 +221,7 @@ public class ConversationServiceImpl implements ConversationService {
                 conversation.getMessageCount(),
                 conversation.getLastMessageAt(),
                 conversation.getPinned(),
+                ConversationKbIds.parse(jsonMapper, conversation.getKbIds()),
                 conversation.getCreatedAt(),
                 conversation.getUpdatedAt());
     }

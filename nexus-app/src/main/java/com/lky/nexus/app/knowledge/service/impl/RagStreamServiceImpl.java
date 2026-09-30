@@ -2,6 +2,7 @@ package com.lky.nexus.app.knowledge.service.impl;
 
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.app.chat.stream.RetrievalEvent;
 import com.lky.nexus.app.chat.stream.SseEventNames;
 import com.lky.nexus.app.infra.web.RequestIdHolder;
 import com.lky.nexus.app.knowledge.service.RagStreamService;
@@ -19,7 +20,6 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -66,11 +66,15 @@ public class RagStreamServiceImpl implements RagStreamService {
                 "truncated", prepared.truncated(),
                 "reranked", prepared.reranked(),
                 "empty", prepared.empty()));
+        // ② 检索过程事件：必须在第一个 delta 之前到达，前端才能先显示"检索到 N 个片段"。
+        //    这里是同步发送（订阅还没建立），顺序是结构保证的，不依赖时序运气。
+        //    empty 也照发：count=0 是要告诉用户的信息，省略事件会让前端一直等。
+        send(emitter, SseEventNames.RETRIEVAL, RetrievalEvent.of(knowledgeBaseId, prepared));
 
         if (prepared.empty()) {
             // 没有资料就不调用模型（省钱，也从根上避免无资料硬答），但仍走完整的流式事件序列，
             // 让前端只有一套处理逻辑
-            String text = "资料中没有相关内容（知识库尚未导入或未建立索引）。";
+            String text = RagAnswerService.EMPTY_ANSWER;
             send(emitter, SseEventNames.DELTA, Map.of("text", text));
             RagAnswer record = ragAnswerService.recordAnswer(userId, knowledgeBaseId, question, text,
                     List.of(), 0, 0, false, System.currentTimeMillis() - start);
@@ -139,14 +143,7 @@ public class RagStreamServiceImpl implements RagStreamService {
 
     /** meta 事件里的引用预览：只有位置信息，正文随 done 事件一起给（避免 meta 过大）。 */
     private List<Map<String, Object>> citationPreview(PreparedAnswer prepared) {
-        return prepared.usedHits().stream().map(hit -> {
-            Map<String, Object> item = new HashMap<>();
-            item.put("chunkId", String.valueOf(hit.chunkId()));
-            item.put("documentId", String.valueOf(hit.documentId()));
-            item.put("documentTitle", hit.documentTitle());
-            item.put("headingPath", hit.headingPath());
-            return item;
-        }).toList();
+        return RetrievalEvent.citationPreview(prepared);
     }
 
     private String textOf(ChatResponse chunk) {

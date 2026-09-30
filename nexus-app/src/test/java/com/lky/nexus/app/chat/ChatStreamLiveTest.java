@@ -32,9 +32,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Step 1.6 验收测试（真实 HTTP + 真实模型）：SSE 流式与停止生成。
  *
  * <p>为什么用真实 Tomcat + JDK {@link HttpClient} 而不是 MockMvc：
- * MockMvc 对异步 {@code SseEmitter} 的处理是模拟的，拿到的事件往往是残缺的；
- * 而 {@code BodyHandlers.ofLines()} 让我们能<b>逐行读取正在到达的流</b>，
- * 这正是"中途停止生成"这类测试所必需的。
+ * MockMvc 能拿到**完整**响应体（{@code asyncDispatch} 之后，见 {@code RagStreamRetrievalEventTest}），
+ * 但它只能在流结束后一次性读——{@code BodyHandlers.ofLines()} 则让我们能<b>逐行读取正在到达的流</b>，
+ * 这正是"中途停止生成"这类测试所必需的：要停，就必须在流还没结束时动手。
+ * （本类原先写的理由是"MockMvc 拿到的事件残缺"，实测不成立，已按事实更正。）
  *
  * <p>未配置 {@code AI_CHAT_API_KEY} 时整体跳过。
  */

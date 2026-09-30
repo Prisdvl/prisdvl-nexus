@@ -8,6 +8,16 @@ import java.util.List;
 public interface RagAnswerService {
 
     /**
+     * 一条资料都没检索到时的固定回答。
+     *
+     * <p>定义在接口上（而不是各实现/调用方各写一遍），是因为"库是空的"这个状态下
+     * 用户可能从三个入口进来：知识库问答同步/流式、会话流式（RAG 模式）。
+     * 三处文案不一致时，用户会以为遇到的是不同的问题（"是不是这个入口坏了？"），
+     * 而实际原因相同：没有资料，因此模型根本没被调用。
+     */
+    String EMPTY_ANSWER = "资料中没有相关内容（知识库尚未导入或未建立索引）。";
+
+    /**
      * 基于知识库回答问题（并留档）。
      *
      * @param topK    召回条数（重排与上下文预算会在其基础上收窄）；
@@ -52,5 +62,44 @@ public interface RagAnswerService {
      * @param answerSummary 上一轮回答的摘要（只取开头一段，避免把上下文撑爆）
      */
     record RagTurn(String question, String answerSummary) {
+
+        /** 历史回答保留的字数：历史只用来"理解指代"，不该挤掉本轮的资料。 */
+        public static final int SUMMARY_LENGTH = 300;
+
+        /** 最多带几轮历史：再多也帮不上指代，只会把上下文和成本推高。 */
+        public static final int MAX_TURNS = 3;
+
+        /**
+         * 由"问题 + 完整回答"构造一轮历史；问题为空时返回 {@code null}（调用方据此过滤）。
+         *
+         * <p>把"摘要截断"收在这里，是因为它现在有<b>两个</b>调用方
+         * （知识库问答接口把前端回传的历史转成 RagTurn、会话流式从 ChatMemory 里取历史）。
+         * 两处各写一份的话，迟早出现"同一个会话在不同入口拿到了不同长度的历史"。
+         */
+        public static RagTurn of(String question, String answer) {
+            if (question == null || question.isBlank()) {
+                return null;
+            }
+            return new RagTurn(question.trim(), summarize(answer));
+        }
+
+        /** 取最后 {@link #MAX_TURNS} 轮（入参按时间正序，{@code null} 元素被丢弃）。 */
+        public static List<RagTurn> lastTurns(List<RagTurn> turns) {
+            if (turns == null || turns.isEmpty()) {
+                return List.of();
+            }
+            List<RagTurn> valid = turns.stream().filter(java.util.Objects::nonNull).toList();
+            return valid.size() <= MAX_TURNS
+                    ? valid
+                    : List.copyOf(valid.subList(valid.size() - MAX_TURNS, valid.size()));
+        }
+
+        private static String summarize(String answer) {
+            if (answer == null || answer.isBlank()) {
+                return null;
+            }
+            String flat = answer.replaceAll("\\s+", " ").trim();
+            return flat.length() <= SUMMARY_LENGTH ? flat : flat.substring(0, SUMMARY_LENGTH) + "…";
+        }
     }
 }

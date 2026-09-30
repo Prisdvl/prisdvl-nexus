@@ -3,29 +3,33 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, DataAnalysis, Delete, Promotion, Plus, VideoPause } from '@element-plus/icons-vue'
 import {
+  bindKnowledgeBase,
   createConversation,
   deleteConversation,
   listConversations,
   listMessages,
   stopStream,
-  streamAgentChat,
+  streamChat,
   type Conversation,
-  type MessageToolCall
+  type MessageToolCall,
+  type StreamRetrieval
 } from '@/api/chat'
 import { DEFAULT_EVAL_CASES, runEval, type EvalReport } from '@/api/agent'
-import { listKnowledgeBases } from '@/api/knowledge'
+import { listKnowledgeBases, type KnowledgeBase } from '@/api/knowledge'
 import { renderMarkdown } from '@/utils/markdown'
 
 /**
- * Agent 对话。
+ * 对话（Agent 模式 / 知识库问答 RAG 模式）。
  *
- * 一轮问答的完整过程（每一步都看得见）：
- *   meta → tool_call（正在检索…）→ tool_result（命中多少条）→ delta…（逐字回答）→ done
+ * 两种模式的差别只在"检索由谁发起"，界面上的过程都看得见：
+ *   AGENT：meta → tool_call（正在检索…）→ tool_result（命中多少条）→ delta… → done
+ *   RAG　：meta → retrieval（检索到 N 个片段）→ delta… → done
  *
- * 界面上的三条原则：
- * 1. **实时**：工具调用与回答都是边发生边显示，不让用户对着空屏等；
- * 2. **可回看**：工具痕迹随消息落库，刷新/切换会话后仍在；
- * 3. **可中断**：生成中随时能停，停掉是真的断开上游（不是只关界面）。
+ * 界面上的四条原则：
+ * 1. **实时**：检索与回答都是边发生边显示，不让用户对着空屏等；
+ * 2. **可回看**：工具痕迹随消息落库，刷新/切换会话后仍在（RAG 的命中片段目前只在本次流里可见）；
+ * 3. **可中断**：生成中随时能停，停掉是真的断开上游（不是只关界面）；
+ * 4. **不装作检索了**：RAG 会话没绑知识库时服务端会明确报错，界面上也提前拦住。
  */
 
 /** 界面上的一条消息。流式进行中的那条是临时消息，结束后用服务端数据校正。 */
@@ -34,6 +38,8 @@ interface ChatItem {
   role: 'USER' | 'ASSISTANT'
   content: string
   toolCalls: MessageToolCall[]
+  /** RAG 模式的检索结果（本次流内有效；历史消息不回放，见 toItems 的说明） */
+  retrieval?: StreamRetrieval | null
   streaming: boolean
   failed?: boolean
 }
@@ -49,6 +55,20 @@ const loadingList = ref(false)
 const loadingMessages = ref(false)
 const streaming = ref(false)
 
+/** 新建会话时选择的模式与知识库：只有"新建"这一刻能选（已建会话的模式不可更改） */
+const draftMode = ref<'AGENT' | 'RAG'>('AGENT')
+const draftKbId = ref('')
+const knowledgeBases = ref<KnowledgeBase[]>([])
+
+/**
+ * 用户是否已经自己做过选择（点了"新对话"或点了某个会话）。
+ *
+ * onMounted 里的"进来就选中最近一次会话"要跨两个 RPC（会话列表、知识库列表），
+ * 在这段时间里用户完全可能已经点了"新对话"。如果那边回来后无条件套用默认选中，
+ * 就会把用户的操作覆盖掉：明明点了新对话，界面又跳回旧会话、旧消息重新铺满屏幕，
+ * 用户接着发的消息会被算到旧会话名下。所以默认选中只在"用户还没动过"时生效。
+ */
+const pickedByUser = ref(false)
 const requestId = ref('')
 const abortController = ref<AbortController | null>(null)
 const scroller = ref<HTMLElement | null>(null)
@@ -59,16 +79,45 @@ const activeConversation = computed(() =>
   conversations.value.find((conversation) => conversation.id === activeId.value)
 )
 
+/** RAG 会话改绑/解绑知识库（新建时没绑定、或想换一个库再问）。 */
+async function changeBoundKnowledgeBase(value: unknown) {
+  const conversation = activeConversation.value
+  if (!conversation) return
+  const kbId = String(value ?? '')
+  try {
+    await bindKnowledgeBase(conversation.id, kbId ? [kbId] : [])
+    await loadConversations()
+    ElMessage.success(kbId ? '已绑定知识库' : '已解绑知识库')
+  } catch (error) {
+    ElMessage.error('绑定失败：' + (error instanceof Error ? error.message : String(error)))
+  }
+}
+
 /** 示例问题：直接点就能跑，省去"第一句该问什么"的犹豫 */
 const samples = ['我的笔记里缓存击穿怎么解决？', '线程池的核心参数有哪些坑？', 'G1 和 ZGC 该怎么选？']
 
 onMounted(async () => {
   await loadConversations()
-  // 进来就选中最近一次会话：比让用户看一个空面板更省一步
-  if (conversations.value.length) {
+  await loadKnowledgeBases()
+  // 进来就选中最近一次会话：比让用户看一个空面板更省一步。
+  // 但两个 await 期间用户可能已经点过"新对话"——那就尊重他的选择，别再抢回来
+  if (!pickedByUser.value && conversations.value.length) {
     await selectConversation(conversations.value[0].id)
   }
 })
+
+async function loadKnowledgeBases() {
+  try {
+    knowledgeBases.value = (await listKnowledgeBases()).list
+    // 默认选中第一个库：少一步点击，同时避免"选了 RAG 但没选库"的空状态
+    if (!draftKbId.value && knowledgeBases.value.length) {
+      draftKbId.value = knowledgeBases.value[0].id
+    }
+  } catch {
+    // 知识库列表加载失败不影响 Agent 模式；选到 RAG 时会提示
+    knowledgeBases.value = []
+  }
+}
 
 async function loadConversations() {
   loadingList.value = true
@@ -79,7 +128,13 @@ async function loadConversations() {
   }
 }
 
-/** 后端消息 → 界面消息。空内容的骨架消息（生成中崩溃留下的）不显示。 */
+/**
+ * 后端消息 → 界面消息。空内容的骨架消息（生成中崩溃留下的）不显示。
+ *
+ * 注意：这里不带 retrieval。RAG 的命中片段目前<b>只在本次流里可见</b>——它没有随消息落库
+ * （chat_message 只存正文与工具痕迹），因此刷新后不显示。这是已知缺口，不是渲染 bug：
+ * 若要回放，需要把命中片段写进消息 metadata（与 Agent 的工具痕迹同一处）。
+ */
 function toItems(list: Array<{ id: string; role: string; content: string | null; toolCalls: MessageToolCall[] }>) {
   return list
     .filter((message) => message.role === 'USER' || message.role === 'ASSISTANT')
@@ -91,6 +146,12 @@ function toItems(list: Array<{ id: string; role: string; content: string | null;
       toolCalls: message.toolCalls ?? [],
       streaming: false
     }))
+}
+
+/** 点会话列表：先记下"用户自己选的"，再走统一的选中逻辑。 */
+async function pickConversation(id: string) {
+  pickedByUser.value = true
+  await selectConversation(id)
 }
 
 async function selectConversation(id: string) {
@@ -114,6 +175,7 @@ function newConversation() {
     ElMessage.warning('请先停止当前生成')
     return
   }
+  pickedByUser.value = true
   activeId.value = ''
   items.value = []
   input.value = ''
@@ -134,14 +196,24 @@ async function removeConversation(conversation: Conversation) {
   await loadConversations()
 }
 
-/** 发送一轮：没有会话就先建一个（Agent 模式），再流式生成。 */
+/** 发送一轮：没有会话就先建一个（按新建时选的模式），再流式生成。 */
 async function send(preset?: string) {
   const content = (preset ?? input.value).trim()
   if (!content || streaming.value) return
 
   let conversationId = activeId.value
   if (!conversationId) {
-    const created = await createConversation('AGENT')
+    // RAG 必须在建会话时就确定知识库：检索范围是会话属性，服务端也会拒绝没绑库的 RAG 提问。
+    // 这里提前拦住，用户不必等一个来回才知道少选了东西。
+    if (draftMode.value === 'RAG' && !draftKbId.value) {
+      ElMessage.warning(knowledgeBases.value.length
+        ? '知识库问答需要先选择一个知识库'
+        : '还没有知识库，先到"知识库"页导一份笔记')
+      return
+    }
+    const created = await createConversation(draftMode.value, {
+      kbIds: draftMode.value === 'RAG' ? [draftKbId.value] : []
+    })
     conversationId = created.id
     activeId.value = created.id
     conversations.value = [created, ...conversations.value]
@@ -154,6 +226,7 @@ async function send(preset?: string) {
     role: 'ASSISTANT',
     content: '',
     toolCalls: [],
+    retrieval: null,
     streaming: true
   }
   items.value.push(answer)
@@ -165,12 +238,17 @@ async function send(preset?: string) {
   abortController.value = controller
 
   try {
-    await streamAgentChat(
+    await streamChat(
       conversationId,
       content,
       {
         onMeta: (meta) => {
           requestId.value = meta.requestId
+        },
+        onRetrieval: (retrieval) => {
+          // 检索事件早于第一个 delta：用户先看到"检索到 N 个片段"，再看回答逐字出现
+          answer.retrieval = retrieval
+          void scrollToBottom()
         },
         onToolCall: (call) => {
           // 工具"正在执行"：先占位再填结果，用户能看到过程而不是只有结果
@@ -335,7 +413,7 @@ watch(activeId, () => {
           :key="conversation.id"
           class="conversation"
           :class="{ active: conversation.id === activeId }"
-          @click="selectConversation(conversation.id)"
+          @click="pickConversation(conversation.id)"
         >
           <span class="conversation-title">{{ conversation.title || '新对话' }}</span>
           <span class="conversation-meta num">
@@ -362,12 +440,31 @@ watch(activeId, () => {
     <section class="thread">
       <header class="thread-head">
         <div class="thread-title">
-          <h1>{{ activeConversation?.title || 'Agent 对话' }}</h1>
+          <h1>{{ activeConversation?.title || '对话' }}</h1>
           <p class="sub">
-            模型先决定是否检索你的知识库（工具调用），再基于检索结果回答；每次检索都留痕
+            {{
+              activeConversation?.mode === 'RAG'
+                ? '先在你的知识库里检索，再基于检索到的片段回答；检索到几个片段会实时显示'
+                : '模型先决定是否检索你的知识库（工具调用），再基于检索结果回答；每次检索都留痕'
+            }}
           </p>
         </div>
-        <el-tag v-if="activeConversation" size="small" effect="plain">AGENT</el-tag>
+        <div class="thread-meta">
+          <el-tag v-if="activeConversation" size="small" effect="plain">
+            {{ activeConversation.mode }}
+          </el-tag>
+          <!-- RAG 会话的知识库可以改绑：换了库之后，后续轮次检索的就是新库 -->
+          <el-select
+            v-if="activeConversation?.mode === 'RAG'"
+            :model-value="activeConversation.kbIds?.[0] ?? ''"
+            size="small"
+            placeholder="未绑定知识库"
+            class="kb-select"
+            @change="changeBoundKnowledgeBase"
+          >
+            <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
+          </el-select>
+        </div>
       </header>
 
       <div ref="scroller" v-loading="loadingMessages" class="messages" @scroll="onScroll">
@@ -396,6 +493,31 @@ watch(activeId, () => {
           :class="message.role === 'USER' ? 'from-user' : 'from-agent'"
         >
           <div class="bubble">
+            <!-- RAG 的检索结果：先于回答出现，用户不必对着空白等生成 -->
+            <div v-if="message.retrieval" class="retrieval">
+              <span class="retrieval-count">检索到 {{ message.retrieval.count }} 个片段</span>
+              <el-tag v-if="message.retrieval.empty" size="small" effect="plain" type="warning">
+                知识库里没有命中
+              </el-tag>
+              <el-tag v-if="message.retrieval.reranked" size="small" effect="plain" type="success">
+                已重排
+              </el-tag>
+              <el-tag
+                v-if="message.retrieval.truncated"
+                size="small"
+                effect="plain"
+                type="info"
+              >
+                预算截断 {{ message.retrieval.truncated }} 段
+              </el-tag>
+              <ul v-if="message.retrieval.hits.length" class="retrieval-hits">
+                <li v-for="hit in message.retrieval.hits.slice(0, 5)" :key="hit.chunkId">
+                  {{ hit.documentTitle || '未命名文档' }}
+                  <template v-if="hit.headingPath"> › {{ hit.headingPath }}</template>
+                </li>
+              </ul>
+            </div>
+
             <!-- 工具痕迹：过程可见。检索中与已完成用两种状态区分 -->
             <ol v-if="message.toolCalls.length" class="trace">
               <li v-for="(call, index) in message.toolCalls" :key="index">
@@ -417,6 +539,24 @@ watch(activeId, () => {
             <div v-else class="markdown" v-html="html(message)" />
           </div>
         </article>
+      </div>
+
+      <!-- 新建会话时的两个选择：模式决定走哪条链路，知识库决定 RAG 检索哪里。
+           已有会话时不再显示——模式是会话属性，中途改等于换了一种问答（服务端也拒绝）。 -->
+      <div v-if="!activeId" class="composer-options">
+        <el-radio-group v-model="draftMode" size="small">
+          <el-radio-button value="AGENT">Agent（自己决定检索）</el-radio-button>
+          <el-radio-button value="RAG">知识库问答（先检索再答）</el-radio-button>
+        </el-radio-group>
+        <el-select
+          v-if="draftMode === 'RAG'"
+          v-model="draftKbId"
+          size="small"
+          placeholder="选择知识库"
+          class="kb-select"
+        >
+          <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
+        </el-select>
       </div>
 
       <footer class="composer">
@@ -830,6 +970,46 @@ watch(activeId, () => {
   color: var(--accent-600);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+/* ---------- 新建会话的模式/知识库选择 ---------- */
+.composer-options {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5) 0;
+  flex-wrap: wrap;
+}
+
+.kb-select {
+  width: 200px;
+}
+
+/* ---------- 检索卡片（RAG 模式：先于回答出现） ---------- */
+.retrieval {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-chip);
+  background: var(--surface-2, transparent);
+  font-size: 12.5px;
+}
+
+.retrieval-count {
+  color: var(--accent-600);
+  font-weight: 600;
+}
+
+.retrieval-hits {
+  flex-basis: 100%;
+  margin: 0;
+  padding-left: 1.1em;
+  color: var(--text-muted);
+  line-height: 1.7;
 }
 
 /* ---------- 输入区 ---------- */

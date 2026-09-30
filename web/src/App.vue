@@ -24,7 +24,7 @@ const navItems = [
     icon: Collection,
     match: ['knowledge-bases', 'knowledge-base-detail']
   },
-  { to: '/agent', label: 'Agent 对话', icon: ChatDotRound, match: ['agent'] }
+  { to: '/agent', label: '对话', icon: ChatDotRound, match: ['agent'] }
 ]
 
 /** 头像里的首字母：没有头像时比一个通用图标更能区分账号 */

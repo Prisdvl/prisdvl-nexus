@@ -15,6 +15,8 @@ export interface Conversation {
   messageCount: number
   lastMessageAt: string | null
   pinned: boolean
+  /** RAG 会话绑定的知识库 id（空数组 = 未绑定，不是 null）。其余模式恒为空 */
+  kbIds: string[]
   createdAt: string
   updatedAt: string
 }
@@ -37,9 +39,21 @@ export interface ChatMessage {
   toolCalls: MessageToolCall[]
 }
 
-/** 新建会话；Agent 对话固定用 AGENT 模式（走带工具的链路）。 */
-export function createConversation(mode: 'PLAIN' | 'RAG' | 'AGENT', title?: string) {
-  return client.post<never, Conversation>('/chat/conversations', { mode, title })
+/**
+ * 新建会话。
+ *
+ * `kbIds` 只在 RAG 模式下有意义（服务端会拒绝给 PLAIN/AGENT 绑库，也会拒绝绑多个）：
+ * RAG 会话必须绑定知识库，否则提问时会被明确拒绝——不做"悄悄退化成不检索"。
+ */
+export function createConversation(
+  mode: 'PLAIN' | 'RAG' | 'AGENT',
+  options: { title?: string; kbIds?: string[] } = {}
+) {
+  return client.post<never, Conversation>('/chat/conversations', {
+    mode,
+    title: options.title,
+    kbIds: options.kbIds
+  })
 }
 
 export function listConversations(pageSize = 50) {
@@ -52,6 +66,11 @@ export function renameConversation(id: string, title: string) {
   return client.put<never, Conversation>(`/chat/conversations/${id}`, { title })
 }
 
+/** 改绑知识库（RAG 会话）；传空数组 = 解绑。 */
+export function bindKnowledgeBase(id: string, kbIds: string[]) {
+  return client.put<never, Conversation>(`/chat/conversations/${id}`, { kbIds })
+}
+
 export function deleteConversation(id: string) {
   return client.delete<never, void>(`/chat/conversations/${id}`)
 }
@@ -61,6 +80,28 @@ export function listMessages(conversationId: string, pageSize = 100) {
   return client.get<never, { list: ChatMessage[]; total: number }>(
     `/chat/messages/${conversationId}?pageNum=1&pageSize=${pageSize}`
   )
+}
+
+/** 一条检索命中（切片级：与回答里的 [n] 编号一一对应）。 */
+export interface StreamRetrievalHit {
+  chunkId: string
+  documentId: string
+  documentTitle: string | null
+  headingPath: string | null
+  score: number
+  /** bm25 / vector / hybrid */
+  source: string
+}
+
+/** retrieval 事件：检索完成、生成之前到达，供界面显示"检索到 N 个片段"。 */
+export interface StreamRetrieval {
+  knowledgeBaseId: string | null
+  count: number
+  hits: StreamRetrievalHit[]
+  contextTokens: number
+  truncated: number
+  reranked: boolean
+  empty: boolean
 }
 
 export interface StreamMeta {
@@ -87,6 +128,7 @@ export interface StreamUsage {
 
 export interface AgentStreamHandlers {
   onMeta?: (meta: StreamMeta) => void
+  onRetrieval?: (retrieval: StreamRetrieval) => void
   onDelta?: (text: string) => void
   onToolCall?: (call: { tool: string; input: string }) => void
   onToolResult?: (call: MessageToolCall) => void
@@ -95,13 +137,16 @@ export interface AgentStreamHandlers {
 }
 
 /**
- * 发起一轮 Agent 对话（流式）。
+ * 发起一轮对话（流式）。三种会话模式共用这一条链路，事件子集不同：
  *
- * 事件顺序：meta →（tool_call → tool_result）* → delta… → usage → done。
- * 工具调用发生在生成之前，因此"正在检索…"能实时出现在回答之前 —— 这正是
- * 用户能看到"模型在做什么"的地方，而不是对着空白等十几秒。
+ * - `PLAIN`：meta → delta… → usage → done
+ * - `RAG`：meta → **retrieval**（检索到 N 个片段）→ delta… → usage → done
+ * - `AGENT`：meta →（tool_call → tool_result）* → delta… → usage → done
+ *
+ * 检索/tool 事件都发生在生成之前，因此"正在检索…"能实时出现在回答之前 ——
+ * 这正是用户能看到"模型在做什么"的地方，而不是对着空白等十几秒。
  */
-export async function streamAgentChat(
+export async function streamChat(
   conversationId: string,
   content: string,
   handlers: AgentStreamHandlers,
@@ -117,6 +162,9 @@ export async function streamAgentChat(
         switch (event) {
           case 'meta':
             handlers.onMeta?.(payload)
+            break
+          case 'retrieval':
+            handlers.onRetrieval?.(payload)
             break
           case 'delta':
             handlers.onDelta?.((payload as { text: string }).text ?? '')

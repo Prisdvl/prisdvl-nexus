@@ -347,8 +347,27 @@ export interface StreamDone {
   error?: string
 }
 
+/** retrieval 事件：检索完成、生成之前到达（"检索到 N 个片段"就来自这里）。 */
+export interface StreamRetrieval {
+  knowledgeBaseId: string | null
+  count: number
+  hits: Array<{
+    chunkId: string
+    documentId: string
+    documentTitle: string | null
+    headingPath: string | null
+    score: number
+    source: string
+  }>
+  contextTokens: number
+  truncated: number
+  reranked: boolean
+  empty: boolean
+}
+
 export interface StreamHandlers {
   onMeta?: (meta: StreamMeta) => void
+  onRetrieval?: (retrieval: StreamRetrieval) => void
   onDelta?: (text: string) => void
   onDone?: (done: StreamDone) => void
 }
@@ -357,7 +376,8 @@ export interface StreamHandlers {
  * 流式问答（SSE over POST）。
  *
  * 帧的解析规则与 Agent 对话完全一样，因此复用 {@code utils/sse.ts}（解析只有一处实现）。
- * 事件顺序由后端保证：meta → delta… → done（done 里带引用与留档 id）。
+ * 事件顺序由后端保证：meta → retrieval → delta… → done（done 里带引用与留档 id）。
+ * retrieval 里的命中片段就是"检索到 N 个片段"的来源，且必定早于第一个 delta。
  */
 export async function askQuestionStream(
   id: string,
@@ -376,6 +396,7 @@ export async function askQuestionStream(
       onFrame: ({ event, data }) => {
         const payload = data as never
         if (event === 'meta') handlers.onMeta?.(payload as StreamMeta)
+        else if (event === 'retrieval') handlers.onRetrieval?.(payload as StreamRetrieval)
         else if (event === 'delta') handlers.onDelta?.((payload as { text: string }).text ?? '')
         else if (event === 'done') handlers.onDone?.(payload as StreamDone)
       }

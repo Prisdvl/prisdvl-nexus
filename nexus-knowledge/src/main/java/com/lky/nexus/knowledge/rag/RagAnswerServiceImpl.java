@@ -125,7 +125,7 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         List<ChunkSearchService.SearchHit> hits =
                 chunkSearchService.search(userId, knowledgeBaseId, retrievalQuery, topK, SearchMode.HYBRID);
         if (hits.isEmpty()) {
-            return finish("资料中没有相关内容（知识库尚未导入或未建立索引）。",
+            return finish(RagAnswerService.EMPTY_ANSWER,
                     List.of(), 0, 0, false, start, knowledgeBaseId, userId, question);
         }
 

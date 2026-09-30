@@ -57,25 +57,23 @@ public class KnowledgeRagController {
         return request.topK() == null ? null : Math.clamp(request.topK(), 1, MAX_TOP_K);
     }
 
-    /** 前端只传"上一轮的问题 + 回答开头"，避免把上下文撑爆（多轮不等于无限塞历史）。 */
+    /**
+     * 前端只传"上一轮的问题 + 回答"，服务端统一收敛成"最多 3 轮、回答只留开头 300 字"。
+     *
+     * <p>规则（含历史取哪几轮、截断多长）放在 {@link RagAnswerService.RagTurn} 里，
+     * 因为它同时服务这条接口与会话流式（{@code /api/chat/stream} 的 RAG 模式从 ChatMemory 取历史）——
+     * 两处各写一份，迟早出现"同一个问题在不同入口看到的历史长度不一样"。
+     *
+     * <p>顺带修正：原先 {@code limit(3)} 取的是**最早**的 3 轮，而只有最近几轮才有助于消解指代
+     * （"那它有什么缺点？"指的是上一轮问的东西）。现在取最近的 3 轮。
+     */
     private List<RagAnswerService.RagTurn> toTurns(List<HistoryTurn> history) {
         if (history == null || history.isEmpty()) {
             return List.of();
         }
-        return history.stream()
-                .filter(turn -> turn.question() != null && !turn.question().isBlank())
-                .limit(3)
-                .map(turn -> new RagAnswerService.RagTurn(turn.question().trim(),
-                        summarize(turn.answer())))
-                .toList();
-    }
-
-    private String summarize(String answer) {
-        if (answer == null || answer.isBlank()) {
-            return null;
-        }
-        String flat = answer.replaceAll("\\s+", " ").trim();
-        return flat.length() <= 300 ? flat : flat.substring(0, 300) + "…";
+        return RagAnswerService.RagTurn.lastTurns(history.stream()
+                .map(turn -> RagAnswerService.RagTurn.of(turn.question(), turn.answer()))
+                .toList());
     }
 
     /** 流式问答（SSE）：事件顺序 meta → delta… → done（done 里带引用与留档 id）。 */

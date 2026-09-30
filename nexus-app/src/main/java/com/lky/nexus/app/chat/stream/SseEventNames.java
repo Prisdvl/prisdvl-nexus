@@ -6,9 +6,10 @@ package com.lky.nexus.app.chat.stream;
  * <p>事件名是前后端契约的一部分：改名字等于破坏前端。集中在这里，
  * 避免"前端监听 delta、后端发 chunk"这类只有联调才发现的低级问题。
  *
- * <p>Phase 1 实际发送：{@link #META}、{@link #DELTA}、{@link #USAGE}、{@link #DONE}、{@link #ERROR}。
- * 其余为 Phase 3/5/6 预留（检索、引用、工具调用、人工确认），现在就把名字定下来，
- * 前端可以提前把分支写好。
+ * <p>当前实际发送：{@link #META}、{@link #DELTA}、{@link #USAGE}、{@link #DONE}、{@link #ERROR}
+ * （Phase 1）、{@link #TOOL_CALL} / {@link #TOOL_RESULT}（Phase 5 Agent）、
+ * {@link #RETRIEVAL}（Phase 3.4 RAG）。
+ * {@link #CITATION} 与 {@link #APPROVAL_REQUIRED} 仍是预留给后续阶段的名称。
  */
 public final class SseEventNames {
 
@@ -28,7 +29,10 @@ public final class SseEventNames {
     public static final String ERROR = "error";
 
     // ---------- Phase 3（RAG）----------
+    /** 检索完成、生成之前：命中片段与来源（前端据此显示"检索到 N 个片段"）。 */
     public static final String RETRIEVAL = "retrieval";
+
+    /** 引用明细。当前引用随 {@code done} 事件返回（回答结束才能解析 [n]），故仍是预留。 */
     public static final String CITATION = "citation";
 
     // ---------- Phase 5 / 6（工具与 Agent）----------

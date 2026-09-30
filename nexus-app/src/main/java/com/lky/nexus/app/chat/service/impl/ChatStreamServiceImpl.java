@@ -12,12 +12,19 @@ import com.lky.nexus.app.chat.model.dto.MessageToolCall;
 import com.lky.nexus.app.chat.model.entity.ChatConversationPO;
 import com.lky.nexus.app.chat.model.entity.ChatMessagePO;
 import com.lky.nexus.app.chat.service.ChatMemoryKeys;
+import com.lky.nexus.app.chat.service.ChatMemoryTurns;
 import com.lky.nexus.app.chat.service.ChatMessageService;
 import com.lky.nexus.app.chat.service.ChatStreamService;
+import com.lky.nexus.app.chat.service.ConversationKbIds;
 import com.lky.nexus.app.chat.service.ConversationService;
+import com.lky.nexus.app.chat.stream.RetrievalEvent;
 import com.lky.nexus.app.chat.stream.SseEventNames;
 import com.lky.nexus.app.chat.stream.StreamCancellationRegistry;
 import com.lky.nexus.app.infra.web.RequestIdHolder;
+import com.lky.nexus.common.api.ErrorCode;
+import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.knowledge.rag.PreparedAnswer;
+import com.lky.nexus.knowledge.rag.RagAnswerService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -33,6 +40,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -58,6 +66,15 @@ import java.util.concurrent.atomic.AtomicReference;
  *   <li><b>终止动作只执行一次</b>：用 {@link AtomicBoolean} 保证
  *       "正常结束 / 用户停止 / 异常 / 客户端断开"四条路径里只有一条会落库并关闭 emitter。</li>
  * </ol>
+ *
+ * <p>三种模式共用这一条流式链路，差别只在"提示词怎么来"：
+ * <ul>
+ *   <li>{@code PLAIN} —— 用户原话 + 会话记忆 advisor；</li>
+ *   <li>{@code RAG} —— 先按会话绑定的知识库检索（{@link RagAnswerService#prepare}），
+ *       发 {@code retrieval} 事件，再走与 {@code /ask/stream} <b>同一份</b>提示词；
+ *       历史从 ChatMemory 取（见 {@link ChatMemoryTurns}，那里解释了为什么不挂 advisor）；</li>
+ *   <li>{@code AGENT} —— 系统提示 + 知识库检索工具，由模型决定检索什么。</li>
+ * </ul>
  */
 @Service
 public class ChatStreamServiceImpl implements ChatStreamService {
@@ -73,26 +90,32 @@ public class ChatStreamServiceImpl implements ChatStreamService {
     private final ChatMemory chatMemory;
     private final StreamCancellationRegistry cancellationRegistry;
     private final KnowledgeSearchTool knowledgeSearchTool;
+    private final RagAnswerService ragAnswerService;
+    private final JsonMapper jsonMapper;
 
     public ChatStreamServiceImpl(ConversationService conversationService,
                                  ChatMessageService chatMessageService,
                                  ChatClientFactory chatClientFactory,
                                  ChatMemory chatMemory,
                                  StreamCancellationRegistry cancellationRegistry,
-                                 KnowledgeSearchTool knowledgeSearchTool) {
+                                 KnowledgeSearchTool knowledgeSearchTool,
+                                 RagAnswerService ragAnswerService,
+                                 JsonMapper jsonMapper) {
         this.conversationService = conversationService;
         this.chatMessageService = chatMessageService;
         this.chatClientFactory = chatClientFactory;
         this.chatMemory = chatMemory;
         this.cancellationRegistry = cancellationRegistry;
         this.knowledgeSearchTool = knowledgeSearchTool;
+        this.ragAnswerService = ragAnswerService;
+        this.jsonMapper = jsonMapper;
     }
 
     @Override
     public SseEmitter stream(Long userId, Long conversationId, String content) {
         // 归属校验放在最前面：异常会走全局异常处理器返回统一 JSON，而不是开一个 SSE 再报错
         ChatConversationPO conversation = conversationService.requireOwned(userId, conversationId);
-        // 模式决定这条链路要不要挂工具：PLAIN/RAG 是纯生成，AGENT 是"模型自己决定检索什么"
+        // 模式决定这条链路走法：PLAIN 纯生成、RAG 先检索再回答、AGENT 由模型自己决定检索什么
         ChatMode mode = ChatMode.parse(conversation.getMode());
         String modelRole = StringUtils.hasText(conversation.getModelRole())
                 ? conversation.getModelRole()
@@ -100,6 +123,20 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         // 取模型放在落库之前：模型未注册（4006）属于配置问题，必须在<b>产生副作用之前</b>失败。
         // 否则会留下一条用户消息 + 一条永远停在 STREAMING 的空助手消息，用户看到的是"消息凭空多了一条"。
         ChatClient chatClient = chatClientFactory.get(modelRole);
+
+        // RAG 模式的检索同样放在落库之前（与 /ask/stream 一致，见 RagStreamServiceImpl）：
+        // ① 知识库未绑定/不属于自己、索引不可用，都会以统一 JSON 报错，而不是"先开一条 SSE 再在半路报错"；
+        // ② 检索发生在生成之前，用户等待的就是"检索 + 生成"两段，事件顺序也才好保证。
+        boolean ragMode = mode == ChatMode.RAG;
+        Long knowledgeBaseId = ragMode ? requireKnowledgeBaseId(conversation) : null;
+        // 历史从 ChatMemory 取（不是 chat_message 全量）：它同时服务两个地方——
+        // 消解指代的检索查询串、以及给模型的"之前的问答"。详见 ChatMemoryTurns 的类注释。
+        List<RagAnswerService.RagTurn> history = ragMode
+                ? ChatMemoryTurns.read(chatMemory, ChatMemoryKeys.of(conversationId))
+                : List.of();
+        PreparedAnswer prepared = ragMode
+                ? ragAnswerService.prepare(userId, knowledgeBaseId, content, null, history)
+                : null;
 
         String requestId = resolveRequestId();
 
@@ -120,19 +157,59 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         emitter.onError(throwable -> cancellationRegistry.clear(requestId));
 
         StreamSession session = new StreamSession(userId, conversationId, assistantMessage.getId(),
-                requestId, modelRole, mode, emitter);
+                requestId, modelRole, mode, ragMode, content, emitter);
         session.sendMeta(userMessage.getId(), assistantMessage.getId());
+        if (ragMode) {
+            // 检索事件必须在第一个 delta 之前：前端据此显示"检索到 N 个片段"。
+            // 这里是同步发送（flux 还没订阅），顺序由代码结构保证，不靠时序运气。
+            session.sendRetrieval(knowledgeBaseId, prepared);
+        }
 
-        MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
-        boolean agentMode = mode == ChatMode.AGENT;
+        // 没有资料就不调用模型（与 /ask/stream 完全一致：省钱，也从根上避免"无资料硬答"）。
+        // 仍走完整的流式事件序列，前端只有一套处理逻辑。
+        if (ragMode && prepared.empty()) {
+            session.finishWithoutModel(RagAnswerService.EMPTY_ANSWER);
+            return emitter;
+        }
 
-        // Flux.defer：整条 prompt 的构建推迟到"订阅那一刻"，这样工具循环才落在
-        // boundedElastic 的工作线程上（而不是 MVC 请求线程）
-        Flux<ChatResponse> modelFlux = Flux.defer(() -> {
-            ChatClient.ChatClientRequestSpec request = chatClient.prompt()
-                    .user(content)
-                    .advisors(a -> a.advisors(memoryAdvisor)
-                            .param(ChatMemory.CONVERSATION_ID, ChatMemoryKeys.of(conversationId)));
+        Flux<ChatResponse> modelFlux = buildFlux(userId, chatClient, session, conversationId, content,
+                ragMode, prepared, history);
+        // subscribeOn：分片读取可能阻塞，必须离开 MVC 请求线程
+        Disposable subscription = modelFlux.subscribeOn(Schedulers.boundedElastic())
+                .subscribe(session::onChunk, session::onError, session::onComplete);
+        session.attach(subscription);
+
+        log.info("开始流式生成 requestId={}, conversationId={}, mode={}, modelRole={}{}",
+                requestId, conversationId, mode, modelRole,
+                ragMode ? ", kbId=" + knowledgeBaseId + ", 检索到 " + prepared.usedHits().size() + " 个片段" : "");
+        return emitter;
+    }
+
+    /**
+     * 构建待订阅的 Flux。
+     *
+     * <p>用 {@code Flux.defer} 把整条 prompt 的构建推迟到"订阅那一刻"，
+     * 这样工具循环（可能包含多次模型往返）落在 boundedElastic 的工作线程上，而不是 MVC 请求线程。
+     */
+    private Flux<ChatResponse> buildFlux(Long userId, ChatClient chatClient, StreamSession session,
+                                         Long conversationId, String content, boolean ragMode,
+                                         PreparedAnswer prepared, List<RagAnswerService.RagTurn> history) {
+        boolean agentMode = session.mode == ChatMode.AGENT;
+        // RAG 模式不挂记忆 advisor（它会把组装后的【资料】块原样存进记忆，见 ChatMemoryTurns）；
+        // PLAIN / AGENT 保持原样——它们的用户消息就是用户原话，交给 advisor 既省事又正确。
+        MessageChatMemoryAdvisor memoryAdvisor = ragMode ? null : MessageChatMemoryAdvisor.builder(chatMemory).build();
+        return Flux.defer(() -> {
+            ChatClient.ChatClientRequestSpec request = chatClient.prompt();
+            if (ragMode) {
+                // 与 /ask/stream 共用同一份系统提示与用户消息构造：两条链路绝不能各写一份，
+                // 否则同一个人问同一个问题会得到两种答案（资料编号规则、无依据时的措辞都会漂移）
+                request = request.system(ragAnswerService.systemPrompt())
+                        .user(ragAnswerService.userMessage(content, prepared, history));
+            } else {
+                request = request.user(content)
+                        .advisors(a -> a.advisors(memoryAdvisor)
+                                .param(ChatMemory.CONVERSATION_ID, ChatMemoryKeys.of(conversationId)));
+            }
             if (agentMode) {
                 // toolContext 是工具拿"当前用户"的唯一通道（详见 AgentContext 的类注释：
                 // 流式链路上工具的执行线程与订阅线程不是同一个，ThreadLocal 会静默丢用户）。
@@ -143,15 +220,21 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             }
             return request.stream().chatResponse();
         });
+    }
 
-        // subscribeOn：分片读取可能阻塞，必须离开 MVC 请求线程
-        Disposable subscription = modelFlux.subscribeOn(Schedulers.boundedElastic())
-                .subscribe(session::onChunk, session::onError, session::onComplete);
-        session.attach(subscription);
-
-        log.info("开始流式生成 requestId={}, conversationId={}, mode={}, modelRole={}",
-                requestId, conversationId, mode, modelRole);
-        return emitter;
+    /**
+     * 取会话绑定的知识库（RAG 模式）。
+     *
+     * <p>这条路径上<b>没有</b>"悄悄退化成不检索"这个选项：RAG 会话拿不到知识库时，
+     * 用户真正想要的是"告诉我哪里没配好"，而不是一个看起来正常、其实没查过笔记的回答。
+     */
+    private Long requireKnowledgeBaseId(ChatConversationPO conversation) {
+        List<Long> kbIds = ConversationKbIds.parse(jsonMapper, conversation.getKbIds());
+        if (kbIds.isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "该会话（RAG 模式）尚未绑定知识库，请先绑定后再提问");
+        }
+        return kbIds.get(0);
     }
 
     @Override
@@ -190,6 +273,10 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         private final String requestId;
         private final String modelRole;
         private final ChatMode mode;
+        /** 是否 RAG 模式：决定结束时要做的额外动作（把这一轮写回会话记忆，见 persist） */
+        private final boolean ragMode;
+        /** 本轮用户提问原文：写回记忆时必须用它，而不是组装后的提示词 */
+        private final String question;
         private final SseEmitter emitter;
 
         private final StringBuilder assembled = new StringBuilder();
@@ -205,13 +292,16 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         private volatile String finishReason;
 
         private StreamSession(Long userId, Long conversationId, Long assistantMessageId,
-                              String requestId, String modelRole, ChatMode mode, SseEmitter emitter) {
+                              String requestId, String modelRole, ChatMode mode, boolean ragMode,
+                              String question, SseEmitter emitter) {
             this.userId = userId;
             this.conversationId = conversationId;
             this.assistantMessageId = assistantMessageId;
             this.requestId = requestId;
             this.modelRole = modelRole;
             this.mode = mode;
+            this.ragMode = ragMode;
+            this.question = question;
             this.emitter = emitter;
         }
 
@@ -229,6 +319,30 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             payload.put("modelRole", modelRole);
             payload.put("mode", mode.name());
             send(SseEventNames.META, payload);
+        }
+
+        /** 检索事件（RAG 模式）：命中片段、来源、是否重排/截断。必须在第一个 delta 之前发出。 */
+        private void sendRetrieval(Long knowledgeBaseId, PreparedAnswer prepared) {
+            send(SseEventNames.RETRIEVAL, RetrievalEvent.of(knowledgeBaseId, prepared));
+        }
+
+        /**
+         * 没有资料时的收尾：不调用模型，仍然按完整的事件序列把固定回答推给前端。
+         *
+         * <p>与 {@code /ask/stream} 的空结果分支行为一致（同一句 {@link RagAnswerService#EMPTY_ANSWER}），
+         * 并且<b>照样落库</b>：这条回答对用户是有效的（它明确说了"没找到依据"），
+         * 若只在内存里推一把不落库，刷新后这一轮对话就凭空消失了。
+         */
+        private void finishWithoutModel(String text) {
+            if (!finalized.compareAndSet(false, true)) {
+                return;
+            }
+            assembled.append(text);
+            send(SseEventNames.DELTA, Map.of("text", text));
+            finishReason = "empty";
+            persist(MessageStatus.DONE, null);
+            send(SseEventNames.DONE, Map.of("finishReason", "empty"));
+            finish();
         }
 
         // ---------- Agent 工具事件 ----------
@@ -337,6 +451,25 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                     // 工具痕迹随消息落库：刷新页面后"当时检索了什么"仍然可查
                     .toolCalls(trace.isEmpty() ? null : trace)
                     .build());
+            rememberTurn();
+        }
+
+        /**
+         * RAG 模式：把这一轮写回会话记忆（下一轮据此消解指代 + 给模型看历史）。
+         *
+         * <p>写记忆<b>不能</b>让落库失败：记忆只影响下一轮的输入质量，
+         * 而 chat_message 是这一轮的既成事实，两者重要性不对等。
+         */
+        private void rememberTurn() {
+            if (!ragMode) {
+                return;
+            }
+            try {
+                ChatMemoryTurns.remember(chatMemory, ChatMemoryKeys.of(conversationId), question,
+                        assembled.toString());
+            } catch (Exception ex) {
+                log.warn("会话记忆写入失败（不影响本轮落库）conversationId={}: {}", conversationId, ex.getMessage());
+            }
         }
 
         private void sendUsage() {

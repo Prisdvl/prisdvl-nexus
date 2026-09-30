@@ -123,6 +123,8 @@ const useStream = ref(true)
 /** 流式进行中的原文。先纯文本、结束后再渲染 Markdown：每来一个字就重新渲染 Markdown 太贵 */
 const streamedText = ref('')
 const streamingNow = ref(false)
+/** 检索事件里报告的命中片段数；未收到（或非流式）时为 null */
+const retrievedCount = ref<number | null>(null)
 
 const filteredDocuments = computed(() => {
   const keyword = docFilter.value.trim().toLowerCase()
@@ -279,6 +281,7 @@ async function askStreaming(asked: string, history: Array<{ question: string; an
   ragAnswer.value = null
   answerHtml.value = ''
   streamedText.value = ''
+  retrievedCount.value = null
   streamingNow.value = true
 
   let citations: RagAnswer['citations'] = []
@@ -288,6 +291,13 @@ async function askStreaming(asked: string, history: Array<{ question: string; an
   let reranked = false
 
   await askQuestionStream(kbId, asked, undefined, history, {
+    onRetrieval: (retrieval) => {
+      // 检索事件必定早于第一个 delta：用户不必对着空白等生成，先看到"检索到几段"
+      retrievedCount.value = retrieval.count
+      contextTokens = retrieval.contextTokens
+      truncated = retrieval.truncated
+      reranked = retrieval.reranked
+    },
     onMeta: (meta) => {
       citations = meta.citations.map((item, index) => ({
         index: index + 1,
@@ -742,6 +752,11 @@ watch(activeTab, () => {
 
             <div v-if="ragAnswer || streamingNow" class="answer-block">
               <div class="answer-meta">
+                <!-- 检索事件必定早于第一个 delta：生成开始前这一行里只有它，
+                     "模型这一刻在做什么"就靠它，而不是一个转圈 -->
+                <span v-if="streamingNow && retrievedCount !== null" class="num retrieval-tag">
+                  检索到 {{ retrievedCount }} 个片段
+                </span>
                 <span class="num" v-if="streamingNow">生成中…</span>
                 <template v-else>
                   <span class="num">资料 {{ ragAnswer?.citations.length ?? 0 }} 段 / {{ ragAnswer?.contextTokens }} tok</span>
@@ -1422,6 +1437,12 @@ watch(activeTab, () => {
   color: var(--text-muted);
   font-size: 12px;
   margin-bottom: var(--space-2);
+}
+
+/* 检索条数：用主色强调，因为它是"这一刻在做什么"的唯一线索（生成开始前界面上只有它） */
+.retrieval-tag {
+  color: var(--accent-600);
+  font-weight: 600;
 }
 
 /* 回答块：浅主色底 + 大圆角。它和正文要一眼可分，所以用底色而不是左侧竖线 */
