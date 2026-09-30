@@ -264,6 +264,22 @@ export function getDocumentLinks(id: string, documentId: string) {
   return client.get<never, DocumentLinks>(`/knowledge-bases/${id}/documents/${documentId}/links`)
 }
 
+export interface RelatedDocument {
+  documentId: string
+  title: string | null
+  sharedTags: number
+  linked: boolean
+  /** 为什么相关（"互相链接"、"共同标签: Java"） */
+  reasons: string[]
+}
+
+/** 相关推荐（Phase 4.2）：共同标签 + 链接关系加权。 */
+export function getRelatedDocuments(id: string, documentId: string, limit = 5) {
+  return client.get<never, RelatedDocument[]>(`/knowledge-bases/${id}/documents/${documentId}/related`, {
+    params: { limit }
+  })
+}
+
 /**
  * 检索。mode 三选一都开放——融合效果好不好，只有在能单独看每一路时才判断得了。
  */

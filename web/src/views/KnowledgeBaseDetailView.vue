@@ -11,6 +11,7 @@ import {
   embedChunks,
   getDocument,
   getDocumentLinks,
+  getRelatedDocuments,
   getImportTask,
   getQaHistory,
   listChunks,
@@ -22,6 +23,7 @@ import {
   type ChunkView,
   type DocumentDetail,
   type DocumentLinks,
+  type RelatedDocument,
   type DocumentSummary,
   type ImportTask,
   type KnowledgeBase,
@@ -56,6 +58,7 @@ const detail = ref<DocumentDetail | null>(null)
 const detailLoading = ref(false)
 const chunks = ref<ChunkView[]>([])
 const links = ref<DocumentLinks | null>(null)
+const related = ref<RelatedDocument[]>([])
 const articleRef = ref<HTMLElement | null>(null)
 const renderedHtml = ref('')
 
@@ -127,14 +130,17 @@ async function selectDocument(documentId: string) {
     // 上一版我在这里把解构变量改名成 loadedDoc，却漏改了下方 renderMarkdown(doc.content)，
     // 还凭空加了一行 doc.value —— 脚本里根本没有 doc 这个 ref，
     // 于是整个 selectDocument 运行时直接抛 "doc is not defined"，页面打不开。
-    const [loadedDoc, chunkList, linkList] = await Promise.all([
+    const [loadedDoc, chunkList, linkList, relatedList] = await Promise.all([
       getDocument(kbId, documentId),
       listChunks(kbId, documentId),
-      getDocumentLinks(kbId, documentId)
+      getDocumentLinks(kbId, documentId),
+      // 推荐是增强项：失败不影响文档本身加载（降级为"无推荐"而不是整页失败）
+      getRelatedDocuments(kbId, documentId).catch(() => [])
     ])
     detail.value = loadedDoc
     chunks.value = chunkList
     links.value = linkList
+    related.value = relatedList
     selectedId.value = documentId
     renderedHtml.value = renderMarkdown(loadedDoc.content)
     await nextTick()
@@ -552,6 +558,29 @@ watch(activeTab, () => {
                         >
                           <el-tag size="small" effect="plain" type="success">被引用</el-tag>
                           <span class="link-name">{{ link.resolvedTitle || '未知文档' }}</span>
+                        </li>
+                      </ul>
+                    </div>
+                  </section>
+
+                  <!-- 相关推荐（Phase 4.2）：共同标签 + 链接关系 -->
+                  <section v-if="related.length" class="links">
+                    <div class="links-head">
+                      <h3>相关推荐</h3>
+                      <span class="num">{{ related.length }} 篇</span>
+                    </div>
+                    <div class="link-group">
+                      <ul>
+                        <li
+                          v-for="item in related"
+                          :key="item.documentId"
+                          @click="openLinked(item.documentId)"
+                        >
+                          <el-tag size="small" effect="plain" :type="item.linked ? 'success' : 'info'">
+                            {{ item.linked ? '互相链接' : '共同标签' }}
+                          </el-tag>
+                          <span class="link-name">{{ item.title }}</span>
+                          <span class="related-reasons">{{ item.reasons.join(' · ') }}</span>
                         </li>
                       </ul>
                     </div>
@@ -1248,6 +1277,12 @@ watch(activeTab, () => {
 
 .link-name {
   color: var(--neutral-700);
+}
+
+/* 相关推荐的理由（如"互相链接 · 共同标签: java"）在条目内弱化显示 */
+.related-reasons {
+  font-size: 11.5px;
+  color: var(--neutral-500);
 }
 
 /* 问答块 */

@@ -50,7 +50,7 @@ try {
   // 切换还没完成就去读关联面板，读到的是上一篇文档的旧值，误判成"没有切换"
   await page.waitForSelector('.doc-title:has-text("Spring Boot")', { timeout: 15000 })
   await page.waitForSelector('.link-group li.unresolved', { timeout: 15000 })
-  const linkSummary = (await page.locator('.links-head .num').innerText()).replace(/\s+/g, ' ').trim()
+  const linkSummary = (await page.locator('.links-head .num').first().innerText()).replace(/\s+/g, ' ').trim()
   const outlinks = await page.locator('.link-group li').count()
   console.log(`关联面板：${linkSummary}（条目 ${outlinks}）`)
   if (outlinks === 0) failures.push('关联面板没有条目')
@@ -58,6 +58,11 @@ try {
   if ((await page.locator('.link-group li.unresolved').count()) === 0) {
     failures.push('没有识别出"待创建"的引用')
   }
+  // 相关推荐面板（Phase 4.2）：与关联面板共用样式，用标题文本区分
+  const relatedSection = page.locator('.links', { has: page.locator('.links-head:has-text("相关推荐")') })
+  const relatedItems = await relatedSection.locator('.link-group li').count()
+  console.log(`相关推荐：${relatedItems} 篇`)
+  if (relatedItems === 0) failures.push('相关推荐面板为空')
   await shoot('kb-doc')
 
   // ③ 切片
