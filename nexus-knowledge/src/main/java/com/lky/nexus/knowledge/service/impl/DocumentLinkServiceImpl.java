@@ -11,9 +11,13 @@ import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.service.DocumentLinkService;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -36,13 +40,88 @@ public class DocumentLinkServiceImpl implements DocumentLinkService {
     private final KnowledgeBaseService knowledgeBaseService;
     private final DocumentMapper documentMapper;
     private final DocumentLinkMapper documentLinkMapper;
+    private final JsonMapper jsonMapper;
 
     public DocumentLinkServiceImpl(KnowledgeBaseService knowledgeBaseService,
                                    DocumentMapper documentMapper,
-                                   DocumentLinkMapper documentLinkMapper) {
+                                   DocumentLinkMapper documentLinkMapper,
+                                   JsonMapper jsonMapper) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.documentMapper = documentMapper;
         this.documentLinkMapper = documentLinkMapper;
+        this.jsonMapper = jsonMapper;
+    }
+
+    @Override
+    public List<RelatedDocument> related(Long userId, Long knowledgeBaseId, Long documentId, int limit) {
+        knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
+        List<DocumentPO> documents = documentMapper.selectList(
+                Wrappers.<DocumentPO>lambdaQuery().eq(DocumentPO::getKbId, knowledgeBaseId));
+        DocumentPO target = documents.stream()
+                .filter(document -> document.getId().equals(documentId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.DOCUMENT_NOT_FOUND));
+
+        // 与本篇有直接链接的文档（出链解析 + 反向链接，全库边扫一遍即可——个人库规模有限）
+        Map<String, DocumentPO> lookup = buildLookup(knowledgeBaseId);
+        Set<Long> linkedIds = new HashSet<>();
+        for (DocumentLinkPO link : documentLinkMapper.selectList(
+                Wrappers.<DocumentLinkPO>lambdaQuery().eq(DocumentLinkPO::getKbId, knowledgeBaseId))) {
+            DocumentPO resolved = resolveTarget(lookup, link.getTarget());
+            if (resolved == null) {
+                continue;
+            }
+            if (resolved.getId().equals(documentId)) {
+                linkedIds.add(link.getFromDocumentId()); // 有人链接到本篇
+            } else if (link.getFromDocumentId().equals(documentId)) {
+                linkedIds.add(resolved.getId()); // 本篇链接出去
+            }
+        }
+
+        Set<String> targetTags = parseTags(target.getTags());
+        List<RelatedDocument> result = new ArrayList<>();
+        for (DocumentPO document : documents) {
+            if (document.getId().equals(documentId)) {
+                continue;
+            }
+            boolean linked = linkedIds.contains(document.getId());
+            Set<String> shared = new LinkedHashSet<>(targetTags);
+            shared.retainAll(parseTags(document.getTags()));
+
+            int score = (linked ? 30 : 0) + shared.size() * 10;
+            if (score == 0) {
+                continue;
+            }
+            List<String> reasons = new ArrayList<>();
+            if (linked) {
+                reasons.add("互相链接");
+            }
+            shared.forEach(tag -> reasons.add("共同标签: " + tag));
+            result.add(new RelatedDocument(document.getId(), document.getTitle(),
+                    shared.size(), linked, List.copyOf(reasons), score));
+        }
+        result.sort(Comparator.comparingInt(RelatedDocument::score).reversed());
+        return result.stream().limit(Math.clamp(limit, 1, 20)).toList();
+    }
+
+    /** 标签解析（兼容二次编码的值，见 B.28——同一个坑不在服务层再踩第二次）。 */
+    private Set<String> parseTags(String json) {
+        Set<String> tags = new LinkedHashSet<>();
+        if (json == null || json.isBlank()) {
+            return tags;
+        }
+        try {
+            JsonNode node = jsonMapper.readTree(json);
+            if (node.isString()) {
+                node = jsonMapper.readTree(node.asString());
+            }
+            if (node.isArray()) {
+                node.forEach(item -> tags.add(item.asString()));
+            }
+        } catch (Exception ignored) {
+            // 脏数据按无标签处理
+        }
+        return tags;
     }
 
     @Override

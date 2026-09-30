@@ -32,6 +32,16 @@ public class KnowledgeDocumentController {
         this.documentLinkService = documentLinkService;
     }
 
+    /** 相关推荐（Phase 4.2）：共同标签 + 链接关系加权。 */
+    @GetMapping("/documents/{documentId}/related")
+    public Result<List<DocumentLinkService.RelatedDocument>> related(
+            @PathVariable Long knowledgeBaseId,
+            @PathVariable Long documentId,
+            @RequestParam(defaultValue = "5") int limit) {
+        return Result.ok(documentLinkService.related(
+                CurrentUser.requireId(), knowledgeBaseId, documentId, limit));
+    }
+
     /** 文档列表。 */
     @GetMapping("/documents")
     public Result<PageResult<DocumentSummary>> listDocuments(
