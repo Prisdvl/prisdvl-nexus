@@ -6,6 +6,8 @@ import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;
 import com.lky.nexus.knowledge.model.entity.ChunkPO;
 import com.lky.nexus.knowledge.model.entity.DocumentPO;
+import com.lky.nexus.knowledge.service.ChunkEmbeddingService;
+import com.lky.nexus.knowledge.service.ChunkIndexService;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
 import com.lky.nexus.app.workflow.WorkflowEngine.Step;
 import com.lky.nexus.app.workflow.WorkflowEngine.StepResult;
@@ -32,6 +34,8 @@ public class WorkflowService {
     private final DocumentMapper documentMapper;
     private final ChunkMapper chunkMapper;
     private final KnowledgeBaseService knowledgeBaseService;
+    private final ChunkEmbeddingService chunkEmbeddingService;
+    private final ChunkIndexService chunkIndexService;
     private final boolean vectorEnabled;
     private final boolean searchEnabled;
 
@@ -39,12 +43,16 @@ public class WorkflowService {
                            DocumentMapper documentMapper,
                            ChunkMapper chunkMapper,
                            KnowledgeBaseService knowledgeBaseService,
+                           ChunkEmbeddingService chunkEmbeddingService,
+                           ChunkIndexService chunkIndexService,
                            @Value("${nexus.vector.enabled:false}") boolean vectorEnabled,
                            @Value("${nexus.search.enabled:false}") boolean searchEnabled) {
         this.knowledgeBaseMapper = knowledgeBaseMapper;
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
         this.knowledgeBaseService = knowledgeBaseService;
+        this.chunkEmbeddingService = chunkEmbeddingService;
+        this.chunkIndexService = chunkIndexService;
         this.vectorEnabled = vectorEnabled;
         this.searchEnabled = searchEnabled;
     }
@@ -77,21 +85,27 @@ public class WorkflowService {
                     }
                 },
                 new Step() {
-                    public String name() { return "检查向量库"; }
+                    public String name() { return "向量化"; }
 
-                    public WorkflowEngine.Result execute() {
-                        return vectorEnabled
-                                ? WorkflowEngine.Result.ok("pgvector 可用，下一步可执行嵌入")
-                                : WorkflowEngine.Result.ok("向量库未启用（降级：跳过嵌入，改用关键词检索）");
+                    public WorkflowEngine.Result execute() throws Exception {
+                        // 能力未启用 -> 如实降级（成功但说明），不中止工作流；
+                        // 能力启用后的异常 -> 失败并中止后续。不靠猜异常文本区分，用配置开关。
+                        if (!vectorEnabled) {
+                            return WorkflowEngine.Result.ok("向量库未启用，跳过嵌入（降级：关键词检索兜底）");
+                        }
+                        var result = chunkEmbeddingService.embedPendingChunks(userId, knowledgeBaseId, 100);
+                        return WorkflowEngine.Result.ok("嵌入完成：" + result);
                     }
                 },
                 new Step() {
-                    public String name() { return "检查检索索引"; }
+                    public String name() { return "建索引"; }
 
-                    public WorkflowEngine.Result execute() {
-                        return searchEnabled
-                                ? WorkflowEngine.Result.ok("Elasticsearch 可用，下一步可执行建索引")
-                                : WorkflowEngine.Result.ok("检索索引未启用（降级：SQL 关键词匹配）");
+                    public WorkflowEngine.Result execute() throws Exception {
+                        if (!searchEnabled) {
+                            return WorkflowEngine.Result.ok("检索索引未启用，跳过建索（降级：SQL 关键词匹配）");
+                        }
+                        var result = chunkIndexService.indexPendingChunks(userId, knowledgeBaseId, 100);
+                        return WorkflowEngine.Result.ok("建索引完成：" + result);
                     }
                 });
 
