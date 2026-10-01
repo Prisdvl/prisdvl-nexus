@@ -309,11 +309,13 @@ class ToolResourceTest {
     @Test
     @DisplayName("MCP：tools/list 由注册表生成（不再是手写的那一份 schema），tools/call 走同一个执行壳")
     void mcpToolsComeFromTheRegistry() throws Exception {
+        // 2026-10-01（Phase 5.1）起 /mcp 与其余端点同一套身份：必须带 JWT。
+        // 此前这里靠 `X-Nexus-User: 1` 自证身份，而那条路径是公开的——见 decisions.md B.42。
+        // 本用例只关心"能力清单与执行壳"，身份契约由 McpEndpointAuthTest 单独钉住。
         String token = registerAndLogin("tool-mcp");
-        Long userId = currentUserId(token);
 
         mockMvc.perform(post("/mcp")
-                        .header("X-Nexus-User", String.valueOf(userId))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"jsonrpc":"2.0","id":1,"method":"tools/list"}
@@ -340,7 +342,7 @@ class ToolResourceTest {
         // 缺省的 topK 绑到一个 int 参数上得到 null，拆箱抛 NullPointerException——
         // 4.3 之前被 MCP 那句 arguments.path("topK").asInt(5) 盖住了。见 decisions.md B.39。
         mockMvc.perform(post("/mcp")
-                        .header("X-Nexus-User", String.valueOf(userId))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"jsonrpc":"2.0","id":4,"method":"tools/call",
@@ -356,7 +358,7 @@ class ToolResourceTest {
         // （String 也带引号），MCP 客户端看到 `"1+2*4 = 9"` 会以为是工具的 bug——
         // 这条断言就是"已经拆回原文"的证据
         mockMvc.perform(post("/mcp")
-                        .header("X-Nexus-User", String.valueOf(userId))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"jsonrpc":"2.0","id":2,"method":"tools/call",
@@ -367,7 +369,7 @@ class ToolResourceTest {
                 .andExpect(jsonPath("$.result.content[0].text").value("1+2*4 = 9"));
 
         mockMvc.perform(post("/mcp")
-                        .header("X-Nexus-User", String.valueOf(userId))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"jsonrpc":"2.0","id":3,"method":"tools/call",

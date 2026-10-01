@@ -92,14 +92,28 @@ curl -s -X POST "localhost:8080/api/knowledge-bases/$KB/vault" -H "Authorization
 项目自带最小 MCP Server：`POST http://localhost:8080/mcp`。
 
 ```bash
-# 任意 MCP 客户端 / curl 都可以：
-curl -s -X POST localhost:8080/mcp -H 'Content-Type: application/json' -H 'X-Nexus-User: <你的用户id>' \
+# 1) 先登录拿一个 JWT（身份就是它，没有别的来源）
+TOKEN=$(curl -s -X POST localhost:8080/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"demo","password":"Passw0rd!23"}' | jq -r .data.accessToken)
+
+# 2) 任意 MCP 客户端 / curl 都要带这个令牌：
+curl -s -X POST localhost:8080/mcp \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-# tools/call: {"name":"knowledge_search","arguments":{"query":"缓存击穿"}}
+# tools/call: {"jsonrpc":"2.0","id":2,"method":"tools/call",
+#              "params":{"name":"knowledge_search","arguments":{"query":"缓存击穿"}}}
 ```
 
-**身份模型（如实声明）**：个人本机服务，用 `X-Nexus-User` 头指定用户 id，
-不做 OAuth——不是公开 API，别暴露到公网。
+**身份模型**：与全站一致——`Authorization: Bearer <JWT>`，用户身份取自令牌的 `sub`。
+**没有任何请求头可以声明"我是谁"**（2026-10-01 之前有：`X-Nexus-User`，它使 `/mcp` 成为一条
+免认证即可读任意用户知识库的路径，见 decisions.md B.42）。
+
+因此：
+
+- MCP 客户端配置里要放一个**令牌**（多数客户端支持自定义 header），令牌过期后需重新登录；
+- 令牌等同于该用户的全部数据权限——**不要写进脚本仓库、不要贴进聊天**；
+- 想只在本机使用，就把服务绑到 `127.0.0.1`（例如 `server.address=127.0.0.1`）：
+  **隔离靠网络边界，不靠请求头**。仍然不要把 8080 暴露到公网。
 
 ## 5. 简历 / 面试讲解大纲（3 分钟讲法）
 

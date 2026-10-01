@@ -2846,6 +2846,160 @@ KB_PREFERRED 的一次真实回答开头：
 
 ---
 
+### B.42 Phase 5.1 实现记录（`/mcp`：一条免认证的自证身份路径，产品化审计的 P0）
+
+> 编号说明：这条属于**产品化**这条线（`docs/productization-gap-analysis.md`），
+> 与 B.35/B.36/B.38/B.41 那条 4.x 实现串并行。它是审计里**唯一的 P0**。
+
+**1. 问题**
+
+`POST /mcp` 在 `SecurityConfig.PUBLIC_ENDPOINTS` 里——**不需要任何凭据**。调用方用
+`X-Nexus-User: <任意用户 id>` 声明自己是谁，服务端照单全收：
+
+```java
+// 修复前 McpEndpoint.java
+private Long resolveUser(String nexusUser) {
+    if (nexusUser == null || nexusUser.isBlank())
+        throw new IllegalArgumentException("缺少 X-Nexus-User 请求头（个人本机信任模型）");
+    return Long.valueOf(nexusUser.trim());
+}
+```
+
+这条路径上挂着两个工具，都真能跑：
+
+| 工具 | 用这个 userId 做什么 |
+| --- | --- |
+| `knowledge_search` | 检索**该用户名下全部知识库**的正文片段 |
+| `qa_ask` | 用该用户的默认 Agent 跑一次完整问答（读他的笔记、花他的模型额度） |
+
+**2. 为什么它是 P0，而其余 18 条只是 P1**
+
+全应用有 43 处 `CurrentUser.requireId()`、越权一律返回 404 而不是 403、
+向量检索的 `kb_id` 过滤写在 SQL 里——这套隔离是全项目做得最扎实的地方（见审计 §1.9）。
+而 `/mcp` 把它**整条绕开**：不需要凭据，只要知道或枚举出一个雪花 id
+（或从任何日志里读到），就能读走那个人的全部笔记正文并替他花钱。
+
+隔离的口径是"用户 A 不能读用户 B 的任何数据"。**存在一条零成本路径可以直接读**时，
+其它地方做得再对也不成立——所以它排在所有功能缺口之前。
+
+**3. 一个重要的事实：这个问题早就被记录过，只是没被修**
+
+`docs/platform-phase3-baseline.md:301` 已经写着：
+
+> `X-Nexus-User`；`.env.example:77` 的 `MCP_INTERNAL_API_KEY` **从未被代码引用**。
+> 任何人可达 `/mcp` 即可读任意用户知识库。
+
+同一句话在 `.env.example` 里还留着一个**从未被任何代码读过**的 `MCP_INTERNAL_API_KEY`——
+一个看起来像"这条路径其实有 API Key 保护"的死配置。**记下来了 ≠ 修了**：
+它当时被归进"如实声明"的清单，而不是待办。这次审计的用处就是把这类"已知但未处理"
+从叙述里拽进 P0 清单，并**动手**。
+
+**4. 修法：删掉第二个身份来源，而不是"两者都接受"**
+
+```
+/mcp 移出 PUBLIC_ENDPOINTS  →  Long userId = CurrentUser.requireId();  →  X-Nexus-User 整条删除
+```
+
+三种可选方案里选了最彻底的一种。**为什么不兼容旧头**（"有 JWT 用 JWT，没有就用头"）：
+那会留下两个身份来源，而"身份只有一个来源"正是这个项目一路守的不变量——
+保留它等于保留一条**只需要一个头就能绕过全部隔离**的路径，只是多了一行注释。
+**想只在本机用就把服务绑到 127.0.0.1：隔离靠网络边界，不靠请求头。**
+
+代价如实说：MCP 客户端的配置要带一个 token（这是所有正规 MCP server 的做法），
+本机 MCP 客户端不再"零配置可用"。
+
+**5. 顺手修掉的第二处：兜底不再回传异常原文**
+
+原来 `catch (Exception ex)` 把 `ex.getMessage()` 直接写进 JSON-RPC 的 `error.message`。
+现在与 `GlobalExceptionHandler` 同一口径：日志里留堆栈 + `requestId`，
+响应体只给 `服务内部错误（requestId=…）`。异常消息里可能带 SQL 片段、内部类名、下游地址，
+对客户端毫无用处，对攻击者是免费的侦察。
+
+**6. 先把问题钉成测试，再修**（审计 §6.2 的自认边界就在这里关掉）
+
+审计当时明说：「MCP 越权是读代码 + 读 Security 配置得出的结论，我没有实际发一个跨用户请求去验证」。
+所以这次先写 `McpEndpointAuthTest`（5 条），**然后把旧实现临时放回去跑一遍**，
+让"这条测试确实能钉住旧实现"变成可复现的事实，而不是信念：
+
+| 用例 | 旧实现下的结果 |
+| --- | --- |
+| 无凭据 `POST /mcp` → 401/2001 | **`Status expected:<401> but was:<500>`** |
+| 只带 `X-Nexus-User` 头 → 401 | **`expected:<401> but was:<200>`**（头自证身份，直接放行） |
+| A 的 token + 伪造 `X-Nexus-User: <B>` → 只能看到 A 的事实 | **失败**：工具输出是 `在全部知识库检索了「缓存击穿」，没有匹配的资料`——身份被头改写成了 **B**，工具去查了**受害者**的知识库 |
+| 零知识库的调用方 → `你还没有任何知识库` | **失败**：同样被改写成 B |
+| 正向对照：带 token 的 `tools/list` | 旧实现下 500（它根本不看 Authorization） |
+
+**5/5 全红**，恢复实现后 **5/5 全绿**。第 3 条那次失败就是这次要修的那件事本身：
+**同一个请求，决定"检索谁的数据"的是请求头，而不是令牌。**
+
+断言为什么这么选：test profile 下 ES 与 pgvector 都是 Disabled 实现，"检索到没有内容"是环境噪声，
+不能用来判断身份。所以断言的是**只有 A 才可能产生的那句话**——A 名下有一个被停用的知识库，
+工具会点名"已跳过：<库名>（已禁用）"。B 的库名一个字都不该出现。身份若被头改写，
+A 的库名不可能出现在输出里。
+
+**7. 影响面：一条既有测试的调用方式**
+
+`ToolResourceTest.mcpToolsComeFromTheRegistry` 原来用 `X-Nexus-User: 1` 调 `/mcp`，
+新实现下变成 401。**改的是调用者的身份，不是断言**——它验的是"能力清单来自注册表、执行壳唯一"
+（B.38/B.39/B.40 的三个回归都钉在这条用例上），那些不变量一个字没动。
+身份契约由 `McpEndpointAuthTest` 单独负责。
+
+**8. 有意没做**
+
+| 没做 | 理由 |
+| --- | --- |
+| 保留 `X-Nexus-User` 作兼容 | 见第 4 条：会留下第二个身份来源，等于没修 |
+| `nexus.mcp.enabled` 开关（默认关） | 有了 JWT 这条，开关只是多一个能被配错的旋钮；"想只在单机用"用网络绑定解决更直白 |
+| 让"用户停用某工具"在这条直调路径上生效 | 那属于**权限**档（P1），需要连 `tools/call` 的拒绝一起做。只在 `tools/list` 里藏起来而 `call` 仍能调，是更坏的谎——保持如实声明（`McpEndpoint` 类注释第 2 条） |
+
+**9. 测试与文档**
+
+- 新增 `McpEndpointAuthTest` 5 条；`ToolResourceTest` 3 处调用改为 Bearer。
+- 全量 **382 运行 / 0 失败 / 0 错误 / 18 跳过**（4.4 基线 377），`BUILD SUCCESS`。
+- `.env.example` 删掉从未被引用的 `MCP_INTERNAL_API_KEY`（死配置比没有配置更糟：
+  它让人以为这条路径受 API Key 保护）。
+- `docs/api.md` §7 与 `docs/deployment.md` §4 的口径从"用头指定用户"改成"带 JWT"。
+
+**10. 真机复验（`local` profile：MySQL + ES + pgvector + 真模型 key）**
+
+迁移到真机的动机：审计 §6.2 那条自认边界说的正是"没有实际发过跨用户请求"。
+两个探针账号 + 各自的库（**A 的库停用、B 的库启用**，这样两个人的输出必然落在不同分支）：
+
+| 请求 | 实测输出 |
+| --- | --- |
+| 无凭据 `tools/list` | `HTTP 401` / `{"code":2001,"message":"未认证或凭证缺失"}` |
+| 只带 `X-Nexus-User: 1` | 同上（**旧利用方式彻底失效**） |
+| **A 的 token + 伪造 `X-Nexus-User: <B>`** | `你的知识库当前都不可用…已跳过：「liveA-disabled-kb」已禁用。` |
+| A 的 token，不带伪造头 | **与上面逐字节相同** |
+| B 的 token（对照） | `在全部知识库检索了「缓存击穿」，没有匹配的资料。` |
+
+第 3、4 行相同 = 请求头对身份**零影响**；第 3、5 行不同 = 两种身份确实产生可区分的输出，
+而 A 的输出里**从不出现 B 的库名**。带 token 的 `tools/list` 返回
+`['knowledge_search', 'calculator', 'qa_ask']`（正向对照）。
+
+**两次作废的尝试也记下来**（否则下次还会踩）：
+
+1. 第一次把中文 JSON 直接写在 Git Bash 的命令行里 —— 控制台是 GBK，`curl` 发出去的字节不是
+   UTF-8，后端回 `1002 请求体格式错误`。**这不是产品 bug，是我的工具用法错了**；
+   改成先用 Python 以 UTF-8 写文件、再 `--data-binary @文件`。
+2. 第二次"看起来通过了"，但**是空断言**：那次 `tools/call` 里两个账号其实都**没有任何知识库**
+   （建库的请求同样被编码问题打挂了）。两个空账号的输出本来就一样 ——
+   这种验证在身份改错时也会绿。**空断言比失败更危险**，所以给 B 建了启用库、给 A 建了停用库重跑。
+
+**11. 顺带发现的一个环境事实（与代码无关，但会影响下一个人）**
+
+`mvn package` 的 `repackage` 在 Windows 上会失败：
+
+```
+Unable to rename 'nexus-app-0.0.1-SNAPSHOT.jar' to '…jar.original'
+```
+
+原因不是构建配置，而是**有一个 `java -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar
+--spring.profiles.active=local` 在跑**——JVM 锁住了那个文件（本次是本轮真机验证留下的进程）。
+**跑构建前先停掉本机后端**；`mvn clean` 同样会卡在删不掉这个 jar 上。
+
+---
+
 
 ---
 

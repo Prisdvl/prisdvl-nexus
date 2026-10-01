@@ -299,6 +299,11 @@ V1 `vector_store` → `kb_vector`（PK=`chunk_id`，`vector(1024)`，HNSW `m=16,
    `:177 dimensions: 1024`、错误文案写死模型名（`EmbeddingClientFactory.java:81`）；且 ADR-008 把维度冻结在 KB 上。
 4. **`/mcp` 无鉴权、身份来自请求头** —— `SecurityConfig.java:50` 放行 + `McpEndpoint.java:46-49,76-85` 直接信
    `X-Nexus-User`；`.env.example:77` 的 `MCP_INTERNAL_API_KEY` **从未被代码引用**。任何人可达 `/mcp` 即可读任意用户知识库。
+   → **2026-10-01 已修（Phase 5.1，见 B.42）**。这条在本文档里被**记录过一次却一直没修**：
+   它当时被归进"如实声明"的清单，不是待办。产品化审计（`productization-gap-analysis.md` P0-1）
+   把它拽进 P0 并动手：`/mcp` 移出放行名单、身份改为 `CurrentUser.requireId()`、
+   `X-Nexus-User` 整条删除、`MCP_INTERNAL_API_KEY` 从 `.env.example` 删除。
+   **本条的时点描述保留不改**——它记录的是修复前的状态（与第 2 条同一口径）。
 5. **角色→模型解析逻辑三份重复** —— `KnowledgeEmbeddingResolver.java:36-37`、`KnowledgeBaseServiceImpl.java:218-219`、
    `EmbeddingClientFactory.java:55`。
 6. **API Key 明文、零加密** —— `AiModelProperties.java:82` 明文 `String`，`AiModelRegistry.java:111` 直接注入；

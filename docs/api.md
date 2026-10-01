@@ -403,6 +403,42 @@ MCP Server 进程自身暴露（Streamable HTTP）：
 | Tool | `searchByTag` | READ |
 | Tool | `listKnowledgeBase` | READ |
 
+> 上面这张表是**目标态**（把一个独立 MCP Server 进程里的知识库能力暴露成标准工具）。
+> 当前**已实现并可调用**的是下面这一节——同一个 Spring Boot 进程内的最小 MCP Server，
+> 没有独立进程。两者不是同一个东西，别把这张表当成"已经在跑的接口清单"。
+
+### 7.1 已实现的 MCP 端点：`POST /mcp`
+
+JSON-RPC 2.0 over HTTP（MCP Streamable HTTP 的最小子集）。
+
+**必须携带 `Authorization: Bearer <JWT>`**（2026-10-01 起，与其余所有端点同一套身份；
+此前它免认证且用 `X-Nexus-User` 头自证身份——那条路径可读任意用户的笔记，属 P0 安全漏洞，
+见 `docs/decisions.md` B.42）。**用户身份只取自令牌里的 `sub`**，任何请求头都不再影响它。
+
+| method | 说明 |
+| --- | --- |
+| `initialize` | 协议握手（返回 `protocolVersion` / `capabilities` / `serverInfo`） |
+| `ping` | 存活探测 |
+| `tools/list` | 工具清单：`@Tool` 方法由注册表反射而来（名称/描述/schema 单一来源），另有非 `@Tool` 的便利入口 `qa_ask` |
+| `tools/call` | 执行工具；失败时 `result.isError = true`，未知工具 `error.code = -32601` |
+
+```bash
+TOKEN=$(curl -s -X POST localhost:8080/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"demo","password":"Passw0rd!23"}' | jq -r .data.accessToken)
+
+curl -s -X POST localhost:8080/mcp \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+# tools/call: {"jsonrpc":"2.0","id":2,"method":"tools/call",
+#              "params":{"name":"knowledge_search","arguments":{"query":"缓存击穿"}}}
+```
+
+**未认证时**返回的是本项目的统一失败体（HTTP 401 / `code 2001`），不是 JSON-RPC 的 `error` 对象：
+认证发生在协议层之前。**兜底错误不回传异常原文**，只给 `-32603` + `requestId`。
+
+**如实声明**：用户对工具的"启停"**不作用于**这条直调路径（启停生效在 Agent 装配那一侧）；
+要让"停用即拒"在这里也成立，需要连 `tools/call` 的拒绝一起做——属于权限档，列在 P1。
+
 ---
 
 ## 8. 工作流（Phase 8）
@@ -495,6 +531,7 @@ POST /api/eval/datasets/1/import
 | `/api/tools/**` | Phase 5 |
 | `/api/agents/**`、`/api/agent/runs/**`、`/api/tool-invocations` | Phase 6 |
 | `/api/mcp/**` | Phase 7 |
+| `POST /mcp`（进程内 MCP Server，见 §7.1） | 已实现（4.3 起；身份 5.1 起改为 JWT） |
 | `/api/workflows/**`、`/api/workflow-runs/**` | Phase 8 |
 | `/api/eval/**`、`/api/prompts/**` | Phase 9 |
 | `/api/observability/**` | Phase 10 |

@@ -4,10 +4,13 @@ import com.lky.nexus.app.agent.AgentContext;
 import com.lky.nexus.app.agent.AgentRuntime;
 import com.lky.nexus.app.agent.tool.ExecutingToolCallback;
 import com.lky.nexus.app.agent.tool.ToolCatalog;
+import com.lky.nexus.app.auth.security.CurrentUser;
+import com.lky.nexus.app.infra.web.RequestIdHolder;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,8 +26,12 @@ import tools.jackson.databind.node.ObjectNode;
  * （initialize / tools/list / tools/call / ping），自己实现一层薄代理，能力的边界完全可控制，
  * 也符合本项目"不把框架当黑盒"的一贯基调。协议细节见 modelcontextprotocol.io。
  *
- * <p><b>身份模型（刻意简单且如实）</b>：这是一个<b>个人本机</b>的 MCP 服务，
- * 不是公开 API——调用方通过 `X-Nexus-User` 头指定用户 id（本机信任模型，文档里如实说明）。
+ * <p><b>身份模型（2026-10-01 起与全站一致）</b>：与其它所有端点一样要
+ * {@code Authorization: Bearer <JWT>}，用户身份取自令牌的 {@code sub}
+ * （{@link CurrentUser#requireId()}）。此前这条路径靠 `X-Nexus-User` 请求头自证身份，
+ * 于是"任何人能访问该端口"就等于"任何人能读任意用户的笔记、用他的 Agent 花钱"——
+ * 那正是本项目在其余 43 处用 {@code requireId} 挡住的那件事（见 decisions.md B.42）。
+ * 想只在本机使用，请把服务绑到 127.0.0.1；<b>隔离靠网络边界，不靠请求头</b>。
  * 工具内部复用已两度 live 验证的 KnowledgeSearchTool / AgentRuntime。
  *
  * <p><b>4.3 起 tools/list 与 tools/call 都从 {@link ToolCatalog} 来</b>（§1.11 第 2 条：消灭第二份
@@ -40,6 +47,8 @@ import tools.jackson.databind.node.ObjectNode;
  *       （见 {@code AgentToolFactory}）。要让"停用即拒"在这里也成立，就得连
  *       {@code tools/call} 的拒绝一起做——那属于 P1 的权限一档，不做半个
  *       （只在 tools/list 里藏起来而 call 仍然能调，是更坏的谎）。
+ *       <b>注意这一条与身份是两件事</b>：身份已经修好（下面的 JWT），但"这个用户停用了某工具"
+ *       在直调路径上仍然不生效——那需要权限档，继续保持如实说明；</li>
  *   <li>工具返回值被框架 JSON 序列化过一次（{@code String} 也会带引号），发给 MCP 客户端前
  *       要拆回原文——见 {@link #unwrapQuotedJson(String)}，那里记着实测依据。</li>
  * </ol>
@@ -69,9 +78,10 @@ public class McpEndpoint {
     }
 
     @PostMapping(value = "/mcp", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ObjectNode mcp(@RequestBody JsonNode request,
-                          @org.springframework.web.bind.annotation.RequestHeader(value = "X-Nexus-User",
-                                  required = false) String nexusUser) {
+    public ObjectNode mcp(@RequestBody JsonNode request) {
+        // 身份在**进入方法之前**就由安全过滤器链定好了（/mcp 不再放行匿名），
+        // 这里取的是令牌里的 sub。取不到只可能是"没走过滤器"这种误用，会抛 2001
+        Long userId = CurrentUser.requireId();
         try {
             String method = request.path("method").asString("");
             JsonNode id = request.path("id");
@@ -83,30 +93,25 @@ public class McpEndpoint {
                 case "initialize" -> result(id, initializeResult());
                 case "ping" -> result(id, jsonMapper.createObjectNode());
                 case "tools/list" -> result(id, toolsList());
-                case "tools/call" -> toolsCall(id, request.path("params"), resolveUser(nexusUser));
+                case "tools/call" -> toolsCall(id, request.path("params"), userId);
                 default -> error(id, -32601, "Method not found: " + method);
             };
         } catch (Exception ex) {
-            log.warn("MCP 请求处理失败：{}", ex.getMessage());
+            // 不把异常原文回给调用方（与 GlobalExceptionHandler 的兜底同一口径）：
+            // 异常消息里可能带 SQL 片段、内部类名、下游地址等，而它们对客户端毫无用处。
+            // 需要定位时靠日志里的堆栈 + 这一行 requestId，不靠响应体
+            String requestId = StringUtils.hasText(RequestIdHolder.current())
+                    ? RequestIdHolder.current() : "-";
+            log.error("MCP 请求处理失败 userId={} requestId={}", userId, requestId, ex);
             ObjectNode err = jsonMapper.createObjectNode();
             err.put("code", -32603);
-            err.put("message", ex.getMessage() == null ? "internal error" : ex.getMessage());
+            err.put("message", "服务内部错误（requestId=" + requestId + "）");
             return jsonMapper.createObjectNode()
                     .put("jsonrpc", "2.0").put("id", -1).set("error", err);
         }
     }
 
     // ------------------------------------------------------------------
-    private Long resolveUser(String nexusUser) {
-        if (nexusUser == null || nexusUser.isBlank()) {
-            throw new IllegalArgumentException("缺少 X-Nexus-User 请求头（个人本机信任模型）");
-        }
-        try {
-            return Long.valueOf(nexusUser.trim());
-        } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("X-Nexus-User 必须是用户 id（数字）");
-        }
-    }
 
     private ObjectNode initializeResult() {
         ObjectNode caps = jsonMapper.createObjectNode();

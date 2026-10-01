@@ -43,11 +43,19 @@ import com.nimbusds.jose.jwk.source.ImmutableSecret;
 @EnableConfigurationProperties(NexusJwtProperties.class)
 public class SecurityConfig {
 
-    /** 公开端点：注册与登录本身当然不能要求先登录；MCP 端点走"X-Nexus-User 头"的个人本机信任模型。 */
+    /**
+     * 公开端点：只有注册与登录。
+     *
+     * <p><b>{@code /mcp} 曾经也在这里</b>（身份靠 {@code X-Nexus-User} 头自证，注释写着"个人本机信任模型"）。
+     * 那是一条把整套隔离绕开的路径：任何人可达该端口即可指定任意 userId，
+     * 读走别人的笔记正文、用别人的默认 Agent 跑问答（花他的额度）。
+     * 2026-10-01 起与其余端点同一套身份：{@code Authorization: Bearer <JWT>}，
+     * 想只在本机用就把服务绑到 127.0.0.1（隔离靠网络，不靠请求头）。
+     * 见 docs/decisions.md B.42 与 docs/productization-gap-analysis.md P0-1。
+     */
     private static final String[] PUBLIC_ENDPOINTS = {
             "/api/auth/register",
-            "/api/auth/login",
-            "/mcp"
+            "/api/auth/login"
     };
 
     /** 健康检查与错误页放行，供 Docker healthcheck、K8s 探针与统一错误处理使用。 */
