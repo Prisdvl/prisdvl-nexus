@@ -291,6 +291,10 @@ V1 `vector_store` → `kb_vector`（PK=`chunk_id`，`vector(1024)`，HNSW `m=16,
 2. **工具注册双重硬编码** —— `AgentService.java:47` 与 `ChatStreamServiceImpl.java:142`（`ToolCallbacks.from(单个 bean)`）
    两个调用点 + MCP 另有一份手写 `tools/list` 与 `switch`（`McpEndpoint.java:113-119,135-154`）。
    加一个工具要改三处源码并重编译。
+   → **2026-10-01 已修（4.3，见 §9.7 / B.38）**。核对后**实际只有两处**（`ChatStreamServiceImpl` 那个调用点
+   自 4.1 起已不存在，只剩一个没人用的 import，已删）：`AgentRuntime.configure` 与 `McpEndpoint`。
+   现在两处都读同一个 `ToolCatalog`（从 `@Tool` 方法反射），加一个内置工具 = "写实现 + 在清单里登记一行"。
+   **本条的时点描述保留不改**——它记录的是修复前的状态。
 3. **嵌入角色与维度硬绑** —— `application.yml:185` `embedding.default: "ollama:bge-m3"`（唯一无 env 覆盖的角色）、
    `:177 dimensions: 1024`、错误文案写死模型名（`EmbeddingClientFactory.java:81`）；且 ADR-008 把维度冻结在 KB 上。
 4. **`/mcp` 无鉴权、身份来自请求头** —— `SecurityConfig.java:50` 放行 + `McpEndpoint.java:46-49,76-85` 直接信
@@ -542,6 +546,13 @@ Phase 3 只做一件事：**给降级补上可计数**（`ObservabilityRegistry`
 | 7 | application / model_config | 建表带列 | 同上 | A 不能使用 B 的模型配置 |
 | 8 | 全量切换 + `workspace_member` | 新表 + 回填 | `workspaceId + resourceId + permission` 三元校验 | 跨 workspace 读写全部拒绝 |
 
+> **执行进度（2026-10-01）**：第 4 行（agent）与第 5 行的**建表部分**（tool）已完成——
+> 4.1 建 `agent` / `agent_knowledge_base`，4.3 建 `tool` / `agent_tool`，两张表都带了
+> `workspace_id` + `owner_id`，查询走 `owner_id`（与 agent 一致，见 `docs/database.md` §6.0.1）。
+> **第 5 行仍有一半没做**：`permission` 与"普通成员不能调用管理员 tool"这条安全测试属 §五/§二十 的权限一档，
+> 仍是 P1——今天没有成员模型，也没有 WRITE / DANGEROUS 工具，这条测试**不适用**（不是"通过"）。
+> 第 6–8 行未动。
+
 ### 4.4 检索侧的隔离做法（Phase 3 具体做法）
 
 ```
@@ -597,6 +608,8 @@ agent(表) → AgentDefinition(不可变配置对象) → AgentRuntime(每次运
 > `maxIterations / timeoutMs / memoryConfig / toolCodes` **没有建**——今天没有任何机制会读它们
 > （轮数上限在框架的 `ToolCallingManager`，超时在 HTTP 层，工具白名单只有内置一个）。
 > 这条偏差的理由写在 decisions.md B.35 §7：**存下来但没人读的配置比没有这个配置更糟**。
+> → **2026-10-01 更新**：`toolCodes` 已随 4.3 加上（字段与读它的装配机制同一次落地，
+> 见 §5.3 落地情况与 §9.7）；`maxIterations / timeoutMs / memoryConfig` **仍然没有建**。
 > 另：内置默认 Agent 是数据库里的真实一行（不是代码兜底），`kbIds` 为空 = 不限制。
 
 ### 5.2 表（§十六，建表时直接带 workspace/owner，§4.3 顺序）
@@ -615,8 +628,74 @@ agent_run_step(id, run_id, seq, type, tool_code, input, output, status, latency_
 > 三列）与 `agent_knowledge_base`，外加 `chat_conversation.agent_id`。
 > `agent_tool` / `agent_run` / `agent_run_step` 三表**未建**——它们分别要等 Tool 体系与
 > 可观测性阶段。实际列与理由见 `docs/database.md` §6.0。
+> → **2026-10-01 更新**：`agent_tool` 已随 4.3（V13）建为 `agent_tool(id, agent_id, tool_code, created_at)`，
+> 与上表**不同**：**没有** `enabled`、按 `tool_code` 引用而非 `tool_id`（理由见 B.38 §3、V13 文件头）；
+> `agent_run` / `agent_run_step` **仍未建**（属 §二十二 审计增量）。
 
 ### 5.3 Tool：Definition → Registry → Factory → Executor（§十九）
+
+> **4.3 设计（落地前写下；**2026-10-01 已落地并在真机栈复核** → §9.7 完成记录、下面的"落地情况"、
+> decisions.md B.38（实现）、B.39 与 B.40（真机验证 + 两个回归））**
+>
+> **这次的假旋钮是哪个**：本节原设计表里有 `permission` / `approval_required` /
+> `timeout_ms` / `rate_limit` 四列。今天的代码里**没有任何一处会读它们**——审批要等 §5.4 的挂起/恢复机制，
+> 超时与限流要等执行壳真的会拦截。按 V12 的同一条理由（B.35 §7：存下来但没人读的配置比没有更糟），
+> **4.3 不建这四列**，只建"今天就真的会拦截"的那一层：`enabled`（工具级）+ `agent_tool.enabled`
+> （Agent 级）。四个字段随 P1 的"Tool Permission / Approval"增量落地，**加列与接上拦截点必须在同一次改动里**。
+>
+> **4.3 落地范围**（后端，与 4.1 只做后端、4.2 再上前端同一节奏）：
+>
+> 1. `tool` + `agent_tool` 两张表（V13，只增不改）；
+> 2. `ToolDefinition`（值对象，`nexus-ai`）+ `ToolCatalog`（代码侧的内置实现清单）；
+> 3. `ToolRegistry`：**"有哪些工具、这个用户能不能用"的唯一答案**；内置工具按需为每个用户补行
+>    （与 `AgentService.resolveDefault` 补内置 Agent 同一种做法——内置项是真实数据行，不是代码兜底）；
+> 4. `AgentToolFactory`：给定 `userId + AgentDefinition` → `ToolCallback[]`，取代
+>    `AgentRuntime.configure` 里那句 `ToolCallbacks.from(knowledgeSearchTool)` 与
+>    `ChatStreamServiceImpl` 里的同一份写死；
+> 5. `ToolExecutionShell`（执行壳）：统一把工具异常变成**明确的观察结果**回灌模型 + 观测计数 + 痕迹；
+>    P1 的权限/审批/超时/限流都插在这一层，不改工具实现；
+> 6. `McpEndpoint.tools/list` 的 `knowledge_search` 描述与 schema 改为从注册表取（§1.11 第 2 条）；
+> 7. `GET /api/tools`（该用户的工具目录）+ `PUT /api/tools/{code}`（启停）+ Agent 侧绑定 `toolCodes`。
+>
+> **4.3 的内置工具是两件**：`knowledge_search`（**必须继续可用**——新路径下逐条回归老行为）
+> 与 `calculator`（选它是因为确定性、无网络：它证明"多工具装配"这条缝是真的，又不引入新的失败模式）。
+>
+> **有意后置、附理由**（不是漏掉）：
+> - `rag_answer`：RAG 模式已有一整套（会话绑库、引用、`retrieval` 事件），把它暴露成工具要处理
+>   "工具的引用怎么进消息"这一层，值得单独一个增量；
+> - `http_request` / `web_search`：**先做等于把它们做成不设防的**（SSRF、出站白名单、超时、限流、
+>   以及"调用外部服务要先问用户"）。它们与 §二十/§二十一 的权限与审批是同一件事的两面，
+>   应在 P1 一起落地；
+> - `agent_tool.approval_required` 与 §5.4 的挂起/恢复：P1。
+>
+> **默认可见性（一条要拍板的语义）**：`agent_tool` 无行 = **不限制**（装该用户全部启用中的内置工具），
+> 与 `kbIds` 空 = 不限制保持一致；有行 = 白名单。因此 4.3 之后，没绑过工具的既有 Agent 会多出
+> `calculator`——这是产品意图（工具平台化后新工具默认可用），但**必须实测"检索路径没有因此改变"**。
+> P1 有了 `permission` 之后收紧为"默认只装 READ，WRITE / DANGEROUS 必须显式绑定"。
+
+> **落地情况（4.3，V13，见 §9.7 与 decisions.md B.38）**：本节上面的链
+> （Definition → Registry → Factory → Executor）**四段都建了**，对应的类是
+> `ToolDefinition`（+`ToolSource`/`ToolCategory`）→ `ToolCatalog` + `ToolRegistry`
+> → `AgentToolFactory` → `ExecutingToolCallback`。
+>
+> 与设计稿的三处**有意偏差**（理由见 B.38 §2–§4）：
+> 1. **`tool` 表的行是"用户覆盖"，不是"内置项的数据行"**——设计稿写的是"按需为每个用户补一行"，
+>    本轮反过来：**没有行 = 用代码侧默认（启用）**。补行方案下，新用户 / 清库 / 换环境之后工具会
+>    凭空消失（症状是"Agent 突然不检索"，静默降级）；反过来之后，工具的存在性由代码保证，
+>    库里只记用户改过的部分。**代价：`tool` 表与 `agent` 表不能照抄同一套模式。**
+> 2. **`json_schema` / `name` / `description` / `category` / `source` 五个描述性列一个都没建**——
+>    与 V12 不建 `max_iterations` 同一条规则：唯一真实来源是 `@Tool` 方法，读路径也只能用代码那份；
+>    库里那份是永远不会被读的死数据。**MCP 的 `tools/list` 因此改为从 `ToolCatalog` 生成**
+>    （这才是本节那条"硬性要求"的落点）。
+> 3. **`permission` / `approval_required` / `timeout_ms` / `rate_limit` 仍不建**：今天没有一处会读它们，
+>    加列与接上拦截点必须同一次做（P1）。
+>    **注意有一处比上面的设计更紧**：设计说"只建 `enabled`（工具级）+ `agent_tool.enabled`（Agent 级）"，
+>    实际**只建了工具级的 `tool.enabled`**，`agent_tool.enabled` 没有建——白名单的"在不在里面"
+>    已经表达了用不用这个工具；一个恒为 1、没有任何写入点的标志位，只会让后来的人以为它能关。
+>
+> `toolCodes` 的语义**刻意与 `kbIds` 对齐**（空 = 不限制），并已进 `AgentDefinition`——
+> 字段与读它的机制（装配时取交集）在同一次改动里落地，正是 §5.1 那条规则的用法。
+
 
 ```
 tool(表: tool_code, workspace_id, owner_id, source[BUILTIN/MCP], json_schema, enabled,
@@ -1037,6 +1116,68 @@ E2E 证明**界面在真机上把过程显示给用户**；真机 SSE 原始帧�
 
 截图证据：`docs/screenshots/agent-chat-rag.png`（RAG 腿：「检索到 4 个片段」+ 带 `[1]` 引用的回答）、
 `agent-chat-failure.png` / `agents-failure.png`（失败现场留档，说明见 B.37 §6）。
+
+---
+
+### 9.7 增量 4.3 完成记录（2026-10-01，Tool Definition 后端）
+
+| 项 | 结果 |
+| --- | --- |
+| 状态 | ✅ 后端完成（编译 / 全量测试 全绿）；**前端（工具目录页）留到 4.4**；**真机栈未跑**（Docker 未运行，见下"未验证"） ｜ **2026-10-01 同日补**：真机栈已跑（含模型腿），抓到 **两个** 4.3 引入的回归并修掉，见下面"同日补跑"与 decisions.md **B.39**（`topK`）、**B.40**（工具痕迹） |
+| 目标 | §十九：Tool Definition → Registry → Factory → Executor；消灭"工具注册硬编码"（§1.11 第 2 条）；**MCP 的 `tools/list` 改为从注册表生成** |
+| 新增主代码（`nexus-ai`） | `ai/agent/ToolDefinition`（纯值对象）、`ToolSource`、`ToolCategory` |
+| 新增主代码（`nexus-app`） | `agent/tool/`：`ToolCatalog`（代码侧清单，从 `@Tool` 反射）、`ToolRegistry`（用户态唯一答案）、`AgentToolFactory`（装配）、`ExecutingToolCallback`（执行壳）、`CalculatorTool`；`agent/ToolController`、`agent/mapper/{ToolMapper,AgentToolMapper}`、`agent/model/{entity×2, dto×2}` |
+| 改写 | `AgentRuntime.configure`（写死的 `ToolCallbacks.from(knowledgeSearchTool)` → `toolFactory.applyTo(...)`）、`AgentService`（`toolCodesOf` / `replaceTools` / 复制与删除带工具白名单）、`AgentDefinition`（+`toolCodes`、`describe()` 带上工具范围）、三个 Agent DTO、`McpEndpoint`（`tools/list` 与 `tools/call` 都走注册表 + 执行壳）、`ChatStreamServiceImpl`（删掉 4.1 遗留的无用 import）、`ErrorCode`（+`5011`）、`ObservabilityRegistry`（+4 个计数） |
+| 配置 / 数据库 | **V13**：`tool`（**覆盖行**：无行 = 代码侧默认，即启用）+ `agent_tool`（无行 = 不限制）。**刻意不建** `name` / `description` / `category` / `json_schema` / `source` 五个描述性列，以及 `permission` / `approval_required` / `timeout_ms` / `rate_limit` / `agent_tool.enabled`（无机制读它们，见 B.38 §4） |
+| API | 新增 `GET /api/tools`、`PUT /api/tools/{code}`；`POST`/`PUT /api/agents` 新增 `toolCodes`（空 = 不限制，与 `kbIds` 同一套语义） |
+| 错误码 | 新增 `5011`（工具不存在，404） |
+| 新增测试 | 23 条（`ToolResourceTest` 10 / `CalculatorToolTest` 6 / `ExecutingToolCallbackTest` 4 / `AgentDefinitionTest` 6→9） |
+| 测试基线 | 335 → **358 运行 / 340 通过 / 0 失败 / 0 错误 / 18 跳过（7 个 live 类）**，BUILD SUCCESS（nexus-app 164 → 184，nexus-ai 35 → 38） |
+| 前端构建 | 本轮未改前端 → **未执行**（4.3 只做后端，与 4.1 只做后端、4.2 再上前端同一节奏） |
+| 运行时验证（真机） | **未跑**：Docker Desktop 未运行（`npipe:////./pipe/dockerDesktopLinuxEngine` 不存在）。**这一轮比往常更依赖它**——见下面"必须真机回归的一条" ｜ **2026-10-01 同日补跑**：`local` profile 真机栈（MySQL 8.4 / ES 9.4.5+ik / pgvector / RabbitMQ / Redis / Ollama bge-m3）已起，逐条复核见下 |
+| E2E 浏览器 | **不适用**：本轮无界面（工具目录页属 4.4） |
+
+**同日补跑（2026-10-01，真机栈 `local`）**
+
+| 项 | 结果 |
+| --- | --- |
+| V13 迁移 | ✅ 真 MySQL 上应用成功（`tool` / `agent_tool` 建出） |
+| 覆盖行写入 / 幂等 | ✅ `PUT /api/tools/calculator` 落该用户覆盖行，来回切换幂等；**代码侧默认值未被改写** |
+| 目录 / 装配一致性 | ✅ `GET /api/tools` 的 `enabled` 随覆盖行变化，且装配结果同步变化（不是"配了没人读"） |
+| `agent_tool` 生命周期 | ✅ 绑定 / 解绑（空列表）/ 删 Agent 后清理无残留 |
+| 错误码 | ✅ 不认识的 code → 5011 / HTTP 404，报文列出可用值 |
+| 执行壳计数 | ✅ `/api/observability/summary` 的 `tool.call.succeeded` 随调用增长（本轮 = 2） |
+| **检索路径未被 4.3 改动**（§5.3 的硬要求） | ✅ 真 ES + pgvector + bge-m3 上 `knowledge_search` 返回真实片段；缺省 5 条、`topK=2` 两条 |
+| **抓到的回归 ①** | ❌→✅ MCP 漏传 `topK` 使工具 500 级失败（`NullPointerException: Cannot invoke "java.lang.Number.intValue()"`）。根因有两层：`int` 拆箱 + **`@ToolParam.required()` 默认 `true`**（反射 schema 把"可选"的 `topK` 标成必填，与自己那句"默认 5"自相矛盾）。已修（`Integer` + `required = false`）并补了回归断言，详见 **B.39** |
+| **抓到的回归 ②** | ❌→✅ 工具痕迹原先由**工具自己**上报，`CalculatorTool` 不上报 → 它执行成功而日志写"工具调用 0 次"、`usedTools=false`、流式界面**一张卡片都没有**。已改为**执行壳兜底**（`ToolCatalog` 登记时声明 `selfReports`），并以"每次成功调用恰好一条痕迹"为不变量对注册表逐条断言（**故意改坏验证过守卫会红**），详见 **B.40** |
+| 回归测试 | ✅ 共 +2 条：`mcpToolsComeFromTheRegistry` 内补 `required` 恰为 `["query"]` / 漏传 `topK` 时 `isError=false`；新增 `everyToolLeavesExactlyOneTrace`。全量测试 **358 → 359 运行 / 341 通过 / 0 失败 / 0 错误 / 18 跳过** |
+| **模型驱动的那条腿** | ✅ **已跑通**（key 是 shell 里那个 `oc_` 开头的，实为 OpenCode 的 key，变量名起错了）。日志：`为 Agent 默认助手(…) 装配 2 个工具：[knowledge_search, calculator]`；一个同时需要检索与算术的问题里**两个工具都真调了**——`knowledge_search` 耗时 2502 ms（**真 ES + pgvector**，LIKE 兜底是毫秒级）且回答带 `缓存击穿 › 什么是缓存击穿` 这类真实标题路径，`calculator` 给出正确的 `12345 × 6789 = 83810205`；模型还自己丢掉了 2 条无关命中 |
+| 现场清理 | ✅ 验证写入的覆盖行（demo 的 `calculator`）与临时 Agent 已删除：`tool` 覆盖行 = 0、`agent_tool` = 0，回到验证前状态 |
+
+**必须真机回归的一条（别跳）**：4.3 之后，**没绑过工具的既有 Agent 会多出一个 `calculator`**——
+`agent_tool` 无行 = 不限制，于是"该用户启用中的全部内置工具"里现在有两个成员。
+这是**有意的产品语义**（工具平台化后，新工具默认可用），但它同时改动了**每一个既有 Agent 送给模型的工具清单**。
+§5.3 的 4.3 设计里把这件事写成了硬要求：**"必须实测检索路径没有因此改变"**。
+在真机跑通之前，这一条只能算"设计上成立"。
+
+> **2026-10-01 已补跑**：真机栈上检索路径**确实没变**（真 ES + pgvector + bge-m3 返回真实片段，
+> 缺省 5 条 / `topK=2` 两条；模型腿也跑了，装配行写着 `装配 2 个工具：[knowledge_search, calculator]`）。
+> **并且正因为真跑了，才抓到两个回归**：① `topK`（B.39）——4.3 删掉 MCP 里那句手写的 `asInt(5)`
+> （删得对）时，一并拆掉了 `int` 拆箱 bug 的掩体；② 工具痕迹（B.40）——第二个工具一登记，
+> "痕迹由工具自己上报"这个洞才第一次显形。
+> **这条"必须真机跑"不是形式：它当天兑回了两个测试环境永远看不见的缺陷。**
+
+**两处"注释说 A、代码做 B"已清掉**（写本记录时对照代码发现，详见 B.38 §9）：
+`ToolDefinition` 的注释还在描述一版被否掉的"落库/补行"设计；
+`ToolSource.parse()` / `ToolCategory.parse()` 没有任何调用方却写着"可选值：…"。
+两者都不是功能缺陷，但错注释比缺注释更难查。
+
+**一条新引入的、必须留痕的不一致**（B.38 §6）：工具可被停用之后，
+系统提示里点名的工具可能与这次装配不一致（内置默认 Agent 的提示词仍写着"必须先调用 `knowledge_search`"）。
+做法是**只计数报警、不代改用户数据**（`tool.prompt.mismatch`）；真正把可用工具生成进提示词要单独一轮。
+
+其余决策（覆盖行语义、执行壳两个重载、为什么第二个工具是 `calculator`、有意后置的 `http_request` 等）
+见 decisions.md **B.38**。
 
 ---
 

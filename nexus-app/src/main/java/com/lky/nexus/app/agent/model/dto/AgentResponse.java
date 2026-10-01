@@ -23,6 +23,8 @@ public record AgentResponse(
         String status,
         Boolean builtin,
         List<Long> kbIds,
+        /** 工具白名单（4.3）；空 = 不限制（全部启用中的内置工具）——与 kbIds 同一套语义。 */
+        List<String> toolCodes,
         LocalDateTime createdAt,
         LocalDateTime updatedAt) {
 }

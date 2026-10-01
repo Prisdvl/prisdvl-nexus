@@ -2172,7 +2172,361 @@ E2E 证明界面在真机上真的把过程显示给用户，两者互相不能�
   就能删掉前端 §3 那段"贴回来"的特例，也能让刷新后可回放。属下一个增量，不在本轮；
 - **Tool Definition（§十九，P0 下一项）**：`AgentRuntime.configure` 里写死的
   `ToolCallbacks.from(knowledgeSearchTool)` 仍未换成按 Definition 组装；
+  → **2026-10-01 已做**：4.3 落地为 `ToolCatalog` + `ToolRegistry` + `AgentToolFactory`，
+  见 **B.38**（该条描述的时点状态保留不改，只补这条回链）；
 - **Docker 部署形态**：`deploy/` 里的 Dockerfile / nginx 仍未实际验证（本轮 Docker 只跑基础设施）。
+
+---
+
+### B.38 Phase 4.3 实现记录（Tool Definition：注册表 + 执行壳，消灭第二份硬编码）
+
+**0. 本增量是什么**
+
+B.35/B.36 让 Agent 变成了资源，但"工具有哪些、谁能用、装哪些"仍写死在代码里：
+`AgentRuntime.configure` 里那句 `ToolCallbacks.from(knowledgeSearchTool)`，以及 `McpEndpoint.tools/list`
+里手抄的一份 `knowledge_search` 名字 / 描述 / schema。本轮把工具变成平台资源：
+
+| 层次 | 落地物 |
+| --- | --- |
+| 表 | **V13**：`tool`（用户覆盖行）+ `agent_tool`（Agent 白名单） |
+| 代码侧清单 | `ToolCatalog`（从 `@Tool` 方法反射出名字 / 描述 / schema，**唯一的描述来源**） |
+| 用户态 | `ToolRegistry`（"有哪些工具、这个用户能不能用、这个 Agent 装哪些"的唯一答案） |
+| 装配 | `AgentToolFactory`（取代写死的 `ToolCallbacks.from(...)`） |
+| 执行壳 | `ExecutingToolCallback`（计数 / 日志 / 把失败变成观察结果回灌） |
+| 接口 | `GET /api/tools`、`PUT /api/tools/{code}`；`PUT/POST /api/agents` 新增 `toolCodes` |
+| MCP | `tools/list` 改为从注册表生成；`tools/call` 走同一个壳 |
+
+内置工具从 1 个变 2 个（新增 `calculator`）。
+
+**1. 消灭的是"两份硬编码"，不是设计稿写的"三份"（核对过）**
+
+§5.3 原文说工具注册有两份硬编码（`AgentService.java:47` 与 `ChatStreamServiceImpl.java:142`）。
+实际核对：`ChatStreamServiceImpl` 自 4.1 起已委托 `AgentRuntime.configure`，
+那里剩下的只是**一个没人用的 import**（本轮删掉）。真正写死工具的地方是两处——
+`configure` 与 `McpEndpoint`。
+
+这不是抠字眼：**要消灭的是 MCP 那一份**。它手抄了 `knowledge_search` 的名字、描述与 JSON Schema，
+还直接调 `knowledgeSearchTool.search(...)` 绕开整套装配——实现改了描述不改，
+MCP 客户端与模型看到的就是过期信息。而漂移的症状是"模型偶尔不调用工具，且没有任何报错"。
+
+修法不是"让两份保持一致"，而是**让第二份不存在**：`ToolCatalog` 从 `@Tool` 方法反射，
+`AgentRuntime` 与 `McpEndpoint` 都读它。
+
+> **回链（B.41，4.4）**："描述只有一个来源"这条不变，但 `knowledge_search` 的**描述内容**后来改了：
+> 它当时还搭着一句策略（"不要凭模型自身的知识回答与知识库相关的问题"），而策略按 B.41 收敛到了
+> `AgentPrompts` 的策略块一处，工具的描述只保留"能做什么、返回什么"。改描述**只动代码**，
+> 库里没有第二份要跟着改——这正是本轮把描述收敛到 `@Tool` 方法换来的好处（对比：若描述还在 MCP 里手抄，
+> 这次要改两处，且漏一处不会有任何报错）。
+
+**2. 覆盖行：没有行 = 用代码侧默认（启用）——与 §5.3 "按需补行"的设计相反**
+
+设计稿写的是"内置工具按需为每个用户补一行"（与 `AgentService.resolveDefault` 补内置 Agent 同一种做法）。
+**本轮刻意反过来**：`tool` 表的行是**用户覆盖**，没有行就用代码侧默认（启用）。
+
+理由：补行方案下，"这个用户有什么工具"在**第一次访问之前无解**——新用户、清库、迁到新环境之后，
+工具会**凭空消失**，而症状是"Agent 突然不检索了"（静默降级）。反过来之后，
+工具的存在性由代码保证，数据库只记录**用户改过的那部分**（今天只有"停用"）。
+
+代价是 `tool` 表与 `agent` 表**不能照抄同一套模式**：内置 Agent 是真实数据行（可改可删），
+内置工具不是。这一点写进了 `ToolDefinition.builtin` 的注释，免得后来的人照着 `resolveDefault`
+给工具也写一个补行方法。
+
+**3. `toolCodes` 空 = 不限制（与 `kbIds` 一致）；且"空列表 ≠ 一个工具都不给"**
+
+`AgentDefinition.toolCodes` 的语义**刻意**与 `kbIds` 对齐：空 = 不限制（装该用户全部启用中的工具），
+有值 = 白名单。两条减项的优先级是**用户停用优先于白名单**——被用户停掉的工具，
+不该因为某个 Agent 的白名单里写了它就复活。
+
+`PUT /api/agents/{id}` 里"空列表"表示**回到不限制**，不是"一个都不给"。后者会把一次手滑
+变成"Agent 变哑巴"，而且症状同样是"回答突然不用资料了"。真要停用某个工具，去 `PUT /api/tools/{code}`。
+
+> **副作用（有意，但必须实测）**：4.3 之后**没绑过工具的既有 Agent 会多出一个 `calculator`**——
+> 因为"无行 = 全部"。这是产品意图（工具平台化后新工具默认可用），但它改了既有 Agent 的模型输入，
+> 所以 §9.7 把"检索路径没有因此改变"单列为一条要回归的事。
+
+**4. 一张只有 4 个业务列的表**：`name` / `description` / `category` / `json_schema` / `source` 一概不建
+
+理由与 V13 文件头、`database.md` §6.0.1 是同一份，这里只记一句话：
+它们唯一的真实来源是 `@Tool` 方法，读路径也只能用代码侧那一份，
+库里那份是**永远不会被读的死数据**，只会在评审时误导人。
+与 V12 不建 `max_iterations` / `timeout_ms` / `memory_config` 是同一条规则（B.35 §7）。
+
+同理，`agent_tool.enabled` 与 `permission` / `approval_required` / `timeout_ms` / `rate_limit`
+四列**本轮不建**：今天没有任何一处会读它们。**加列与接上拦截点必须在同一次改动里。**
+
+**5. 执行壳必须同时实现两个 `call` 重载（实测过的坑）**
+
+`ExecutingToolCallback` 包住原始回调做三件事：计数、日志、把失败变成明确的观察结果回灌。
+
+它**必须**同时实现 `call(String)` 与 `call(String, ToolContext)`：接口里带 `ToolContext` 的那个
+默认实现只打一行日志就转调无参版本（`javap -c` 读出来的），而 `MethodToolCallback` 恰恰靠这个重载
+把 `ToolContext` 注入进工具方法。只实现无参那个，工具就再也读不到"当前用户"——
+**症状是"Agent 突然不检索了，一条报错都没有"**，与 B.30 修过的是同一类坑。
+
+失败**回灌而不外抛**：工具抛异常往外走，整轮对话断在这里，用户看到的是"回答失败"；
+回灌一句"工具 X 失败：<原因>，请换一种方式或如实告知用户"之后，模型完全可能换个算法
+或如实说明（§六十七 要的"可降级"就落在这一句上）。
+
+`McpEndpoint.tools/call` 走**同一个壳**，但用 `invoke()` 取 `Outcome`——因为 MCP 响应里有
+`isError` 字段，把失败也报成 `isError:false` 就是对外说假话。
+
+**6. 4.3 新引入的一类不一致：提示词点名了一个这次没装的工具**
+
+在此之前不可能发生：提示词里写的那个工具**永远会被装上**（就写死在装配处）。
+现在工具可被用户停用、被白名单收窄，于是出现新组合——内置默认 Agent 的提示词仍写着
+"必须先调用 `knowledge_search` 检索"，而这次一个检索工具都没装。
+模型会照提示词去用一个看不见的工具，**表现与"检索了没命中"一模一样**。
+
+`ToolRegistry.warnIfPromptNamesMissingTools` 的做法是**只报警不拦截**（计数 `tool.prompt.mismatch`）：
+提示词是用户的数据，无权代改；"自动补上工具"又会让停用开关重新变成假旋钮。
+真正的解法是把可用工具**生成进**提示词（而不是靠一句写死的名字），
+那会改到每一个既有 Agent 的模型输入，需要单独一轮验证——先如实留痕，不夹带。
+
+同类的第二个计数是 `agent.tools.empty`：装配结果是 0 个工具时，模型退化成"只凭自身知识回答"，
+对话一切正常——静默降级的经典形状（§1.11 第 10 条）。
+
+**7. 两个内置工具的选择理由**
+
+`knowledge_search` 必须继续可用（新路径下逐条回归老行为）；第二个选 `calculator` 是因为它
+**确定性、无网络、无副作用**——能证明"多工具装配"这条缝是真的，又不引入新的失败模式
+（对比之下 `http_request` 的第一版会是一个 SSRF 面）。
+
+求值器是手写的递归下降解析器，**不用 `ScriptEngine` / `eval`**：那等于把一个语言运行时
+交给模型。数值用 `BigDecimal` 而不是 `double`——`0.1+0.2` 出 `0.30000000000000004`
+会被模型照抄进回答里，用户看到的就是"算错了"。
+
+**8. 有意后置（附理由，不是漏掉）**
+
+| 后置项 | 理由 |
+| --- | --- |
+| `rag_answer` 作为工具 | RAG 模式已有一整套（会话绑库 / 引用 / `retrieval` 事件），暴露成工具要处理"工具的引用怎么进消息"，值得单独一个增量 |
+| `http_request` / `web_search` | 先做等于把它们做成**不设防的**（SSRF、出站白名单、超时、限流、以及"调用外部服务要先问用户"）。与 §二十/§二十一 的权限与审批是同一件事的两面，P1 一起做 |
+| `permission` / `approval_required` / `timeout_ms` / `rate_limit` | 今天没有任何一处会读它们，**加列与接上拦截点必须同一次做** |
+| `agent_tool.enabled` | 白名单的"在不在里面"已经表达了用不用；一个恒为 1、没有写入点的标志位只会让人以为它能关 |
+| `tool_invocation` 审计表 | 属 §二十二 审计增量（与 `agent_run` / `agent_run_step` 一起） |
+| 工具目录页（前端） | 与 4.1→4.2 同一节奏：4.3 只做后端，界面属 4.4 |
+
+**9. 顺带清掉的两处"注释说 A、代码做 B"（本轮发现）**
+
+都不是功能缺陷，但**留着一个描述已废弃设计的注释比缺注释更糟**：
+
+1. `ToolDefinition` 的类注释还写着"由 ToolCatalog 从实现反射生成、**在补齐时对齐到库里**"，
+   `jsonSchema` 字段上写着"反射生成后**落库**"——但 V13 明确不建这些列，代码也从没写过它们，
+   **注释描述的是一版被否掉的设计**。已改为"既不落库也不缓存（没有第二份，就没有漂移）"；
+2. `ToolSource.parse()` / `ToolCategory.parse()` **没有任何调用方**（`tool` 表既没有 `source`
+   也没有 `category` 列），但报错文案写着"可选值：BUILTIN / MCP"，读起来像存在一个接受它们的接口。
+   已删除两个方法并注明：**别照抄 `AgentStatus` / `KnowledgeBaseStatus` 那几个枚举**——
+   那些值是从数据库列里读出来的、必须能解析；这两个不是。
+
+**10. 验证状态（如实）**
+
+| 层次 | 结果 |
+| --- | --- |
+| 编译 | 4 模块 BUILD SUCCESS（JDK 21） |
+| 全量测试 | **358 运行 / 340 通过 / 0 失败 / 0 错误 / 18 跳过**（7 个 live 类），BUILD SUCCESS；nexus-app 184、nexus-knowledge 122、nexus-ai 38、nexus-common 14 |
+| 新增测试 | **23 条**（`ToolResourceTest` 10 / `CalculatorToolTest` 6 / `ExecutingToolCallbackTest` 4 / `AgentDefinitionTest` 6→9） |
+| 前端构建 | 本轮未改前端 → **未执行**（4.3 只做后端） |
+| 真机栈（`local`） | **未跑**：Docker Desktop 未运行。4.3 改了 Agent 的装配路径（既有 Agent 会多出 `calculator`），**这一条必须在真机上回归**，见 §9.7 |
+| E2E 浏览器 | **不适用**：本轮无界面（工具目录页属 4.4） |
+
+> **上面这张表是写下时的状态，保留不改。同日稍后已补跑真机栈**（用户选择"Docker 起来，在真机上验"），
+> 结果与**两个由 4.3 引入的真实回归**记在 **B.39**（`topK`）与 **B.40**（工具痕迹）；
+> §9.7 那一行同步补了回链。
+
+---
+
+### B.39 4.3 真机验证：`topK` 的"可选"从来没被说出口（反射 schema 在说谎）
+
+**1. 为什么非要在真机上跑**
+
+4.3 之前，"模型能不能检索"这条主链路只有两条路：模型链路和 MCP 直调。改装配的那**一个**动作
+（`ToolCallbacks.from(knowledgeSearchTool)` → `ToolCatalog` + 按 Definition 组装）同时经过这两条路，
+而测试环境里 `knowledge_search` 永远走的是"检索不可用 → 降级 → 0 条"，**失败与成功长得一样**。
+更关键的是：4.3 把 MCP 那句手写的 `arguments.path("topK").asInt(5)` 删了（那是第二份 schema，
+删得对），却没意识到**它同时是一个 bug 的掩体**。
+
+**2. 抓到的回归（真实输出）**
+
+在真机栈（MySQL 8.4 + ES 9.4.5/ik + pgvector + bge-m3）上，用 MCP 直调路径（不经过模型）：
+
+```
+POST /mcp  {"jsonrpc":"2.0","id":4,"method":"tools/call",
+            "params":{"name":"knowledge_search","arguments":{"query":"缓存击穿"}}}
+```
+
+HTTP 200，`result.isError: true`，正文：
+
+```
+工具 knowledge_search 执行失败：java.lang.NullPointerException:
+Cannot invoke "java.lang.Number.intValue()" because the return value is null
+```
+
+漏传 `topK` 就把工具打挂了。**4.3 之前不会**——因为那句被删掉的 `asInt(5)` 兜了默认值。
+
+**3. 两层真相，第二层比第一层难看到**
+
+1. **NPE**：`int topK` 是基本类型，参数缺省时 JSON 的"没有这个字段"绑进去得到 `null`，拆箱即炸。
+   改成包装类型 `Integer topK` + `topK == null || topK <= 0 ? 默认值 : topK` 即修。
+   （把 `null` 和 `<= 0` 归为同一种"没指定"：传 0 或负数的人想要的也不是"返回 0 条"。）
+
+2. **但 NPE 只是症状。真正的缺陷是 schema 在说谎。** 修完 NPE 后再看 `tools/list`，
+   反射出来的 `required` 是 **`["query","topK"]`**——而 `topK` 自己的 `description` 写着
+   "默认 5，最大 10"。**同一个 schema 里，一处说必填、一处说可以不给。**
+   MCP 客户端据 `required` 判定"漏传就是错"，于是这个参数在**外部契约上**从来不是可选的。
+
+   查证方式：把 fat jar 里的 `spring-ai-model-2.0.1.jar` 抽出来，`javap -v` 读
+   `ToolParam` 注解的 `required()`，默认值 = **`true`**。也就是说——**"不写 `required` 就是必填"**，
+   与 `@ToolParam` 这个名字给人的直觉相反。补上 `required = false` 后才与描述对齐：
+
+   | | 修复前 | 修复后 |
+   | --- | --- | --- |
+   | `tools/list` 的 `required` | `["query","topK"]` | **`["query"]`** |
+   | 漏传 `topK` | NPE（`isError: true`） | **"检索到 5 条结果"** |
+   | 传 `topK = 2` | 2 条 | **2 条** |
+
+**4. 为什么之前两轮都没发现（这个形状值得记住）**
+
+| 路径 | 为什么盖住了 |
+| --- | --- |
+| MCP 直调 | 端点自己写了 `arguments.path("topK").asInt(5)`，**永远**显式传参，走不到缺省分支。删掉它是 4.3 的正确动作，也正是它拆掉了掩体 |
+| 模型链路 | 模型**照 schema 传参**——schema 说 `topK` 必填，模型就一定会给。**一个错误的 schema 会让唯一能暴露它的调用方主动绕开它** |
+
+第二行是这件事的一般形态：**契约错了，最听话的调用方是最后一个发现的人**。
+所以"反射出来的 schema"不能只断言"字段存在"（B.38 的测试原来只断言了 `properties.query` 存在——
+`exists()` 对 `required` 的内容一无所知），必须断言**必填集恰好是什么**。
+
+**5. 已补的回归测试**
+
+`ToolResourceTest.mcpToolsComeFromTheRegistry`（不新增测试方法，把断言加在已有的 MCP 那条上）：
+
+- `inputSchema.required.length() == 1` 且 `required[0] == "query"`（`topK` 的 `properties` 仍要存在）；
+- 一条 `tools/call` 只给 `query`：`isError == false`，且正文**不含** `NullPointerException` / `执行失败`。
+
+两条一起才拦得住：只断言 `required` 内容，改回 `int` 也不会红；只断言调用不报错，
+`required` 继续撒谎也没人管。
+
+**6. 真机栈上逐条复核通过（本轮）**
+
+| 项 | 结果 |
+| --- | --- |
+| V13 迁移 | 在真 MySQL 8.4 上应用成功（`tool` / `agent_tool` 建出） |
+| 覆盖行写入 | `PUT /api/tools/calculator {"enabled":false}` → `tool` 表落一行该用户的覆盖行；再切回 `true` 幂等 |
+| 目录反映覆盖 | `GET /api/tools` 的 `enabled` 随覆盖行变化，**代码侧默认值未被改写** |
+| 装配生效 | 停用后该用户装配结果少了对应工具；`agent_tool` 绑定 / 解绑 / 清理（删 Agent 后无残留）均正确 |
+| 错误码 | 不认识的 code → **5011 / HTTP 404**，报文里列出可用值 |
+| 执行壳计数 | `/api/observability/summary` 的 `tool.call.succeeded` 随调用增长（本轮实测 = 2） |
+| 检索本体未被 4.3 破坏 | 在真 ES + pgvector + bge-m3 上，`knowledge_search` 正常返回真实片段（`topK` 缺省 5 条、`topK=2` 两条） |
+| 模型驱动装配 | 写本表时**未验证**：`AI_CHAT_API_KEY` 未设置，日志为 `模型 opencode:deepseek-v4-flash 未注册。已注册：[ollama:qwen3:7b]`。`AgentRuntime.configure` 要先拿到 `ChatClient` 才会走到工具装配 ｜ **同日稍后已跑通**：key 用的是 shell 里那个 `oc_` 开头、被误命名为 `ANTHROPIC_API_KEY` 的值（`oc_` = opencode）。装配行 `装配 2 个工具：[knowledge_search, calculator]`，两个工具都真调了，见 **B.40** |
+
+**7. 现场清理（不留测试残留）**
+
+验证过程写入的覆盖行（demo 用户的 `calculator`）与临时 Agent 已删除：`tool` 覆盖行 = 0 条、
+`agent_tool` = 0 条，回到验证前的状态——**用真机验过的东西，不能在用户的数据里留下半个**。
+
+---
+
+### B.40 4.3 的第二个回归：工具痕迹是工具**自己**报的，于是 calculator 在痕迹里不存在
+
+**1. 怎么撞上的**
+
+B.39 那次真机跑模型腿时，顺手看了日志，发现同一行回答里两句话对不上：
+
+```
+ExecutingToolCallback - 工具 calculator 执行成功，耗时 0 ms
+AgentRuntime          - Agent 回答 … → 工具调用 0 次，耗时 1651 ms
+```
+
+工具执行成功了，日志说调用了 0 次。用一个纯算术问题（模型只调 calculator、不调检索）复现，
+稳定成立。
+
+**2. 根因：痕迹的**责任方**放错了层**
+
+过程痕迹（`onCall` / `onResult`）不是由执行壳收的，而是**各工具自己**调
+`AgentContext.call/record` 上报的。`KnowledgeSearchTool` 报，`CalculatorTool` 不报。
+`ExecutingToolCallback` 压根不知道工具有没有报过。于是"这个工具忘了报"的表现是：
+
+| 层 | 症状 |
+| --- | --- |
+| `AgentRuntime` 日志 | "工具调用 N 次"少算 |
+| `AgentAnswer.toolCalls` | 少一条；`usedTools = !trace.isEmpty()` 变成 **false**（工具明明跑了） |
+| 流式对话 SSE | 没有 `tool_call`、没有 `tool_result` —— 界面上一张卡片都没有 |
+| `EvalService` | 按 `toolCalls().size()` 记评测，记成 0 |
+
+**3. 为什么 4.3 之前不可能出现**
+
+4.3 之前只有 `knowledge_search` 一个工具，而它自己报，所以 `trace.size()` 与真实调用数
+**恒等**。这个洞一直都在，只是没有任何输入能让它显形。第二个工具一登记，它立刻显形。
+
+这与 B.39 是同一个形状，值得单列出来：**4.3 做对了事，同时照亮了底下早就错的东西。**
+两处的共同点是"原来只有一条路 / 一个工具，所以某个恒等关系看起来像不变量"。
+
+**4. 修法：不靠"记得报"，靠把兜底责任挪到壳上**
+
+先说被否掉的两个方案：
+
+- **"在 `CalculatorTool` 里补两行 `AgentContext.record`"**——能修好今天，但下一个工具的作者
+  仍然要"记得"，而忘记的症状是**静默少报**（不是报错）。靠约定维持不变量，等于没有不变量。
+- **"壳在 ToolContext 里装一个计数包装器，数到 0 就兜底"**——能自动判断，但要往**同一个请求
+  共享的** ToolContext map 里临时塞状态。`AgentContext` 的类注释里已经记着一次"线程相关的想当然"
+  导致的静默失效（ThreadLocal 那次），不值得再赌一次框架的执行线程模型。
+
+采用的方式：**登记时就声明清楚这个工具会不会自报**（`ToolCatalog.Declaration.selfReports`），
+壳对 `false` 的工具在调用前后各补一条通用痕迹。
+
+```java
+boolean backstop = !tool.selfReports();
+if (backstop) AgentContext.call(toolContext, tool.code(), toolInput);
+… 执行 …
+if (backstop) AgentContext.record(toolContext, new ToolCallRecord(tool.code(), toolInput, clip(result)));
+```
+
+两个细节：
+
+- **通用痕迹的 `input` 用模型给的原始 JSON，壳不去解析它**——解析等于又造一份 schema。
+  代价是 `input` 的形态在两类工具间不一致（检索是自然语言 query，计算是 `{"expression":"…"}`），
+  这是如实换来的；
+- **失败也要留痕**（摘要写"执行失败：<原因>"）。否则界面上是"没有这一步"，而不是"这一步没做成"。
+
+**5. 这个标志位凭什么不会变成下一个"假旋钮"**
+
+`selfReports` 是一个**代码里声明的布尔值，读错了会静默少报**——听起来正是 §六十七 要防的东西。
+所以它必须配一个**不依赖它自己**的断言：
+
+> **不变量：每一次成功的工具调用，恰好产生一条痕迹。**
+
+`ToolResourceTest#everyToolLeavesExactlyOneTrace` 对**注册表里的每一个工具**跑一遍真实调用
+（走执行壳 + 真 listener），断言 `trace` 恰好 1 条、且 `trace[0].tool()` 就是它自己。
+它不关心"谁来报"，只钉结果——所以标志位写错、或者将来有人新增工具时忘了管这件事，都会红。
+
+**这个守卫本身也验过**：把 `calculator` 的 `selfReports` 故意改成 `true`（= 谎称自己会上报），
+测试立刻失败：
+
+```
+[calculator 成功执行后必须恰好留下一条痕迹]
+Expected size: 1 but was: 0
+```
+
+同一时刻日志里仍写着"工具 calculator 执行成功"——与线上那个 bug 一字不差。
+改回 `false` 后恢复绿。
+
+**6. 真机复核**
+
+修复后在同一栈上重跑那个纯算术问题：
+
+```
+ExecutingToolCallback - 工具 calculator 执行成功，耗时 12 ms
+AgentRuntime          - Agent 回答 … → 工具调用 1 次，耗时 3574 ms
+```
+
+1 对 1。全量测试 **359 运行 / 341 通过 / 0 失败 / 0 错误 / 18 跳过**（比 4.3 基线 +1 条）。
+
+**7. 顺带说明：`AgentAnswer.usedTools` 的语义因此对齐了**
+
+它的注释写的是"是否真的发生了工具调用"，而修复前它在"只调了 calculator"时是 `false`——
+注释与实现对不上。现在它名副其实。**没有改它的定义**，只是让它真的成立。
+
+---
+
 
 ---
 

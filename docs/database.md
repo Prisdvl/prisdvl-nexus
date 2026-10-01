@@ -335,7 +335,29 @@ CREATE TABLE kb_chunk (
 3. **刻意没建** `max_iterations` / `timeout_ms` / `memory_config`：今天没有任何机制会读它们
    （轮数上限在 Spring AI 的 `ToolCallingManager`，超时在 HTTP 层，记忆策略由模式决定）。
    存下来但没人读的配置比没有这个配置更糟——用户会以为配了就生效。
-   `agent_tool` 同理：现在只有一个内置工具，等 Tool 体系（P0 下一项）落地再建。
+
+### 6.0.1 已实现：`tool` / `agent_tool`（平台化 Phase 4.3，迁移 V13）
+
+| 表 | 关键列 | 说明 |
+| --- | --- | --- |
+| `tool` | `id`、`workspace_id`、`owner_id`、`code`、`enabled`、时间列、`deleted` | 索引 `(owner_id, deleted)`；**覆盖行**：无行 = 用代码侧默认（启用） |
+| `agent_tool` | `id`、`agent_id`、`tool_code`、`created_at` | 唯一键 `(agent_id, tool_code)`；**无行 = 不限制**；物理表（改绑 = 删旧行 + 插新行） |
+
+三点与设计稿的**有意偏差**（详见 `docs/decisions.md` B.38）：
+
+1. **描述性列一概不建**（`name` / `description` / `category` / `json_schema` / `source`）：
+   它们唯一的真实来源是代码里的 `@Tool` 方法（名字、描述、schema 都由框架反射出来，
+   模型看到的描述必须与实现同步），而读路径也只能用代码侧那一份 →
+   库里那份就是**永远不被读的死数据**，只会在评审时误导人。与第 3 条同一理由。
+   外部工具（MCP server / 自定义 HTTP）落地时，"只有数据库才知道"的配置才第一次真的存在，
+   那时加列与接上读路径同一次做；
+2. **引用键是 `tool_code` 而不是 `tool_id`**：内置工具的实现活在代码里，它的"身份"本来就是 code；
+   而 `tool` 表的行是可以不存在的覆盖行，用 id 引用会立刻悬空。code 稳定，行被删/重建都不影响绑定；
+3. **`agent_tool.enabled` 没建**（设计稿有）：白名单的"在不在里面"已经表达了用不用这个工具；
+   一个恒为 1、没有任何写入点的标志位只会让后来的人以为它能关。
+   `permission` / `approval_required` / `timeout_ms` / `rate_limit` 同样不建——今天没有任何一处会读它们，
+   它们与 P1 的 Tool Permission / Approval 一起落地。
+
 
 ### 6.1 设计稿（未实现的部分）
 
@@ -343,8 +365,8 @@ CREATE TABLE kb_chunk (
 | --- | --- | --- |
 | `ai_prompt_template` | `id`、`code`(如 `rag.answer`)、`name`、`description`、`scene` | 逻辑提示词 |
 | `ai_prompt_version` | `id`、`template_id`、`version`、`content`、`variables`(JSON)、`temperature`、`max_tokens`、`top_p`、`status`(`DRAFT`/`PUBLISHED`/`ARCHIVED`)、`published_at`、`created_by` | 唯一键 `(template_id, version)`；**每次 AI 调用都记录 `prompt_version_id`**，评测才能对比版本 |
-| `ai_tool_registry` | `id`、`code`、`name`、`description`、`source`(`BUILTIN`/`MCP`)、`mcp_server_id`、`permission`(`READ`/`WRITE`/`DANGEROUS`)、`input_schema`(JSON)、`requires_approval`、`enabled` | 工具元数据（不仅是代码里的 `@Tool`） |
-| `ai_agent_tool` | `id`、`agent_id`、`tool_id`、`enabled`、`requires_approval` | **Agent 权限矩阵**：默认只挂 `READ` |
+| `ai_tool_registry` | `id`、`code`、`name`、`description`、`source`(`BUILTIN`/`MCP`)、`mcp_server_id`、`permission`(`READ`/`WRITE`/`DANGEROUS`)、`input_schema`(JSON)、`requires_approval`、`enabled` | 工具元数据（不仅是代码里的 `@Tool`）。**内置工具这一半已按 6.0.1 的形态实现**（`tool` 表只存用户态）；本行剩下的部分是"外部工具"落地时的样子——那时 name/description/schema 才第一次成为数据库里的真源 |
+| `ai_agent_tool` | `id`、`agent_id`、`tool_id`、`enabled`、`requires_approval` | **Agent 权限矩阵**：默认只挂 `READ`。已按 6.0.1 实现为 `agent_tool`（无 `enabled`、按 code 引用）；`requires_approval` 属 P1 |
 | `ai_tool_invocation` | `id`、`agent_run_id`、`message_id`、`tool_code`、`arguments`(JSON)、`result_digest`、`success`、`duration_ms`、`permission`、`approval_status`(`NOT_REQUIRED`/`PENDING`/`APPROVED`/`REJECTED`)、`approved_by`、`error_msg` | **审计表**，任何工具执行可追溯 |
 | `ai_agent_run` | `id`、`user_id`、`conversation_id`、`agent_id`、`goal`、`status`(`RUNNING`/`WAITING_APPROVAL`/`DONE`/`FAILED`/`MAX_ITERATIONS`/`CANCELLED`)、`step_count`、`total_tokens`、`started_at`、`finished_at`、`error_msg` | 一次 Agent 任务 |
 | `ai_agent_run_step` | `id`、`run_id`、`step_index`、`type`(`THINK`/`TOOL_CALL`/`OBSERVATION`/`ANSWER`)、`content`、`tool_code`、`model`、`tokens`、`duration_ms`、`created_at` | 完整思维链轨迹（前端可回放，也是评测素材） |

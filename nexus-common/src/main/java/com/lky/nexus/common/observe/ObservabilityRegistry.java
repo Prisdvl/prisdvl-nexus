@@ -24,6 +24,16 @@ public class ObservabilityRegistry {
     public static final String AGENT_SEARCH_DEGRADED = "agent.search.degraded";
     public static final String AGENT_SEARCH_UNAVAILABLE = "agent.search.unavailable";
     public static final String RAG_RECORD_FAILED = "rag.record.failed";
+    /** 工具调用成功/失败（4.3 执行壳）：失败不是异常，是"回灌给模型的观察结果"，因此必须计数。 */
+    public static final String TOOL_CALL_SUCCEEDED = "tool.call.succeeded";
+    public static final String TOOL_CALL_FAILED = "tool.call.failed";
+    /** 装配到 0 个工具的 Agent：静默降级的经典形态（对话照常，只是再也不检索了）。 */
+    public static final String AGENT_TOOLS_EMPTY = "agent.tools.empty";
+    /**
+     * 系统提示里点名了某个工具，但这次装配没有给它：提示词在命令模型调用一个它看不见的工具。
+     * 4.3 才有的一种不一致（在此之前提示词里的那个工具永远会被装上），必须留痕。
+     */
+    public static final String TOOL_PROMPT_MISMATCH = "tool.prompt.mismatch";
 
     private final ConcurrentHashMap<String, LongAdder> counters = new ConcurrentHashMap<>();
 

@@ -73,6 +73,7 @@ public enum ErrorCode {
     AGENT_NOT_PUBLISHED(5008, "Agent 尚未发布"),
     AGENT_DISABLED(5009, "Agent 已停用"),
     AGENT_BUILTIN_READONLY(5010, "内置默认 Agent 不允许此操作"),
+    TOOL_NOT_FOUND(5011, "工具不存在"),
 
     // ---------- 6xxx 工作流 / 评测 ----------
     WORKFLOW_DEFINITION_INVALID(6001, "工作流定义非法"),

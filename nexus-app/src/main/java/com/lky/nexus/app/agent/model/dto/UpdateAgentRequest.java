@@ -29,5 +29,13 @@ public record UpdateAgentRequest(
         String status,
 
         /** 绑定的知识库 id；空列表 = 解绑（变成"不限制"），null = 不改。 */
-        List<Long> kbIds) {
+        List<Long> kbIds,
+
+        /**
+         * 工具白名单（4.3）；空列表 = 回到"不限制"（全部启用中的内置工具），null = 不改。
+         *
+         * <p>注意"空列表 = 不限制"而不是"一个工具都不给"：后者会让一次手滑把 Agent 变成哑巴，
+         * 而且症状是"回答突然不用资料了"（静默降级）。真要停用某个工具，去工具自己那里停。
+         */
+        List<String> toolCodes) {
 }

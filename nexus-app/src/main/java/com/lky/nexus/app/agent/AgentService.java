@@ -7,12 +7,15 @@ import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.agent.mapper.AgentKnowledgeBaseMapper;
 import com.lky.nexus.app.agent.mapper.AgentMapper;
+import com.lky.nexus.app.agent.mapper.AgentToolMapper;
 import com.lky.nexus.app.agent.model.AgentStatus;
 import com.lky.nexus.app.agent.model.dto.AgentResponse;
 import com.lky.nexus.app.agent.model.dto.CreateAgentRequest;
 import com.lky.nexus.app.agent.model.dto.UpdateAgentRequest;
 import com.lky.nexus.app.agent.model.entity.AgentKnowledgeBasePO;
 import com.lky.nexus.app.agent.model.entity.AgentPO;
+import com.lky.nexus.app.agent.model.entity.AgentToolPO;
+import com.lky.nexus.app.agent.tool.ToolRegistry;
 import com.lky.nexus.app.workspace.WorkspaceService;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.api.PageQuery;
@@ -56,20 +59,26 @@ public class AgentService {
 
     private final AgentMapper agentMapper;
     private final AgentKnowledgeBaseMapper agentKbMapper;
+    private final AgentToolMapper agentToolMapper;
     private final KnowledgeBaseService knowledgeBaseService;
     private final WorkspaceService workspaceService;
     private final ChatClientFactory chatClientFactory;
+    private final ToolRegistry toolRegistry;
 
     public AgentService(AgentMapper agentMapper,
                         AgentKnowledgeBaseMapper agentKbMapper,
+                        AgentToolMapper agentToolMapper,
                         KnowledgeBaseService knowledgeBaseService,
                         WorkspaceService workspaceService,
-                        ChatClientFactory chatClientFactory) {
+                        ChatClientFactory chatClientFactory,
+                        ToolRegistry toolRegistry) {
         this.agentMapper = agentMapper;
         this.agentKbMapper = agentKbMapper;
+        this.agentToolMapper = agentToolMapper;
         this.knowledgeBaseService = knowledgeBaseService;
         this.workspaceService = workspaceService;
         this.chatClientFactory = chatClientFactory;
+        this.toolRegistry = toolRegistry;
     }
 
     // ------------------------------------------------------------------
@@ -125,6 +134,19 @@ public class AgentService {
                 .stream().map(AgentKnowledgeBasePO::getKbId).toList();
     }
 
+    /**
+     * 该 Agent 的工具白名单（4.3，按绑定顺序）；<b>空 = 不限制</b>。
+     *
+     * <p>返回的是 code 而不是 id：工具的身份在实现里（{@code @Tool(name=...)}），
+     * 而 {@code tool} 表的行只是用户态覆盖——用 id 引用随时可能悬空。理由详见 V13 的文件头。
+     */
+    public List<String> toolCodesOf(Long agentId) {
+        return agentToolMapper.selectList(Wrappers.<AgentToolPO>lambdaQuery()
+                        .eq(AgentToolPO::getAgentId, agentId)
+                        .orderByAsc(AgentToolPO::getId))
+                .stream().map(AgentToolPO::getToolCode).toList();
+    }
+
     // ------------------------------------------------------------------
     // 写
     // ------------------------------------------------------------------
@@ -154,8 +176,10 @@ public class AgentService {
 
         // 绑定在落库前校验（越权/不存在的库必须在这里被拒，不然会存下一个查不到数据的 id）
         replaceKnowledgeBases(userId, agent.getId(), request.kbIds());
-        log.info("创建 Agent id={}, userId={}, code={}, 绑定知识库 {} 个",
-                agent.getId(), userId, code, kbIdsOf(agent.getId()).size());
+        replaceTools(agent.getId(), request.toolCodes());
+        log.info("创建 Agent id={}, userId={}, code={}, 绑定知识库 {} 个、工具 {}",
+                agent.getId(), userId, code, kbIdsOf(agent.getId()).size(),
+                toolCodesOf(agent.getId()).isEmpty() ? "全部" : toolCodesOf(agent.getId()));
         return toResponse(agent);
     }
 
@@ -178,8 +202,13 @@ public class AgentService {
             // null = 不改；空列表 = 解绑（回到"不限制"）
             replaceKnowledgeBases(userId, agentId, request.kbIds());
         }
-        log.info("更新 Agent id={}, userId={}, status={}, 绑定知识库 {} 个",
-                agentId, userId, agent.getStatus(), kbIdsOf(agentId).size());
+        if (request.toolCodes() != null) {
+            // 与 kbIds 同样的约定：null = 不改；空列表 = 回到"不限制"
+            replaceTools(agentId, request.toolCodes());
+        }
+        log.info("更新 Agent id={}, userId={}, status={}, 绑定知识库 {} 个、工具 {}",
+                agentId, userId, agent.getStatus(), kbIdsOf(agentId).size(),
+                toolCodesOf(agentId).isEmpty() ? "全部" : toolCodesOf(agentId));
         return toResponse(agent);
     }
 
@@ -206,6 +235,9 @@ public class AgentService {
         agentMapper.insert(copy);
 
         replaceKnowledgeBases(userId, copy.getId(), kbIdsOf(agentId));
+        // 工具白名单跟着复制：用户复制一个 Agent 的意图是"拿它改"，少复制一样东西
+        // 会得到一个行为不同的副本（还不报错）
+        replaceTools(copy.getId(), toolCodesOf(agentId));
         log.info("复制 Agent 源 id={} → 新 id={}, code={}", agentId, copy.getId(), copy.getCode());
         return toResponse(copy);
     }
@@ -221,6 +253,8 @@ public class AgentService {
         // 绑定是物理行，随 Agent 一起清掉，避免留下指向已删 Agent 的无主数据
         agentKbMapper.delete(Wrappers.<AgentKnowledgeBasePO>lambdaQuery()
                 .eq(AgentKnowledgeBasePO::getAgentId, agentId));
+        agentToolMapper.delete(Wrappers.<AgentToolPO>lambdaQuery()
+                .eq(AgentToolPO::getAgentId, agentId));
         log.info("删除 Agent id={}, userId={}", agentId, userId);
     }
 
@@ -320,6 +354,7 @@ public class AgentService {
                 StringUtils.hasText(agent.getModelRole())
                         ? agent.getModelRole() : AiModelProperties.Role.CHAT_AGENT,
                 kbIdsOf(agent.getId()),
+                toolCodesOf(agent.getId()),
                 Boolean.TRUE.equals(agent.getBuiltin()));
     }
 
@@ -364,6 +399,21 @@ public class AgentService {
             throw new BusinessException(ErrorCode.AGENT_BUILTIN_READONLY,
                     "内置默认 Agent 不能停用或退回草稿：AGENT 模式需要它兜底。"
                             + "若要停用检索类行为，请新建一个自己的 Agent 并选用它");
+        }
+    }
+
+    private void replaceTools(Long agentId, List<String> rawToolCodes) {
+        // null 与空列表都表示"不限制"（与 kbIds 的语义一致：空 = 用全部启用中的内置工具）。
+        // 这里不做"空列表 = 不给任何工具"的解读——那样会让"想清空白名单"变成"把 Agent 变哑巴"
+        List<String> codes = toolRegistry.requireKnownTools(rawToolCodes);
+        agentToolMapper.delete(Wrappers.<AgentToolPO>lambdaQuery()
+                .eq(AgentToolPO::getAgentId, agentId));
+        for (String code : codes) {
+            AgentToolPO link = new AgentToolPO();
+            link.setAgentId(agentId);
+            link.setToolCode(code);
+            link.setCreatedAt(LocalDateTime.now());
+            agentToolMapper.insert(link);
         }
     }
 
@@ -417,6 +467,7 @@ public class AgentService {
                 agent.getStatus(),
                 agent.getBuiltin(),
                 kbIdsOf(agent.getId()),
+                toolCodesOf(agent.getId()),
                 agent.getCreatedAt(),
                 agent.getUpdatedAt());
     }

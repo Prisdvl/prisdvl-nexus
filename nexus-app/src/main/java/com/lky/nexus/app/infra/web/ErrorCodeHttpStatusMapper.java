@@ -60,6 +60,11 @@ public final class ErrorCodeHttpStatusMapper {
             case AGENT_CODE_DUPLICATED, AGENT_NOT_PUBLISHED, AGENT_DISABLED, AGENT_BUILTIN_READONLY ->
                     HttpStatus.CONFLICT;
 
+            // 4.3 Tool：不认识这个工具 code → 404（与上面同一个理由：不泄露"存在过什么"）。
+            // 注意它同时用在写入侧（Agent 绑了不存在的工具）——那是"你填的值不对"，
+            // 但对外仍然是"这个 code 没有对应的资源"，前端按 404 展示即可，不必分成两个码
+            case TOOL_NOT_FOUND -> HttpStatus.NOT_FOUND;
+
             // 7xxx 限流
             case RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
 

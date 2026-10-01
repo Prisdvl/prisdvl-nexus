@@ -15,10 +15,13 @@ import java.util.Objects;
  * 与厂商、与存储都无关；{@code nexus-app} 决定"从哪来"（数据库）。
  * 依赖方向因此是 {@code app → ai}，不需要 {@code ai → app} 这种倒挂。
  *
- * <p>刻意<b>没有</b>的字段：{@code maxIterations} / {@code timeoutMs} / {@code toolCodes}。
- * 前两个今天没有任何机制会读（轮数上限在框架的 ToolCallingManager 里，超时在 HTTP 层），
- * 工具白名单要等 Tool 体系（P0 的下一项）落地——字段在那儿才有意义。
+ * <p>刻意<b>没有</b>的字段：{@code maxIterations} / {@code timeoutMs}。
+ * 它们今天没有任何机制会读（轮数上限在框架的 ToolCallingManager 里，超时在 HTTP 层），
  * 提前放进来会让调用方以为"配了就生效"，这是最难查的一类假配置。
+ *
+ * <p>{@code toolCodes} 是 4.3（Tool Definition）才加上的：字段与读它的机制
+ * （AgentToolFactory 装配工具时取交集）**同一次改动里**落地——这正是上面那条规则的用法。
+ *
  *
  * <p>字段语义上的一条<b>刻意区分</b>（与 RAG 会话相反，勿混）：
  * {@link #kbIds} <b>为空表示不限制</b>（检索该用户的全部知识库，即今天的行为），
@@ -46,6 +49,15 @@ public record AgentDefinition(
         /** 绑定的知识库；<b>空 = 不限制</b>（检索该用户全部知识库）。 */
         List<Long> kbIds,
 
+        /**
+         * 可用的工具（code，如 {@code knowledge_search}）；<b>空 = 不限制</b>
+         * （装该用户全部启用中的内置工具）。语义与 {@link #kbIds} 刻意保持一致。
+         *
+         * <p>Phase 4.1 时刻意没有这个字段（当时只有一个内置工具，白名单只有信息量没有机制）；
+         * 4.3 的 Tool 体系落地后它才第一次有意义：装配工具时按它取交集。
+         */
+        List<String> toolCodes,
+
         /** 是否系统内置：内置项不可删除、不可停用（保证 AGENT 模式总有可用的默认 Agent）。 */
         boolean builtin) {
 
@@ -57,6 +69,8 @@ public record AgentDefinition(
         modelRole = requireText(modelRole, "modelRole");
         // 去重并保序：绑同一个库两次没有意义，留着只会让"绑了 3 个库"变成错觉
         kbIds = List.copyOf(new LinkedHashSet<>(Objects.requireNonNull(kbIds, "kbIds 不能为 null，空列表表示不限制")));
+        // 工具白名单同理去重保序（空 = 不限制，不是"没有工具"）
+        toolCodes = List.copyOf(new LinkedHashSet<>(Objects.requireNonNull(toolCodes, "toolCodes 不能为 null，空列表表示不限制")));
     }
 
     /** 是否限定了检索范围（为空 = 不限制）。 */
@@ -64,9 +78,16 @@ public record AgentDefinition(
         return !kbIds.isEmpty();
     }
 
-    /** 给日志与痕迹用的一句话描述：跑的是哪个 Agent、检索范围多大。 */
+    /** 是否限定了工具白名单（为空 = 不限制，装该用户全部启用中的内置工具）。 */
+    public boolean toolScoped() {
+        return !toolCodes.isEmpty();
+    }
+
+    /** 给日志与痕迹用的一句话描述：跑的是哪个 Agent、检索范围多大、工具白名单多宽。 */
     public String describe() {
-        return "%s(%s, %s)".formatted(name, code, scoped() ? kbIds.size() + " 个知识库" : "全部知识库");
+        return "%s(%s, %s, %s)".formatted(name, code,
+                scoped() ? kbIds.size() + " 个知识库" : "全部知识库",
+                toolScoped() ? toolCodes.size() + " 个工具" : "全部工具");
     }
 
     private static String requireText(String value, String field) {

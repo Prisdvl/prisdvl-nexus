@@ -68,10 +68,21 @@ public class KnowledgeSearchTool {
                     + "不要凭模型自身的知识回答与知识库相关的问题。")
     public String search(
             @ToolParam(description = "检索关键词或问题，用中文自然语言表述") String query,
-            @ToolParam(description = "返回条数，默认 5，最大 10") int topK,
+            // 两处一起才算把"可选"表达清楚（4.3 真机实测踩到，见 decisions.md B.39）：
+            //   1. required = false：@ToolParam 的 required 默认就是 true（javap 读出来的），
+            //      不写这一句，框架反射出的 schema 会把 topK 标成必填——与本行"默认 5"自相矛盾，
+            //      MCP 客户端据此以为漏传就是错，而这个参数的语义从来是可选的；
+            //   2. 包装类型 Integer 而不是 int：漏传时 JSON 的缺省值绑到基本类型上会得到 null，
+            //      拆箱抛 NullPointerException（"Cannot invoke Number.intValue()"）。
+            // 这两条 4.3 之前都被盖住了——MCP 那条路自己写了 arguments.path("topK").asInt(5)
+            // 兜住默认值，而模型那条路永远照 required 的 schema 传参；
+            // 4.3 把参数原样交给工具（正确做法）之后，矛盾立刻变成一次真实的 400/工具失败。
+            @ToolParam(description = "返回条数，默认 5，最大 10", required = false) Integer topK,
             ToolContext toolContext) {
         Long userId = AgentContext.requireUserId(toolContext);
-        int limit = Math.clamp(topK <= 0 ? DEFAULT_PRESENT_LIMIT : topK, 1, MAX_PRESENT_LIMIT);
+        // null（漏传）与 <= 0（传了 0 或负数）都走默认值：两者都是"没指定"，不该有不同下场
+        int limit = Math.clamp(topK == null || topK <= 0 ? DEFAULT_PRESENT_LIMIT : topK,
+                1, MAX_PRESENT_LIMIT);
         // 先报"开始检索"：流式对话据此把"正在检索知识库…"实时推给用户，
         // 而不是让用户对着空屏等几秒（检索本身要走 ES + pgvector）
         AgentContext.call(toolContext, "knowledge_search", query);

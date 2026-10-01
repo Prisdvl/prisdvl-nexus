@@ -38,5 +38,12 @@ public record CreateAgentRequest(
         String modelRole,
 
         /** 绑定的知识库 id；空表示不限制。 */
-        List<Long> kbIds) {
+        List<Long> kbIds,
+
+        /**
+         * 可用的工具 code（4.3）；<b>空 = 不限制</b>（装该用户全部启用中的内置工具）。
+         *
+         * <p>与 {@code kbIds} 同一套语义，别与 RAG 会话相反的那条搞混（见 {@code AgentDefinition}）。
+         */
+        List<String> toolCodes) {
 }

@@ -10,18 +10,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * {@link AgentDefinition} 的不可变性契约（Phase 4.1）。
+ * {@link AgentDefinition} 的不可变性契约（Phase 4.1；4.3 补 toolCodes）。
  *
- * <p>这类"看起来只是 getter 的值对象"最容易在评审里被放过，但它的两个性质是有实际后果的：
+ * <p>这类"看起来只是 getter 的值对象"最容易在评审里被放过，但它的性质是有实际后果的：
  * <ol>
  *   <li><b>kbIds 不可变</b>：它会被塞进 {@code ToolContext} 跟着一次流式回答走完全程。
  *       若记录持有调用方传进来的那个可变 List，调用方事后 {@code add} 一个库，
  *       检索范围就会在飞行途中变化——这种 bug 完全不报错，只是"偶尔搜到了不该搜的库"；</li>
  *   <li><b>为空 = 不限制</b>：与 RAG 会话相反的语义（那边为空是硬错误）。搞反的后果是
- *       "以为收窄了范围，其实搜了全部"——正是这次改动的核心风险点，值得用测试钉住。</li>
+ *       "以为收窄了范围，其实搜了全部"——正是这次改动的核心风险点，值得用测试钉住。
+ *       {@code toolCodes} 沿用同一约定（4.3）：为空 = 装该用户全部启用中的工具，
+ *       而<b>不是</b>"一个工具都不装"；</li>
+ *   <li><b>toolCodes 同样防御性拷贝</b>：它会在装配工具时被读，改到飞行中的白名单
+ *       表现就是"这次回答多了一个工具"，同样不报错。</li>
  * </ol>
  */
-@DisplayName("AgentDefinition：值对象的不可变性与 kbIds 语义")
+@DisplayName("AgentDefinition：值对象的不可变性与 kbIds / toolCodes 语义")
 class AgentDefinitionTest {
 
     @Test
@@ -34,6 +38,33 @@ class AgentDefinitionTest {
 
         assertThat(definition.kbIds()).containsExactly(1L, 2L);
         assertThat(definition.scoped()).isTrue();
+    }
+
+    @Test
+    @DisplayName("toolCodes 防御性拷贝 + 去重保序：绑两次同一个工具不是「绑了 2 个工具」")
+    void toolCodesAreCopiedAndDeduplicated() {
+        List<String> mutable = new ArrayList<>(List.of("knowledge_search", "calculator", "knowledge_search"));
+        AgentDefinition definition = definition(List.of(), mutable);
+
+        mutable.add("calculator");
+
+        assertThat(definition.toolCodes()).containsExactly("knowledge_search", "calculator");
+        assertThat(definition.toolScoped()).isTrue();
+    }
+
+    @Test
+    @DisplayName("空 toolCodes = 不限制（装全部启用中的工具），不是「一个都不装」")
+    void emptyToolCodesMeansUnrestricted() {
+        assertThat(definition(List.of(), List.of()).toolScoped()).isFalse();
+        assertThat(definition(List.of(), List.of()).toolCodes()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("toolCodes 为 null 会被拒绝：null 与「不限制」是两件事")
+    void nullToolCodesIsRejected() {
+        assertThatThrownBy(() -> definition(List.of(), null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("toolCodes");
     }
 
     @Test
@@ -62,30 +93,40 @@ class AgentDefinitionTest {
     @Test
     @DisplayName("agentId / code / name / systemPrompt / modelRole 缺失都在构造期就失败")
     void missingIdentityFieldsFailFast() {
-        assertThatThrownBy(() -> new AgentDefinition(null, "c", "n", "p", "r", List.of(), false))
+        assertThatThrownBy(() -> new AgentDefinition(null, "c", "n", "p", "r", List.of(), List.of(), false))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AgentDefinition(1L, " ", "n", "p", "r", List.of(), false))
+        assertThatThrownBy(() -> new AgentDefinition(1L, " ", "n", "p", "r", List.of(), List.of(), false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("code");
-        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "", "p", "r", List.of(), false))
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "", "p", "r", List.of(), List.of(), false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("name");
-        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", null, "r", List.of(), false))
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", null, "r", List.of(), List.of(), false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("systemPrompt");
-        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", "p", "\t", List.of(), false))
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", "p", "\t", List.of(), List.of(), false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("modelRole");
     }
 
     @Test
-    @DisplayName("describe() 如实说明检索范围：绑了库说几个，没绑说「全部知识库」")
+    @DisplayName("describe() 如实说明检索范围与工具白名单：绑了说几个，没绑说「全部」")
     void describeTellsTheScope() {
-        assertThat(definition(List.of(1L, 2L)).describe()).isEqualTo("笔记助手(helper, 2 个知识库)");
-        assertThat(definition(List.of()).describe()).isEqualTo("笔记助手(helper, 全部知识库)");
+        assertThat(definition(List.of(1L, 2L)).describe())
+                .isEqualTo("笔记助手(helper, 2 个知识库, 全部工具)");
+        assertThat(definition(List.of()).describe())
+                .isEqualTo("笔记助手(helper, 全部知识库, 全部工具)");
+        // 白名单窄的时候，日志里这句话就是"这次为什么只有一个工具"的唯一线索
+        assertThat(definition(List.of(), List.of("calculator")).describe())
+                .isEqualTo("笔记助手(helper, 全部知识库, 1 个工具)");
     }
 
     private AgentDefinition definition(List<Long> kbIds) {
-        return new AgentDefinition(1L, "helper", "笔记助手", "只依据资料回答", "chat.agent", kbIds, false);
+        return definition(kbIds, List.of());
+    }
+
+    private AgentDefinition definition(List<Long> kbIds, List<String> toolCodes) {
+        return new AgentDefinition(1L, "helper", "笔记助手", "只依据资料回答", "chat.agent",
+                kbIds, toolCodes, false);
     }
 }

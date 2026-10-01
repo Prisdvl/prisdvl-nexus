@@ -2,10 +2,10 @@ package com.lky.nexus.app.agent;
 
 import com.lky.nexus.ai.agent.AgentDefinition;
 import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.app.agent.tool.AgentToolFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -14,13 +14,15 @@ import java.util.List;
 /**
  * Agent Runtime（平台化 §十七）：按一份 {@link AgentDefinition} 跑一次完整的"工具循环"。
  *
- * <p><b>本类是 Phase 4.1 之前那个写死配置的 {@code AgentService}</b>，改动只有三处，
- * 全部是"把常量换成 Definition 里的字段"：
+ * <p><b>本类是 Phase 4.1 之前那个写死配置的 {@code AgentService}</b>，改动都是
+ * "把常量换成 Definition 里的字段"：
  * <ol>
  *   <li>{@code AgentPrompts.AGENT_SYSTEM} → {@code definition.systemPrompt()}；</li>
  *   <li>{@code Role.CHAT_AGENT} → {@code definition.modelRole()}；</li>
  *   <li>工具"扫该用户全部知识库" → 知识库范围随 {@code definition.kbIds()} 进入 ToolContext
- *       （空 = 不限制，仍是原来的行为）。</li>
+ *       （空 = 不限制，仍是原来的行为）；</li>
+ *   <li>（4.3）工具从"写死的 {@code ToolCallbacks.from(knowledgeSearchTool)}" → 由
+ *       {@code AgentToolFactory} 按"用户启用中的工具 ∩ 该 Agent 的白名单"装配。</li>
  * </ol>
  *
  * <p><b>Agent Loop 本身一行没动</b>（§六十七 明文禁止推翻）：循环仍由 Spring AI 的
@@ -37,14 +39,14 @@ public class AgentRuntime {
     private static final Logger log = LoggerFactory.getLogger(AgentRuntime.class);
 
     private final ChatClientFactory chatClientFactory;
-    private final KnowledgeSearchTool knowledgeSearchTool;
+    private final AgentToolFactory toolFactory;
     private final AgentService agentService;
 
     public AgentRuntime(ChatClientFactory chatClientFactory,
-                        KnowledgeSearchTool knowledgeSearchTool,
+                        AgentToolFactory toolFactory,
                         AgentService agentService) {
         this.chatClientFactory = chatClientFactory;
-        this.knowledgeSearchTool = knowledgeSearchTool;
+        this.toolFactory = toolFactory;
         this.agentService = agentService;
     }
 
@@ -60,14 +62,15 @@ public class AgentRuntime {
                                                       Long userId,
                                                       AgentDefinition definition,
                                                       AgentContext.ToolCallListener listener) {
-        return request.system(definition.systemPrompt())
-                // userId 与 kbIds 一起进 ToolContext：这是工具拿"能查谁的库、能查哪些库"的
-                // 唯一通道，且不会发给模型（框架生成工具入参 schema 时跳过 ToolContext 参数）
-                .toolContext(AgentContext.of(userId, definition.kbIds(), listener))
-                // 工具白名单固定为内置的 knowledge_search：Tool 体系（P0 下一项）落地后
-                // 改成按 Definition 里的 toolCodes 组装。现在只有一个内置工具，
-                // 提前做一个"只能装一个元素的注册表"没有信息量（详见 decisions.md B.35）
-                .tools(ToolCallbacks.from(knowledgeSearchTool));
+        return toolFactory.applyTo(
+                request.system(definition.systemPrompt())
+                        // userId 与 kbIds 一起进 ToolContext：这是工具拿"能查谁的库、能查哪些库"的
+                        // 唯一通道，且不会发给模型（框架生成工具入参 schema 时跳过 ToolContext 参数）
+                        .toolContext(AgentContext.of(userId, definition.kbIds(), listener)),
+                userId, definition);
+        // 装哪些工具交给 AgentToolFactory（4.3）：它读的是"该用户启用中的工具 ∩ 这个 Agent 的白名单"。
+        // 这里原来写的是 ToolCallbacks.from(knowledgeSearchTool)（写死的唯一工具），
+        // 4.3 之后工具的来源是注册表（见 decisions.md B.38）。
     }
 
     /**
