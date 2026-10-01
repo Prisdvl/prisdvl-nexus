@@ -4,6 +4,7 @@ import com.lky.nexus.common.observe.ObservabilityRegistry;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lky.nexus.ai.config.AiModelProperties;
+import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
@@ -264,7 +265,24 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         return user.toString();
     }
 
-    /** 生成（同步路径）。流式路径由 RagStreamService 复用同样的提示词与用户消息。 */
+    /**
+     * 生成（同步路径）。流式路径由 RagStreamService 复用同样的提示词与用户消息。
+     *
+     * <p><b>失败必须抛出去，不能"失败也是一种回答"</b>（2026-10-01 之前这里是
+     * {@code catch (Exception ex) { return "生成回答失败：" + ex.getMessage() … }}）。
+     * 那个写法的三处伤害：
+     * <ol>
+     *   <li>HTTP 200 + 一句话，把"这次没成功"伪装成"答案是这句话"。调用方（前端、任何
+     *       脚本、将来的自动化）无法用状态码判断成败，只能靠匹配中文字符串；</li>
+     *   <li>那句话里带着模型的原始报错（可能含网关地址、上游响应体），被当作答案展示；</li>
+     *   <li>它会走完 {@link #finish} 落进 {@code kb_qa_record}——问答留档里从此多出一条
+     *       看起来像正常回答的记录，"留档"这个功能本身就不可信了。</li>
+     * </ol>
+     * 现在改成抛业务异常：错误码与文案由 {@link FailureClassifier} 统一给（模型不可用 4001 /
+     * 超时 4002 / 工具轮数超限 5002 …），由 {@code GlobalExceptionHandler} 转成统一 JSON。
+     * 失败<b>不落档</b>——{@code kb_qa_record} 只记录真实发生过的问答（连"资料中没有相关内容"
+     * 都算，因为那是一条真回答），这里没有"半条回答"可记：{@code generated} 为 null 时压根没生成过。
+     */
     private String generate(String question, PreparedAnswer prepared, List<RagTurn> history) {
         try {
             ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_DEFAULT);
@@ -274,8 +292,8 @@ public class RagAnswerServiceImpl implements RagAnswerService {
                     .call()
                     .content();
         } catch (Exception ex) {
-            log.error("生成回答失败", ex);
-            return "生成回答失败：" + ex.getMessage() + "\n（检索到的资料见下方引用）";
+            log.error("生成回答失败（同步问答）问题「{}」", question, ex);
+            throw FailureClassifier.toBusinessException(ex);
         }
     }
 

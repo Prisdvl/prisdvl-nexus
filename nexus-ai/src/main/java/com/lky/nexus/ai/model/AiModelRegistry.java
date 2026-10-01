@@ -6,6 +6,8 @@ import com.lky.nexus.common.exception.BusinessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.model.tool.ToolCallLimitBehavior;
+import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.ollama.api.OllamaApi;
 import org.springframework.ai.ollama.api.OllamaChatOptions;
@@ -37,7 +39,11 @@ public class AiModelRegistry {
 
     private final Map<String, ChatModel> chatModels;
 
+    /** 工具循环上限的唯一载体：所有手工构建的模型共用同一份，避免各 provider 各配一套。 */
+    private final ToolCallingManager toolCallingManager;
+
     public AiModelRegistry(AiModelProperties properties) {
+        this.toolCallingManager = toolCallingManager(properties.getTools());
         Map<String, ChatModel> built = new LinkedHashMap<>();
         for (AiModelProperties.Provider provider : properties.getProviders()) {
             if (provider.getType() == null) {
@@ -83,6 +89,18 @@ public class AiModelRegistry {
         return chatModels.keySet();
     }
 
+    /**
+     * 本次构建实际交给各模型的工具调用管理器。
+     *
+     * <p>包级可见是刻意的：{@code ToolCallLimitTest} 用它<b>真的撞一次上限</b>，
+     * 证明 {@code ai.tools.*} 是生效的配置，而不是"写了但没人读"（这个坑刚踩过，
+     * 见 {@link AiModelProperties.ToolLimits} 的注释）。限定可见性是为了不让它变成对外 API——
+     * 上限的读取方应该是模型，不是业务代码。
+     */
+    ToolCallingManager toolCallingManager() {
+        return toolCallingManager;
+    }
+
     private boolean requiresApiKey(AiModelProperties.Provider provider) {
         return provider.getType() == AiModelProperties.ProviderType.OPENAI_COMPATIBLE;
     }
@@ -103,6 +121,7 @@ public class AiModelRegistry {
      * <p>构建方式经 v2.0.1 源码核对：{@code OpenAiChatModel.builder().options(OpenAiChatOptions)}，
      * 其中 {@code OpenAiChatOptions.Builder} 提供 {@code baseUrl(String)} 与 {@code apiKey(String)}。
      */
+    @SuppressWarnings({"deprecation", "removal"})
     private ChatModel buildOpenAiCompatibleChatModel(AiModelProperties properties,
                                                      AiModelProperties.Provider provider,
                                                      AiModelProperties.ModelEntry entry) {
@@ -120,10 +139,14 @@ public class AiModelRegistry {
             optionsBuilder.customHeaders(provider.getHeaders());
         }
 
-        return OpenAiChatModel.builder().options(optionsBuilder.build()).build();
+        return OpenAiChatModel.builder()
+                .options(optionsBuilder.build())
+                .toolCallingManager(toolCallingManager)
+                .build();
     }
 
     /** Ollama 原生协议：模型名可带冒号（如 {@code qwen3:7b}），base-url 由 {@link OllamaApi} 承载。 */
+    @SuppressWarnings({"deprecation", "removal"})
     private ChatModel buildOllamaChatModel(AiModelProperties properties,
                                           AiModelProperties.Provider provider,
                                           AiModelProperties.ModelEntry entry) {
@@ -137,6 +160,41 @@ public class AiModelRegistry {
         return OllamaChatModel.builder()
                 .ollamaApi(ollamaApi)
                 .options(options)
+                .toolCallingManager(toolCallingManager)
                 .build();
+    }
+
+    /**
+     * 按配置构建工具调用管理器——<b>必须显式传</b>给每个模型，否则框架会自己造一个默认的。
+     *
+     * <p>为什么这件事必须在这里做：Agent 的工具循环是"模型与工具来回对话若干轮"，
+     * 没有上限就是一个可能烧光额度的死循环。上限<b>确实存在</b>（框架
+     * {@code DefaultToolCallingManager} 给 40 / 150），但"存在"与"看得见、调得动、有测试"
+     * 是三件事。这里把它从"框架内部默认值"变成 {@code ai.tools} 里的显式配置，
+     * 并在启动日志里打出来——排查"为什么这次只检索了 3 次就不动了"时，
+     * 不该需要读框架源码。
+     *
+     * <p>{@code builder.toolCallingManager(...)} 在 2.0.1 里标了
+     * {@code @Deprecated(forRemoval=true)}，但框架<b>自己的</b>
+     * {@code OpenAiChatAutoConfiguration} 也在调它（javap 核对过）。
+     * 不走它就只能接受框架内置的默认值（那份默认值读不到本项目的配置），
+     * 所以这里沿用到正式替代 API 出现为止——将来它真被删掉时，替代方案是
+     * "把 ToolCallingManager 做成 bean 再注入"，而本项目手工建模型，那条路要另想办法。
+     *
+     * <p>超限行为固定为 {@code THROW}，不做成开关：另一个选项
+     * （{@code RETURN_ERROR_RESPONSE}）会让模型"带着没有结果的工具调用继续作答"，
+     * 也就是一个看起来正常、其实没检索到东西的回答——这正是本项目一路在防的静默降级。
+     * 抛出来才能变成一条如实的 5002 错误（见 {@code FailureClassifier}）。
+     */
+    private static ToolCallingManager toolCallingManager(AiModelProperties.ToolLimits limits) {
+        ToolCallingManager manager = ToolCallingManager.builder()
+                .maxCallsPerTool(limits.getMaxCallsPerToolDefault())
+                .maxTotalToolCalls(limits.getMaxTotalToolCalls())
+                .onLimitExceeded(ToolCallLimitBehavior.THROW)
+                .build();
+        log.info("工具循环上限：单工具 {} 次 / 一次生成合计 {} 次，超限抛出（配置在 ai.tools，"
+                        + "注意 spring.ai.tools.limits.* 在本项目不起作用，原因见 AiModelProperties.ToolLimits）",
+                limits.getMaxCallsPerToolDefault(), limits.getMaxTotalToolCalls());
+        return manager;
     }
 }

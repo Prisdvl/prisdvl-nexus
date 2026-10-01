@@ -3000,6 +3000,124 @@ Unable to rename 'nexus-app-0.0.1-SNAPSHOT.jar' to '…jar.original'
 
 ---
 
+### B.43 Phase 5.2 实现记录（错误处理：一个假旋钮、一本判定表，和一次把范围扩大的真机验证）
+
+> 编号说明：同 B.42，属**产品化**这条线。对应审计里的 P1-5 / P1-7 / P1-10 / P1-11 / P1-13。
+
+**1. 起点：四类"错报"**
+
+| # | 缺陷 | 症状 |
+| --- | --- | --- |
+| P1-5 | 上传超限没有处理器 | 落到兜底 → HTTP 500「系统内部错误（requestId=…）」；文件太大被打成服务端 BUG |
+| P1-7 | 同步 RAG 把模型异常**当成回答**返回 | HTTP 200 + `"生成回答失败：" + ex.getMessage()`，而且这条"回答"会落进 `kb_qa_record` |
+| P1-10 | 工具轮数超限被报成 `4001 模型调用失败` | `ErrorCode 5002` 从未被抛出 = 死码；用户会去换模型、查额度，而正确动作是把问题拆小 |
+| P1-11 | 工具循环上限"配了但没人读" | 见下面第 2 节——**这条最初差点被修成一个假旋钮** |
+
+**2. P1-11：一个假旋钮，以及为什么不能就这么写上**
+
+审计的建议原话是"把 `spring.ai.tools.limits.*` 显式写进 yml 并写明理由"。
+在动手前核对了一遍框架源码（`javap` 看 `OpenAiChatModel$Builder`、`DefaultToolCallingManager`），
+结论是**那么做等于什么都没做**：
+
+- `OpenAiChatModel.Builder.build()` 在没传 `toolCallingManager` 时**自己造一个默认的**，
+  整个过程**不读** `spring.ai.tools.limits.*`——那两个 key 由 `OpenAiChatAutoConfiguration` 消费；
+- 而本项目 `application.yml` 里写着 `spring.ai.model.chat: "none"`，模型全部由
+  `AiModelRegistry` 手工构建（ADR-003：同时要对话模型、Agent 模型、裁判模型）。
+  **自动配置不运行 → 那两个 key 无人读取。**
+
+改一个没人读的配置，比不配更糟：它让人**以为**已经配好了（这次差点就这么交付）。
+
+所以上限被搬进本项目自己的配置，并**显式传给每一个模型**：
+
+| 位置 | 内容 |
+| --- | --- |
+| `application.yml` | `ai.tools.max-calls-per-tool-default: 40` / `max-total-tool-calls: 150`，注释写明"这是框架默认值"并标注 ⚠️ 别用 `spring.ai.tools.limits.*` |
+| `AiModelProperties.ToolLimits` | 承载两个值的嵌套类，注释解释"为什么不是框架的那两个 key" |
+| `AiModelRegistry` | 构造一个 `ToolCallingManager`，两个模型构建器都 `.toolCallingManager(它)`，启动日志打出来 |
+
+`toolCallingManager(…)` 在 2.0.1 里标了 `@Deprecated(forRemoval=true)`，但**框架自己的**
+`OpenAiChatAutoConfiguration` 也在调它。不用它就只能接受框架内置的默认值（那份默认值读不到本项目的
+配置），因此沿用到正式替代 API 出现，并在注释里写明将来的替代路径。
+
+超限行为固定 `THROW`，不做成开关：另一个选项 `RETURN_ERROR_RESPONSE` 会让模型"带着没有结果的
+工具调用继续作答"——一个看起来正常、其实没检索到东西的回答，正是本项目一路在防的静默降级。
+
+**怎么证明它不是第二个假旋钮**：`ToolCallLimitTest` 把上限调到 **1**，然后真的发起第 2 次工具调用，
+断言抛出的异常带着工具名与上限；另有一条 `configuredDefaultsMatchFrameworkDefaults` 把本项目的默认值
+钉在 `DefaultToolCallingManager.DEFAULT_*` 与字面量 40/150 上——框架改默认值时它会先报出来。
+
+**3. 归因收敛到一处：`FailureClassifier`**
+
+判定表（顺序本身是契约）与每个入口的表现写在 `docs/api.md` §1.2「失败归因表」，这里只记决策：
+
+- **顺序从具体到笼统**：框架的轮数上限 → 业务异常 → 鉴权被拒 → 超时 → 未知。
+  业务异常排在类名匹配**之前**，因为它是"已经判定过的事实"，不能被后面的猜测覆盖
+  （有一条测试专门钉这个：被 `BusinessException(FORBIDDEN)` 包住的 `*Unauthorized*` 仍报 403）。
+- **沿 cause 链上溯**：Spring AI 会包 `RetryExhausted → WebClientRequest → ConnectException`，
+  只看最外层等于永远落到"未知"桶。
+- **新增 `4007 MODEL_AUTH_FAILED`**，而不是复用 4001/4006。三件事各是一个决定：
+  - **不复用 4001**：4001 的文案是"请稍后重试"，而密钥过期重试一万次都是 401——
+    对一半人给出错误建议，比不给建议更费时间；
+  - **不复用 4006**：4006 是"这个角色压根没接模型"（改配置），4007 是"接了但密钥被拒"（换密钥），
+    动作不同；
+  - **HTTP 用 502 不用 401**：401 是"你（调用方）没通过认证"，而这里是我们作为网关调上游被拒。
+    返回 401 会诱导前端去清 Token、跳登录页——一个完全错误的自救动作。
+  - 识别按类名（`*Unauthorized*` / `*Authentication*`…），理由与既有的超时判定相同：这些异常来自
+    不同 SDK，逐一 import 会把项目绑死在某个供应商上。**刻意不匹配 `AccessDenied`**：
+    在 Spring Security 里那是"我们的接口被越权访问"，与"上游拒绝我们的密钥"是两件相反的事。
+
+**4. 真机验证把这一期的范围扩大了（这是本条最该被记住的部分）**
+
+按上面的改动改完后，用一把**无效 Key** 起真机栈（`--spring.profiles.active=local`），
+拿同一个故障打各条链路，发现审计里没写、改动也没覆盖到的两处：
+
+| 入口 | 修复前 | 修复后 |
+| --- | --- | --- |
+| `POST /api/agent/ask` | **500 / 9999「系统内部错误」** | 502 / 4007 |
+| `POST /api/chat/conversations/{id}/messages` | 502 / 4001 + **上游原文**（`401: Invalid API key. (base-url=https://…)`） | 502 / 4007 |
+| `POST /api/chat/stream` | 4001 / `retryable=true` | 4007 / `retryable=false` |
+| `chat_message.error_msg`（落库） | 上游原文，且会被 `GET /api/chat/messages/{id}` 读回来再露一次 | 给用户的那句话；原文只留日志，靠 `requestId` 关联 |
+
+- `AgentRuntime.ask` 是**四个非流式入口的唯一收口**（`/api/agent/ask`、Agent 试跑、评测集执行、
+  MCP 的 `agent_ask`），而它此前一个 `catch` 都没有：同一个"密钥无效"，流式对话回 4001、
+  这四个入口回 500。现在两边共用 `FailureClassifier`，所以报的是同一个码同一句话。
+- `ChatServiceImpl` 的 `"模型调用失败：" + ex.getMessage()` 既泄露上游原文、又把它存进
+  `error_msg`。改成存 `failure.message()`：**这不是换个地方泄露，是关掉这条泄露路径**——
+  `error_msg` 会经 messages 接口回到客户端。
+- 这两处**不在**审计的清单里，是"跑一次真实的失败"才暴露的。审计是从代码读出来的，
+  而"某条链路根本没接上"这类缺陷只有让它真的失败一次才看得见。
+
+**5. 与审计措辞的两处偏离（如实记录）**
+
+1. **P1-7 记的是"失败落 FAILED"，实际做的是"抛异常 + 不落档"**。理由是 `kb_qa_record`
+   **没有 status 列**，写进去就是一条"看起来正常的回答"。`finish()` 的既有注释也写着
+   "只记录成功的问答"。因此生成失败时 `generated` 为 null，压根没有"半条回答"可记。
+2. **上传超限的验证分两层，因为 MockMvc 测不了它**：体积上限由 **Servlet 容器**在解析 multipart
+   时判，MockMvc 用的是模拟请求、不经过容器解析。因此：
+   - `ErrorContractTest`（探针控制器 + MockMvc）：证明"接到这个异常会返回 413/3006"；
+   - `UploadSizeLimitHttpTest`（真实 Tomcat + 真实 multipart，上限调成 8KB/16KB）：
+     证明"容器真的会抛这个异常"。载荷只有 64KB：容器拒绝后会尝试吞掉剩余请求体好把响应写回去，
+     Tomcat 的 `maxSwallowSize` 默认 2MB——按线上真实体积去测，连接会在响应写出前被中断，
+     那测的就变成"Tomcat 怎么处理半截请求"了。
+
+**6. 真机实测（`local` profile）**
+
+1. 无效 Key 起服务：三条链路分别返回上表"修复后"的结果，三个入口**一致**。
+2. `chat_message.error_msg` 落库内容 = 给用户的那句话；`GET /api/chat/messages/{id}` 读回来的也是它。
+3. **201MB 真实上传**（`max-file-size: 200MB`）→ `413` + `{"code":3006,"message":"文件超出大小限制
+   （单文件上限 200MB，单次请求上限 220MB）"}`。文案里是**配置里读出来的值**，不是写死的 200MB：
+   写死的数字会在改配置后变成谎言，而这类谎言没人会去测。
+4. `mvn test` 406 通过 / 0 失败 / 0 错误 / 18 跳过（基线 382，新增 24 条）；`mvn package` 成功。
+
+**7. 这一期明确没做的**
+
+- **工具级超时**：审计提过，但当前没有会阻塞的外部工具，先不写一个没有调用方的超时旋钮
+  （B.38 的取舍一致）。
+- **前端没有体积预检**：用户选了一个 300MB 的文件，要等传完才在服务端被拒（现在至少能看懂原因）。
+- **`retryable` 前端还没消费**：`error` 帧里的这个字段目前没有渲染方，前端仍只显示 `message`。
+  要做成"不可重试就不给重试按钮"，属于前端那一期。
+- **`maxSwallowSize` 那条边界未实测**：远超上限的上传（如 1GB）是否会在响应写出前被容器断连，
+  只有推理没有实测，因此不作为结论。真要做，正确做法是前端预检 + 后端限制双管。
 
 ---
 

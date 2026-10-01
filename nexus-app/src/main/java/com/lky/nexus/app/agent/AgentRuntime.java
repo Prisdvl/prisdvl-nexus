@@ -1,8 +1,10 @@
 package com.lky.nexus.app.agent;
 
 import com.lky.nexus.ai.agent.AgentDefinition;
+import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.agent.tool.AgentToolFactory;
+import com.lky.nexus.common.exception.BusinessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -89,11 +91,24 @@ public class AgentRuntime {
         long start = System.currentTimeMillis();
         // 痕迹由监听器收进本次调用的私有列表：不共享状态，天然并发安全
         List<AgentContext.ToolCallRecord> trace = new ArrayList<>();
-        String answer = configure(chatClientFactory.get(definition.modelRole()).prompt(),
-                userId, definition, AgentContext.collector(trace))
-                .user(question)
-                .call()
-                .content();
+        String answer;
+        try {
+            answer = configure(chatClientFactory.get(definition.modelRole()).prompt(),
+                    userId, definition, AgentContext.collector(trace))
+                    .user(question)
+                    .call()
+                    .content();
+        } catch (BusinessException ex) {
+            // 已经是明确的业务结论（4006 未配置模型等），原样抛出，不再包一层
+            throw ex;
+        } catch (Exception ex) {
+            // 不分类的代价是实测出来的：同一个"密钥无效"，流式对话回的是
+            // 「模型调用失败，请稍后重试」，而这里一路冒到兜底处理器变成
+            // 500「系统内部错误（requestId=…）」——用户看到 500 只会以为产品坏了，
+            // 运维还会收到一条 ERROR 告警。分类收敛在 FailureClassifier（B.43）。
+            log.error("Agent 调用失败 userId={} agent={} 问题「{}」", userId, definition.describe(), question, ex);
+            throw FailureClassifier.toBusinessException(ex);
+        }
 
         log.info("Agent 回答 userId={} agent={} 问题「{}」→ 工具调用 {} 次，耗时 {} ms",
                 userId, definition.describe(), question, trace.size(), System.currentTimeMillis() - start);

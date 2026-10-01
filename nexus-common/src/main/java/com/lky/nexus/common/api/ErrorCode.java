@@ -61,6 +61,10 @@ public enum ErrorCode {
     EMBEDDING_FAILED(4004, "文本嵌入失败"),
     VECTOR_STORE_UNAVAILABLE(4005, "向量库不可用"),
     MODEL_ROLE_NOT_CONFIGURED(4006, "未配置对应的模型角色"),
+    // 4007 与 4006 都是"服务端没把模型配好"，但对用户是两件事：
+    // 4006 是"这个角色压根没接模型"（选错了/没配），4007 是"接了但密钥被拒"
+    // （key 过期、被吊销、额度封禁）。分开的好处是动作不同：前者改配置，后者换密钥。
+    MODEL_AUTH_FAILED(4007, "模型服务鉴权失败"),
 
     // ---------- 5xxx 工具 / Agent / MCP ----------
     TOOL_EXECUTION_FAILED(5001, "工具执行失败"),

@@ -2,6 +2,7 @@ package com.lky.nexus.app.chat.service.impl;
 
 import com.lky.nexus.ai.agent.AgentDefinition;
 import com.lky.nexus.ai.config.AiModelProperties;
+import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.agent.AgentContext;
 import com.lky.nexus.app.agent.AgentRuntime;
@@ -421,16 +422,33 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             finish();
         }
 
+        /**
+         * 流式失败。
+         *
+         * <p>这里曾经写死 {@code code 4001 / message "模型调用失败" / retryable true}——
+         * 于是"Agent 工具循环撞到轮数上限（5002）"、"检索服务不可用（4005）"、
+         * "模型响应超时（4002）"统统被报成同一句话，用户按错误的线索去排查。
+         * 现在码与文案交给 {@link FailureClassifier}（判定只写在那一个地方，
+         * 同步问答与这里因此不会漂移）。
+         *
+         * <p>落库的 {@code error_msg} 存<b>给用户看的那句</b>而不是原始异常文本：
+         * 原始异常连同堆栈已经在下面这行日志里（带 requestId，可回查），
+         * 而 {@code error_msg} 会随 {@code GET /api/chat/conversations/{id}/messages}
+         * 返回给客户端——把上游响应体、内网地址之类的东西塞进这个字段，
+         * 等于开了一条"错误信息外泄"的通道（update.txt §十四）。
+         */
         private void onError(Throwable error) {
             if (!finalized.compareAndSet(false, true)) {
                 return;
             }
-            log.error("流式生成失败 requestId={}, conversationId={}", requestId, conversationId, error);
-            persist(MessageStatus.FAILED, truncate(error.getMessage()));
+            FailureClassifier.Failure failure = FailureClassifier.classify(error);
+            log.error("流式生成失败 requestId={}, conversationId={}, code={}",
+                    requestId, conversationId, failure.code().getCode(), error);
+            persist(MessageStatus.FAILED, truncate(failure.message()));
             send(SseEventNames.ERROR, Map.of(
-                    "code", 4001,
-                    "message", "模型调用失败，请稍后重试",
-                    "retryable", true));
+                    "code", failure.code().getCode(),
+                    "message", failure.message(),
+                    "retryable", failure.retryable()));
             finish();
         }
 

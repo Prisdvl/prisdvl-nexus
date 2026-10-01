@@ -146,6 +146,18 @@ nexus:
 ai:
   defaults:
     temperature: 0.7
+  # Agent 工具循环的上限（一次生成里"模型 ↔ 工具"能来回几轮）。
+  # 这里的值就是框架 DefaultToolCallingManager 的默认值（40 / 150），写出来是为了
+  # ① 可查：排查"为什么只检索了 3 次就停了"不用去读框架源码；
+  # ② 可调：答案里出现"工具调用次数超过上限"（错误码 5002）时，改这里即可，不用改代码；
+  # ③ 可测：nexus-ai 的 ToolCallLimitTest 会真的把上限撞一次，证明它生效。
+  #
+  # ⚠️ 不要写成 spring.ai.tools.limits.*：那两个 key 只对"自动配置出来的 ChatModel"生效，
+  #    而本项目关闭了模型自动配置（见上面 spring.ai.model.chat=none），模型由
+  #    AiModelRegistry 手工构建。写在那里是假旋钮——改了没反应（见 decisions.md B.43）。
+  tools:
+    max-calls-per-tool-default: 40
+    max-total-tool-calls: 150
   providers:
     # 当前接入 OpenCode Zen（OpenAI 兼容网关）。换供应商只需改 base-url 与 model，
     # 例如 DeepSeek 官方：base-url=https://api.deepseek.com + model=deepseek-chat。

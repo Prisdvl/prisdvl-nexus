@@ -1,6 +1,7 @@
 package com.lky.nexus.app.knowledge.service.impl;
 
 import com.lky.nexus.ai.config.AiModelProperties;
+import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.chat.stream.RetrievalEvent;
 import com.lky.nexus.app.chat.stream.SseEventNames;
@@ -20,6 +21,7 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -104,17 +106,32 @@ public class RagStreamServiceImpl implements RagStreamService {
                     }
                 },
                 error -> {
-                    // 生成失败：把已收到的部分落库（部分内容对用户仍有价值），并明确告知失败
+                    // 生成失败：把已收到的部分落库（部分内容对用户仍有价值），并明确告知失败。
+                    // 两条 2026-10-01 修正：
+                    // ① 给用户看的话由 FailureClassifier 统一给（原来是把 error.getMessage()
+                    //    原样塞进 done 帧，内网地址/上游响应体会直接显示在界面上）；
+                    // ② 一个字都没生成出来时不落档——否则问答历史里会多出一条空回答，
+                    //    既看不出为什么是空的，也没有任何内容可回看（update.txt §十二 的"不留脏数据"）。
                     log.error("RAG 流式生成失败 requestId={}, kbId={}", requestId, knowledgeBaseId, error);
                     if (finished.compareAndSet(false, true)) {
-                        RagAnswer record = ragAnswerService.recordAnswer(userId, knowledgeBaseId, question,
-                                assembled.toString(), prepared.usedHits(), prepared.contextTokens(),
-                                prepared.truncated(), prepared.reranked(), System.currentTimeMillis() - start);
-                        send(emitter, SseEventNames.DONE, Map.of(
-                                "finishReason", "error",
-                                "error", String.valueOf(error.getMessage()),
-                                "recordId", String.valueOf(record.recordId()),
-                                "citations", record.citations()));
+                        FailureClassifier.Failure failure = FailureClassifier.classify(error);
+                        Map<String, Object> done = new HashMap<>();
+                        done.put("finishReason", "error");
+                        done.put("error", failure.message());
+                        done.put("errorCode", failure.code().getCode());
+                        done.put("retryable", failure.retryable());
+                        done.put("citations", List.of());
+                        if (assembled.isEmpty()) {
+                            log.warn("生成失败且没有产出任何内容，不写问答留档 requestId={}", requestId);
+                        } else {
+                            RagAnswer record = ragAnswerService.recordAnswer(userId, knowledgeBaseId, question,
+                                    assembled.toString(), prepared.usedHits(), prepared.contextTokens(),
+                                    prepared.truncated(), prepared.reranked(),
+                                    System.currentTimeMillis() - start);
+                            done.put("recordId", String.valueOf(record.recordId()));
+                            done.put("citations", record.citations());
+                        }
+                        send(emitter, SseEventNames.DONE, done);
                         emitter.complete();
                     }
                 },

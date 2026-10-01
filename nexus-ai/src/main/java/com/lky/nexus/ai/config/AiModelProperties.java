@@ -40,6 +40,9 @@ public class AiModelProperties {
 
     private Defaults defaults = new Defaults();
 
+    /** Agent 工具循环的上限（`ai.tools`）。 */
+    private ToolLimits tools = new ToolLimits();
+
     /** 供应商列表。 */
     private List<Provider> providers = new ArrayList<>();
 
@@ -70,10 +73,35 @@ public class AiModelProperties {
         private Integer maxTokens;
     }
 
+    /**
+     * 工具循环上限。
+     *
+     * <p><b>为什么不写在 {@code spring.ai.tools.limits.*} 里</b>：那两个 key 是 Spring AI
+     * 为<b>自动配置出来的</b> ChatModel 准备的，而本项目关闭了模型自动配置
+     * （{@code spring.ai.model.chat=none}，见 {@code AiModelRegistry} 类注释），
+     * 模型由 {@code AiModelRegistry} 手工构建。手工构建时若不给
+     * {@code ToolCallingManager}，框架会自己造一个默认的（40 / 150 / 超限抛异常），
+     * 它<b>不会</b>去读容器里的 {@code spring.ai.tools} 属性。
+     * 所以把上限写进 {@code spring.ai.tools.limits.*} 就是一个假旋钮：
+     * 改了没有任何效果，却让人以为已经配置过（实测于 2026-10-01，见 decisions.md B.43）。
+     *
+     * <p>默认值与框架的 {@code DefaultToolCallingManager} 一致——默认值不应该是新数字，
+     * 只是把它变成"看得见、改得动、有测试钉住"的配置。
+     */
     @Getter
     @Setter
-    public static class Provider {
-        /** 供应商标识，如 deepseek / ollama；被 roles 引用。 */
+    public static class ToolLimits {
+
+        /** 单个工具在一次生成里最多被调用几次（框架默认 40）。 */
+        private int maxCallsPerToolDefault = 40;
+
+        /** 一次生成里所有工具合计最多被调用几次（框架默认 150）。 */
+        private int maxTotalToolCalls = 150;
+    }
+
+    @Getter
+    @Setter
+    public static class Provider {        /** 供应商标识，如 deepseek / ollama；被 roles 引用。 */
         private String name;
         private ProviderType type;
         /** OpenAI 兼容端点或 Ollama 地址。 */

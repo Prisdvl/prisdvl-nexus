@@ -1,6 +1,7 @@
 package com.lky.nexus.app.chat.service.impl;
 
 import com.lky.nexus.ai.config.AiModelProperties;
+import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.chat.model.dto.AssistantReplyDraft;
 import com.lky.nexus.app.chat.model.dto.ChatAnswerResponse;
@@ -89,16 +90,25 @@ public class ChatServiceImpl implements ChatService {
             // 配置类错误（如 4006 未配置模型）原样抛出，不做包装
             throw ex;
         } catch (Exception ex) {
+            // 分类只写在一处（FailureClassifier），流式路径用的是同一个判定，
+            // 所以"同一次故障"在流式与非流式两个入口给出的是同一个码、同一句话。
+            //
+            // 改之前这里直接把 ex.getMessage() 拼进响应，也存进 error_msg：上游 SDK 的原话
+            // （"401: Invalid API key."、网关地址、内部报错）就这样露给了用户，
+            // 而且它还会被 messages 接口读回来再露一次。原始异常仍打在日志里，
+            // 靠 requestId 关联，排查不依赖返回给用户的那句话。
+            FailureClassifier.Failure failure = FailureClassifier.classify(ex);
             int latencyMs = elapsedMillis(startNanos);
-            log.error("模型调用失败 conversationId={}, requestId={}", conversationId, requestId, ex);
+            log.error("模型调用失败 conversationId={}, requestId={}, code={}",
+                    conversationId, requestId, failure.code().getCode(), ex);
             chatMessageService.appendAssistantMessage(userId, conversationId, AssistantReplyDraft.builder()
-                    .errorMsg(truncate(ex.getMessage()))
+                    .errorMsg(truncate(failure.message()))
                     .model(role)
                     .requestId(requestId)
                     .latency(latencyMs, null)
                     .status(MessageStatus.FAILED.name())
                     .build());
-            throw new BusinessException(ErrorCode.MODEL_UNAVAILABLE, "模型调用失败：" + ex.getMessage());
+            throw new BusinessException(failure.code(), failure.message());
         }
         int latencyMs = elapsedMillis(startNanos);
 

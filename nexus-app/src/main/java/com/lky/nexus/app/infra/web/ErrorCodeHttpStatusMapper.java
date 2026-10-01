@@ -47,7 +47,11 @@ public final class ErrorCodeHttpStatusMapper {
             case MODEL_UNAVAILABLE, VECTOR_STORE_UNAVAILABLE, MCP_SERVER_UNAVAILABLE, EVAL_JUDGE_MODEL_UNAVAILABLE ->
                     HttpStatus.SERVICE_UNAVAILABLE;
             case MODEL_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
-            case TOKEN_LIMIT_EXCEEDED, EMBEDDING_FAILED, MODEL_ROLE_NOT_CONFIGURED -> HttpStatus.BAD_GATEWAY;
+            // 4007 用 502 而不是 401：401 是"你（调用方）没通过认证"，
+            // 而这里是我们作为网关去调上游时被拒——错在我们的配置，不在客户端，
+            // 返回 401 会诱导前端去清 Token、跳登录页，那是完全错误的自救动作
+            case TOKEN_LIMIT_EXCEEDED, EMBEDDING_FAILED, MODEL_ROLE_NOT_CONFIGURED,
+                 MODEL_AUTH_FAILED -> HttpStatus.BAD_GATEWAY;
 
             // 5xxx / 6xxx / 9999：服务端自身问题
             case TOOL_EXECUTION_FAILED, AGENT_MAX_ITERATIONS_EXCEEDED, WORKFLOW_DEFINITION_INVALID,

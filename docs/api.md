@@ -29,6 +29,35 @@
 
 统一由 `GlobalExceptionHandler` 转换，业务代码只抛 `BusinessException(ErrorCode, message)`。
 
+#### 失败归因表（Phase 5.2）
+
+"模型调用失败"曾经是所有生成期故障的唯一说法——撞到工具轮数上限、密钥过期、网关超时，
+用户看到的都是同一句话。归错不会让程序崩，只会让所有人沿着错误方向排查，因此判定收敛到
+**一处**：`FailureClassifier`（`nexus-ai`），下列入口共用它，所以同一个故障在所有入口
+报的是同一个码、同一句话：
+
+| 判定顺序 | 异常 | 码 / HTTP | retryable | 给用户的话 |
+| --- | --- | --- | --- | --- |
+| 1 | `ToolCallLimitExceededException`（分单工具 / 合计两种） | `5002` / `500` | ✗ | 哪个工具、上限几次（确定性上限，重试必然再撞） |
+| 2 | `BusinessException`（任何域） | 它自己的码 | 按域 | 它自己的文案（已判定过的事实，不被下面的猜测覆盖） |
+| 3 | 401/403 类（`*Unauthorized*`、`*Authentication*`…） | `4007` / `502` | ✗ | 密钥无效或已过期，请联系管理员 |
+| 4 | 超时（`*Timeout*`、`SocketTimeoutException`） | `4002` / `504` | ✓ | 模型响应超时，请稍后重试 |
+| 5 | 其余未知故障 | `4001` / `503` | ✓ | 模型调用失败，请稍后重试 |
+
+- 判定沿 cause 链上溯（Spring AI 会包 `RetryExhausted → WebClientRequest → ConnectException`），
+  只看最外层等于永远落到第 5 行。
+- 第 3 行刻意不匹配 `AccessDenied`：在 Spring Security 里那是"**我们的**接口被越权访问"，
+  与"上游拒绝我们的密钥"是两件相反的事。
+- **同一个故障在各入口的口径**（2026-10-01 真机实测，无效 Key）：`/api/agent/ask`、
+  `/api/chat/conversations/{id}/messages` 均返回 `502 / 4007`；SSE 的 `error` 帧
+  `{"code":4007,"retryable":false,"message":"…"}`。修复前这三处分别是
+  `500 / 9999 系统内部错误`、`502 / 4001` + **上游原文**、`4001 / retryable=true`。
+- 生成失败**不再是"一种回答"**：同步 RAG（`POST /api/knowledge-bases/{id}/ask`）此前会把
+  `"生成回答失败：" + ex.getMessage()` 当成 200 的答案返回，并落进 `kb_qa_record`；
+  现在抛业务异常，且不落档（留档只记真实发生过的问答）。
+- `chat_message.error_msg` 存的是**给用户的那句话**（不是上游原文），它会经
+  `GET /api/chat/messages/{id}` 返回给前端，因此原文只留在日志里、靠 `requestId` 关联。
+
 ### 1.3 错误码规划
 
 | 段 | 域 | 示例 |
@@ -37,7 +66,7 @@
 | `1xxx` | 通用/参数 | `1001 参数校验失败`、`1002 请求体格式错误`、`1003 不支持的排序字段` |
 | `2xxx` | 认证授权 | `2001 未认证`、`2002 Token 已过期`、`2003 无权限访问该资源`、`2004 账号被禁用` |
 | `3xxx` | 知识库/文档 | `3001 知识库不存在`、`3002 知识库名称重复`、`3003 文档不存在`、`3004 DocumentParseFailed 文档解析失败`、`3005 文件类型不支持`、`3006 文件超出大小限制`、`3007 ZIP 结构非法`、`3008 导入任务不存在` |
-| `4xxx` | AI 模型/嵌入/向量 | `4001 ModelUnavailable 模型不可用`、`4002 ModelTimeout 模型超时`、`4003 TokenLimitExceeded 超出上下文限制`、`4004 EmbeddingFailed 嵌入失败`、`4005 VectorStoreUnavailable 向量库不可用`、`4006 未配置对应逻辑角色的模型` |
+| `4xxx` | AI 模型/嵌入/向量 | `4001 ModelUnavailable 模型不可用`、`4002 ModelTimeout 模型超时`、`4003 TokenLimitExceeded 超出上下文限制`、`4004 EmbeddingFailed 嵌入失败`、`4005 VectorStoreUnavailable 向量库不可用`、`4006 未配置对应逻辑角色的模型`、`4007 ModelAuthFailed 模型服务鉴权失败`（密钥被上游拒绝；**不可重试**，与 4001 的区别见 1.2 的错误归因表） |
 | `5xxx` | 工具/Agent/MCP | `5001 ToolExecutionFailed 工具执行失败`、`5002 AgentMaxIterationsExceeded 超出最大步数`、`5003 人工确认被拒绝`、`5004 工具无权限`、`5005 MCP 服务不可用` |
 | `6xxx` | 工作流/评测 | `6001 工作流定义非法`、`6002 工作流节点执行失败`、`6003 评测集为空`、`6004 评测裁判模型不可用` |
 | `7xxx` | 限流/系统 | `7001 请求过于频繁`、`7002 配额已用尽`、`9999 系统内部错误` |
@@ -56,7 +85,7 @@
 | 场景 | 约定 |
 | --- | --- |
 | 创建类接口 | 支持 `Idempotency-Key` 头；同 key 10 分钟内返回首次结果（Redis 存结果摘要） |
-| 文件上传 | `multipart/form-data`；单文件 ≤ 50 MB，ZIP ≤ 200 MB（可配）；一次最多 200 个文件 |
+| 文件上传 | `multipart/form-data`；单文件 ≤ 50 MB，ZIP ≤ 200 MB（可配）；一次最多 200 个文件。超过 `spring.servlet.multipart.max-file-size` 时返回 `413` + code `3006`，文案里带**配置的实际值**（形如"单文件上限 200MB，单次请求上限 220MB"），不写死数字 |
 | 长任务 | 一律返回 `taskId`，用 `GET /api/import-tasks/{id}` 或 SSE 获取进度 |
 | 流式接口 | `POST` + `Accept: text/event-stream`（不用 `EventSource`，因为它无法带 `Authorization` 头） |
 
@@ -274,7 +303,7 @@ Content-Type: application/json
 | `citation` | 生成结束后（Phase 3 预留，仍未实现） | `{"citations":[{...}]}` |
 | `usage` | 结束前（**已实现**） | `{"promptTokens":1820,"completionTokens":240,"totalTokens":2060,"latencyMs":2900,"firstTokenMs":380}` |
 | `done` | 正常结束（**已实现**） | `{"finishReason":"stop"}`；用户停止时 `{"finishReason":"stopped","stopped":true}` |
-| `error` | 异常结束（**已实现**） | `{"code":4001,"message":"模型调用失败，请稍后重试","retryable":true}` |
+| `error` | 异常结束（**已实现**） | `{"code":4001,"message":"模型调用失败，请稍后重试","retryable":true}`；`code`/`message`/`retryable` 由 `FailureClassifier` 判定，可能是 `4007`（密钥被拒，不可重试）、`4002`（超时）、`5002`（工具轮数超限）等，见 1.2 的失败归因表 |
 
 **实现约束**
 
@@ -300,6 +329,11 @@ Content-Type: application/json
   `citationPreview`。两条流式链路（`/api/chat/stream` 的 RAG 模式与
   `/api/knowledge-bases/{id}/ask/stream`）共用同一个构造器，因此事件形状完全一致。
 - `citation` / `approval_required` 仍未实现：引用目前随 `usage` 之前的 `done`（或 `meta.citations`）给出。
+- **RAG 流式生成失败**（`/api/knowledge-bases/{id}/ask/stream`，Phase 5.2）不再发 `error` 帧，
+  而是把失败放进**最后一个 `done` 帧**：`{"finishReason":"error","error":"<给用户的话>","errorCode":4001,
+  "retryable":true,"citations":[]}`。理由是这条链路此时已经产出过 `retrieval` 与部分 `delta`，
+  收尾仍以 `done` 结束，前端只需要处理"一个终止帧"；`errorCode` 的取值同 1.2 的失败归因表。
+  若失败前一个字都没产出，**不写问答留档**（`kb_qa_record` 只记真实发生过的问答）。
 - 命中片段**不随消息落库**：刷新后 `retrieval` 卡片不再显示（正文与引用仍在）。回放需要把命中写进
   `chat_message.metadata`，与工具痕迹同一处，属后续增量。
 - `mode` 在**建会话时**指定（`POST /api/chat/conversations` 的 `mode` 字段），
