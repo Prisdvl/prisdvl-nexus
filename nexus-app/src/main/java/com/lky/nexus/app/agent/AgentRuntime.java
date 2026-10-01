@@ -17,7 +17,9 @@ import java.util.List;
  * <p><b>本类是 Phase 4.1 之前那个写死配置的 {@code AgentService}</b>，改动都是
  * "把常量换成 Definition 里的字段"：
  * <ol>
- *   <li>{@code AgentPrompts.AGENT_SYSTEM} → {@code definition.systemPrompt()}；</li>
+ *   <li>{@code AgentPrompts.AGENT_SYSTEM} → {@code definition.systemPrompt()} 拼上回答策略块
+ *       （{@code AgentPrompts.systemPromptFor}；4.4）——"没有资料时怎么办"从写死的提示词里
+ *       挪进了 {@code agent.answer_policy}，用户可配；</li>
  *   <li>{@code Role.CHAT_AGENT} → {@code definition.modelRole()}；</li>
  *   <li>工具"扫该用户全部知识库" → 知识库范围随 {@code definition.kbIds()} 进入 ToolContext
  *       （空 = 不限制，仍是原来的行为）；</li>
@@ -63,7 +65,10 @@ public class AgentRuntime {
                                                       AgentDefinition definition,
                                                       AgentContext.ToolCallListener listener) {
         return toolFactory.applyTo(
-                request.system(definition.systemPrompt())
+                // 提示 = 用户写的那段 + 平台按 answerPolicy 追加的策略块（4.4）。
+                // 组装点只有这一个：本类的一次性调用与流式对话都走 configure，
+                // 所以"策略"不会有第二份实现（同源教训见 AgentContext 的类注释）
+                request.system(AgentPrompts.systemPromptFor(definition))
                         // userId 与 kbIds 一起进 ToolContext：这是工具拿"能查谁的库、能查哪些库"的
                         // 唯一通道，且不会发给模型（框架生成工具入参 schema 时跳过 ToolContext 参数）
                         .toolContext(AgentContext.of(userId, definition.kbIds(), listener)),

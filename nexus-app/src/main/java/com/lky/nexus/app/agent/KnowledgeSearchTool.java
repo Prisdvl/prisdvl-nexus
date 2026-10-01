@@ -11,6 +11,8 @@ import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -39,6 +41,8 @@ import java.util.stream.Collectors;
 @Component
 public class KnowledgeSearchTool {
 
+    private static final Logger log = LoggerFactory.getLogger(KnowledgeSearchTool.class);
+
     /** 模型没给条数时的最终上限（给模型看的条数，不是每个库的召回深度）。 */
     private static final int DEFAULT_PRESENT_LIMIT = 5;
     /** 给模型看的条数上限：再多会挤占上下文，也超出"让模型看一眼"的需要。 */
@@ -64,8 +68,11 @@ public class KnowledgeSearchTool {
 
     @Tool(name = "knowledge_search",
             description = "检索当前用户知识库中的资料片段（混合检索：BM25 + 向量 + RRF 融合）。"
-                    + "当用户的问题可能涉及他的笔记内容时，必须先调用本工具，再根据检索结果回答；"
-                    + "不要凭模型自身的知识回答与知识库相关的问题。")
+                    + "当用户的问题可能涉及他的笔记内容时，必须先调用本工具，再根据检索结果回答。")
+    // 描述只讲"这个工具做什么、什么时候调它"。"检索不到时怎么办"不写在这里：
+    // 那是回答策略（agent.answer_policy → AgentPrompts 的策略块）的事，
+    // 描述与提示词各说一遍就会互相矛盾——而这句话经 MCP tools/list 发给了外部客户端，
+    // 更不该替它们规定回答口径（4.4 删掉了原有的"不要凭模型自身的知识回答"那句）。
     public String search(
             @ToolParam(description = "检索关键词或问题，用中文自然语言表述") String query,
             // 两处一起才算把"可选"表达清楚（4.3 真机实测踩到，见 decisions.md B.39）：
@@ -162,18 +169,81 @@ public class KnowledgeSearchTool {
             out.append('\n').append(clip(hit.content(), 400)).append('\n');
         }
         if (take == 0) {
-            if (scoped != null && searchable.isEmpty()) {
-                // "绑了库但一个都搜不了"与"搜了但没命中"必须分开说：
-                // 前者模型只能如实说检索不可用，不能退回去用自身知识编造（那正是关掉幻觉的初衷）
-                out.append("（本 Agent 绑定的知识库当前都不可用，无法检索到任何资料。"
-                        + "请如实告知用户检索不可用，不要用你自己的知识回答。）");
-            } else {
-                out.append("（没有检索到相关结果。若问题确实与笔记无关，请如实说明。）");
-            }
+            out.append(emptyExplanation(scoped, knowledgeBases, searchable, skipped, query));
+            // 三种"再换关键词也没用"的情形正好是"模型可能改用自身知识回答"的触发条件，
+            // 静默降级必须可数（B.27 起的规矩）；四种事实的区分在日志里留全
+            observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_EMPTY);
+            log.warn("知识库检索没有可引用资料：userId={} query=「{}」 绑定 {} 个库 / 可检索 {} 个 / 跳过 {}",
+                    userId, query, knowledgeBases.size(), searchable.size(), skipped);
         }
         AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query,
-                take + " 条结果" + (skipped.isEmpty() ? "" : "（跳过 " + skipped.size() + " 个库）")));
+                summary(take, scoped, knowledgeBases, searchable, skipped)));
         return out.toString();
+    }
+
+    /**
+     * "一条可引用资料都没有"的四种情形，各自如实说出（能混在一起出现，{@code skipped} 逐条列出）。
+     *
+     * <p><b>只报事实，不报策略</b>：这里不再出现"能不能用自身知识回答"——那是
+     * {@code AgentPrompts} 按回答策略追加的那一段的事。工具一旦替模型做决定，
+     * 这条规则就有了第二处来源，而 4.4 之前正是"工具与提示词各说一遍"把新用户挡在门外
+     * （见 decisions.md B.41）。
+     */
+    private String emptyExplanation(List<Long> scoped, List<KnowledgeBasePO> knowledgeBases,
+                                    List<KnowledgeBasePO> searchable, List<String> skipped, String query) {
+        StringBuilder text = new StringBuilder("（");
+        if (!searchable.isEmpty()) {
+            // 搜了、但没命中：与"没东西可搜"是两件事，前者换一次关键词仍然有意义
+            text.append("在").append(scopeLabel(scoped)).append("检索了「").append(query)
+                    .append("」，没有匹配的资料。可以换一次关键词再检索；如果仍然没有结果，就不要再调用本工具了。");
+        } else {
+            if (!knowledgeBases.isEmpty()) {
+                text.append(unavailableScopeLabel(scoped)).append("当前都不可用");
+            } else if (scoped != null) {
+                // 绑定时校验过归属，但库之后可以被删——这种"绑定悬空"要说成"已不存在"，不是"没内容"
+                text.append("本 Agent 绑定的知识库都已不存在（可能已被删除）");
+            } else {
+                text.append("你还没有任何知识库");
+            }
+            // 这三种情形换关键词都不会有结果：如实说出来，省掉模型"再试一次"的那几轮
+            //（实测里 3 次工具调用全烧在空库上、白花 4 秒，见 decisions.md B.41）
+            text.append("，没有可检索的资料。不要再用不同关键词重复调用本工具——换词也不会有结果。");
+        }
+        if (!skipped.isEmpty()) {
+            text.append("已跳过：").append(String.join("、", skipped)).append('。');
+        }
+        return text.append('）').toString();
+    }
+
+    /** 检索范围在人话里的说法（未绑定 = 全部知识库）。 */
+    private String scopeLabel(List<Long> scoped) {
+        return scoped == null ? "全部知识库" : "本 Agent 绑定的 " + scoped.size() + " 个知识库";
+    }
+
+    /** "一个都搜不了"时对范围的称呼（覆盖"未绑定但全被禁用"与"绑定但全不可用"两种）。 */
+    private String unavailableScopeLabel(List<Long> scoped) {
+        return scoped == null ? "你的知识库" : "本 Agent 绑定的知识库";
+    }
+
+    /**
+     * 界面卡片上那句话：随消息落库，刷新之后仍然能看出"这次有没有东西可引用"。
+     *
+     * <p>用户据此分辨回答是"检索到了资料"还是"模型改用自身知识了"——所以未命中的情形
+     * 必须与"搜了没命中"分开写，不能都笼统成"0 条结果"。
+     */
+    private String summary(int take, List<Long> scoped, List<KnowledgeBasePO> knowledgeBases,
+                           List<KnowledgeBasePO> searchable, List<String> skipped) {
+        String suffix = skipped.isEmpty() ? "" : "（跳过 " + skipped.size() + " 个库）";
+        if (take > 0) {
+            return take + " 条结果" + suffix;
+        }
+        if (!searchable.isEmpty()) {
+            return "0 条结果（无匹配）" + suffix;
+        }
+        if (!knowledgeBases.isEmpty()) {
+            return "知识库全部不可用，0 条结果" + suffix;
+        }
+        return (scoped != null ? "绑定的知识库均已不存在" : "没有知识库") + "，0 条结果" + suffix;
     }
 
     /** 第二级降级：SQL LIKE 关键词匹配。

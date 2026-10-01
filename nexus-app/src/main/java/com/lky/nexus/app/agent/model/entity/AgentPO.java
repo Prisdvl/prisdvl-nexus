@@ -44,6 +44,9 @@ public class AgentPO {
     /** 模型逻辑角色（ai.roles 的 key）；为空时由服务层补成 chat.agent。 */
     private String modelRole;
 
+    /** 回答策略（4.4）：KB_PREFERRED / KB_ONLY；为空时由服务层补成默认。 */
+    private String answerPolicy;
+
     /** DRAFT / PUBLISHED / DISABLED。 */
     private String status;
 

@@ -23,6 +23,12 @@ public class ObservabilityRegistry {
     /** 已知的关键计数键（集中定义，避免字符串飘散在业务代码里）。 */
     public static final String AGENT_SEARCH_DEGRADED = "agent.search.degraded";
     public static final String AGENT_SEARCH_UNAVAILABLE = "agent.search.unavailable";
+    /**
+     * 检索跑完了但没有一条可引用的资料（4.4）：这是"模型可能改用自身知识回答"的触发条件。
+     * 与 {@code AGENT_SEARCH_UNAVAILABLE}（基础设施不可用）不同——这里是工具装了、也真的跑了，
+     * 只是没东西可引用；也不是 {@code AGENT_TOOLS_EMPTY}（一个工具都没装配）。
+     */
+    public static final String AGENT_SEARCH_EMPTY = "agent.search.empty";
     public static final String RAG_RECORD_FAILED = "rag.record.failed";
     /** 工具调用成功/失败（4.3 执行壳）：失败不是异常，是"回灌给模型的观察结果"，因此必须计数。 */
     public static final String TOOL_CALL_SUCCEEDED = "tool.call.succeeded";

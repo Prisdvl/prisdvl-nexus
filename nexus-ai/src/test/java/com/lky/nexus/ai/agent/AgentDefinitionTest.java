@@ -91,22 +91,31 @@ class AgentDefinitionTest {
     }
 
     @Test
-    @DisplayName("agentId / code / name / systemPrompt / modelRole 缺失都在构造期就失败")
+    @DisplayName("agentId / code / name / systemPrompt / modelRole / answerPolicy 缺失都在构造期就失败")
     void missingIdentityFieldsFailFast() {
-        assertThatThrownBy(() -> new AgentDefinition(null, "c", "n", "p", "r", List.of(), List.of(), false))
+        assertThatThrownBy(() -> new AgentDefinition(null, "c", "n", "p", "r", List.of(), List.of(),
+                AnswerPolicy.KB_PREFERRED, false))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AgentDefinition(1L, " ", "n", "p", "r", List.of(), List.of(), false))
+        assertThatThrownBy(() -> new AgentDefinition(1L, " ", "n", "p", "r", List.of(), List.of(),
+                AnswerPolicy.KB_PREFERRED, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("code");
-        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "", "p", "r", List.of(), List.of(), false))
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "", "p", "r", List.of(), List.of(),
+                AnswerPolicy.KB_PREFERRED, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("name");
-        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", null, "r", List.of(), List.of(), false))
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", null, "r", List.of(), List.of(),
+                AnswerPolicy.KB_PREFERRED, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("systemPrompt");
-        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", "p", "\t", List.of(), List.of(), false))
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", "p", "\t", List.of(), List.of(),
+                AnswerPolicy.KB_PREFERRED, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("modelRole");
+        // 回答策略必填：装配阶段就该定好，运行期不做兜底（否则"没配时用什么"会多出第二个决定的地方）
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", "p", "r", List.of(), List.of(), null, false))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("answerPolicy");
     }
 
     @Test
@@ -127,6 +136,6 @@ class AgentDefinitionTest {
 
     private AgentDefinition definition(List<Long> kbIds, List<String> toolCodes) {
         return new AgentDefinition(1L, "helper", "笔记助手", "只依据资料回答", "chat.agent",
-                kbIds, toolCodes, false);
+                kbIds, toolCodes, AnswerPolicy.KB_PREFERRED, false);
     }
 }

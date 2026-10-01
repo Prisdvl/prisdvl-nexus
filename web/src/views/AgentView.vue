@@ -17,7 +17,12 @@ import {
   type StreamRetrieval
 } from '@/api/chat'
 import { DEFAULT_EVAL_CASES, runEval, type EvalReport } from '@/api/agent'
-import { listAgents, type AgentResource, type AgentStatus } from '@/api/agents'
+import {
+  listAgents,
+  type AgentResource,
+  type AgentStatus,
+  type AnswerPolicy
+} from '@/api/agents'
 import { listKnowledgeBases, type KnowledgeBase } from '@/api/knowledge'
 import { renderMarkdown } from '@/utils/markdown'
 
@@ -75,6 +80,19 @@ const usableAgents = computed(() => agents.value.filter((agent) => agent.status 
 const blockedAgents = computed(() =>
   agents.value.filter((agent) => agent.status !== 'PUBLISHED' && !agent.builtin)
 )
+
+/**
+ * 草稿会话当前会用的 Agent 的回答策略（'' = 内置默认）。
+ *
+ * 用在"还没有知识库"那句提示里：同样是一个空知识库，选「只依据笔记」与用默认的
+ * 「优先用笔记」，用户该期待的结果完全不同——提示必须跟着策略走，不能写死一句。
+ */
+const draftAnswerPolicy = computed<AnswerPolicy>(() => {
+  const selected = draftAgentId.value
+    ? usableAgents.value.find((agent) => agent.id === draftAgentId.value)
+    : agents.value.find((agent) => agent.builtin)
+  return selected?.answerPolicy ?? 'KB_PREFERRED'
+})
 
 /**
  * 用户是否已经自己做过选择（点了"新对话"或点了某个会话）。
@@ -646,8 +664,10 @@ watch(activeId, () => {
             <!-- 工具痕迹：过程可见。检索中与已完成用两种状态区分 -->
             <ol v-if="message.toolCalls.length" class="trace">
               <li v-for="(call, index) in message.toolCalls" :key="index">
-                <el-tag size="small" effect="plain" :type="isPending(call) ? 'info' : 'success'">
-                  {{ isPending(call) ? '检索中' : '已检索' }}
+                <!-- 标签只说"这一步做完了"，不说"找到了"：未命中时摘要写的是
+                     「0 条结果（无匹配）」，绿色对勾式的"已检索"会被读成"检索到了" -->
+                <el-tag size="small" effect="plain" :type="isPending(call) ? 'warning' : 'info'">
+                  {{ isPending(call) ? '检索中' : '检索完成' }}
                 </el-tag>
                 <span class="trace-tool">{{ toolLabel(call.tool) }}</span>
                 <code class="trace-input">{{ call.input }}</code>
@@ -703,6 +723,17 @@ watch(activeId, () => {
       <p v-if="!activeId && draftMode === 'AGENT' && blockedAgents.length" class="composer-hint">
         还有 {{ blockedAgents.length }} 个 Agent 不能选用（草稿需先发布、已停用需先启用）：
         {{ blockedAgents.map((agent) => agent.name).join('、') }} —— 到「Agent 管理」里试跑后发布
+      </p>
+      <!-- 一个知识库都没有时提前讲清楚会得到什么：说清"会不会答"取决所选 Agent 的回答策略 -->
+      <p v-if="!activeId && draftMode === 'AGENT' && !knowledgeBases.length" class="composer-hint">
+        <template v-if="draftAnswerPolicy === 'KB_ONLY'">
+          还没有知识库，而当前选用的 Agent 是「只依据笔记」：提问会如实回答"没有在笔记中找到可引用的资料"。
+          到「知识库」页导入笔记后就能检索到内容。
+        </template>
+        <template v-else>
+          还没有知识库：现在提问，Agent 会用自己的知识回答，并注明内容不是来自你的笔记。
+          到「知识库」页导入笔记后，回答就能引用你的资料。
+        </template>
       </p>
 
       <footer class="composer">

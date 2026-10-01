@@ -13,6 +13,16 @@ import type { PageResult } from './client'
  */
 export type AgentStatus = 'DRAFT' | 'PUBLISHED' | 'DISABLED'
 
+/**
+ * 回答策略：没有可引用的资料时，允不允许用模型自身的知识回答（4.4）。
+ *
+ * `KB_PREFERRED`（默认）——笔记优先；笔记里没有时可以用自身知识回答，但必须注明不是来自笔记。
+ * `KB_ONLY`——只依据笔记，没找到就直说；这是 4.4 之前的旧行为，现在是显式选择。
+ *
+ * 两种情况下都**禁止**把模型自身的知识说成是用户笔记里的内容。
+ */
+export type AnswerPolicy = 'KB_PREFERRED' | 'KB_ONLY'
+
 export interface AgentResource {
   id: string
   /** 稳定标识（创建后不可改，被 Tool / Workflow / 会话引用的是它，不是显示名） */
@@ -22,6 +32,8 @@ export interface AgentResource {
   systemPrompt: string | null
   /** 逻辑模型角色；为空 = 服务端默认（chat.agent） */
   modelRole: string | null
+  /** 没有可引用资料时怎么答；服务端保证一定返回合法值 */
+  answerPolicy: AnswerPolicy
   status: AgentStatus
   /** 内置默认 Agent：不可删除、不可停用，但可改名与改提示词 */
   builtin: boolean
@@ -37,6 +49,8 @@ export interface AgentPayload {
   description?: string
   systemPrompt?: string
   modelRole?: string
+  /** 不传 = 不改；新建时不传则由服务端落默认 KB_PREFERRED */
+  answerPolicy?: AnswerPolicy
   status?: AgentStatus
   kbIds?: string[]
 }

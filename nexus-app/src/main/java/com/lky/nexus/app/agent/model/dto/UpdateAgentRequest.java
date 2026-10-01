@@ -25,6 +25,13 @@ public record UpdateAgentRequest(
 
         String modelRole,
 
+        /**
+         * 回答策略（4.4）：{@code KB_PREFERRED} / {@code KB_ONLY}；null = 不改。
+         *
+         * <p>判空即不改，与 {@code modelRole} 同一套约定；非法值在服务层报 1001。
+         */
+        String answerPolicy,
+
         /** DRAFT / PUBLISHED / DISABLED。 */
         String status,
 

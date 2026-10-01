@@ -19,7 +19,8 @@ import {
   updateAgent,
   type AgentResource,
   type AgentStatus,
-  type AgentTestResult
+  type AgentTestResult,
+  type AnswerPolicy
 } from '@/api/agents'
 import { listKnowledgeBases, type KnowledgeBase } from '@/api/knowledge'
 
@@ -48,7 +49,13 @@ const createForm = reactive({ code: '', name: '', description: '' })
 const editVisible = ref(false)
 const saving = ref(false)
 const editTarget = ref<AgentResource | null>(null)
-const editForm = reactive({ name: '', description: '', systemPrompt: '', kbIds: [] as string[] })
+const editForm = reactive({
+  name: '',
+  description: '',
+  systemPrompt: '',
+  answerPolicy: 'KB_PREFERRED' as AnswerPolicy,
+  kbIds: [] as string[]
+})
 
 const testVisible = ref(false)
 const testing = ref(false)
@@ -67,6 +74,12 @@ const STATUS_TAG: Record<AgentStatus, 'info' | 'success' | 'warning'> = {
   DRAFT: 'info',
   PUBLISHED: 'success',
   DISABLED: 'warning'
+}
+
+/** 卡片上的一句话说法（完整解释放在配置弹窗的单选项里，卡片只要一眼能分辨）。 */
+const POLICY_TEXT: Record<AnswerPolicy, string> = {
+  KB_PREFERRED: '优先用笔记（没有时可用自身知识，会注明）',
+  KB_ONLY: '只依据笔记'
 }
 
 const publishedCount = computed(() => agents.value.filter((a) => a.status === 'PUBLISHED').length)
@@ -129,6 +142,7 @@ function openEdit(agent: AgentResource) {
   editForm.name = agent.name
   editForm.description = agent.description ?? ''
   editForm.systemPrompt = agent.systemPrompt ?? ''
+  editForm.answerPolicy = agent.answerPolicy ?? 'KB_PREFERRED'
   editForm.kbIds = [...(agent.kbIds ?? [])]
   editVisible.value = true
 }
@@ -142,6 +156,7 @@ async function submitEdit() {
       name: editForm.name.trim() || undefined,
       description: editForm.description,
       systemPrompt: editForm.systemPrompt,
+      answerPolicy: editForm.answerPolicy,
       kbIds: editForm.kbIds
     })
     ElMessage.success('已保存（下一轮对话就生效）')
@@ -275,6 +290,10 @@ function applyTestQuestion() {
               <dt>模型角色</dt>
               <dd class="mono">{{ agent.modelRole || '服务端默认' }}</dd>
             </div>
+            <div>
+              <dt>回答策略</dt>
+              <dd>{{ POLICY_TEXT[agent.answerPolicy] ?? POLICY_TEXT.KB_PREFERRED }}</dd>
+            </div>
           </dl>
 
           <p v-if="!agent.kbIds?.length" class="range-hint">
@@ -365,8 +384,23 @@ function applyTestQuestion() {
           />
         </el-form-item>
         <p class="hint">
-          提示词决定它的行为边界（例如"只依据检索到的资料回答，没有依据就直说"）。
-          留空时用服务端默认，不会变成"没有提示词"。
+          提示词决定它的行为边界。留空时用服务端默认，不会变成"没有提示词"。
+          <b>"没有资料时怎么办"不在提示词里写</b>——由下面的「回答策略」统一控制，
+          两处都写会互相矛盾。
+        </p>
+        <el-form-item label="回答策略">
+          <el-radio-group v-model="editForm.answerPolicy">
+            <el-radio value="KB_PREFERRED">
+              优先用笔记（笔记里没有时，可用自身知识回答，并注明不是来自笔记）
+            </el-radio>
+            <el-radio value="KB_ONLY">
+              只依据笔记（没有找到就直说，不用自身知识）
+            </el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <p class="hint">
+          两种策略都<b>禁止</b>把模型自身的知识说成是笔记里的内容——区别只在"没有可引用资料时答不答"。
+          还没有导入笔记的新用户，选「优先用笔记」才不会第一次提问就被拒。
         </p>
         <el-form-item label="可检索的知识库">
           <el-select

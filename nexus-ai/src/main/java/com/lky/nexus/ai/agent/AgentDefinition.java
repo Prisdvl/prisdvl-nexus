@@ -22,6 +22,10 @@ import java.util.Objects;
  * <p>{@code toolCodes} 是 4.3（Tool Definition）才加上的：字段与读它的机制
  * （AgentToolFactory 装配工具时取交集）**同一次改动里**落地——这正是上面那条规则的用法。
  *
+ * <p>{@link #answerPolicy} 是 4.4 加上的，遵守同一条规则：字段与读它的机制
+ * （{@code AgentPrompts.systemPromptFor} 据此追加策略块）一起落地。它回答的是
+ * "没有可引用资料时能不能用模型自身的知识"，与 {@link #kbIds}（检索范围）、
+ * {@link #toolCodes}（工具白名单）同层——都是"这个 Agent 被允许做什么"。
  *
  * <p>字段语义上的一条<b>刻意区分</b>（与 RAG 会话相反，勿混）：
  * {@link #kbIds} <b>为空表示不限制</b>（检索该用户的全部知识库，即今天的行为），
@@ -58,6 +62,15 @@ public record AgentDefinition(
          */
         List<String> toolCodes,
 
+        /**
+         * 没有可引用的资料时怎么答（4.4，{@code agent.answer_policy}）。
+         *
+         * <p>它不是"提示词的一部分"，而是与 {@link #systemPrompt} 并列的另一层：
+         * 提示词是用户写的数据，本字段由平台按 {@code AgentPrompts} 的策略块表达。
+         * 两者在请求期由 {@code AgentPrompts.systemPromptFor} 合成一条系统提示。
+         */
+        AnswerPolicy answerPolicy,
+
         /** 是否系统内置：内置项不可删除、不可停用（保证 AGENT 模式总有可用的默认 Agent）。 */
         boolean builtin) {
 
@@ -71,6 +84,9 @@ public record AgentDefinition(
         kbIds = List.copyOf(new LinkedHashSet<>(Objects.requireNonNull(kbIds, "kbIds 不能为 null，空列表表示不限制")));
         // 工具白名单同理去重保序（空 = 不限制，不是"没有工具"）
         toolCodes = List.copyOf(new LinkedHashSet<>(Objects.requireNonNull(toolCodes, "toolCodes 不能为 null，空列表表示不限制")));
+        // 回答策略必填：装配阶段（AgentService.toDefinition）就该解析好，运行期不再兜底——
+        // 否则"没配时用什么"会有第二个决定的地方，那正是本项目一路在防的静默不一致
+        Objects.requireNonNull(answerPolicy, "answerPolicy 不能为 null：装配阶段应补成 AnswerPolicy.DEFAULT");
     }
 
     /** 是否限定了检索范围（为空 = 不限制）。 */

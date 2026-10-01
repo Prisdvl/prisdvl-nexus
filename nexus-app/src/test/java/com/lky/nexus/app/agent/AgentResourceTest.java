@@ -2,6 +2,9 @@ package com.lky.nexus.app.agent;
 
 import com.jayway.jsonpath.JsonPath;
 import com.lky.nexus.ai.agent.AgentDefinition;
+import com.lky.nexus.app.agent.mapper.AgentMapper;
+import com.lky.nexus.app.agent.model.entity.AgentPO;
+import com.lky.nexus.app.workspace.WorkspaceService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,6 +14,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+
+import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -50,6 +55,13 @@ class AgentResourceTest {
 
     @Autowired
     private AgentService agentService;
+
+    /** 存量升级那条要用它直接造"老行"——只有绕开服务层才能造出 4.4 之前的播种文本。 */
+    @Autowired
+    private AgentMapper agentMapper;
+
+    @Autowired
+    private WorkspaceService workspaceService;
 
     @Test
     @DisplayName("创建：落 DRAFT、非内置，知识库绑定随详情返回")
@@ -326,6 +338,124 @@ class AgentResourceTest {
         assertThat(first.systemPrompt()).isEqualTo(AgentPrompts.AGENT_SYSTEM);
         // 内置项默认不限制检索范围（AgentDefinition 的 kbIds 为空即"全部知识库"）
         assertThat(first.scoped()).isFalse();
+    }
+
+    @Test
+    @DisplayName("创建：不传回答策略时落默认 KB_PREFERRED（新用户第一次提问不该被拒）")
+    void createDefaultsToKbPreferred() throws Exception {
+        String token = registerAndLogin("agent-policy-default");
+
+        mockMvc.perform(post("/api/agents")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"policy-default","name":"没写策略"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.answerPolicy").value("KB_PREFERRED"));
+
+        // 内置默认 Agent 也一样：AGENT 模式的兜底不该是"检索不到就拒答"
+        mockMvc.perform(get("/api/agents").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.list[0].answerPolicy").value("KB_PREFERRED"));
+    }
+
+    @Test
+    @DisplayName("改回答策略：KB_ONLY 能存能回读，非法值在写入口报 1001")
+    void answerPolicyIsUpdatableAndValidated() throws Exception {
+        String token = registerAndLogin("agent-policy-update");
+        String agentId = createAgent(token, "policy-update", "可改策略");
+
+        mockMvc.perform(put("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"answerPolicy":"KB_ONLY"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.answerPolicy").value("KB_ONLY"));
+
+        // 回读一次：确认是落库了，而不是只在这一次响应里漂亮
+        mockMvc.perform(get("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.answerPolicy").value("KB_ONLY"));
+
+        // 非法值不落到库里：写入口就报，而不是存下一个没人认识的值
+        mockMvc.perform(put("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"answerPolicy":"FREE_STYLE"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(1001));
+
+        mockMvc.perform(get("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(jsonPath("$.data.answerPolicy").value("KB_ONLY"));
+    }
+
+    @Test
+    @DisplayName("复制：回答策略跟着复制（少复制一样会得到一个行为不同的副本，还不报错）")
+    void duplicateCopiesAnswerPolicy() throws Exception {
+        String token = registerAndLogin("agent-policy-copy");
+        String agentId = createAgent(token, "policy-copy", "原样");
+
+        mockMvc.perform(put("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"answerPolicy":"KB_ONLY"}
+                                """))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/agents/" + agentId + "/duplicate")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.answerPolicy").value("KB_ONLY"));
+    }
+
+    @Test
+    @DisplayName("存量升级：只升「还是机器播种的那份」提示词，用户改过的一个字都不动")
+    void resolveDefaultUpgradesOnlyUntouchedLegacyPrompt() throws Exception {
+        // 两个用户各造一行内置：一个留着 4.4 之前的播种文本，一个被用户改过。
+        // 必须分两个用户——resolveDefault 按 code 取一行，同一个用户造两行会取到哪一个不确定
+        Long legacyUser = currentUserId(registerAndLogin("agent-legacy-untouched"));
+        Long editedUser = currentUserId(registerAndLogin("agent-legacy-edited"));
+        AgentPO legacy = insertBuiltin(legacyUser, AgentPrompts.AGENT_SYSTEM_LEGACY);
+        AgentPO edited = insertBuiltin(editedUser, "我自己的严格提示词：只依据资料回答");
+
+        AgentDefinition upgraded = agentService.resolveDefault(legacyUser);
+        agentService.resolveDefault(legacyUser);   // 幂等：再来一次不该有变化
+        agentService.resolveDefault(editedUser);
+
+        // 旧播种文本里写着"不要用自身知识回答"，与默认策略 KB_PREFERRED 矛盾，就地升级
+        assertThat(upgraded.systemPrompt()).isEqualTo(AgentPrompts.AGENT_SYSTEM);
+        assertThat(agentMapper.selectById(legacy.getId()).getSystemPrompt())
+                .isEqualTo(AgentPrompts.AGENT_SYSTEM);
+        // 但用户自己写的提示词绝不被机器覆盖——策略块里有让位条款顶着（见 decisions.md B.41）
+        assertThat(agentMapper.selectById(edited.getId()).getSystemPrompt())
+                .isEqualTo("我自己的严格提示词：只依据资料回答");
+    }
+
+    /** 直接造一行内置 Agent（绕过服务层）：只有这样才能造出"4.4 之前播种的那份文本"。 */
+    private AgentPO insertBuiltin(Long userId, String systemPrompt) {
+        AgentPO agent = new AgentPO();
+        agent.setWorkspaceId(workspaceService.requirePersonalWorkspace(userId));
+        agent.setOwnerId(userId);
+        agent.setCode(AgentPrompts.BUILTIN_CODE);
+        agent.setName(AgentPrompts.BUILTIN_NAME);
+        agent.setSystemPrompt(systemPrompt);
+        agent.setModelRole("chat.agent");
+        agent.setAnswerPolicy("KB_PREFERRED");
+        agent.setStatus("PUBLISHED");
+        agent.setBuiltin(true);
+        LocalDateTime now = LocalDateTime.now();
+        agent.setCreatedAt(now);
+        agent.setUpdatedAt(now);
+        agentMapper.insert(agent);
+        return agent;
     }
 
     // ------------------------------------------------------------------

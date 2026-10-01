@@ -358,6 +358,21 @@ CREATE TABLE kb_chunk (
    `permission` / `approval_required` / `timeout_ms` / `rate_limit` 同样不建——今天没有任何一处会读它们，
    它们与 P1 的 Tool Permission / Approval 一起落地。
 
+### 6.0.2 已实现：`agent.answer_policy`（平台化 Phase 4.4，迁移 V14）
+
+`agent` 表**新增一列**（6.0 的那张表是 V12 时的状态，此处是它的增量）：
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `answer_policy` | `VARCHAR(16) NOT NULL DEFAULT 'KB_PREFERRED'` | 没有可引用资料时怎么答：`KB_PREFERRED`（可用自身知识，但必须注明不是来自笔记）/ `KB_ONLY`（只依据笔记，没有就说没找到） |
+
+两点说明（详见 `docs/decisions.md` B.41）：
+
+1. **默认 `KB_PREFERRED`**：`KB_ONLY` 是 4.4 之前的**唯一**行为，而它的代价落在"刚注册、
+   还没导入笔记"的新用户身上——第一次提问就吃一句拒绝。默认值取哪个，就是决定这批人看到什么；
+2. **只有一列，没有 DML**：整个 migration 目录没有 DML 先例（全是 DDL），存量行的**提示词**
+   改写交给 Java 侧按"历史指纹"就地升级（`AgentService.resolveDefault`）。写进 SQL 的话，
+   那句中文长字面量会成为提示词的**第三个**真源（另两处是 `AgentPrompts` 常量与库里的行）。
 
 ### 6.1 设计稿（未实现的部分）
 

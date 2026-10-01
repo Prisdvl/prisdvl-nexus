@@ -1,6 +1,7 @@
 package com.lky.nexus.app.agent;
 
 import com.jayway.jsonpath.JsonPath;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
 import org.junit.jupiter.api.DisplayName;
@@ -56,6 +57,9 @@ class KnowledgeSearchToolScopeTest {
 
     @Autowired
     private KnowledgeSearchTool knowledgeSearchTool;
+
+    @Autowired
+    private ObservabilityRegistry observabilityRegistry;
 
     @MockitoBean
     private ChunkSearchService chunkSearchService;
@@ -119,7 +123,7 @@ class KnowledgeSearchToolScopeTest {
     }
 
     @Test
-    @DisplayName("全部绑定的库都不可用时：明确说「检索不可用」，不让模型退回自身知识硬答")
+    @DisplayName("全部绑定的库都不可用时：逐条说清原因（工具只报事实，不替模型决定答不答）")
     void allBoundKnowledgeBasesUnavailableIsSaidOutLoud() throws Exception {
         String token = registerAndLogin("scope-all-gone");
         Long userId = currentUserId(token);
@@ -134,6 +138,74 @@ class KnowledgeSearchToolScopeTest {
         assertThat(result).contains("全禁用的库", "已禁用");
         // 悬空绑定（库被删了）同样要说出来，而不是当成"这个库没内容"
         assertThat(result).contains("999999999", "已不存在");
+        // 4.4 起工具不再规定"能不能用自身知识"——那是回答策略（agent.answer_policy）的事。
+        // 工具与提示词各说一遍，正是把新用户挡在门外的成因（见 decisions.md B.41）
+        assertThat(result).doesNotContain("不要用你自己的知识回答");
+    }
+
+    @Test
+    @DisplayName("零知识库：说「你还没有任何知识库」，并明说换关键词也没用（不白烧工具调用）")
+    void noKnowledgeBaseAtAllIsSaidAsSuch() throws Exception {
+        String token = registerAndLogin("scope-none");
+        Long userId = currentUserId(token);
+        returnEmptyHits();
+
+        String result = knowledgeSearchTool.search("缓存击穿", 5, AgentContext.toolContext(userId));
+
+        assertThat(result).contains("你还没有任何知识库");
+        // 实测里模型把 3 次工具调用全烧在空库上换关键词、白花 4 秒——这句话就是那件事的对策
+        assertThat(result).contains("换词也不会有结果");
+        assertThat(result).doesNotContain("不要用你自己的知识回答");
+    }
+
+    @Test
+    @DisplayName("未绑定但库被全禁用：说「你的知识库当前都不可用」，并点名跳过了谁")
+    void allKnowledgeBasesDisabledWhileUnscopedIsSaidOutLoud() throws Exception {
+        String token = registerAndLogin("scope-all-disabled");
+        Long userId = currentUserId(token);
+        Long disabled = Long.valueOf(createKnowledgeBase(token, "未绑定的停用库"));
+        disableKnowledgeBase(token, disabled);
+        returnEmptyHits();
+
+        String result = knowledgeSearchTool.search("缓存击穿", 5, AgentContext.toolContext(userId));
+
+        // 未绑定时的措辞与绑定时要分开：说「本 Agent 绑定的…」会让用户去找一个不存在的绑定
+        assertThat(result).contains("你的知识库当前都不可用");
+        assertThat(result).contains("未绑定的停用库", "已禁用");
+        assertThat(result).doesNotContain("不要用你自己的知识回答");
+    }
+
+    @Test
+    @DisplayName("库可搜但没命中：说「没有匹配的资料」，且不劝退重试（换关键词仍可能有用）")
+    void searchedButNoMatchIsDistinguishedFromNothingToSearch() throws Exception {
+        String token = registerAndLogin("scope-no-match");
+        Long userId = currentUserId(token);
+        createKnowledgeBase(token, "有内容的库");
+        returnEmptyHits();
+
+        String result = knowledgeSearchTool.search("缓存击穿", 5, AgentContext.toolContext(userId));
+
+        assertThat(result).contains("没有匹配的资料", "可以换一次关键词");
+        // "换词也没用"只属于"没东西可搜"那三种情形，不能混进"搜了但没命中"
+        assertThat(result).doesNotContain("换词也不会有结果");
+        assertThat(result).doesNotContain("不要用你自己的知识回答");
+    }
+
+    @Test
+    @DisplayName("没有可引用资料必须可计数：agent.search.empty 有增量（静默降级必须可数）")
+    void emptySearchIsCounted() throws Exception {
+        String token = registerAndLogin("scope-counted");
+        Long userId = currentUserId(token);
+        returnEmptyHits();
+
+        long before = observabilityRegistry.snapshot()
+                .getOrDefault(ObservabilityRegistry.AGENT_SEARCH_EMPTY, 0L);
+        knowledgeSearchTool.search("缓存击穿", 5, AgentContext.toolContext(userId));
+        long after = observabilityRegistry.snapshot()
+                .getOrDefault(ObservabilityRegistry.AGENT_SEARCH_EMPTY, 0L);
+
+        // 断言增量而不是绝对值：计数器是全局的，别的用例也会加
+        assertThat(after).isGreaterThan(before);
     }
 
     @Test

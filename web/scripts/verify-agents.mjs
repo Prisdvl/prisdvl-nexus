@@ -6,7 +6,7 @@
  * "不绑知识库 = 全部知识库"这句反直觉的语义有没有写在用户看得见的地方、
  * 试跑失败时用户能不能看到失败原因而不是一个转圈的按钮。这些只有浏览器能证明。
  *
- * 覆盖的生命周期：新建（草稿）→ 配置（提示词 + 绑知识库）→ 发布 → 在对话页可选用 → 停用
+ * 覆盖的生命周期：新建（草稿）→ 配置（提示词 + 回答策略 + 绑知识库）→ 发布 → 在对话页可选用 → 停用
  *                 → 对话页不再列出它 → 删除。
  *
  * 退出码：0 = 全部通过；1 = 有真实失败；2 = 有跳过（本机没有可用模型，试跑跑不了，见下）。
@@ -54,6 +54,32 @@ async function deleteAgentCard(code) {
   await cardByCode(code).locator('.danger').click()
   await confirmBox()
   await cardByCode(code).waitFor({ state: 'detached', timeout: 15000 })
+}
+
+/**
+ * 打开对话页草稿态的 Agent 选择器，返回 `{ options, listed }`：
+ * `options` 是下拉里渲染出来的项，`listed` 是 `/api/agents` 那一刻返回的数据。
+ *
+ * 为什么要等**响应**而不是只等"下拉里出现第一个选项"：`内置默认 Agent` 是模板里写死的静态项，
+ * 列表数据没回来它也在——于是"等第一个选项"会立刻满足，断言读到一个**空**列表：
+ * 已发布的 Agent"没出现"会被报成产品缺陷（假失败），已停用的 Agent"没出现"则会静默通过（假通过）。
+ * 列表请求随 AgentView 挂载发出、不随下拉打开，所以 waitForResponse 必须在点导航**之前**挂上。
+ * 拿回 `listed` 之后，两条断言可以各自钉一半：数据里有这一行（服务端如实给了状态）、
+ * 渲染里没有（界面按状态过滤）——两边都非空，假通过就没有落脚的地方。
+ */
+async function openAgentPicker() {
+  const responsePromise = page.waitForResponse(
+    (response) => response.url().includes('/api/agents?') && response.status() === 200,
+    { timeout: 15000 }
+  )
+  await page.click('.nav-item:has-text("对话")')
+  await page.click('.rail .new-chat')
+  await page.waitForSelector('.composer-options', { timeout: 15000 })
+  const listed = (await (await responsePromise).json()).data.list
+  await page.click('.composer-options .kb-select')
+  const options = page.locator('.el-select-dropdown:visible .el-select-dropdown__item')
+  await options.first().waitFor({ timeout: 15000 })
+  return { options, listed }
 }
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -110,6 +136,10 @@ try {
   await card.locator('.el-button:has-text("配置")').click()
   const editDialog = dialog('配置「')
   await editDialog.locator('.el-textarea__inner').first().fill(prompt)
+  // 回答策略（4.4）：选 KB_ONLY 并读回。上面那句用户提示词写的是"不要用你自己的知识补充"，
+  // 与 KB_ONLY 一致；若留在默认的 KB_PREFERRED，两者会互相矛盾（策略块里有让位条款兜着，
+  // 但那是给存量 Agent 的，新配置不该这么搭）。这一步同时钉住"选择器不是假旋钮"。
+  await editDialog.locator('.el-radio:has-text("只依据笔记")').click()
   // 绑一个库：多选下拉的选项挂在 body 上的 popper 里，不在弹窗 DOM 内
   await editDialog.locator('.kb-multi').click()
   const option = page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: demoKb }).first()
@@ -129,6 +159,10 @@ try {
   }
   if (!configuredText.includes('只依据检索到的资料回答')) {
     failures.push('提示词没有回显在卡片上')
+  }
+  // 卡片上的策略文案来自服务端响应（保存后重新拉列表），所以这一条同时验了"存下去了"与"读回来了"
+  if (!configuredText.includes('只依据笔记')) {
+    failures.push('回答策略没有回显成「只依据笔记」（选择器可能是假旋钮）')
   }
 
   // ---------- ④ 复制：副本必须是草稿 ----------
@@ -154,16 +188,29 @@ try {
   console.log('⑤ 已发布')
 
   // 对话页的选择器：已发布的出现、草稿的不出现（并给出解释）
-  await page.click('.nav-item:has-text("对话")')
-  await page.click('.rail .new-chat')
-  await page.waitForSelector('.composer-options', { timeout: 15000 })
-  await page.click('.composer-options .kb-select')
-  const options = page.locator('.el-select-dropdown:visible .el-select-dropdown__item')
-  await options.first().waitFor({ timeout: 15000 })
-  const optionTexts = (await options.allInnerTexts()).map((text) => text.trim())
+  const picker = await openAgentPicker()
+  const optionTexts = (await picker.options.allInnerTexts()).map((text) => text.trim())
   console.log(`⑥ 对话页可选 Agent：${optionTexts.join(' / ')}`)
+  // 先钉服务端：这一行确实在列表里、状态确实已发布（否则下面的"没出现"可能只是因为列表是空的）
+  const publishedRow = picker.listed.find((agent) => agent.code === agentCode)
+  if (publishedRow?.status !== 'PUBLISHED') {
+    failures.push(`列表接口没有把「${agentCode}」报成 PUBLISHED（实际：${publishedRow?.status ?? '不在列表里'}）`)
+  }
   if (!optionTexts.includes(agentName)) {
     failures.push('已发布的 Agent 没有出现在对话页的 Agent 选择器里')
+  }
+  // 反向那半：草稿（刚才的副本）在数据里、但不出现在下拉里——同一份数据两种待遇，才叫"按状态过滤"。
+  // 比"选项条数 == 数据里 PUBLISHED 的条数"而不比名字：名字措辞会变，条数不会，
+  // 且这条断言对"漏了一个"和"多了一个草稿"两个方向都有效（内置项是模板里的静态项，
+  // 与数据里那行 builtin 一一对应，所以两边可以直接相等）
+  if (!picker.listed.some((agent) => agent.code === copyCode)) {
+    failures.push(`列表接口里没有草稿副本「${copyCode}」（这一步前面就该建好它）`)
+  }
+  const publishedCount = picker.listed.filter((agent) => agent.status === 'PUBLISHED').length
+  if (optionTexts.length !== publishedCount) {
+    failures.push(
+      `选择器里 ${optionTexts.length} 项、数据里已发布 ${publishedCount} 项（多出来的可能是草稿，少了的可能是没渲染）`
+    )
   }
   if (!optionTexts.some((text) => text.includes('内置默认'))) {
     failures.push('Agent 选择器里没有"内置默认 Agent"这一项（没选 Agent 的会话就没法解释）')
@@ -230,20 +277,23 @@ try {
   console.log('⑨ 已停用')
 
   // 停用后对话页不能再列出它（列出来就是在骗用户"能选"）
-  await page.click('.nav-item:has-text("对话")')
-  // 必须像第 ⑥ 段那样先点"新对话"：页面挂载后会"自动选中最近会话"，
+  //
+  // `openAgentPicker` 里的"新对话"这一步是必须的：页面挂载后会"自动选中最近会话"，
   // 一旦选中，`.composer-options` 就被头部的选择器取代——这条腿曾因此假失败
   // （点开的下拉随 DOM 被换掉而消失，报的是"下拉项没出现"，看着像产品缺陷）。
   // 点"新对话"同时把 pickedByUser 置位，自动选中不再覆盖：用的是应用自己的既定机制。
-  await page.click('.rail .new-chat')
-  await page.waitForSelector('.composer-options', { timeout: 15000 })
-  await page.click('.composer-options .kb-select')
-  await options.first().waitFor({ timeout: 15000 })
-  const afterDisable = (await options.allInnerTexts()).map((text) => text.trim())
+  const afterDisablePicker = await openAgentPicker()
+  const afterDisable = (await afterDisablePicker.options.allInnerTexts()).map((text) => text.trim())
+  // 先确认这一行**确实还在数据里**、只是停用了：否则"没出现在下拉里"可能只是因为列表空着，
+  // 于是这条最有价值的断言（停用后不能被选用）会在列表为空时静默通过
+  const disabledRow = afterDisablePicker.listed.find((agent) => agent.code === agentCode)
+  if (disabledRow?.status !== 'DISABLED') {
+    failures.push(`列表接口没有把「${agentCode}」报成 DISABLED（实际：${disabledRow?.status ?? '不在列表里'}）`)
+  }
   if (afterDisable.includes(agentName)) {
     failures.push('已停用的 Agent 仍然出现在对话页的选择器里')
   } else {
-    console.log('⑩ 已停用的 Agent 不再出现在选择器里')
+    console.log('⑩ 已停用的 Agent 不再出现在选择器里（它仍在列表中，只是不能再被选用）')
   }
   await page.keyboard.press('Escape')
 

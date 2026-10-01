@@ -224,18 +224,24 @@ node scripts/verify-agent-chat.mjs # 对话页两条腿：Agent（工具卡片/�
 node scripts/verify-stream.mjs     # 知识库问答流式：逐字增长 + 引用 + 生成期间的"检索到 N 个片段"
 node scripts/verify-retrieval-ui.mjs # 检索卡片渲染契约：桩掉 /api/chat/stream，验"检索到 N 个片段"排在回答之前
 node scripts/verify-agents.mjs     # Agent 管理页：新建→配置→发布→对话页可选→停用→不可选→删除（11 条腿）
+node scripts/verify-agent-no-kb.mjs # 零知识库的新用户提问：提示 → 检索如实报空 → 回答注明不是来自笔记 → 痕迹刷新后仍在
 ```
 
 > `verify-*.mjs` 都要求后端已按上一节跑起来，并且**已经种好演示数据**
 > （`node scripts/seed-demo.mjs`，`standalone` 重启后要重跑）。
 > 脚本会把截图写进 `docs/screenshots/`。
+> 例外是 `verify-agent-no-kb.mjs`：它**故意不用演示账号**——它要的就是"一个库都没有的新账号"，
+> 所以每次运行自己注册一个 `probe-nokb-*`，也不依赖 `seed-demo`。
+> 没有删号接口，因此**每跑一次会留下一个这样的账号**（代价写在这里，免得以后当成残留 bug 去查）。
 
 > **退出码**：`0` 全部通过 / `1` 真实失败 / `2` 有跳过。跳过只在**环境能力缺失**时发生
 > ——`standalone` 没有 Elasticsearch，RAG 在检索这一步就返回 4005，
 > 于是"检索到 N 个片段"相关的断言无法执行（`verify-agent-chat.mjs` 只跳过 RAG 腿，
 > `verify-stream.mjs` 整体跳过）；`verify-agents.mjs` 只跳过试跑那条腿
 > （**没配 `AI_CHAT_API_KEY` 时**后端报 4006 `模型 … 未注册。已注册：[…]`，其余 10 条腿照跑；
-> 配好 key 后这条腿会真跑——本机实测 11 条腿全部执行、退出码 0）。
+> 配好 key 后这条腿会真跑——本机实测 11 条腿全部执行、退出码 0）；
+> `verify-agent-no-kb.mjs` 只跳过**提问**那条腿，"提问前那一屏提示"照验
+> （那句话与模型无关，是前端读知识库数量算出来的）。
 > 脚本会打印 `⚠ SKIPPED` 与原因，**跳过不等于通过**。
 >
 > **full 栈已经跑过**（Docker 起 MySQL/ES/pgvector/Redis/RabbitMQ，后端

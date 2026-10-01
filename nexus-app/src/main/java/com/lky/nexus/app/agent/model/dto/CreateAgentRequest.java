@@ -37,6 +37,14 @@ public record CreateAgentRequest(
         /** 模型逻辑角色（ai.roles 的 key）；为空则用 chat.agent。 */
         String modelRole,
 
+        /**
+         * 回答策略（4.4）：{@code KB_PREFERRED}（默认）/ {@code KB_ONLY}；为空则用默认。
+         *
+         * <p>它决定"没有可引用的资料时能不能用模型自身的知识回答"，与 {@code kbIds}
+         * （检索范围）、{@code toolCodes}（工具白名单）同层——都是这个 Agent 被允许做什么。
+         */
+        String answerPolicy,
+
         /** 绑定的知识库 id；空表示不限制。 */
         List<Long> kbIds,
 

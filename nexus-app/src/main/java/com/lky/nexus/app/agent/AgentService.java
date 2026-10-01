@@ -3,6 +3,7 @@ package com.lky.nexus.app.agent;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lky.nexus.ai.agent.AgentDefinition;
+import com.lky.nexus.ai.agent.AnswerPolicy;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.agent.mapper.AgentKnowledgeBaseMapper;
@@ -165,7 +166,12 @@ public class AgentService {
         agent.setOwnerId(userId);
         agent.setCode(code);
         applyEditableFields(agent, request.name(), request.description(),
-                request.systemPrompt(), request.modelRole());
+                request.systemPrompt(), request.modelRole(), request.answerPolicy());
+        // 新建行必须有策略：这里显式落默认，而不是依赖 DDL 的 DEFAULT——
+        // 库里补了默认值，内存里的对象仍然是 null，紧接着的 toResponse 就会回一个 null 给前端
+        if (agent.getAnswerPolicy() == null) {
+            agent.setAnswerPolicy(AnswerPolicy.DEFAULT.name());
+        }
         // 不自动发布：§十八 要求"用户可以先测试 Agent，再发布"，DRAFT 就是那个"先"
         agent.setStatus(AgentStatus.DEFAULT.name());
         agent.setBuiltin(false);
@@ -189,7 +195,7 @@ public class AgentService {
 
         // 局部更新：内部逐个字段判 null（null = 不改）
         applyEditableFields(agent, request.name(), request.description(),
-                request.systemPrompt(), request.modelRole());
+                request.systemPrompt(), request.modelRole(), request.answerPolicy());
         if (StringUtils.hasText(request.status())) {
             AgentStatus target = AgentStatus.parse(request.status());
             requireStatusChangeAllowed(agent, target);
@@ -226,6 +232,9 @@ public class AgentService {
         copy.setDescription(source.getDescription());
         copy.setSystemPrompt(source.getSystemPrompt());
         copy.setModelRole(source.getModelRole());
+        // 策略跟着复制：复制一个 Agent 的意图是"拿它改"，少复制一样会得到一个行为不同的副本
+        //（还不报错）——与上面复制 toolCodes 是同一条理由
+        copy.setAnswerPolicy(source.getAnswerPolicy());
         copy.setStatus(AgentStatus.DRAFT.name());
         // 副本不是内置项：用户复制出来就是为了改
         copy.setBuiltin(false);
@@ -310,14 +319,41 @@ public class AgentService {
                 .last("LIMIT 1"));
         if (builtin == null) {
             builtin = createBuiltin(userId);
-        } else if (!AgentStatus.PUBLISHED.name().equals(builtin.getStatus())) {
-            // 历史数据/直接造库可能留下非 PUBLISHED 的内置行：就地纠正，
-            // 否则 AGENT 模式会莫名其妙不可用，而用户什么都没改过
-            builtin.setStatus(AgentStatus.PUBLISHED.name());
-            builtin.setUpdatedAt(LocalDateTime.now());
-            agentMapper.updateById(builtin);
+        } else {
+            boolean changed = false;
+            if (!AgentStatus.PUBLISHED.name().equals(builtin.getStatus())) {
+                // 历史数据/直接造库可能留下非 PUBLISHED 的内置行：就地纠正，
+                // 否则 AGENT 模式会莫名其妙不可用，而用户什么都没改过
+                builtin.setStatus(AgentStatus.PUBLISHED.name());
+                changed = true;
+            }
+            if (isUntouchedLegacyPrompt(builtin.getSystemPrompt())) {
+                // 4.4：旧默认提示词里写着"检索不到就如实说 / 不要用自身知识回答"，
+                // 与默认策略 KB_PREFERRED 直接矛盾。只升"还是机器播种的那份文本"的行——
+                // 用户改过的一个字都不动（策略块里有让位条款顶着，见 docs/decisions.md B.41）
+                builtin.setSystemPrompt(AgentPrompts.AGENT_SYSTEM);
+                changed = true;
+                log.info("内置默认 Agent 的提示词仍是 4.4 之前的播种文本，就地升级 id={}, userId={}",
+                        builtin.getId(), userId);
+            }
+            if (changed) {
+                builtin.setUpdatedAt(LocalDateTime.now());
+                agentMapper.updateById(builtin);
+            }
         }
         return toDefinition(builtin);
+    }
+
+    /**
+     * 这一行的提示词是否还<b>原样</b>是 4.4 之前机器播种的那份？
+     *
+     * <p>两边都 {@code strip()} 再比：{@code createBuiltin} 存的是带尾换行的文本块，
+     * 而 {@code applyEditableFields} 保存时 trim 过——不统一就认不出"没改过"。
+     * 空提示词不算（那种行由 {@code toDefinition} 回落到当前默认，本就不必改写）。
+     */
+    private boolean isUntouchedLegacyPrompt(String stored) {
+        return StringUtils.hasText(stored)
+                && AgentPrompts.AGENT_SYSTEM_LEGACY.strip().equals(stored.strip());
     }
 
     /** 内置默认 Agent 的那一行；不暴露为 API，只由 {@link #resolveDefault} 按需补齐。 */
@@ -330,6 +366,7 @@ public class AgentService {
         agent.setDescription(AgentPrompts.BUILTIN_DESCRIPTION);
         agent.setSystemPrompt(AgentPrompts.AGENT_SYSTEM);
         agent.setModelRole(AiModelProperties.Role.CHAT_AGENT);
+        agent.setAnswerPolicy(AnswerPolicy.DEFAULT.name());
         agent.setStatus(AgentStatus.PUBLISHED.name());
         agent.setBuiltin(true);
         LocalDateTime now = LocalDateTime.now();
@@ -355,6 +392,8 @@ public class AgentService {
                         ? agent.getModelRole() : AiModelProperties.Role.CHAT_AGENT,
                 kbIdsOf(agent.getId()),
                 toolCodesOf(agent.getId()),
+                // 空 = 没配过（DDL 默认值把老行补成了 KB_PREFERRED，这里兜住 null）
+                AnswerPolicy.parse(agent.getAnswerPolicy()),
                 Boolean.TRUE.equals(agent.getBuiltin()));
     }
 
@@ -363,7 +402,7 @@ public class AgentService {
     // ------------------------------------------------------------------
 
     private void applyEditableFields(AgentPO agent, String name, String description,
-                                     String systemPrompt, String modelRole) {
+                                     String systemPrompt, String modelRole, String answerPolicy) {
         if (StringUtils.hasText(name)) {
             agent.setName(name.trim());
         }
@@ -378,6 +417,11 @@ public class AgentService {
             String role = modelRole.trim();
             requireConfiguredModelRole(role);
             agent.setModelRole(role);
+        }
+        if (StringUtils.hasText(answerPolicy)) {
+            // 解析一次就同时做了两件事：非法值在写入口报 1001（不存下没人认识的值），
+            // 大小写归一后落库（枚举名是稳定的对外取值）
+            agent.setAnswerPolicy(AnswerPolicy.parse(answerPolicy).name());
         }
     }
 
@@ -464,6 +508,8 @@ public class AgentService {
                 agent.getDescription(),
                 agent.getSystemPrompt(),
                 agent.getModelRole(),
+                // 对外返回的一定是合法值：直接插库（测试/运维）留下的 null 在这里被收敛成默认
+                AnswerPolicy.parse(agent.getAnswerPolicy()).name(),
                 agent.getStatus(),
                 agent.getBuiltin(),
                 kbIdsOf(agent.getId()),

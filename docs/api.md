@@ -330,9 +330,9 @@ Content-Type: application/json
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/agents` | 我的 Agent 列表（内置默认 Agent 置顶；`pageNum` / `pageSize`） |
-| POST | `/api/agents` | 创建 Agent：`{code, name, description?, systemPrompt?, modelRole?, kbIds?}` → 落 `DRAFT` |
-| GET | `/api/agents/{agentId}` | 详情（含绑定知识库 `kbIds`） |
-| PUT | `/api/agents/{agentId}` | 局部更新（null = 不改）：`{name?, description?, systemPrompt?, modelRole?, status?, kbIds?}`；`kbIds: []` = 解绑 |
+| POST | `/api/agents` | 创建 Agent：`{code, name, description?, systemPrompt?, modelRole?, answerPolicy?, kbIds?}` → 落 `DRAFT` |
+| GET | `/api/agents/{agentId}` | 详情（含绑定知识库 `kbIds` 与 `answerPolicy`） |
+| PUT | `/api/agents/{agentId}` | 局部更新（null = 不改）：`{name?, description?, systemPrompt?, modelRole?, answerPolicy?, status?, kbIds?}`；`kbIds: []` = 解绑 |
 | POST | `/api/agents/{agentId}/duplicate` | 复制（服务端生成 `-copy` 标识，副本回到 `DRAFT`） |
 | DELETE | `/api/agents/{agentId}` | 删除（内置默认 Agent → 5010） |
 | POST | `/api/agents/{agentId}/test-chat` | 试跑：`{question}` → 与 `/api/agent/ask` 同形的答案 + 工具痕迹。**不受发布状态限制**（草稿正是要被测试的） |
@@ -346,6 +346,12 @@ Content-Type: application/json
 - 内置默认 Agent（`code=builtin.default`）不可删除、不可停用（5010），但可改名、改提示词——
   AGENT 模式因此永远有可用的兜底；`agentId` 为空的 AGENT 会话在执行时解析到它；
 - `kbIds` 为空 = **不限制**（检索该用户全部知识库，注意与 RAG 会话的 kbIds 语义相反）；
+- `answerPolicy`（4.4，可空字段；**不传 = 不改**，新建时不传落服务端默认）：
+  `KB_PREFERRED`（默认）没有可引用资料时**允许**用模型自身知识回答，但必须注明"不是来自你的笔记"；
+  `KB_ONLY` 只依据笔记，没有就直说。两者都**禁止**把自身知识标注成"来源：笔记"，
+  区别只在"没有资料时答不答"。非法值 → `1001`。响应里该字段**保证是合法值**
+  （服务端把库里的 NULL 收敛成默认），前端不必再兜底；
+  注意它与 RAG 会话的契约**有意相反**：RAG 没有可引用资料时一律拒绝（见 B.41 第 9 条）；
 - 错误码：`5006` 不存在/非本人（HTTP 404，不泄露存在性）、`5007` 标识重复、`5008` 未发布、
   `5009` 已停用、`5010` 内置项只读（后四个 HTTP 409，语义是"请求格式没问题、资源状态不允许"）。
 

@@ -20,6 +20,8 @@ public record AgentResponse(
         String description,
         String systemPrompt,
         String modelRole,
+        /** 回答策略（4.4）：KB_PREFERRED / KB_ONLY。决定"没有可引用资料时能不能用自身知识"。 */
+        String answerPolicy,
         String status,
         Boolean builtin,
         List<Long> kbIds,
