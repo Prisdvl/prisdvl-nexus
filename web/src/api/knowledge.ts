@@ -203,8 +203,45 @@ export function uploadVault(id: string, file: File) {
   })
 }
 
+/**
+ * 上传单个文件（P1-1）：TXT / MD / PDF / DOCX。
+ *
+ * 与「上传 Vault」走同一条后端流水线，因此**同名再传是更新、内容未变会跳过**——
+ * 界面上应当把这两件事解释给用户，否则"传了但什么都没变"看起来像失败。
+ * 支持的格式以服务端解析器注册表为准，不在前端另写一份清单（写两份必然分叉）。
+ */
+export function uploadDocument(id: string, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return client.post<never, ImportTask>(`/knowledge-bases/${id}/documents`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
 export function getImportTask(taskId: string) {
   return client.get<never, ImportTask>(`/import-tasks/${taskId}`)
+}
+
+/** 导入明细的一条：哪个文件被做了什么、为什么（P1-3 / P1-4）。 */
+export interface ImportTaskItem {
+  id: string
+  sourcePath: string
+  action: string
+  documentId: string | null
+  chunkCount: number
+  durationMs: number
+  message: string | null
+  createdAt: string
+}
+
+/**
+ * 导入明细。`action` 过滤在**服务端**做：一个 Vault 上千条明细、失败的可能只有 3 条，
+ * 拿回来再在前端筛，会被 limit 提前截断掉真正想看的那几条。
+ */
+export function listImportTaskItems(taskId: string, action?: string, limit = 100) {
+  return client.get<never, ImportTaskItem[]>(`/import-tasks/${taskId}/items`, {
+    params: { ...(action ? { action } : {}), limit }
+  })
 }
 
 // ---------- 向量化 / 索引 ----------
@@ -240,6 +277,16 @@ export function listChunks(id: string, documentId: string) {
 /** 文档详情：原始正文（Markdown 渲染）+ 大纲。 */
 export function getDocument(id: string, documentId: string) {
   return client.get<never, DocumentDetail>(`/knowledge-bases/${id}/documents/${documentId}`)
+}
+
+/**
+ * 删除一篇文档（P1-2）。
+ *
+ * 失败要按「**没删掉**」处理，而不是「删了一半」：后端把向量/索引的清理放在最前面且
+ * 失败即整体失败，因此报错时文档仍然完好地在库里，用户可以放心重试。
+ */
+export function deleteDocument(id: string, documentId: string) {
+  return client.delete<never, void>(`/knowledge-bases/${id}/documents/${documentId}`)
 }
 
 export interface DocumentLinkView {

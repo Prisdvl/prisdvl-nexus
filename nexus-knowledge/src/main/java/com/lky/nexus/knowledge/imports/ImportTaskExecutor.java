@@ -13,6 +13,8 @@ import com.lky.nexus.knowledge.mapper.ImportTaskItemMapper;
 import com.lky.nexus.knowledge.mapper.ImportTaskMapper;
 import com.lky.nexus.knowledge.model.ImportAction;
 import com.lky.nexus.knowledge.model.ImportTaskStatus;
+import com.lky.nexus.knowledge.model.ImportTaskType;
+import com.lky.nexus.knowledge.model.KnowledgeSourceType;
 import com.lky.nexus.knowledge.model.dto.ImportTaskResponse;
 import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.ImportTaskItemPO;
@@ -36,7 +38,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Vault 导入任务的<b>执行器</b>（消费者侧）。
+ * 导入任务的<b>执行器</b>（消费者侧）。Vault 压缩包与单文件上传共用这一条流水线。
  *
  * <p>它被三种调用方复用，这也是它必须独立成组件的原因：
  * <ul>
@@ -51,11 +53,21 @@ import java.util.Map;
  * <p><b>幂等性</b>：消息队列只保证"至少一次"投递，因此 {@link #execute(Long)} 用一次
  * CAS（比较并设置）把任务从可执行状态抢占为 RUNNING；抢不到就说明已有人在处理或已处理完，
  * 直接返回当前状态。这不是"大概不会重复"，而是数据库层面的互斥。
+ *
+ * <p><b>两种任务类型的唯一分歧点在文件清单的来源</b>（5.3 起）：
+ * <ul>
+ *   <li>{@code VAULT_ZIP}：清单由解压器从压缩包里读出（含被跳过的条目与总数）；</li>
+ *   <li>{@code UPLOAD}：清单就是暂存区的那一个文件（见 {@link #singleFileScan}）。</li>
+ * </ul>
+ * 从"增量比对"开始往下——认领改名、切分、落库、计数、明细、收尾——两条路<b>完全一致</b>。
+ * 这是刻意不新建第二条流水线的地方：单文件上传看起来简单，但它同样要处理
+ * "同名再传是更新还是新增"、"内容没变就跳过"，这些判断已经在这里了，
+ * 复制一份等于把它们的修正永远留在两个地方。
  */
 @Component
-public class VaultImportExecutor {
+public class ImportTaskExecutor {
 
-    private static final Logger log = LoggerFactory.getLogger(VaultImportExecutor.class);
+    private static final Logger log = LoggerFactory.getLogger(ImportTaskExecutor.class);
 
     /** 每处理多少个文件更新一次任务进度。 */
     private static final int PROGRESS_BATCH = 10;
@@ -63,6 +75,9 @@ public class VaultImportExecutor {
     /** 可以被抢占执行的状态：QUEUED（首次）、PARTIAL/FAILED（重试）。 */
     private static final List<String> CLAIMABLE_STATUS = List.of(
             ImportTaskStatus.QUEUED.name(), ImportTaskStatus.PARTIAL.name(), ImportTaskStatus.FAILED.name());
+
+    /** 未变化文件在明细里的说明。措辞要说清"这是正常的"，否则用户会把它当成一种失败。 */
+    private static final String UNCHANGED_REASON = "文件未变化，已跳过（未重新解析，也未重新嵌入向量）";
 
     private final KnowledgeBaseService knowledgeBaseService;
     private final VaultPackageExtractor vaultPackageExtractor;
@@ -76,17 +91,17 @@ public class VaultImportExecutor {
     private final ImportTaskMapper importTaskMapper;
     private final ImportTaskItemMapper importTaskItemMapper;
 
-    public VaultImportExecutor(KnowledgeBaseService knowledgeBaseService,
-                               VaultPackageExtractor vaultPackageExtractor,
-                               VaultSyncPlanner vaultSyncPlanner,
-                               ParserRegistry parserRegistry,
-                               ChunkerFactory chunkerFactory,
-                               DocumentPersistService documentPersistService,
-                               DocumentStorage documentStorage,
-                               ImportStagingStore importStagingStore,
-                               DocumentMapper documentMapper,
-                               ImportTaskMapper importTaskMapper,
-                               ImportTaskItemMapper importTaskItemMapper) {
+    public ImportTaskExecutor(KnowledgeBaseService knowledgeBaseService,
+                              VaultPackageExtractor vaultPackageExtractor,
+                              VaultSyncPlanner vaultSyncPlanner,
+                              ParserRegistry parserRegistry,
+                              ChunkerFactory chunkerFactory,
+                              DocumentPersistService documentPersistService,
+                              DocumentStorage documentStorage,
+                              ImportStagingStore importStagingStore,
+                              DocumentMapper documentMapper,
+                              ImportTaskMapper importTaskMapper,
+                              ImportTaskItemMapper importTaskItemMapper) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.vaultPackageExtractor = vaultPackageExtractor;
         this.vaultSyncPlanner = vaultSyncPlanner;
@@ -126,15 +141,15 @@ public class VaultImportExecutor {
             return current == null ? null : toResponse(current);
         }
 
-        byte[] zipBytes = importStagingStore.load(taskId);
-        if (zipBytes == null) {
+        byte[] stagedBytes = importStagingStore.load(taskId);
+        if (stagedBytes == null) {
             log.error("导入暂存文件丢失 taskId={}", taskId);
-            markFailed(taskId, "导入暂存文件丢失，请重新上传压缩包");
+            markFailed(taskId, "导入暂存文件丢失，请重新上传");
             return toResponse(importTaskMapper.selectById(taskId));
         }
 
         try {
-            return runPipeline(task, zipBytes);
+            return runPipeline(task, stagedBytes);
         } catch (BusinessException ex) {
             // 业务性失败（压缩包损坏、参数非法）：重试不会有不同结果，因此不再抛出
             log.warn("导入任务因业务原因失败 taskId={}, reason={}", taskId, ex.getMessage());
@@ -150,9 +165,19 @@ public class VaultImportExecutor {
 
     // ------------------------------------------------------------------
 
-    private ImportTaskResponse runPipeline(ImportTaskPO task, byte[] zipBytes) {
+    private ImportTaskResponse runPipeline(ImportTaskPO task, byte[] stagedBytes) {
         KnowledgeBasePO knowledgeBase = knowledgeBaseService.requireOwned(task.getUserId(), task.getKbId());
-        VaultScanResult scan = vaultPackageExtractor.extract(zipBytes, VaultScanOptions.defaults());
+
+        // 唯一的类型分歧点：文件清单从哪来。往下全部共用
+        boolean fullSync = !ImportTaskType.UPLOAD.name().equals(task.getTaskType());
+        VaultScanResult scan = fullSync
+                ? vaultPackageExtractor.extract(stagedBytes, VaultScanOptions.defaults())
+                : singleFileScan(task, stagedBytes);
+
+        // 来源如实标注：整包同步是 OBSIDIAN，单文件上传是 UPLOAD。
+        // 两者在库里的路径可以长得一模一样，因此这件事只能由发起方声明，不能事后推断
+        KnowledgeSourceType sourceType = fullSync
+                ? KnowledgeSourceType.OBSIDIAN : KnowledgeSourceType.UPLOAD;
 
         task.setTotalFiles(scan.files().size());
         importTaskMapper.updateById(task);
@@ -171,11 +196,28 @@ public class VaultImportExecutor {
         List<ScannedFile> scannedFiles = scan.files().stream()
                 .map(file -> new ScannedFile(file, HashUtils.sha256Hex(file.content())))
                 .toList();
-        // 完整 Vault 同步才允许判定删除
-        VaultSyncPlan plan = vaultSyncPlanner.plan(existingDocuments, scannedFiles, true);
+        // 完整 Vault 同步才允许判定删除：单文件上传的"清单"只有一个文件，
+        // 若也按"清单里没有 = 文件被删了"来判定，会把库里其余文档全部误删
+        VaultSyncPlan plan = vaultSyncPlanner.plan(existingDocuments, scannedFiles, fullSync);
         Map<String, DocumentPO> missingByHash = vaultSyncPlanner.indexByFileHash(plan.missing());
 
         Counters counters = new Counters(totalFiles(plan, scan));
+
+        // 未变化的文件：<b>单文件上传才逐条记明细</b>，整包同步只计数。
+        //
+        // 这个区分不是省事，是两条路的代价差了几个数量级：
+        //   * 上传一个文件时"未变化"最多一条，而它恰恰是最需要解释的一种结果——
+        //     用户传了、界面说"跳过 1"，没有任何明细的话看起来就像失败；
+        //   * 整包同步一次可能带着上千篇未变的笔记（这正是增量同步的常态），
+        //     逐条落库意味着每次重导都插入上千行，而它们提供的信息（"这篇没变"）
+        //     已经由 skippedCount 汇总表达了。
+        // 因此整包同步的 skippedCount 会大于明细条数，界面上要如实说明这一点。
+        if (!fullSync) {
+            for (ScannedFile unchanged : plan.unchanged()) {
+                recordItem(task, unchanged.file().sourcePath(), ImportAction.SKIPPED, null,
+                        unchanged.fileHash(), unchanged.fileHash(), 0, 0, UNCHANGED_REASON);
+            }
+        }
         counters.skipped += plan.unchanged().size();
 
         // ---------- 第二阶段：字节变了 → 解析后判断"只改元数据"还是"正文也变" ----------
@@ -186,7 +228,7 @@ public class VaultImportExecutor {
                 String contentHash = HashUtils.sha256Hex(parsed.content());
                 if (document != null && contentHash.equals(document.getContentHash())) {
                     documentPersistService.updateMetadataOnly(task.getUserId(), knowledgeBase, document,
-                            scanned.file(), parsed);
+                            scanned.file(), parsed, sourceType);
                     return new FileOutcome(ImportAction.METADATA_ONLY, document.getId(),
                             nz(document.getChunkCount()));
                 }
@@ -194,7 +236,7 @@ public class VaultImportExecutor {
                 String storedPath = documentStorage.store(knowledgeBase.getId(),
                         scanned.file().sourcePath(), scanned.file().content());
                 DocumentPersistResult result = documentPersistService.save(task.getUserId(), knowledgeBase,
-                        scanned.file(), parsed, chunks, storedPath);
+                        scanned.file(), parsed, chunks, storedPath, sourceType);
                 return new FileOutcome(ImportAction.UPDATED, result.document().getId(), chunks.size());
             }));
         }
@@ -206,7 +248,7 @@ public class VaultImportExecutor {
                 DocumentPO renamedFrom = vaultSyncPlanner.claimRename(missingByHash, scanned);
                 if (renamedFrom != null) {
                     documentPersistService.relocate(task.getUserId(), knowledgeBase, renamedFrom,
-                            scanned.file(), parsed);
+                            scanned.file(), parsed, sourceType);
                     log.debug("识别为改名：{} → {}", renamedFrom.getSourcePath(), scanned.file().sourcePath());
                     return new FileOutcome(ImportAction.RENAMED, renamedFrom.getId(),
                             nz(renamedFrom.getChunkCount()));
@@ -215,12 +257,14 @@ public class VaultImportExecutor {
                 String storedPath = documentStorage.store(knowledgeBase.getId(),
                         scanned.file().sourcePath(), scanned.file().content());
                 DocumentPersistResult result = documentPersistService.save(task.getUserId(), knowledgeBase,
-                        scanned.file(), parsed, chunks, storedPath);
+                        scanned.file(), parsed, chunks, storedPath, sourceType);
                 return new FileOutcome(ImportAction.CREATED, result.document().getId(), chunks.size());
             }));
         }
 
         // ---------- 第四阶段：没被认领的"消失文档" → 删除 ----------
+        // 单文件上传时 missingByHash 必然为空（detectDeletions=false），本段自然跳过：
+        // "这次没传它"绝不等于"用户删了它"
         for (DocumentPO document : missingByHash.values()) {
             long startMillis = System.currentTimeMillis();
             try {
@@ -243,7 +287,13 @@ public class VaultImportExecutor {
             }
         }
 
-        // 被跳过的压缩包条目（隐藏目录、不支持类型）也计入统计
+        // 被跳过的压缩包条目（隐藏目录、不支持类型）同样要留明细。
+        // 这里是"用户最常问的那一类问题"的落点：我的 .pptx / .png 为什么没进来？
+        // 答案在 SkippedEntry.reason 里，而这条路径此前只加了一个计数——
+        // 于是 ImportAction.SKIPPED 与 Counters 里的 case SKIPPED 都是死代码。
+        for (VaultScanResult.SkippedEntry entry : scan.skipped()) {
+            recordItem(task, entry.path(), ImportAction.SKIPPED, null, null, null, 0, 0, entry.reason());
+        }
         counters.skipped += scan.skipped().size();
 
         task.setCreatedCount(counters.created);
@@ -266,9 +316,10 @@ public class VaultImportExecutor {
             importStagingStore.delete(task.getId());
         }
 
-        log.info("Vault 同步完成 kbId={}，新增 {} / 正文更新 {} / 元数据更新 {} / 改名 {} / 跳过 {} / 删除 {} / 失败 {}，切片 {}",
-                knowledgeBase.getId(), counters.created, counters.updated, counters.metadataOnly,
-                counters.renamed, counters.skipped, counters.deleted, counters.failed, counters.totalChunks);
+        log.info("导入完成 type={} kbId={}，新增 {} / 正文更新 {} / 元数据更新 {} / 改名 {} / 跳过 {} / 删除 {} / 失败 {}，切片 {}",
+                task.getTaskType(), knowledgeBase.getId(), counters.created, counters.updated,
+                counters.metadataOnly, counters.renamed, counters.skipped, counters.deleted,
+                counters.failed, counters.totalChunks);
         return toResponse(task);
     }
 
@@ -337,6 +388,38 @@ public class VaultImportExecutor {
                     ex.getClass().getSimpleName() + ": " + ex.getMessage());
             return new FileOutcome(ImportAction.FAILED, null, 0);
         }
+    }
+
+    /**
+     * 单文件上传的"扫描结果"：不需要扫描，直接由暂存的字节与任务上的文件名合成一个文件。
+     *
+     * <p>这样做让上传与 Vault 走同一个 {@link VaultSyncPlan}——于是"同名再传是更新还是新增"、
+     * "内容没变就跳过"、"库里已有同内容的别的路径 → 认作改名"这些判断全部自动成立，
+     * 而不必为上传再写一套（写两套的代价不是多写代码，是它们的修正永远会分叉）。
+     *
+     * <p>几个刻意的取值：
+     * <ul>
+     *   <li>{@code folder = null}、{@code sourcePath = 文件名}：上传的文件没有"库内路径"这回事，
+     *       文件名就是它的身份。这也让 {@code [[笔记名]]} 这类链接能直接匹配上；</li>
+     *   <li>{@code lastModified = null}：multipart 不携带可靠的修改时间（那是客户端可伪造的
+     *       元数据，不是文件内容的一部分），而 {@code doc_updated_at} 宁可空着，
+     *       也不要填一个看起来精确其实是假的时刻；</li>
+     *   <li>{@code totalEntries = 1}、{@code skipped} 为空：上传没有"条目"概念，
+     *       被拒的情况（空文件 / 格式不支持 / 超大）在入队期就已经答复过用户了。</li>
+     * </ul>
+     *
+     * <p>注意这里<b>没有</b> {@link VaultScanOptions} 的单文件 20MB 限制——那是给
+     * "压缩包里的某一个条目"设的，而这是用户显式点名的文件，上限在入队侧另行判定。
+     */
+    private VaultScanResult singleFileScan(ImportTaskPO task, byte[] content) {
+        String fileName = task.getSourceName();
+        if (fileName == null || fileName.isBlank()) {
+            // 任务行上没有文件名 → 无法确定这次要导入什么，属于数据损坏而不是用户输入问题
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "上传任务缺少文件名（taskId=" + task.getId() + "），无法确定导入目标");
+        }
+        VaultFile file = new VaultFile(fileName, fileName, null, content, null);
+        return new VaultScanResult(List.of(file), List.of(), 1);
     }
 
     private ParsedDocument parse(VaultFile file) {

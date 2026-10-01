@@ -29,7 +29,14 @@ public interface KnowledgeBaseService {
 
     KnowledgeBaseResponse update(Long userId, Long knowledgeBaseId, UpdateKnowledgeBaseRequest request);
 
-    /** 删除知识库：软删知识库本体，并物理清理其文档与标签。 */
+    /**
+     * 删除知识库：知识库与文档软删，切片 / 关联边 / 标签物理清理，
+     * 并清空向量库与检索索引里该库的全部数据、删除磁盘上的原始文件。
+     *
+     * <p>外部清理（向量库 / 检索索引）放在最前面且失败即整体失败：它们不在本事务内、
+     * 无法回滚，一旦留下就是"检索命中却翻不出文档"的孤儿。详见
+     * {@code DocumentPersistService#delete}。
+     */
     void delete(Long userId, Long knowledgeBaseId);
 
     /**

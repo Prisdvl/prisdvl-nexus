@@ -11,15 +11,21 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 /**
- * 导入暂存区：上传的 ZIP 先落到这里，消息里只传 taskId。
+ * 导入暂存区：上传的原始字节先落到这里，消息里只传 taskId。
  *
- * <p><b>为什么不把 ZIP 直接塞进消息</b>：一个 Vault 压缩包可能几十 MB，
+ * <p><b>为什么不把字节直接塞进消息</b>：一个 Vault 压缩包可能几十 MB，
  * 而消息中间件不是文件传输通道——超大消息会撑爆 broker 内存与队列、
  * 触发 max_message_size 限制，而且在消费者出错重试时会被反复投递。
  * 正确做法是"文件落盘 + 消息只传引用"，这也是消息队列的通用实践。
  *
+ * <p>存的是<b>原始字节</b>，不带扩展名：同一块暂存区要同时服务 Vault 压缩包
+ * （Phase 5.3 之前）与单文件上传（5.3 起）。文件名不在路径里，而在
+ * {@code kb_import_task.source_name}（见 V15）——按类型拼后缀只会让
+ * {@link #load} / {@link #exists} / {@link #delete} 三个方法都必须先知道类型才敢调，
+ * 而它们本来只关心"这一个 taskId 的字节还在不在"。
+ *
  * <p>生命周期：入队时写入 → 消费时读取 → <b>任务完全成功后才删除</b>。
- * 部分失败时保留，以便重试接口直接复用同一个压缩包（用户不必再传一次）。
+ * 部分失败时保留，以便重试接口直接复用同一份字节（用户不必再传一次）。
  */
 @Component
 public class ImportStagingStore {
@@ -37,7 +43,7 @@ public class ImportStagingStore {
         }
     }
 
-    /** 保存上传的压缩包，返回暂存路径。 */
+    /** 保存上传的原始字节，返回暂存路径。 */
     public String store(Long taskId, byte[] content) {
         Path target = resolve(taskId);
         try {
@@ -49,7 +55,7 @@ public class ImportStagingStore {
         }
     }
 
-    /** 读取暂存压缩包；不存在返回 null（任务会被标记为失败而不是抛异常）。 */
+    /** 读取暂存字节；不存在返回 null（任务会被标记为失败而不是抛异常）。 */
     public byte[] load(Long taskId) {
         Path target = resolve(taskId);
         try {
@@ -76,8 +82,10 @@ public class ImportStagingStore {
     }
 
     private Path resolve(Long taskId) {
-        // taskId 是雪花 id（纯数字），不存在路径穿越风险；仍做一次 normalize + 前缀校验作为纵深防御
-        Path target = root.resolve(taskId + ".zip").normalize();
+        // taskId 是雪花 id（纯数字），不存在路径穿越风险；仍做一次 normalize + 前缀校验作为纵深防御。
+        // .bin 而非 .zip：这块暂存区从 5.3 起同时服务 Vault 压缩包与单文件上传
+        // （后缀只影响人和杀毒软件怎么看待这个文件，代码从不按后缀分支）
+        Path target = root.resolve(taskId + ".bin").normalize();
         if (!target.startsWith(root)) {
             throw new IllegalArgumentException("非法的暂存路径：taskId=" + taskId);
         }

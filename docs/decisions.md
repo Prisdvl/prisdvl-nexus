@@ -3121,6 +3121,199 @@ Unable to rename 'nexus-app-0.0.1-SNAPSHOT.jar' to '…jar.original'
 
 ---
 
+### B.44 Phase 5.3 实现记录（知识库闭环补完：单文件上传 / 删文档 / 失败原因可见）
+
+> 编号说明：同 B.42/B.43，属**产品化**这条线。对应审计里的 P1-1 / P1-2 / P1-3 / P1-4。
+
+**1. 动手前被推翻的三条审计结论**
+
+审计写在 `productization-gap-analysis.md` 里的方案有三处经不起推敲，改了做法：
+
+| 审计原话 | 实际 | 因此怎么改 |
+| --- | --- | --- |
+| P1-4："给 `DocumentSummary` 补 `errorMsg`" | **那是个死字段。** `DocumentStatus` 全仓只在 `applyMetadata` 被写成 `READY` / `errorMsg=null`，**没有任何路径写 `FAILED`**。逐文件的失败原因落在 `kb_import_task_item.message` | 不补字段。补的是那张表的**读接口**——它此前只有写入方，没有任何人读 |
+| P1-2："删文档时清理 chunk / 向量 / ES" | **存量路径今天就在漏，而且不止一条。** `DocumentPersistServiceImpl.delete` 不清向量 / ES / 关联边；`KnowledgeBaseServiceImpl.delete` 更彻底——连 `kb_chunk` 都没删（`documentMapper.delete` 走 `@TableLogic` 逻辑删除，注释却写着"物理删除"），向量与 ES 也不碰，代码里留着一条 TODO 自认 | 只修新端点 = "修了一个，漏了仨"。库级那条一并堵上 |
+| （审计没提到） | **孤儿还有第四条路径：重新切分。** 覆盖已有文档时切片拿到新 id，而向量按 `chunk_id` 存 → 旧向量全部成为孤儿。`ChunkEmbeddingService.deleteVectors` 的 javadoc 早就写着"文档被删除或**重新切分**时调用"，但从来没有人从这个方向调用过 | 在 `save()` 的更新分支也加一次外部清理 |
+
+第三条约等于"照着自己的注释读了一遍才发现注释和代码不一致"——javadoc 描述的是**意图**，
+不是事实，两者不一致时只有一种可能是对的。
+
+**2. 单文件上传（P1-1）：复用，不新建**
+
+新增一条流水线很容易，但两条流水线会以"其中一条漏了新字段"的方式分叉。
+所以上传走的是**同一条**异步导入链路，差异收敛到两处：
+
+- `taskType = UPLOAD` + `kb_import_task.source_name`（迁移 V15，见 `database.md`）；
+- **不做删除检测**。`VaultSyncPlanner` 早就在类注释里留了口子：
+  `detectDeletions=false` 是给单文件上传用的，否则"这次清单里只有这一个文件"
+  会被执行器理解成"库里其余文档都该删"——一个能一键清空知识库的 bug。
+
+顺带处理了两件容易被忽略的事：
+
+- **校验放进服务层**（`ParserRegistry.requireParser` + `requireUploadable`），不只是 Controller。
+  否则换个调用方（MCP 工具、批量导入）绕过 HTTP，用户拿到的是含糊的"导入失败"
+  而不是 `3005` + "当前支持哪些格式"。
+- **绕开压缩包的 20MB 单条目上限**：那是给 ZIP 里来路不明的条目设的防线，
+  而直接上传是用户显式点名的文件，多一道 20MB 的闸只会让合法的 25MB PDF 被拒。
+  改用压缩包整体上限（200MB），与 Spring 的 `max-file-size` 对齐。
+
+**3. `sourceType` 从硬编码改成参数（新功能引出的数据失真）**
+
+`DocumentPersistServiceImpl.applyMetadata` 写死 `sourceType = OBSIDIAN`，
+于是 `KnowledgeSourceType.UPLOAD` 这个枚举值**从来不可达**。
+在只有 ZIP 导入的年代这只是无害的冗余；加了单文件上传之后，
+用户手工传的文件会被标成 Obsidian 导入，而 `KnowledgeSourceType` 的注释写明
+"区分来源是为了判断这次的清单是否覆盖了库里的全部来源"——
+那个判断会把用户手工传的文件当成同步范围内的东西。
+
+因此把 `sourceType` 穿透 `save` / `updateMetadataOnly` / `relocate` 三个签名：
+Vault 路径传 `OBSIDIAN`，上传路径传 `UPLOAD`。
+**是"新功能把旧硬编码变成 bug"的典型**——不是这个改动引入了问题，是它让问题变得可达。
+
+**4. 删除（P1-2）：fail-closed，以及顺序为什么不对称**
+
+删除要动六处数据，少动哪一处都不会报错，只会留下看不见的残留。完整清单见
+`database.md`「删除会动哪些表」。这里只记两条决策：
+
+**(a) 外部清理在前，且失败即整体失败。**
+向量 / ES 不在 MySQL 事务里、无法回滚，所以顺序只能是"先外部、后 MySQL"：
+
+| 顺序 | 外部失败时会怎样 |
+| --- | --- |
+| **先外部，后 MySQL**（采用） | 事务回滚 → 文档原封不动，用户重试即可 |
+| 先 MySQL，后外部 | 文档没了但向量还在 → 检索命中却取不出正文，且**没有任何入口能修** |
+
+两种失败的代价不对称，所以选择后者不可接受。测试 `purgeFailureAbortsTheWholeDelete`
+用 `doThrow` 模拟向量库不可用，断言 5xx、文档 / 切片 / 文件 / 关联边全部原封不动，
+并额外断言索引那一步 `never()` 被调用——**顺序本身就是保证**。
+
+**(b) 磁盘文件在删库时放最后，在删单篇时不是。**
+文件孤儿只是浪费磁盘；而"文件已删、事务又回滚了"是真的数据丢失。
+删库把文件删除放在最后一步，删单篇时它在外部清理之后、事务之内（无害），
+顺序跟着代价走，而不是跟着"看起来整齐"走。
+
+**(c) 入链保留是刻意的。** 只删以本文档为源的出链；
+别人指向它的边会退化成"待创建的引用"（`resolved=false`），这正是 Obsidian 语义——
+删掉一篇笔记时，别的笔记里对它的引用不该消失，那正是"这里本该有篇笔记"的线索。
+
+**5. 墓碑陷阱：一个"加个按钮就能一键复现"的老问题**
+
+`uk_doc_kb_path (kb_id, source_path, deleted)` 把 `deleted` 放进了唯一键，
+本意是允许"删了再传同名文件"。但 `deleted` 是 `@TableLogic Integer`，
+**第二次**逻辑删除同一路径会写出第二行 `deleted=1`，撞唯一键：
+
+```
+传 note.md → 删 → 再传 note.md → 再删     ← 报 "Duplicate entry ... for key 'uk_doc_kb_path'"
+```
+
+这句话和用户的操作毫无关系，用户看到的会是一个莫名其妙的 500。
+此前只有"重复导入 + 删文件"才碰得到；加了删除按钮就是一键复现。
+修法是逻辑删除前先用原生 SQL 清掉同路径旧墓碑
+（原生 `@Delete` 绕过 `@TableLogic`，仓库里已有原生 `@Select` 先例）。
+`DocumentDeleteTest.deletingTheSamePathTwiceDoesNotCollide` 就是这条的回归。
+
+**6. 失败原因可见（P1-3 / P1-4）：补一个只会写不会读的表，和一段死代码**
+
+`kb_import_task_item` 从建立起来就只有写入方。于是"失败 3 个"是一个没有下文的数字，
+用户只能翻服务端日志——而这张表存在的**全部意义**就是回答"为什么这篇没进来"
+（它自己的类注释就是这么写的）。新增 `GET /api/import-tasks/{id}/items`：
+
+- `action` 可选过滤（大小写不敏感），`limit` 默认 100、**收敛到 1–500**——
+  一个 Vault 上千行明细，不能让一次查询全拖回来；
+- 归属校验与 `GET /api/import-tasks/{id}` 同一道，别人的任务一律 `3008`，不泄露文件清单。
+
+顺带发现并堵上一个更隐蔽的洞：**扫描期跳过的条目从来没有被记录过**。
+执行器只做了 `counters.skipped += scan.skipped().size()`，没有 `recordItem`——
+于是 `ImportAction.SKIPPED` 与 `Counters` 里的 `case SKIPPED` 一直是**死代码**。
+后果是用户最常问的那一类问题（"我的 `.pptx` 为什么没进来"）恰恰是明细答不了的。
+现在每条都带上原因。
+
+**一处刻意保留的不对称**：整包同步时"内容未变化"的文件**只计数、不逐条落明细**。
+第一版实现把 `plan.unchanged()` 全部落库，直接撞上了既有测试
+`VaultIncrementalSyncTest.noChangeImportIsZeroWrite`：
+
+```java
+assertThat(importTaskItemMapper.selectCount(...))
+        .as("跳过的文件不写明细，否则一次重导会插入上千行")
+        .isEqualTo(itemsBefore);
+```
+
+那条测试是对的先例，**没有改它**，而是把行为收窄到"单文件上传（恰好一行）"才落明细，
+并在界面上把这个差异讲清楚（`task.skippedCount` 可能大于明细条数）。
+单文件上传的"内容未变化"则如实给出一条 `SKIPPED` + 原因——
+因为"传了却什么都没发生"必须有解释来源。
+
+界面上，判据用**任务上的计数**而不是明细条数
+（`!task.failedCount && !task.skippedCount`），否则整包同步的正常结果会被显示成"有跳过但查不到明细"。
+
+**7. 与既有约定/测试的交互**
+
+- **构造器循环依赖**：`KnowledgeBaseServiceImpl` 需要清向量与索引，
+  但 `ChunkEmbeddingServiceImpl` / `ChunkIndexServiceImpl` 都构造器注入了 `KnowledgeBaseService`
+  ——注回去 Spring Boot 3 会在启动时直接拒绝。因此库级清理注入的是**端口**
+  `VectorStore` / `ChunkIndex`（它们没有反向依赖），这条取舍写在了类的 javadoc 里。
+- **测试 profile 下"无孤儿"证明不了**：`DisabledVectorStore` / `DisabledChunkIndex`
+  是**静默 no-op**（不报错，查什么都是空的），所以用真实 Bean 的"删完是空的"断言毫无意义。
+  改用 `@MockitoBean` 替换 `ChunkEmbeddingService` / `ChunkIndexService` 并 `verify`
+  传入的 documentId；真实存储的 `countByKnowledgeBase == 0` 留给真机/live 门控用例。
+- **`refreshKnowledgeBaseStats` 的 O(全库切片) 问题**（本阶段顺带修的一个审计里没有的问题）：
+  它原本把整个知识库的 chunk 行读进内存求 token 和。单文档删除会走它，
+  大库上这就是 O(全库切片)。改成一条 `COUNT` + 一条 `SUM(token_count)` 聚合。
+  **范围说明**：这是探索中发现的，审计里没有。
+
+**8. 测试与构建**
+
+- 新增 4 个测试类 20 条：`DocumentUploadTest`（5）、`DocumentDeleteTest`（5）、
+  `KnowledgeBaseDeletePurgeTest`（3）、`ImportTaskItemApiTest`（6），
+  `mvn test` **426 通过 / 0 失败 / 0 错误 / 18 跳过**（基线 406，恰好 +20）；
+- `mvn package` 成功；`cd web && npm run build` 成功；
+- 新增 `web/scripts/verify-doc-lifecycle.mjs`（上传 → 失败原因 → 删除 → 列表消失四段）。
+
+**9. 真机验收：已执行，全绿**
+
+本节初稿写的是"没有执行"（当时 Docker / 前后端都没起）。**同日补跑完毕**，结论如下。
+
+*环境*：`docker compose`（MySQL 3307 / PostgreSQL+pgvector 5433 / Redis / ES 9200 + analysis-ik /
+RabbitMQ）+ `--profile ai-local`（Ollama，`bge-m3`）+ 后端 `--spring.profiles.active=local` +
+前端 `npm run dev`。验收脚本 `acceptance_all.py`（一次性，在 `target/verify-fixtures/` 下，不进仓库）。
+
+| 验收项（计划原文） | 结果 |
+| --- | --- |
+| 迁移在真实 MySQL 上落地 | `Successfully applied 1 migration to schema 'nexus', now at version v15` |
+| PDF / DOCX / TXT / MD **各上传一次** | 4/4 终态 `DONE`，每个 `created=1 failed=0`；查库 `source_type='UPLOAD'` 4 篇（这是"接口没暴露 ≠ 没写对"的核对，`DocumentSummary` 不含该字段） |
+| 向量化 + 建索引 | 真 Ollama `bge-m3` 嵌入、真 ES 写入 |
+| 删除前基线 | 每篇**恰好 1 向量 + 1 ES 文档 + 1 切片**，库内向量合计 4（先证基线非空，否则"删完是 0"是空断言） |
+| **删后向量 / ES 无残留** | 逐篇删除后：向量 0、ES 0、切片 0、标签 0、**出链 0**、文档行 `deleted=1`、磁盘原件已消失 |
+| 整库口径 | 库内向量 0、ES 0；文档列表空；`doc_count=0 / chunk_count=0` |
+| 入链语义 | 先删被引用的 `验收纯文本.txt`，`验收笔记.md` 里那条 `[[验收纯文本]]` **仍在**，而它自己的出链已清空 |
+| 墓碑回归（本阶段新暴露的路径） | 同一路径"传 → 删 → 再传 → 再删"两轮均成功（`uk_doc_kb_path` 不再被撞） |
+| 删库清理（本阶段顺带补的漏） | 库级向量 / ES / 切片全部归零 |
+| 界面 E2E | 新增 `verify-doc-lifecycle.mjs` **退出 0**（含三张截图）；既有 `verify-frontend.mjs` 复跑**退出 0** |
+
+`verify-agents.mjs` 退出 **2 = 设计内的跳过**（该脚本把"本机没有可用模型"定义为跳过而非失败）：
+后端未设 `AI_CHAT_API_KEY` 时只注册了 `ollama:qwen3:7b`，而默认对话模型是
+`opencode:deepseek-v4-flash`，于是试跑那一段报"模型未注册"。与本阶段改动无关。
+
+*脚本本身踩到的四个坑*（都会让验收**假装通过**，记在这里以免下次重犯）：
+
+1. **pgvector 与 MySQL 是两个库**。`docker exec ... psql` 不指定库名时查询落在一张不存在的表上、
+   返回空串，`int('')` 变成 0 —— 于是"删除后向量是 0"这类断言**全部通过却是空断言**。
+   第一版就这么骗过了自己，直到手工核对"4 行明明在"才发现。
+2. **ES 可见性延迟**：`refresh_interval` 默认 1s，删完立刻查会读到删除前状态。断言前必须
+   `_refresh` 并留重试窗口。
+3. **中文经 `mysql -e` 传下去会被按 latin1 解读**，`target like '%…%'` 于是永远不匹配；
+   改用 `--default-character-set=utf8mb4`，并把中文比对挪到 Python 侧做。
+4. **`Content-Type: application/json` 不带 `charset=utf-8` 时 Spring 按 ISO-8859-1 解码**，
+   中文库名直接变成 `1002 请求体格式错误`——建库接口的第一次调用就是这么失败的。
+
+**10. 这一期明确没做 / 没验到的**
+
+- **没有"批量删除"入口**：一次删多篇只能逐个点，接口也只支持单篇。
+- **`kb_attachment` 不在删除清理范围内**：第一版只登记展示，还没有写入路径，因此暂无孤儿可清；
+  将来做多模态附件上传时这条要跟着补（已记为 P2-16）。
+
+---
+
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
 
 | # | 决策项 | 结论 |

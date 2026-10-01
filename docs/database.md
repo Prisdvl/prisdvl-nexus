@@ -281,17 +281,66 @@ CREATE TABLE kb_chunk (
 | 表 | 关键列 | 说明 |
 | --- | --- | --- |
 | `kb_document_tag` | `id`、`kb_id`、`document_id`、`tag`(VARCHAR 128)、`tag_source`(`FRONTMATTER`/`INLINE`/`FOLDER`) | 唯一键 `(document_id, tag)`；索引 `(kb_id, tag)` 支撑"按标签过滤/检索" |
-| `kb_document_link` | `id`、`kb_id`、`source_document_id`、`target_document_id`(可空)、`target_title`、`link_type`(`WIKILINK`/`MD_LINK`/`EMBED`)、`raw_target`、`resolved` | WikiLink/Markdown Link 抽取结果；`resolved=false` 表示目标文档未导入（=知识缺口线索，Phase 4 用） |
+| `kb_document_link` | `id`、`kb_id`、`from_document_id`、`link_type`(`WIKILINK`/`MARKDOWN_LINK`/`EMBED`)、`target`(VARCHAR 512)、`display`(可空)、`start_offset`、`is_external` | WikiLink/Markdown Link 抽取结果。**目标只存文本、不存外键**：`target` 是笔记名 / 相对路径 / URL，读取时才去解析成文档（`is_external=1` 的 http(s) 外链不参与关联图）。因此"目标文档未导入"退化成"解析不到"，不需要一个 `resolved` 列——第 5 章的关联面板据此拆成"出链 / 反向链接 / 待创建"三组 |
 | `kb_attachment` | `id`、`kb_id`、`document_id`、`source_path`、`mime`、`size`、`stored_path`、`hash` | 图片等附件；第一版只登记与展示，不做多模态 Embedding |
 
 ### 4.5 导入任务（异步 + 增量同步的可观测载体）
 
 | 表 | 关键列 | 说明 |
 | --- | --- | --- |
-| `kb_import_task` | `id`、`kb_id`、`user_id`、`task_type`(`UPLOAD`/`VAULT_ZIP`/`RESYNC`)、`status`(`QUEUED`/`RUNNING`/`PARTIAL`/`DONE`/`FAILED`/`CANCELLED`)、`total_files`、`created_count`、`updated_count`、`skipped_count`、`deleted_count`、`failed_count`、`total_chunks`、`total_tokens`、`progress`(0-100)、`started_at`、`finished_at`、`error_msg` | HTTP 立刻返回 `taskId`，前端轮询/SSE 看进度 |
+| `kb_import_task` | `id`、`kb_id`、`user_id`、`task_type`(`UPLOAD`/`VAULT_ZIP`/`RESYNC`)、`source_name`（V15，见下）、`status`(`QUEUED`/`RUNNING`/`PARTIAL`/`DONE`/`FAILED`/`CANCELLED`)、`total_files`、`created_count`、`updated_count`、`skipped_count`、`deleted_count`、`failed_count`、`total_chunks`、`total_tokens`、`progress`(0-100)、`started_at`、`finished_at`、`error_msg` | HTTP 立刻返回 `taskId`，前端轮询看进度 |
 | `kb_import_task_item` | `id`、`task_id`、`kb_id`、`source_path`、`action`(`CREATED`/`UPDATED`/`SKIPPED`/`DELETED`/`FAILED`)、`document_id`、`old_hash`、`new_hash`、`chunk_count`、`duration_ms`、`message` | 每个文件的处理明细，失败可单文件重试 |
 
 索引：`idx_task_kb (kb_id, created_at)`、`idx_item_task (task_id, action)`
+
+#### V15：`kb_import_task.source_name`（平台化 Phase 5.3）
+
+`VARCHAR(512) NULL`，与 `kb_document.source_path` / `kb_import_task_item.source_path` 同宽。
+
+单文件上传（P1-1）复用了整条导入链路，于是任务行需要知道"这次要导入的是哪个文件"——
+ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名本身。
+把它单独存一列而不是复用 `error_msg` 之类的字段，是因为它描述的是任务的**输入**，
+而 `error_msg` 是**输出**；混用会让"这次导入了什么"和"为什么失败"互相覆盖。
+
+叫 `source_name` 而不是 `file_name`：它最终会成为 `kb_document.source_path`
+（执行器把它当文件名用，也当库内路径用），与那一列保持同名是为了让"任务输入 → 文档身份"这条链一眼可读。
+
+该列**不随 `ImportTaskResponse` 返回**：它是执行器的输入，用户要看的是结果
+（进了哪些文件、哪些失败了）——那由 `kb_import_task_item` 回答。
+
+#### 删除会动哪些表（Phase 5.3 · P1-2）
+
+删除是整个知识库链路里唯一"一处少删就静默留残留"的动作，因此把它单独列清楚。
+两类删除的清理对象**不一样**，这不是疏漏，是刻意取舍：
+
+| 表 / 存储 | 删单篇文档 | 删整个知识库 | 为什么 |
+| --- | --- | --- | --- |
+| pgvector `kb_vector` | 按 `document_id` 删 | 按 `kb_id` 删 | 不删 → 检索命中却取不出正文，且没有任何入口能修 |
+| Elasticsearch 文档 | 按 `document_id` 删 | 按 `kb_id` 删 | 同上（BM25 那一路） |
+| `kb_chunk` | 物理删 | 物理删 | 量大、无审计价值，留着会让"这个库还有多少数据"失去意义 |
+| `kb_document_tag` | 物理删 | 物理删 | 同上（是从文档派生的投影） |
+| `kb_document_link` | **只删出链**（`from_document_id = 本文档`） | 按 `kb_id` 全删 | 删一篇笔记时，别人指向它的边要留下——它会退化成"待创建的引用"，这正是 Obsidian 语义 |
+| `kb_document` | 逻辑删（`deleted=1`） | 逻辑删 | 保留审计；查询侧靠 `@TableLogic` 过滤 |
+| 磁盘原始文件 | 删 | 删（**最后一步**） | 见下 |
+| `kb_knowledge_base` 统计列 | 重算 | 整行删除 | 不重算，列表页会一直显示删除前的数字 |
+
+两条顺序上的讲究：
+
+1. **外部存储（向量 / ES）先清，且清不掉就整个失败**（fail-closed）。
+   它们不在 MySQL 事务里、无法回滚，所以顺序只能是"先外部、后 MySQL"：
+   外部失败 → 事务回滚，文档原封不动、用户可重试；反过来则留下查不到正文的孤儿。
+2. **磁盘文件在删库时放最后**。文件孤儿只是浪费磁盘，而"文件已删但事务回滚"是真的数据丢失——
+   两种失败的代价不对称，顺序就该不对称。（删单篇时磁盘文件在外部清理之后、事务之内，无害。）
+
+**同名路径的墓碑陷阱**：`uk_doc_kb_path (kb_id, source_path, deleted)` 把 `deleted` 也放进了唯一键
+（为了允许"删了再传同名文件"）。但 `deleted` 是 `@TableLogic Integer`，**第二次**逻辑删除同一路径
+会写出第二行 `deleted=1` 而撞唯一键——传 → 删 → 再传 → 再删即可复现。
+因此逻辑删除前先用原生 SQL 清掉同路径的旧墓碑
+（`DocumentMapper.purgePathTombstones` / `purgeKnowledgeBaseTombstones`，原生 `@Delete` 绕过 `@TableLogic`）。
+这条路径在加删除按钮之前靠"重复导入 + 删文件"才碰得到，加了按钮就是一键复现。
+
+> 同样形状的陷阱还埋在 `uk_user_username (username, deleted)` 上（见 `productization-gap-analysis.md` P2-15）：
+> 目前**没有**删号接口所以不可达，补删号功能前必须先修。
 
 ---
 

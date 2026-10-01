@@ -9,6 +9,8 @@ import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.api.PageQuery;
 import com.lky.nexus.common.api.PageResult;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.knowledge.mapper.ChunkMapper;
+import com.lky.nexus.knowledge.mapper.DocumentLinkMapper;
 import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.DocumentTagMapper;
 import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;
@@ -18,10 +20,15 @@ import com.lky.nexus.knowledge.model.KnowledgeSourceType;
 import com.lky.nexus.knowledge.model.dto.CreateKnowledgeBaseRequest;
 import com.lky.nexus.knowledge.model.dto.KnowledgeBaseResponse;
 import com.lky.nexus.knowledge.model.dto.UpdateKnowledgeBaseRequest;
+import com.lky.nexus.knowledge.model.entity.ChunkPO;
+import com.lky.nexus.knowledge.model.entity.DocumentLinkPO;
 import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.DocumentTagPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
+import com.lky.nexus.knowledge.search.ChunkIndex;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
+import com.lky.nexus.knowledge.storage.DocumentStorage;
+import com.lky.nexus.knowledge.vector.VectorStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -54,19 +61,41 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final DocumentMapper documentMapper;
     private final DocumentTagMapper documentTagMapper;
+    private final DocumentLinkMapper documentLinkMapper;
+    private final ChunkMapper chunkMapper;
     private final AiModelProperties aiModelProperties;
     private final RetrievalDefaults retrievalDefaults;
+
+    /**
+     * 外部存储的清理直接用<b>端口</b>（{@code VectorStore} / {@code ChunkIndex}）而不是
+     * {@code ChunkEmbeddingService} / {@code ChunkIndexService}：后两者的实现都注入了
+     * {@code KnowledgeBaseService}（用于 {@code requireOwned}），本类再反向注入它们就构成
+     * 构造器循环依赖，Spring Boot 3 默认直接启动失败。而端口这一层只依赖中间件，没有回边。
+     */
+    private final VectorStore vectorStore;
+    private final ChunkIndex chunkIndex;
+    private final DocumentStorage documentStorage;
 
     public KnowledgeBaseServiceImpl(KnowledgeBaseMapper knowledgeBaseMapper,
                                     DocumentMapper documentMapper,
                                     DocumentTagMapper documentTagMapper,
+                                    DocumentLinkMapper documentLinkMapper,
+                                    ChunkMapper chunkMapper,
                                     AiModelProperties aiModelProperties,
-                                    RetrievalDefaults retrievalDefaults) {
+                                    RetrievalDefaults retrievalDefaults,
+                                    VectorStore vectorStore,
+                                    ChunkIndex chunkIndex,
+                                    DocumentStorage documentStorage) {
         this.knowledgeBaseMapper = knowledgeBaseMapper;
         this.documentMapper = documentMapper;
         this.documentTagMapper = documentTagMapper;
+        this.documentLinkMapper = documentLinkMapper;
+        this.chunkMapper = chunkMapper;
         this.aiModelProperties = aiModelProperties;
         this.retrievalDefaults = retrievalDefaults;
+        this.vectorStore = vectorStore;
+        this.chunkIndex = chunkIndex;
+        this.documentStorage = documentStorage;
     }
 
     @Override
@@ -183,15 +212,43 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     public void delete(Long userId, Long knowledgeBaseId) {
         requireOwned(userId, knowledgeBaseId);
 
-        // 知识库走逻辑删除（保留记录便于审计）；
-        // 文档与标签没有独立价值且量大，物理删除，避免无主数据堆积。
-        // 注意：Phase 3 起这里还要级联清理向量与 ES 索引（按 documentId 过滤）。
+        // 删库是"整库消失"，因此外部的向量与索引必须一并清掉——否则留下的是最坏的一类孤儿：
+        // 知识库行已经没了，向量库里还留着它的向量，检索命中却翻不出任何文档。
+        // 与单篇文档删除同一取舍：外部清理在前、且清不掉就整体失败（详见 DocumentPersistService.delete）。
+        vectorStore.deleteByKnowledgeBase(knowledgeBaseId);
+        chunkIndex.deleteByKnowledgeBase(knowledgeBaseId);
+
+        // 磁盘上的原始文件先记下来，等数据库这部分做完再删。
+        // 顺序与外部存储相反是有理由的：向量清不掉会污染检索，所以宁可删不掉；
+        // 而原始文件清不掉只是浪费磁盘，反过来"文件先删了、事务却回滚"才是真的数据丢失。
+        // LocalDocumentStorage.delete 自身吞掉 IO 异常，因此放在这里也不会让删除失败。
+        List<String> storedPaths = documentMapper.selectList(Wrappers.<DocumentPO>lambdaQuery()
+                        .select(DocumentPO::getStoredPath)
+                        .eq(DocumentPO::getKbId, knowledgeBaseId)).stream()
+                .map(DocumentPO::getStoredPath)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+
+        // 切片与关联边没有独立价值且量大，物理删除——它们不承载审计意义，
+        // 而且留着的每一行都会让"这个库还有多少数据"这类核对失去意义。
+        int chunks = chunkMapper.delete(Wrappers.<ChunkPO>lambdaQuery().eq(ChunkPO::getKbId, knowledgeBaseId));
+        int links = documentLinkMapper.delete(Wrappers.<DocumentLinkPO>lambdaQuery()
+                .eq(DocumentLinkPO::getKbId, knowledgeBaseId));
+
+        // 逻辑删除文档之前，先清掉本库下早先留下的墓碑，否则会撞 uk_doc_kb_path：
+        // 库里某条路径上若已有一行 deleted=1，这次逻辑删除会再写一行同键的，唯一键直接拒绝。
+        documentMapper.purgeKnowledgeBaseTombstones(knowledgeBaseId);
+
+        // 知识库与文档走逻辑删除（保留记录便于审计）
         int documents = documentMapper.delete(Wrappers.<DocumentPO>lambdaQuery()
                 .eq(DocumentPO::getKbId, knowledgeBaseId));
         int tags = documentTagMapper.delete(Wrappers.<DocumentTagPO>lambdaQuery()
                 .eq(DocumentTagPO::getKbId, knowledgeBaseId));
         knowledgeBaseMapper.deleteById(knowledgeBaseId);
-        log.info("删除知识库 id={}, userId={}, 清理文档 {} 篇 / 标签 {} 条", knowledgeBaseId, userId, documents, tags);
+
+        storedPaths.forEach(documentStorage::delete);
+        log.info("删除知识库 id={}, userId={}, 清理文档 {} 篇 / 切片 {} 条 / 关联边 {} 条 / 标签 {} 条 / 原始文件 {} 个",
+                knowledgeBaseId, userId, documents, chunks, links, tags, storedPaths.size());
     }
 
     @Override

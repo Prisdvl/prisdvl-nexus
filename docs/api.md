@@ -147,40 +147,124 @@ POST /api/auth/login
 
 ### 3.2 文档
 
+文档一律挂在知识库下（嵌套路由），不存在跨库的 `/api/documents`——归属校验因此只有一处（路径上的 `{kbId}`），
+下面所有 `{id}` 都是 `{documentId}`：
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/knowledge-bases/{id}/documents` | 单/多文件上传（md/txt/pdf/docx）→ `taskId` |
-| POST | `/api/knowledge-bases/{id}/vault` | 上传 Obsidian Vault ZIP → `taskId` |
-| POST | `/api/knowledge-bases/{id}/resync` | 用已存原始文件重新同步（增量，不动没变的文件） |
-| GET | `/api/documents` | 文档分页列表（按 kbId/folder/tag/status/关键词过滤） |
-| GET | `/api/documents/{id}` | 文档详情（frontmatter、标签、标题树、图片、关联文档、Chunk/向量状态） |
-| GET | `/api/documents/{id}/content` | 原始 Markdown 正文（前端渲染用） |
-| GET | `/api/documents/{id}/chunks` | Chunk 列表（含 heading_path、token 数、向量状态） |
-| DELETE | `/api/documents/{id}` | 删除文档及其 Chunk/向量/ES 记录 |
-| POST | `/api/documents/{id}/reindex` | 单文档重建索引（切分/嵌入参数变更后使用） |
-| GET | `/api/documents/{id}/links` | 关联文档（WikiLink / Markdown Link，含未解析目标） |
+| POST | `/api/knowledge-bases/{kbId}/documents` | **单文件上传（Phase 5.3 · P1-1）**：md/txt/pdf/docx → `taskId` |
+| POST | `/api/knowledge-bases/{kbId}/vault` | 上传 Obsidian Vault ZIP → `taskId` |
+| GET | `/api/knowledge-bases/{kbId}/documents` | 文档分页列表（按 folder/tag/status/关键词过滤） |
+| GET | `/api/knowledge-bases/{kbId}/documents/{id}` | 文档详情（frontmatter、标签、标题树、图片、关联文档、Chunk/向量状态） |
+| GET | `/api/knowledge-bases/{kbId}/documents/{id}/chunks` | Chunk 列表（含 heading_path、token 数、向量状态） |
+| GET | `/api/knowledge-bases/{kbId}/documents/{id}/links` | 关联文档（WikiLink / Markdown Link，含未解析目标） |
+| GET | `/api/knowledge-bases/{kbId}/documents/{id}/related` | 相关推荐（按关联度排序） |
+| DELETE | `/api/knowledge-bases/{kbId}/documents/{id}` | **删除单篇文档（Phase 5.3 · P1-2）**，见下 |
+
+#### 单文件上传（Phase 5.3 · P1-1）
+
+```http
+POST /api/knowledge-bases/1/documents   (multipart: file=笔记.md)
+200 OK
+{ "code": 0, "data": { "id": 9001, "taskType": "UPLOAD",
+                       "status": "QUEUED", "totalFiles": 1, ... } }
+```
+
+- **复用整条异步导入链路**，没有第二条流水线：同一张 `kb_import_task`、同一个执行器、
+  同一套状态机与重试端点。区别只有两处——
+  - 任务 `taskType = UPLOAD`，文件名记在 `kb_import_task.source_name`（V15 新列；
+    ZIP 导入是 `VAULT_ZIP` / 压缩包名）。该列**不随响应返回**，执行器内部用它确定导入目标；
+  - **不做删除检测**：单文件上传的"清单"只有这一个文件，按它去比对会把库里其余文档全删掉
+    （`VaultSyncPlanner` 的 `detectDeletions=false`，这个口子本来就是为它留的）。
+- **扩展名校验在服务层**（`ParserRegistry.requireParser`），不是只在 Controller：
+  这样别的调用方（未来的 MCP 工具）绕过 HTTP 也会拿到 `3005 文件类型不支持` +
+  "当前支持哪些格式"，而不是一个含糊的"导入失败"。
+- **不适用压缩包里那套 20MB 单条目上限**：直接上传是用户显式点名的文件，
+  `VaultScanOptions.DEFAULT_MAX_FILE_BYTES` 是给 ZIP 里来路不明的条目设的防线，
+  多一道 20MB 的闸只会让合法的 25MB PDF 被拒。服务层改用**压缩包整体上限**
+  `DEFAULT_MAX_TOTAL_BYTES`（200MB）判定，与 Spring 的 `max-file-size` 对齐——
+  校验放在服务里而不只靠 multipart，换一个调用方（MCP、批量导入）也成立。
+  超限 → `3006`；Spring 层先拦下的则是 `413 / 3006`，见 1.2。
+- 落库的文档 `sourceType = UPLOAD`（此前该枚举值不可达，详见 `docs/decisions.md` B.44）。
+- **重复上传同名同内容**不会报错：增量同步判定 `SKIPPED`，并在 `items` 里给出一条
+  "文件未变化，已跳过（未重新解析，也未重新嵌入向量）"——这正是 P1-3 要解决的问题。
+
+#### 删除单篇文档（Phase 5.3 · P1-2）
+
+```http
+DELETE /api/knowledge-bases/1/documents/7
+200 OK  { "code": 0, "data": null }
+```
+
+删除会连着清六处数据（少清哪一处都不会报错，只会留下看不见的残留）：
+
+| 清理对象 | 语义 |
+| --- | --- |
+| 向量库（pgvector） | 按 `document_id` 清 |
+| 检索索引（ES） | 按 `document_id` 清 |
+| `kb_chunk` / `kb_document_tag` | **物理删除**（量大且无审计价值） |
+| `kb_document_link` 的**出链** | 删文本档指向别人的边；**保留入链**——别人指向它的边会退化成"待创建的引用"，这是 Obsidian 语义 |
+| 磁盘上的原始文件 | 不留垃圾 |
+| `kb_knowledge_base` 的统计 | 重算 `docCount` / `chunkCount` / `totalTokens` |
+
+- **外部清理在前，且失败即整体失败（fail-closed）**：向量/ES 不在 MySQL 事务里，
+  无法回滚，所以顺序只能是"先外部、后 MySQL"。外部失败 → 事务回滚 → 文档原封不动，
+  用户重试即可；反过来会在向量库里留下**检索命中却取不出正文**的孤儿，且没有任何入口能修。
+- **同名路径的墓碑会被先清掉**：`uk_doc_kb_path (kb_id, source_path, deleted)` 是逻辑删除陷阱——
+  同一路径第二次逻辑删除会写出第二行 `deleted=1` 而撞唯一键（传 → 删 → 再传 → 再删即可复现）。
+- 错误：库不属于该用户 → `3001`；文档不在该库里（或不存在）→ `3003`。两者都是 404，不泄露资源存在性。
 
 ### 3.3 导入任务
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/import-tasks/{taskId}` | 任务状态与进度（总数/成功/跳过/失败/百分比） |
-| GET | `/api/import-tasks/{taskId}/stream` | SSE 实时进度 |
-| GET | `/api/import-tasks/{taskId}/items` | 逐文件明细（含 SKIPPED 原因、失败原因） |
-| POST | `/api/import-tasks/{taskId}/cancel` | 取消（worker 检查取消标记后停止） |
-| POST | `/api/import-tasks/{taskId}/retry` | 只重试失败项 |
+| GET | `/api/import-tasks/{taskId}` | 任务状态与进度（总数/新增/更新/跳过/删除/失败/百分比） |
+| GET | `/api/import-tasks/{taskId}/items` | **逐文件明细（Phase 5.3 · P1-3）**，见下 |
+| POST | `/api/import-tasks/{taskId}/retry` | 只重试失败项（复用暂存包） |
+
+> `/stream`（SSE 实时进度）与 `/cancel` 在 API 设计文档里规划过，但**没有实现**——
+> 前端目前靠 1.2s 轮询 `GET /api/import-tasks/{taskId}` 拿终态。规划与实际不符的以本节为准。
+
+#### 逐文件明细（Phase 5.3 · P1-3 / P1-4）
+
+```http
+GET /api/import-tasks/9001/items?action=FAILED&limit=100
+200 OK
+{ "code": 0, "data": [
+    { "id": 55012, "sourcePath": "坏文件.pdf", "action": "FAILED",
+      "documentId": null, "chunkCount": 0, "durationMs": 12,
+      "message": "解析失败：不是有效的 PDF（missing %PDF header）",
+      "createdAt": "2026-10-01T19:20:31" } ] }
+```
+
+- **这张表此前只有写入方、没有任何读接口**：于是"失败 3 个"是一个没有下文的数字，
+  用户只能去翻服务端日志——而 `kb_import_task_item` 存在的全部意义就是回答"为什么这篇没进来"。
+- `action` 可选过滤，大小写不敏感（`FAILED` / `failed` / `SKIPPED` / `skipped`）；
+  不传则返回全部。`limit` 默认 100，**收敛到 1–500**（0 抬到 1，超大值压到 500）——
+  一个 Vault 会有上千行明细，不能让一次查询全拖回来。
+- **`SKIPPED` 现在真的会被写入了**（此前是死枚举）：扫描期被跳过的条目
+  （`.pptx`、隐藏目录、空文件…）以前只进计数、不落明细，
+  于是用户最常问的"我的 `.pptx` 为什么没进来"恰恰是明细答不了的那一类。现在每条都带上原因。
+- **一处刻意的不对称**：整包同步时"内容未变化"的文件**只计数、不逐条落明细**——
+  否则一次全量重导会插入上千行同样的记录（`VaultIncrementalSyncTest` 守着这条）。
+  单文件上传只有一行，因此会如实给出"文件未变化，已跳过"。
+  界面必须解释这个差异（`task.skippedCount` 可能大于明细条数），不能让用户以为明细丢了。
+- 归属校验与 `GET /api/import-tasks/{taskId}` 同一道：别人的任务一律 `3008`，
+  不泄露文件清单。
 
 ```http
 POST /api/knowledge-bases/1/vault   (multipart: file=MyVault.zip)
 
 200 OK
-{ "code": 0, "message": "success", "data": { "taskId": 9001, "status": "QUEUED" } }
+{ "code": 0, "message": "success", "data": { "id": 9001, "taskType": "VAULT_ZIP",
+                                             "status": "QUEUED", "totalFiles": 380 } }
 
 GET /api/import-tasks/9001
 { "code": 0, "data": {
-    "taskId": 9001, "status": "RUNNING", "progress": 42,
-    "totalFiles": 380, "created": 120, "updated": 15, "skipped": 240, "deleted": 5, "failed": 0,
-    "totalChunks": 5120, "startedAt": "2026-09-24T02:11:00Z" } }
+    "id": 9001, "status": "RUNNING", "progress": 42,
+    "totalFiles": 380, "createdCount": 120, "updatedCount": 15, "skippedCount": 240,
+    "deletedCount": 5, "failedCount": 0,
+    "totalChunks": 5120, "errorMsg": null, "startedAt": "2026-09-24T02:11:00Z" } }
 ```
 
 ---

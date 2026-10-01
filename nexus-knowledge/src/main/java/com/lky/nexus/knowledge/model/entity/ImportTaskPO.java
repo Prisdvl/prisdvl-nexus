@@ -27,6 +27,15 @@ public class ImportTaskPO {
     /** UPLOAD / VAULT_ZIP / RESYNC */
     private String taskType;
 
+    /**
+     * 单文件上传的原始文件名（UPLOAD 专用，见 V15）。
+     *
+     * <p>执行器在消费者线程里跑，那时已经没有 HTTP 请求可以问"用户传的是哪个文件"；
+     * 暂存区又只按 taskId 命名，所以名字必须落在任务行上。
+     * VAULT_ZIP 任务此列为 null——源路径在压缩包条目里，不在这里。
+     */
+    private String sourceName;
+
     /** QUEUED / RUNNING / PARTIAL / DONE / FAILED / CANCELLED */
     private String status;
 

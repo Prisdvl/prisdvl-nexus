@@ -1,6 +1,6 @@
 package com.lky.nexus.app.infra.messaging;
 
-import com.lky.nexus.knowledge.imports.VaultImportExecutor;
+import com.lky.nexus.knowledge.imports.ImportTaskExecutor;
 import com.lky.nexus.knowledge.service.ImportTaskPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,15 +27,15 @@ public class SynchronousImportTaskPublisher implements ImportTaskPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(SynchronousImportTaskPublisher.class);
 
-    private final VaultImportExecutor vaultImportExecutor;
+    private final ImportTaskExecutor importTaskExecutor;
 
-    public SynchronousImportTaskPublisher(VaultImportExecutor vaultImportExecutor) {
-        this.vaultImportExecutor = vaultImportExecutor;
+    public SynchronousImportTaskPublisher(ImportTaskExecutor importTaskExecutor) {
+        this.importTaskExecutor = importTaskExecutor;
     }
 
     @Override
     public void publish(Long taskId) {
         log.info("同步模式：直接执行导入任务 taskId={}", taskId);
-        vaultImportExecutor.execute(taskId);
+        importTaskExecutor.execute(taskId);
     }
 }

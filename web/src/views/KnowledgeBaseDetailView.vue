@@ -2,12 +2,13 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useCountUp } from '@/composables/useCountUp'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { MagicStick, Refresh, Search, UploadFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, MagicStick, Refresh, Search, UploadFilled } from '@element-plus/icons-vue'
 import {
   askQuestion,
   askQuestionStream,
   buildIndex,
+  deleteDocument,
   embedChunks,
   getDocument,
   getDocumentLinks,
@@ -16,10 +17,12 @@ import {
   getQaHistory,
   listChunks,
   listDocuments,
+  listImportTaskItems,
   listKnowledgeBases,
   recreateIndex,
   runWorkflow as runWorkflowApi,
   search,
+  uploadDocument,
   uploadVault,
   type ChunkView,
   type DocumentDetail,
@@ -27,6 +30,7 @@ import {
   type RelatedDocument,
   type DocumentSummary,
   type ImportTask,
+  type ImportTaskItem,
   type KnowledgeBase,
   type RagAnswer,
   type SearchHit,
@@ -51,6 +55,18 @@ const documents = ref<DocumentSummary[]>([])
 const loading = ref(false)
 const busy = ref('')
 const task = ref<ImportTask | null>(null)
+
+/**
+ * 最近一次导入的失败 / 跳过明细（P1-3 / P1-4）。
+ *
+ * 这两份数据解决的是同一个抱怨："导入失败了，然后呢？"——任务视图只给出一个
+ * failedCount，而失败的文件、原因一直只写在服务端日志里。分开存而不是合成一个列表，
+ * 是因为两者要分开呈现：失败需要被处理，跳过（内容未变、格式不支持）大多只是告知。
+ */
+const failedItems = ref<ImportTaskItem[]>([])
+const skippedItems = ref<ImportTaskItem[]>([])
+/** 明细接口有 limit（这里取 50），超出时如实告诉用户"只显示了前 N 条"，而不是假装这就是全部 */
+const ITEM_LIMIT = 50
 
 const docFilter = ref('')
 const activeTab = ref<'content' | 'chunks' | 'search' | 'ask'>('content')
@@ -373,26 +389,135 @@ function linkTypeLabel(type: string): string {
   return '链接'
 }
 
+/** 上传整个 Vault（ZIP）——全量同步语义：清单里没有的文档会被删除。 */
 function pickFile() {
+  pickUpload('.zip', (file) => uploadVault(kbId, file))
+}
+
+/**
+ * 上传单个文件（P1-1）。
+ *
+ * {@code accept} 只是给文件选择器一个默认筛选，**不是校验**：用户可以切成"所有文件"，
+ * 也可能被别的客户端直接打接口。真正的判定在服务端（解析器注册表 + 大小上限），
+ * 拒绝时会带着"当前支持哪些格式"在 toast 里说清楚——所以这里不重复维护一份格式清单，
+ * 两份清单必然分叉。
+ */
+function pickDocument() {
+  pickUpload('.md,.txt,.pdf,.docx', (file) => uploadDocument(kbId, file))
+}
+
+function pickUpload(accept: string, submit: (file: File) => Promise<ImportTask>) {
   const input = document.createElement('input')
   input.type = 'file'
-  input.accept = '.zip'
+  input.accept = accept
   input.onchange = async () => {
     const file = input.files?.[0]
     if (!file) return
-    const created = await uploadVault(kbId, file)
-    task.value = created
-    ElMessage.info('已提交导入，处理中…')
-    for (let i = 0; i < 240; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 1200))
-      task.value = await getImportTask(created.id)
-      if (['DONE', 'PARTIAL', 'FAILED'].includes(task.value.status)) break
+    try {
+      await awaitImport(await submit(file))
+    } catch {
+      // 不必在这里拼提示：client.ts 的响应拦截器已经把后端的中文 message 全局 toast 出去了
+      // （比如"暂不支持的文件类型：slides.pptx（当前支持 [...]）"）。
+      // 这里只是把未处理的 rejection 收掉，免得控制台多一条报错。
     }
-    selectedId.value = ''
-    detail.value = null
-    await load()
   }
   input.click()
+}
+
+/**
+ * 等待一次导入跑完并刷新界面。两个上传入口共用——它们的差别只在"怎么拿到文件"，
+ * 之后的轮询、取明细、刷新列表完全一样；分开写就会有两份轮询，其中一份迟早会漏掉新字段。
+ */
+async function awaitImport(created: ImportTask) {
+  task.value = created
+  ElMessage.info('已提交导入，处理中…')
+  for (let i = 0; i < 240; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    task.value = await getImportTask(created.id)
+    if (['DONE', 'PARTIAL', 'FAILED'].includes(task.value.status)) break
+  }
+  await loadImportItems()
+  selectedId.value = ''
+  detail.value = null
+  await load()
+}
+
+/** 取最近一次导入的明细。失败/跳过各查一次：过滤在服务端做，才不会被执行器的 limit 截断掉想看的那几条。 */
+async function loadImportItems() {
+  const current = task.value
+  if (!current) {
+    failedItems.value = []
+    skippedItems.value = []
+    return
+  }
+  const [failed, skipped] = await Promise.all([
+    // 明细是"锦上添花"：它挂了不该把一次成功的导入显示成失败，因此各自降级为空列表
+    listImportTaskItems(current.id, 'FAILED', ITEM_LIMIT).catch(() => []),
+    listImportTaskItems(current.id, 'SKIPPED', ITEM_LIMIT).catch(() => [])
+  ])
+  failedItems.value = failed
+  skippedItems.value = skipped
+}
+
+/**
+ * 删除一篇文档（P1-2）。
+ *
+ * 危险操作要二次确认（与知识库列表一致）。措辞里点明"切片与向量一并删除"，
+ * 因为那才是这个动作真正不可逆的部分。
+ *
+ * 失败时**什么都不改**：后端把向量/索引的清理放在最前面且失败即整体失败，
+ * 所以报错意味着文档仍然完好——不该顺手把它从界面上抹掉，那会让用户以为删成功了。
+ */
+async function removeDocument(doc: DocumentSummary) {
+  const name = doc.title || doc.fileName || doc.sourcePath
+  try {
+    await ElMessageBox.confirm(
+      `将从本知识库移除「${name}」及其 ${doc.chunkCount} 个切片（向量与索引一并清除）。此操作不可撤销。`,
+      '确认删除文档？',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return // 用户取消：ElMessageBox 以 rejection 表达取消，这不是错误
+  }
+  busy.value = 'delete:' + doc.id
+  try {
+    await deleteDocument(kbId, doc.id)
+    ElMessage.success('已删除')
+    // 删的正好是当前打开的那篇 → 清空阅读区，否则右侧会继续显示已经不存在的内容
+    if (selectedId.value === doc.id) {
+      selectedId.value = ''
+      detail.value = null
+      chunks.value = []
+      links.value = null
+      related.value = []
+      renderedHtml.value = ''
+    }
+    await load()
+  } finally {
+    busy.value = ''
+  }
+}
+
+/** 任务状态 → 标签配色。PARTIAL 用 warning：它既不是失败也不是成功，混进 DONE 会掩盖问题。 */
+function taskStatusType(status: string): 'success' | 'danger' | 'warning' | 'info' {
+  if (status === 'DONE') return 'success'
+  if (status === 'FAILED') return 'danger'
+  if (status === 'PARTIAL') return 'warning'
+  return 'info'
+}
+
+/** 明细里的动作 → 中文。用户看不懂 CREATED / METADATA_ONLY 这类内部枚举。 */
+function actionLabel(action: string): string {
+  const labels: Record<string, string> = {
+    CREATED: '新增',
+    UPDATED: '更新',
+    METADATA_ONLY: '仅元数据',
+    RENAMED: '改名',
+    SKIPPED: '跳过',
+    DELETED: '删除',
+    FAILED: '失败'
+  }
+  return labels[action] ?? action
 }
 
 async function runEmbed() {
@@ -477,6 +602,7 @@ watch(activeTab, () => {
         </p>
       </div>
       <div class="head-actions">
+        <el-button :icon="UploadFilled" @click="pickDocument">上传文件</el-button>
         <el-button :icon="UploadFilled" @click="pickFile">上传 Vault</el-button>
         <el-button :icon="MagicStick" :loading="busy === 'embed'" @click="runEmbed">向量化</el-button>
         <el-button :loading="busy === 'index'" @click="runIndex">建索引</el-button>
@@ -502,6 +628,59 @@ watch(activeTab, () => {
         <dd class="num">{{ task.status }} · {{ task.createdCount }} 新增 / {{ task.skippedCount }} 跳过</dd>
       </div>
     </dl>
+
+    <!-- 导入结果（P1-3 / P1-4）：失败与跳过都给出"哪个文件、为什么" -->
+    <section v-if="task" class="import-result">
+      <div class="ir-head">
+        <h3>最近导入</h3>
+        <el-tag size="small" :type="taskStatusType(task.status)">{{ task.status }}</el-tag>
+        <span class="num">
+          新增 {{ task.createdCount }} · 更新 {{ task.updatedCount }} ·
+          跳过 {{ task.skippedCount }} · 删除 {{ task.deletedCount }} · 失败 {{ task.failedCount }}
+        </span>
+      </div>
+
+      <!-- 整批失败（压缩包损坏、暂存丢失等）只会写在这里，此时一个文件都没处理过 -->
+      <p v-if="task.errorMsg" class="ir-error">{{ task.errorMsg }}</p>
+
+      <div v-if="failedItems.length" class="ir-group">
+        <div class="outline-head">导入失败（{{ task.failedCount }}）</div>
+        <ul>
+          <li v-for="item in failedItems" :key="item.id">
+            <el-tag size="small" type="danger" effect="plain">{{ actionLabel(item.action) }}</el-tag>
+            <span class="ir-path">{{ item.sourcePath }}</span>
+            <span class="ir-msg">{{ item.message }}</span>
+          </li>
+        </ul>
+        <p v-if="task.failedCount > failedItems.length" class="hint">
+          仅显示最近 {{ failedItems.length }} 条，共 {{ task.failedCount }} 条。
+        </p>
+      </div>
+
+      <div v-if="task.skippedCount" class="ir-group">
+        <div class="outline-head">已跳过（{{ task.skippedCount }}）</div>
+        <ul v-if="skippedItems.length">
+          <li v-for="item in skippedItems" :key="item.id">
+            <el-tag size="small" type="info" effect="plain">{{ actionLabel(item.action) }}</el-tag>
+            <span class="ir-path">{{ item.sourcePath }}</span>
+            <span class="ir-msg">{{ item.message }}</span>
+          </li>
+        </ul>
+        <!-- 跳过不是失败，但它是最容易被误读成失败的一种结果，所以要把"为什么跳过"讲清楚 -->
+        <p class="hint">
+          跳过是正常结果：格式不支持、空文件、隐藏目录，或内容与上次导入完全一致。
+          整包同步时「内容未变」的文件只计入总数、不逐条列出（一次全量重导会有上千条）。
+        </p>
+        <p v-if="skippedItems.length && task.skippedCount > skippedItems.length" class="hint">
+          上面列出了其中 {{ skippedItems.length }} 条（最近处理的部分）。
+        </p>
+      </div>
+
+      <!-- 判据用任务上的计数而不是明细条数：整包同步的"未变化"文件只计数、不落明细 -->
+      <p v-if="!task.failedCount && !task.skippedCount && !task.errorMsg" class="hint">
+        本次导入的每个文件都处理成功了，没有跳过或失败的条目。
+      </p>
+    </section>
 
     <!-- 知识工作流（Phase 6.2）：统计 → 向量化 → 建索引，每步状态可观测 -->
     <div class="workflow">
@@ -535,9 +714,22 @@ watch(activeTab, () => {
             :class="{ active: doc.id === selectedId }"
             @click="selectDocument(doc.id)"
           >
-            <span class="doc-title">{{ doc.title || doc.fileName }}</span>
-            <span class="doc-path">{{ doc.sourcePath }}</span>
-            <span class="doc-meta num">{{ doc.chunkCount }} 切片 · v{{ doc.version }}</span>
+            <div class="doc-main">
+              <span class="doc-title">{{ doc.title || doc.fileName }}</span>
+              <span class="doc-path">{{ doc.sourcePath }}</span>
+              <span class="doc-meta num">{{ doc.chunkCount }} 切片 · v{{ doc.version }}</span>
+            </div>
+            <!-- 整行都是"选中这篇"的点击区，所以删除必须 stop——
+                 否则点删除会先切换文档，右侧正文闪一下再报"加载失败"（文档已经没了） -->
+            <el-button
+              class="doc-del"
+              :icon="Delete"
+              :loading="busy === 'delete:' + doc.id"
+              text
+              size="small"
+              title="删除这篇文档"
+              @click.stop="removeDocument(doc)"
+            />
           </li>
         </ul>
         <p v-if="filteredDocuments.length === 0" class="empty">没有匹配的文档</p>
@@ -970,12 +1162,100 @@ watch(activeTab, () => {
 
 .docs li {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: flex-start;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-input);
   cursor: pointer;
   transition: background-color var(--dur-fast) var(--ease-soft);
+}
+
+.doc-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* 删除入口平时是弱化的图标（行内的主要动作永远是"打开这篇"），悬停时才提示它的危险性 */
+.doc-del {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.doc-del:hover {
+  color: var(--danger);
+}
+
+/* 导入结果：失败与跳过的明细 */
+.import-result {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.ir-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.ir-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.ir-head .num {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.ir-error {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-input);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.ir-group {
+  margin-top: var(--space-4);
+}
+
+.ir-group ul {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.ir-group li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+
+.ir-path {
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ir-msg {
+  color: var(--text-muted);
+  min-width: 0;
 }
 
 .docs li:hover {

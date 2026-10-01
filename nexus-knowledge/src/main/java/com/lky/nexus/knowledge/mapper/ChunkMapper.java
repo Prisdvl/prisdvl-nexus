@@ -5,6 +5,7 @@ import com.lky.nexus.knowledge.model.entity.ChunkPO;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 
 import java.util.List;
 
@@ -39,4 +40,18 @@ public interface ChunkMapper extends BaseMapper<ChunkPO> {
             </script>
             """)
     int insertBatch(@Param("chunks") List<ChunkPO> chunks);
+
+    /**
+     * 某知识库的切片 token 总数（在数据库里聚合，不把行读进内存）。
+     *
+     * <p>为什么值得单独写一条 SQL：重算知识库统计在<b>每次文档删除</b>之后都会调用
+     * （见 {@code DocumentPersistServiceImpl}），而一个真实知识库的切片是几万到几十万行。
+     * 原先的做法是 {@code selectList} 把整库切片的 {@code token_count} 拉回 Java 再求和——
+     * 删一篇文档的代价随全库规模线性增长，而且传的是几十万行数据。
+     *
+     * <p>{@code COALESCE} 不是防御性编程：空库（或切片全被删掉）时 {@code SUM} 返回
+     * {@code NULL}，直接映射到 {@code long} 会抛 NPE——这是"删掉最后一篇文档"必然走到的路径。
+     */
+    @Select("SELECT COALESCE(SUM(token_count), 0) FROM kb_chunk WHERE kb_id = #{kbId}")
+    long sumTokenCount(@Param("kbId") Long kbId);
 }

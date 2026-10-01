@@ -2,7 +2,7 @@ package com.lky.nexus.app.knowledge;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.jayway.jsonpath.JsonPath;
-import com.lky.nexus.knowledge.imports.VaultImportExecutor;
+import com.lky.nexus.knowledge.imports.ImportTaskExecutor;
 import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.ImportTaskItemMapper;
 import com.lky.nexus.knowledge.mapper.ImportTaskMapper;
@@ -61,7 +61,7 @@ class ImportTaskAsyncTest {
     private MockMvc mockMvc;
 
     @Autowired
-    private VaultImportExecutor vaultImportExecutor;
+    private ImportTaskExecutor importTaskExecutor;
 
     @Autowired
     private ImportTaskMapper importTaskMapper;
@@ -109,7 +109,7 @@ class ImportTaskAsyncTest {
                 .eq(DocumentPO::getKbId, kbId))).isZero();
 
         // 测试扮演消费者
-        vaultImportExecutor.execute(taskId);
+        importTaskExecutor.execute(taskId);
 
         ImportTaskPO finished = importTaskMapper.selectById(taskId);
         assertThat(finished.getStatus()).isEqualTo("DONE");
@@ -134,15 +134,15 @@ class ImportTaskAsyncTest {
         Long kbId = createKnowledgeBase(token, "幂等");
         Long taskId = enqueue(token, kbId);
 
-        vaultImportExecutor.execute(taskId);
+        importTaskExecutor.execute(taskId);
         long documentsAfterFirst = documentMapper.selectCount(Wrappers.<DocumentPO>lambdaQuery()
                 .eq(DocumentPO::getKbId, kbId));
         long itemsAfterFirst = itemCount(taskId);
         Integer versionAfterFirst = documentVersion(kbId);
 
         // 重复投递两次
-        vaultImportExecutor.execute(taskId);
-        vaultImportExecutor.execute(taskId);
+        importTaskExecutor.execute(taskId);
+        importTaskExecutor.execute(taskId);
 
         assertThat(documentMapper.selectCount(Wrappers.<DocumentPO>lambdaQuery()
                 .eq(DocumentPO::getKbId, kbId))).isEqualTo(documentsAfterFirst);
@@ -170,7 +170,7 @@ class ImportTaskAsyncTest {
         orphan.setCreatedAt(LocalDateTime.now());
         importTaskMapper.insert(orphan);
 
-        vaultImportExecutor.execute(orphan.getId());
+        importTaskExecutor.execute(orphan.getId());
 
         ImportTaskPO failed = importTaskMapper.selectById(orphan.getId());
         assertThat(failed.getStatus()).isEqualTo("FAILED");

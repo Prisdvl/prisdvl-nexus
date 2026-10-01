@@ -13,6 +13,11 @@ const here = dirname(fileURLToPath(import.meta.url))
 const token = readFileSync(resolve(here, '../.demo-token'), 'utf8').trim()
 const base = process.env.WEB_BASE ?? 'http://localhost:5173'
 const outDir = resolve(here, '../../docs/screenshots')
+// 本脚本断言的是带双链的那篇（java_springboot.md → [[JVM 笔记]] / [[SpringMVC]]），
+// 它只在「我的笔记」里（库名相近的那个「我的 Java 笔记」一条关联边都没有）。
+// **不能靠"点第一张卡片"**：列表按创建时间倒序，演示数据后来又加了一个库，
+// 第一张就变成别的了——那样的失败说明的是数据漂移，不是代码坏了
+const demoKb = process.env.DEMO_KB ?? '我的笔记'
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 const context = await browser.newContext({ viewport: { width: 1440, height: 980 } })
@@ -35,7 +40,7 @@ try {
   await shoot('kb-list')
 
   // ② 正文：Markdown + 大纲 + 关联面板
-  await page.click('.card .name')
+  await page.click(`.card:has-text("${demoKb}") .name`)
   await page.waitForSelector('.docs li', { timeout: 15000 })
   await page.waitForSelector('.markdown', { timeout: 15000 })
   await page.waitForTimeout(800)

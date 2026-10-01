@@ -113,8 +113,8 @@ update.txt 第 2 条要求"不要重复实现已经存在的功能"。以下是�
 | --- | --- | --- | --- | --- |
 | **Auth** | 注册/登录/JWT/BCrypt/401/403/无状态，fail-closed | 无登出接口、无令牌失效（`jti` 预留未用）；无改密码；无登录失败计数；令牌存 localStorage | P2 | 先补改密码（P1 项）；登出用短 TTL + `jti` 黑名单（Redis 已在栈里但应用零使用）；把"登出=客户端丢弃令牌"的现状写进 `docs/api.md` |
 | **User** | 只有 `GET /api/users/me` | 无资料编辑、无改密码、无账户注销 | P1 | `PUT /api/users/me`（昵称/邮箱）+ `PUT /api/users/me/password`（验旧密码 + BCrypt 重编码 + 撤销旧令牌） |
-| **Knowledge Base** | 创建/编辑/删除/禁用/检索参数/workspace，异步导入 + 重试 | **只能导入 ZIP**（单文件上传缺失）；**无删除单个文档接口**；导入失败原因界面不展示 | P1 | ①`POST /knowledge-bases/{id}/documents`（multipart 单文件，复用 `ParserRegistry` + 同一条持久化链路）；②`DELETE /documents/{documentId}`（连带清理 chunk/向量/ES 文档）；③前端渲染 `failedCount` 与 `errorMsg` |
-| **Document** | 4 种解析器、状态机、增量同步、压缩包防御 | 每文档的 `errorMsg` 没出现在接口里（`DocumentSummary` 无该字段）；✅ 超 200MB 的失败落到兜底 500 **已修（5.2）** | P1 | `DocumentSummary` 补 `status`/`errorMsg`；`GlobalExceptionHandler` 加 `MaxUploadSizeExceededException` → 参数类错误 + 明确上限文案 |
+| **Knowledge Base** | 创建/编辑/删除/禁用/检索参数/workspace，异步导入 + 重试，单文件上传，删单篇文档，失败原因可见 | ✅ **P1-1/P1-2/P1-3 三项均已修（5.3）**：`POST /knowledge-bases/{id}/documents`、`DELETE /knowledge-bases/{kbId}/documents/{documentId}`、`GET /import-tasks/{id}/items` + 面板渲染。删除的清理范围比审计写的宽（存量路径也在漏，见上文"5.3 修正的审计结论"） | ~~P1~~ → 已修 | 见 B.44 |
+| **Document** | 4 种解析器、状态机、增量同步、压缩包防御、逐文件失败明细 | ✅ **P1-4 已修（5.3）**：原方案（给 `DocumentSummary` 补 `errorMsg`）是**死字段**——`DocumentStatus.FAILED` 无写入路径。改为补 `kb_import_task_item` 的读接口；✅ 超 200MB 的失败落到兜底 500 **已修（5.2）** | ~~P1~~ → 已修 | 见 B.44 §1/§6 |
 | **RAG** | 混合检索+Rerank+引用+无命中不调模型 | **多库只取第一个**（`kbIds.get(0)`）；✅ 同步路径把模型异常**当成正常回答**返回并落库**已修（5.2）**；"检索到 N 个片段"不落库 | P1 | ①多库改成合并检索（逐库检索 + 融合，或下推多 `kb_id`）；②`generate()` 的 catch 改为抛业务异常（LLM 错误域），失败落 `FAILED`；③`retrieval` 事件随消息落库 |
 | **Agent** | Definition/Runtime 分离、状态机、白名单、复制、试跑 | **`temperature` 不可配**（全局 `ai.defaults.temperature: 0.7`）；**管理页不能配 Tools**（`AgentPayload` 连 `toolCodes` 都没有）；无 Agent 使用统计 | P1 | ①`agent.temperature`（迁移 V15）+ 请求级 options（字段与读它的机制同一次落地）；②`AgentPayload.toolCodes` + 编辑弹窗多选 + 卡片回显；③可选：消息上记 `agentId` 以支持按 Agent 聚合 |
 | **Tool** | 注册表 + 用户启停 + 白名单交集 + 执行壳 + 痕迹 | **无 Tool 超时**；✅ **超循环上限没被识别已修（5.2）**（`ToolCallLimitExceededException` 现在 → `5002`，`5002` 不再是死码）；✅ 40/150 上限**已显式配置并真撞测过（5.2）**（但**不是**写 `spring.ai.tools.limits.*`——本项目手工建模型，那两个 key 无人读，见 B.43 §2）| P1 | ~~①显式配置 `spring.ai.tools.limits.*`~~（该方案是假旋钮，已否）；②映射 `ToolCallLimitExceededException` → `5002` + 如实文案；③工具加了超时字段，等第一个会阻塞的外部工具落地时一起实现 |
@@ -193,10 +193,10 @@ private Long resolveUser(String nexusUser) {
 
 | 编号 | 模块 | 问题 | 证据 | 方案 |
 | --- | --- | --- | --- | --- |
-| P1-1 | KB | **不能上传单个文件**，只能打 ZIP | `KnowledgeImportController` 只有 `/vault`（`.zip` 必需，含魔数校验）；`KnowledgeDocumentController` **只有 GET** | 新增 `POST /knowledge-bases/{id}/documents`（multipart），复用 `ParserRegistry` + `DocumentPersistService`；任务与状态机复用 `ImportTask` |
-| P1-2 | KB | **没有删除单个文档**的接口 | `grep -rn DeleteMapping nexus-app/.../knowledge/controller/` → 只有 KB 那一条 | 新增 `DELETE /documents/{documentId}`，事务内清理 chunk → 向量（`PgVectorStore.deleteByDocument`）→ ES 文档，并写一条 `deleted` 计数 |
-| P1-3 | KB | **导入失败原因不可见**：面板只显示 `createdCount / skippedCount` | `KnowledgeBaseDetailView.vue:502`；`ImportTaskResponse` 明明有 `failedCount`/`errorMsg` | 面板补 `failedCount` 与失败原因（`errorMsg` + 逐文件原因） |
-| P1-4 | Document | 每文档的失败原因没进接口 | `DocumentPO.errorMsg`（实体有）→ `DocumentSummary`（前端类型 28–38 行）无此字段 | 接口补 `errorMsg`，列表里对 `FAILED` 行显示原因 |
+| P1-1 | KB | ~~**不能上传单个文件**，只能打 ZIP~~ | ✅ **5.3（2026-10-01）**：`POST /knowledge-bases/{id}/documents`，复用**同一条**异步导入链路（`taskType=UPLOAD` + V15 `source_name`），差异只有"不做删除检测"与"绕开 20MB 单条目上限"。见 B.44 §2 | ✅ 按原方案落地 |
+| P1-2 | KB | ~~**没有删除单个文档**的接口~~ | ✅ **5.3（2026-10-01）**：`DELETE /knowledge-bases/{kbId}/documents/{documentId}`。**方案比审计写的宽**——存量删除路径今天就在漏，而且不止一条，详见下方"5.3 修正的审计结论" | ✅ 按原方案落地，范围扩大 |
+| P1-3 | KB | ~~**导入失败原因不可见**：面板只显示 `createdCount / skippedCount`~~ | ✅ **5.3（2026-10-01）**：`GET /import-tasks/{id}/items`（action 过滤 + limit 收敛到 1–500），面板逐条列出路径与原因；`task.errorMsg` 也接上了 | ✅ 按原方案落地，另补一个洞 |
+| P1-4 | Document | ~~每文档的失败原因没进接口~~ | ✅ **5.3（2026-10-01）**：**原方案是个死字段**——`DocumentStatus` 全仓没有任何路径写 `FAILED`（`applyMetadata` 永远写 `READY`/`errorMsg=null`）。真正的原因在 `kb_import_task_item.message`，而那张表**只有写入方**。改补 items 读接口 | ⚠️ 方案被推翻，见 B.44 §1 |
 | P1-5 | Document | 超 200MB 上传返回 500「系统内部错误」 | `application.yml:50` 只有 Spring 上限；`GlobalExceptionHandler` **没有** `MaxUploadSizeExceededException` 分支 → 落到兜底 `Exception` → `INTERNAL_ERROR` | ✅ **5.2（2026-10-01）**：`GlobalExceptionHandler` 补 `MaxUploadSizeExceededException` → `413 / 3006`，文案带**配置里读出来的**上限值（不写死）；真机 201MB 实测通过，见 B.43 §6 |
 | P1-6 | RAG | 会话绑多个知识库时**只用第一个** | `ChatStreamServiceImpl.requireKnowledgeBaseId` → `kbIds.get(0)` | 多库合并检索（逐库检索后按分数融合，或把 `kb_id IN (...)` 下推） |
 | P1-7 | RAG | 同步问答把模型异常**当成回答**返回并落库 | `RagAnswerServiceImpl.generate` 的 `catch (Exception ex) { return "生成回答失败：" + ex.getMessage() …}` | ✅ **5.2（2026-10-01）**：改成抛业务异常（`FailureClassifier` 给码），**失败不落档**——`kb_qa_record` 没有 status 列，写进去就是一条假回答（与本文措辞的偏离见 B.43 §5） |
@@ -213,6 +213,25 @@ private Long resolveUser(String nexusUser) {
 | P1-18 | README | 进度表停在早期，首次阅读者会误判 | `README.md` §6："Phase 2 Knowledge Base ⏳ / Phase 3 RAG ⏳"，而实现早已完成 | 重写为"功能清单 + 状态"，并补 Troubleshooting/Security/Roadmap/Screenshots |
 
 > P1 共 18 条，按模块归并后是 14 个模块行（表里合并了同模块的项）。
+
+#### 5.3 修正的审计结论（动手时发现的，审计当时没看到）
+
+审计的价值在于把范围框住；它写下的**方案**则要在动手第一步复核。5.3 复核出四处偏差，
+其中两处改变了做法（详见 `docs/decisions.md` B.44）：
+
+| # | 审计写的 | 实际是 | 后果 |
+| --- | --- | --- | --- |
+| 1 | P1-4：给 `DocumentSummary` 补 `errorMsg` | `DocumentStatus.FAILED` **没有任何写入路径**，补上去是一个永远为 null 的字段 | 改成补 `kb_import_task_item` 的**读接口**（那张表只有写入方） |
+| 2 | P1-2：删文档时清理 chunk / 向量 / ES | **存量删除路径今天就在漏**：`DocumentPersistServiceImpl.delete` 不清向量/ES/关联边；`KnowledgeBaseServiceImpl.delete` 连 `kb_chunk` 都没删（`@TableLogic` 逻辑删除，注释却写"物理删除"），向量与 ES 也不碰，代码里留着 TODO 自认 | 只修新端点等于"修了一个，漏了仨"，库级那条一并堵上 |
+| 3 | （未提及） | **孤儿还有第四条路径：重新切分**。覆盖已有文档时切片换新 id，向量按 `chunk_id` 存 → 旧向量全部成孤儿。`ChunkEmbeddingService.deleteVectors` 的 javadoc 早写着"文档被删除或**重新切分**时调用"，但从没人从这个方向调用过 | `save()` 更新分支补一次外部清理；**代价如实披露**：每个变更文件多一次向量清理 + 一次索引清理（此前为 0） |
+| 4 | （未提及） | **扫描期跳过的条目从来没被记录**：执行器只加了计数、没调 `recordItem`，于是 `ImportAction.SKIPPED` 与 `Counters.case SKIPPED` 是**死代码** | 补齐明细。用户最常问的"我的 `.pptx` 为什么没进来"从此有答案 |
+| 5 | （未提及） | **墓碑陷阱比预想的近**：`uk_doc_kb_path (kb_id, source_path, deleted)` 此前只有"重复导入 + 删文件"碰得到，加了删除按钮就是**一键复现** | 逻辑删除前先清同路径旧墓碑（原生 SQL 绕过 `@TableLogic`） |
+| 6 | （未提及） | `refreshKnowledgeBaseStats` 把整个库的 chunk 行读进内存求 token 和 → 大库上 O(全库切片)；单文档删除会走它 | 改成一条 `COUNT` + 一条 `SUM(token_count)` |
+
+第 1 条和第 3 条是同一类问题的两种形态：**字段/注释描述的"意图"被当成了"事实"**。
+`DocumentStatus.FAILED` 看起来是个完备的状态机状态，实际无人写入；
+`deleteVectors` 的 javadoc 说"重新切分时也调用"，但从来没有人从这个方向调用过。
+审计靠"读代码 + 读字段"很难发现这一类，只有追一遍**写入方**才能确认。
 
 ---
 
@@ -235,6 +254,7 @@ private Long resolveUser(String nexusUser) {
 | P2-13 | Chat | 长会话无"清空消息" | |
 | P2-14 | DB | 无外键约束（全部逻辑关联） | 需在 database.md 写明为什么（MyBatis-Plus 逻辑删除 + 应用层校验） |
 | P2-15 | DB | `uk_user_username (username, deleted)` 的逻辑删除陷阱：同一用户名删两次会撞唯一键 | 当前**无删号接口**，尚不可达；补删号功能前必须先修 |
+| P2-16 | DB | `kb_attachment` 不在删除清理范围内 | Phase 5.3 的删除矩阵只覆盖 chunk / tag / link / 文档 / 向量 / ES。该表目前只有登记与展示、**没有写入路径**，所以还产生不了孤儿；做多模态附件上传时，删文档 / 删库必须同步补上它 |
 
 ### P3 —— Nice to have
 
@@ -257,7 +277,7 @@ private Long resolveUser(String nexusUser) {
 | --- | --- | --- |
 | **Phase 5.1** ✅ 完成 2026-10-01 | **P0-1**：`/mcp` 身份改走 JWT（头直接删除，不留第二身份来源） | 新增 5 条测试（无凭据 401、只带头仍 401、伪造他人 id 只能看到自己的数据、零库调用方、正向对照）+ **旧实现下 5/5 全红**；`mvn test` 382/0/0/18 绿；api.md/deployment.md/.env.example 改口径 |
 | **Phase 5.2** ✅ 完成 2026-10-01 | 错误契约三处漏洞：P1-5（上传超限）、P1-7（同步 RAG 异常）、P1-10（循环超限）+ P1-11（上限显式化）+ P1-13（错误帧不区分来源）。**真机验证把范围扩大了**：`/api/agent/ask` 等四个非流式入口原本回 500/9999、`ChatServiceImpl` 把上游原文回显并落库（B.43 §4） | 新增 24 条测试（含错误码↔HTTP 契约、真实 Tomcat 上传超限、真撞一次工具上限、同步 RAG 失败不落档）；`mvn test` 406/0/0/18 绿；`mvn package` 成功；真机实测三种入口口径一致 + 413/3006 |
-| **Phase 5.3** | 知识库闭环补完：P1-1（单文件上传）、P1-2（删文档）、P1-3/P1-4（失败原因可见） | 上传 PDF/DOCX/TXT/MD 各一次（真机）；删除后向量/ES 无残留（孤儿数据检查）；E2E 脚本加一条 |
+| **Phase 5.3** | 知识库闭环补完：P1-1（单文件上传）、P1-2（删文档）、P1-3/P1-4（失败原因可见）。**动手时范围扩大**：存量删除路径（文档级 + 库级）都在漏，且多出"重新切分"这条孤儿路径，一并修（见 B.44） | ✅ **全部达成**。代码/测试/构建/文档：新增 20 条测试 → `mvn test` 426/0/0/18，`mvn package` 与 `npm run build` 成功；新增 `verify-doc-lifecycle.mjs`（退出 0，三张截图）。**真机验收已执行且全绿**（2026-10-01）：V15 在真 MySQL 落地；PDF/DOCX/TXT/MD 各上传一次全部 `created=1 failed=0`、`source_type='UPLOAD'`；删除后向量 / ES / 切片 / 标签 / 出链全部归零、磁盘原件消失、入链按 Obsidian 语义保留；墓碑路径两轮通过；删库同样归零。证据与脚本陷阱见 B.44 §9 |
 | **Phase 5.4** | Agent 闭环补完：P1-8（temperature）、P1-9（Tools UI）、P1-12（重命名会话）、P1-14（agentId 落库） | `verify-agents.mjs` 扩到覆盖工具选择与温度回读；会话重命名 E2E |
 | **Phase 5.5** | 多库 RAG：P1-6 | 2 个库各抓一段、答案同时引用两库的测试 |
 | **Phase 5.6** | 用户与安全：P1-15（改密码）、P1-16（限流） | 改密码后旧令牌失效；限流命中返回 7001 |
@@ -314,4 +334,7 @@ private Long resolveUser(String nexusUser) {
 **先做 1，再做 3，再做 2**：安全漏洞的暴露面是"零成本"，失败路径的口径问题会让所有后续排查都被误导，
 界面缺口虽然最显眼，但它是唯一"不影响正确性"的一类。
 
-**进度**：1 与 3 已完成（5.1 于 2026-10-01；5.2 于 2026-10-01）。下一阶段是 5.3（知识库闭环补完：单文件上传 / 删文档 / 失败原因可见，即上文的"2"）。
+**进度**：1 与 3 已完成（5.1 / 5.2，均 2026-10-01）；第 2 类里的**知识库部分**已完成（5.3，2026-10-01，
+P1-1/P1-2/P1-3/P1-4，**含真机验收**，见 §4）。
+
+**下一阶段是 5.4**（Agent 闭环补完：P1-8 `temperature`、P1-9 Tools UI、P1-12 重命名会话、P1-14 `agentId` 落库）。
