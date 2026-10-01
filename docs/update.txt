@@ -1,966 +1,432 @@
-你现在需要继续完善我现有的 Java AI 平台项目：
+你现在继续负责完善当前项目：prisdvl-nexus。
 
-# `prisdvl-nexus`
+## 一、项目最终目标
 
-注意：
+不要把当前任务理解为“继续补几个功能”或者“让测试全部通过”。
 
-> **这个项目已经不是从零开始。主链路已经跑通，并且有真实环境验证。**
->
-> 不允许把它当成一个新项目重新设计、重新实现。
->
-> 必须基于当前代码、当前数据库、当前测试、当前文档继续增量开发。
->
-> 第一目标不是“增加代码量”，而是把已经能工作的 RAG + Agent + Workflow 原型，继续升级成一个真正的、可供其他用户使用的通用 AI 平台。
+你的目标是：
 
----
+> 将当前 prisdvl-nexus 从一个已经跑通核心链路的 AI Agent + RAG Demo，继续完善成一个真正可以让普通用户使用的、具备完整产品闭环和工程质量的 AI 知识库 + Agent 平台。
 
-# 一、固定项目约定
+最终用户应该能够完成完整闭环：
 
-当前 Maven 多模块结构已经确定，必须保持：
-
-```text
-prisdvl-nexus
-├── nexus-common
-├── nexus-ai
-├── nexus-knowledge
-└── nexus-app
-```
-
-Java 包名保持：
-
-```text
-com.lky.nexus.*
-```
-
-不能擅自修改：
-
-```text
-prisdvl-nexus
-nexus-common
-nexus-ai
-nexus-knowledge
-nexus-app
-com.lky.nexus.*
-```
-
-除非发现明确的架构问题，并且必须先说明原因、影响和迁移方案。
+注册/登录
+→ 创建知识库
+→ 上传/导入文档
+→ 文档解析与切分
+→ Embedding
+→ 向量化存储
+→ 知识库检索
+→ 创建 Agent
+→ 配置 Agent
+→ 选择知识库
+→ 配置 Tool
+→ 测试 Agent
+→ 发布 Agent
+→ 在对话页面选择 Agent
+→ 多轮对话
+→ RAG / Tool Calling / Agent Loop
+→ 查看执行过程
+→ 管理历史会话
+→ 修改/停用 Agent
+→ 管理自己的知识库和数据
 
 ---
 
-# 二、当前项目真实状态
+# 二、工作原则
 
-以下内容视为当前基线，不需要重新实现。
+你必须遵循以下原则。
 
----
+### 1. 先理解现有项目，再修改
 
-## 1. 主链路已经跑通
+不要直接开始写代码。
 
-以下主链路已经真实验证：
+首先完整检查当前代码库：
 
-```text
-导入
- ↓
-结构化切分
- ↓
-Embedding
- ↓
-pgvector
- ↓
-ES / IK
- ↓
-混合检索 RRF
- ↓
-重排
- ↓
-引用
- ↓
-RAG 问答
- ↓
-SSE 流式回答
- ↓
-Agent 工具循环
- ↓
-流式对话
-```
+* README
+* docs
+* docs/decisions.md
+* pom.xml
+* Maven modules
+* Java package structure
+* web package structure
+* 数据库 schema / migration
+* Agent
+* RAG
+* Knowledge Base
+* Chat
+* Tool
+* Trace
+* API
+* 前端页面
+* E2E scripts
+* configuration
+* Docker / deployment files
 
-必须保留现有实现和行为。
+重点理解当前已经实现的能力。
+
+不要重复实现已经存在的功能。
 
 ---
 
-# 三、当前已经完成的能力
+### 2. 不要为了“看起来完整”而重构
 
-以下能力视为：
+当前项目已经存在大量真实实现。
 
-> **已完成，不要重复开发。**
+优先：
 
----
-
-## 账号 / JWT / RBAC
-
-已经完成：
-
-```text
-账号
-JWT
-RBAC
-刷新保持登录
-```
-
-已经有：
-
-```text
-28 个用例
-真实 HTTP 冒烟验证
-```
-
----
-
-## 会话系统
-
-已经完成：
-
-```text
-会话持久化
-消息持久化
-多轮记忆
-SSE 流式输出
-停止生成
-STOPPED 状态
-```
-
-已经进行过真实逐行验证。
-
----
-
-## 知识库
-
-已经完成：
-
-```text
-知识库 CRUD
-MD
-TXT
-PDF
-DOCX
-Vault
-增量同步
-```
-
-其中 Vault 已完成真实 MySQL 全链路验证。
-
----
-
-## RAG
-
-已经完成：
-
-```text
-结构化切分
-Embedding
-pgvector
-Elasticsearch
-IK
-Hybrid Search
-RRF
-Rerank
-引用
-RAG QA
-SSE 流式 RAG
-QA 留档
-```
-
-当前引用没有独立 source 表，而是：
-
-```text
-回答正文
-+
-kb_qa_record
-```
-
-这一点后续可以在平台化阶段优化，但不能影响现有 RAG 能力。
-
----
-
-## 文档关联
-
-已经完成：
-
-```text
-出链
-反向链接
-待创建关系
-相关推荐
-前端面板
-```
-
----
-
-## Agent
-
-已经完成：
-
-```text
-knowledge_search Tool
-有界工具循环
-降级阶梯
-流式工具事件
-流式对话
-工具执行痕迹
-痕迹落库
-```
-
-已经有：
-
-```text
-AgentLoopTest
-```
-
-并修复过流式链路丢用户的问题。
-
----
-
-## MCP
-
-已经完成最小版本：
-
-```text
-initialize
-tools/list
-tools/call
-```
-
-当前：
-
-```text
-X-Nexus-User
-本机信任模型
-```
-
-限制：
-
-```text
-无 Client 接入
-无鉴权
-无第三方客户端验证
-```
-
-后续继续完善，不要推翻现有 MCP Server。
-
----
-
-## Workflow
-
-已经完成：
-
-```text
-顺序执行
-失败中止
-步骤可观测
-知识库“跑工作流”
-WorkflowEngineTest
-```
-
-当前还没有：
-
-```text
-wf_* 持久化表
-Workflow Canvas
-```
-
----
-
-## Evaluation
-
-已经完成基础版本：
-
-```text
-要点命中率
-引用有效性
-前端一键跑评测
-```
-
-目前走 Agent 链路进行评测。
-
-尚未实现：
-
-```text
-检索指标
-裁判模型
-跨 Run 对比页
-```
-
----
-
-## Observability
-
-已经完成：
-
-```text
-ObservabilityRegistry
-```
-
-能够将被吞掉的：
-
-```text
-降级
-失败
-```
-
-变成数字。
-
-目前还没有：
-
-```text
-obs_* 表
-看板
-Micrometer
-```
-
----
-
-# 四、当前已经完成的平台化 Phase 2
-
-已经完成：
-
-```text
-Workspace
-知识库平台字段
-```
-
-并且已经执行：
-
-```text
-V9
-V10
-```
-
-数据库迁移遵循：
-
-```text
-只增不改
-```
-
-注意：
-
-> 当前资源归属查询仍然主要走 `user_id`。
-
-Workspace 维度的真正资源隔离属于后续阶段。
-
----
-
-# 五、当前明确未完成的能力
-
-以下内容是接下来重点开发范围。
-
----
-
-## Phase 3+
-
-尚未实现：
-
-```text
-Retriever 端口抽象
-Agent 用户可配置
-Tool 用户可配置
-Workflow 用户可配置
-Application 用户可配置
-Model 用户可配置
-API Key 加密存储
-```
-
----
-
-## 文档格式
-
-尚未实现：
-
-```text
-HTML
-CSV
-JSON
-```
-
----
-
-## Agent 高级能力
-
-尚未实现：
-
-```text
-Planner
-工具权限
-approval_required
-人工确认
-审计表
-```
-
----
-
-## 工程化
-
-尚未实现：
-
-```text
-Dockerfile
-Nginx
-CI
-```
-
-当前：
-
-```text
-deploy/
-└── compose + ES/PG 配置
-```
-
-`.github/workflows` 当前不存在。
-
----
-
-## 深化文档
-
-以下文档尚未完成：
-
-```text
-rag.md
-agent.md
-mcp.md
-workflow.md
-evaluation.md
-observability.md
-interview.md
-```
-
-当前 `docs/` 主要只有：
-
-```text
-api
-architecture
-database
-decisions
-deployment
-roadmap
-平台化分析
-```
-
----
-
-# 六、环境限制，必须正确处理
-
-当前环境存在：
-
-```text
-Docker Desktop WSL2 后端不可用
-```
-
-因此：
-
-```text
-MySQL
-ES
-pgvector
-RabbitMQ
-```
-
-当前无法保证完整真实环境运行。
-
-目前只能使用：
-
-```text
-standalone
-H2
-RAG fallback
-```
-
-进行验证。
-
-已有：
-
-```text
-18 个 live tests
-```
-
-在缺少基础设施时默认跳过。
-
-同时：
-
-```text
-H2
-```
-
-重启会清空数据。
-
-当前已经增加：
-
-```text
-scripts/seed-demo.mjs
-```
-
-用于重建演示数据。
-
----
-
-# 七、你的任务不是重新做 Phase 1 / Phase 2
-
-直接进入：
-
-# Phase 3 → Phase 4 → Phase 5 → 工程化 → 文档 → 最终验收
-
-但不能一次性疯狂修改所有模块。
-
-必须分阶段完成。
-
----
-
-# 八、第一步：重新扫描当前代码
-
-先不要修改。
-
-重新检查：
-
-```text
-pom.xml
-所有 module
-Entity
-DTO
-VO
-Controller
-Service
-Mapper
-Config
-AI
-RAG
-Agent
-MCP
-Workflow
-Evaluation
-Observability
-Migration
-scripts
-tests
-frontend
-docs
-deploy
-```
-
-特别查找：
-
-```text
-Retriever
-Agent
-Tool
-Workflow
-Application
-Model
-API Key
-Workspace
-Permission
-Execution
-Audit
-Approval
-```
-
-然后输出：
-
-```text
-《Phase 3 前代码基线分析》
-```
-
-必须明确：
-
-```text
-哪些代码已经存在
-哪些代码可以直接复用
-哪些代码只是 MVP
-哪些地方需要抽象
-哪些地方存在耦合
-哪些数据库表已经存在
-哪些 migration 已执行
-哪些 API 已存在
-哪些测试已经覆盖
-哪些能力不能重复实现
-```
-
----
-
-# 九、总体目标架构
-
-最终项目应该从：
-
-```text
-一个已经跑通的 AI Demo / MVP
-```
-
-升级成：
-
-```text
-可配置
-可复用
-可隔离
-可审计
-可扩展
-可部署
-可验证
-```
-
-的 AI 平台。
-
-最终模型：
-
-```text
-                       prisdvl-nexus
-                              │
-       ┌──────────────────────┼──────────────────────┐
-       │                      │                      │
-       ↓                      ↓                      ↓
-   Knowledge               AI Core                Platform
-       │                      │                      │
-       │                 ┌────┼────┐           ┌─────┼─────┐
-       │                 ↓    ↓    ↓           ↓     ↓     ↓
-       │               RAG  Agent Tool      User Workspace Model
-       │                 │    │    │           │     │     │
-       │                 └────┼────┘           │     │     │
-       │                      ↓                │     │     │
-       │                 Workflow             │     │     │
-       │                      │                │     │     │
-       └──────────────────────┼────────────────┘     │
-                              ↓                      │
-                         Application ←───────────────┘
-                              │
-                              ↓
-                         Conversation
-                              │
-                              ↓
-                           User / API
-```
-
----
-
-# 十、Phase 3：Retriever 端口抽象
-
-这是首先要做的事情。
-
-当前已经有：
-
-```text
-pgvector
-ES
-IK
-Hybrid Search
-RRF
-Rerank
-```
-
-现在不要继续把具体实现直接暴露给业务层。
-
-建立统一 Retriever 抽象。
-
-例如：
-
-```java
-public interface Retriever {
-    List<RetrievedDocument> retrieve(RetrievalQuery query);
-}
-```
-
-根据现有项目实际情况设计接口，不要求照抄上面的代码。
-
-需要能够支持：
-
-```text
-VectorRetriever
-KeywordRetriever
-HybridRetriever
-RerankRetriever
-```
-
-最终形成：
-
-```text
-RagService
-   ↓
-Retriever
-   ↓
-具体 Retrieval Strategy
-```
+> 增量完善
 
 而不是：
 
-```text
-RagService
-   ↓
-ElasticsearchClient
-   +
-PgVector
-   +
-RRF
-   +
-Rerank
-```
+> 推倒重写
 
-全部硬编码在一个 Service 中。
+除非你能够证明当前设计存在无法通过增量方式解决的架构问题。
+
+如果准备进行较大的架构修改：
+
+1. 先分析问题
+2. 说明影响范围
+3. 给出迁移方案
+4. 再实施
 
 ---
 
-# 十一、Retriever 必须支持 Strategy
+### 3. 不允许为了通过测试而修改测试掩盖 Bug
 
-至少预留：
+测试必须验证真实业务行为。
+
+禁止：
+
+* sleep 代替正确等待条件
+* 修改 assertion 让错误变成成功
+* 删除失败测试
+* 降低测试要求
+* mock 掉真正应该验证的业务链路
+* 通过 hard-code 绕过问题
+
+如果发现测试错误：
+
+> 修复测试本身，并在 docs/decisions.md 中记录原因。
+
+---
+
+# 三、第一阶段：建立当前项目基线
+
+首先执行完整项目审计。
+
+请检查：
+
+```bash
+git status
+git branch
+git log --oneline -10
+```
+
+然后检查项目结构。
+
+分析：
+
+### Backend
+
+* Spring Boot
+* Spring AI
+* Agent
+* RAG
+* Knowledge Base
+* Document
+* Chunk
+* Embedding
+* Vector Store
+* Tool
+* Chat
+* Trace
+* Authentication
+* Authorization
+* Persistence
+* Transaction
+* Exception Handling
+* Configuration
+
+### Frontend
+
+* 登录
+* Agent
+* Knowledge Base
+* Document
+* Chat
+* Agent Picker
+* Agent Builder
+* Trace
+* Error Handling
+* Loading State
+* Empty State
+* Responsive Layout
+
+### Infrastructure
+
+检查：
+
+* MySQL
+* Redis
+* Vector Database
+* Object Storage
+* LLM
+* Embedding
+* Docker
+* Docker Compose
+* Nginx
+* configuration
+* secrets
+
+---
+
+# 四、输出项目 Gap Analysis
+
+完成审计后，不要立即修改代码。
+
+先生成一个完整的：
 
 ```text
-VECTOR
-KEYWORD
-HYBRID
-HYBRID_RERANK
+docs/productization-gap-analysis.md
 ```
+
+至少包含：
+
+| 模块             | 当前状态 | 缺失问题 | 严重程度 | 建议方案 |
+| -------------- | ---- | ---- | ---- | ---- |
+| Auth           |      |      |      |      |
+| User           |      |      |      |      |
+| Knowledge Base |      |      |      |      |
+| Document       |      |      |      |      |
+| RAG            |      |      |      |      |
+| Agent          |      |      |      |      |
+| Tool           |      |      |      |      |
+| Chat           |      |      |      |      |
+| Trace          |      |      |      |      |
+| Permission     |      |      |      |      |
+| Data Isolation |      |      |      |      |
+| Error Handling |      |      |      |      |
+| Security       |      |      |      |      |
+| Observability  |      |      |      |      |
+| Testing        |      |      |      |      |
+| Deployment     |      |      |      |      |
+
+同时把问题分成：
+
+```text
+P0 = 不解决就不能称为可用产品
+P1 = 正式使用前应该解决
+P2 = 可以后续迭代
+P3 = Nice to have
+```
+
+---
+
+# 五、重点完善方向
+
+## 1. 用户系统
+
+检查是否真正具备：
+
+* 注册
+* 登录
+* 登出
+* Session / JWT
+* 用户身份识别
+* 密码安全存储
+* 用户信息
+* 登录失败处理
+* Token 过期
+* 未登录访问保护
+
+如果当前已有实现，则检查是否存在安全漏洞和边界问题。
+
+---
+
+# 六、最重要：多租户 / 数据隔离
+
+这是正式产品必须解决的问题。
+
+所有用户数据必须按照 user_id / tenant_id 正确隔离。
 
 例如：
 
 ```text
-RetrievalStrategy
+User A
+ ├── KB A
+ ├── Documents A
+ ├── Agents A
+ ├── Conversations A
+ └── Tools A
+
+User B
+ ├── KB B
+ ├── Documents B
+ ├── Agents B
+ ├── Conversations B
+ └── Tools B
 ```
 
-未来新增：
+必须验证：
 
 ```text
-GRAPH
-SQL
-KNOWLEDGE_GRAPH
+A 不能读取 B 的 KB
+A 不能读取 B 的 Document
+A 不能读取 B 的 Agent
+A 不能调用 B 的 Agent
+A 不能读取 B 的 Conversation
+A 不能修改 B 的资源
 ```
 
-不能大改现有业务代码。
+特别检查：
+
+* API 参数直接传 resourceId
+* 越权查询
+* 越权修改
+* 越权删除
+* Agent → Knowledge Base
+* Chat → Agent
+* RAG → Knowledge Base
+* Vector Search metadata filter
+
+不能只依赖前端隐藏按钮。
+
+必须在后端强制校验。
+
+增加对应 API / integration / E2E tests。
 
 ---
 
-# 十二、Retriever 查询对象
+# 七、Knowledge Base 产品化
 
-建立统一查询模型。
-
-例如应该包含：
+完善知识库完整生命周期：
 
 ```text
-query
-workspaceId
-knowledgeBaseIds
-topK
-similarityThreshold
-filters
-rerank
-```
-
-重点：
-
-> 查询条件必须支持 workspace / knowledge base 隔离。
-
-这样 RAG 才真正具备平台化基础。
-
----
-
-# 十三、Workspace 资源隔离
-
-这是 Phase 3 的重点。
-
-当前：
-
-```text
-user_id
-```
-
-仍然是主要归属条件。
-
-现在逐步升级为：
-
-```text
-workspace_id
-```
-
-核心资源至少考虑：
-
-```text
-KnowledgeBase
-Agent
-Tool
-Workflow
-Application
-Model
-Conversation
-```
-
-资源访问原则：
-
-```text
-User
- ↓
-Workspace Membership
- ↓
-Resource Permission
- ↓
-Resource
-```
-
-不能只根据：
-
-```text
-resourceId
-```
-
-直接查询。
-
-必须经过：
-
-```text
-workspaceId
-+
-resourceId
-+
-permission
-```
-
-验证。
-
----
-
-# 十四、不要一次性强行完成完整多租户
-
-当前只完成：
-
-```text
-Workspace
-```
-
-即可先建立：
-
-```text
-workspace_id
-```
-
-然后逐步迁移：
-
-```text
-KnowledgeBase
-Document
-Agent
-Tool
-Workflow
-Application
-```
-
-每个资源逐步完成：
-
-```text
-归属
-查询
 创建
-更新
+ ↓
+编辑
+ ↓
+上传文件
+ ↓
+解析
+ ↓
+切分
+ ↓
+Embedding
+ ↓
+向量存储
+ ↓
+索引完成
+ ↓
+检索测试
+ ↓
 删除
 ```
 
-Workspace 隔离必须真实体现在数据库查询中。
+至少考虑：
 
----
+* PDF
+* DOCX
+* TXT
+* Markdown
+* 文件大小限制
+* 文件类型限制
+* 重复文件
+* 空文件
+* 解析失败
+* Embedding 失败
+* 删除文件
+* 删除 KB
+* 异步处理
+* processing 状态
+* failed 状态
+* completed 状态
+* 重试机制
 
-# 十五、Phase 4：用户可配置 Agent
-
-现在 Agent 已经能运行。
-
-下一步不是重写 Agent Loop。
-
-而是：
-
-> **把开发者写死的 Agent 能力，变成数据库中的用户资源。**
-
-用户应该能够：
+用户必须能知道：
 
 ```text
-创建 Agent
-修改 Agent
-删除 Agent
-启用 / 禁用 Agent
-复制 Agent
-绑定知识库
-绑定 Tool
-配置 Prompt
-配置模型
-配置 Memory
+文件正在处理
+文件处理成功
+文件处理失败
+失败原因
 ```
 
 ---
 
-# 十六、Agent 数据模型
+# 八、RAG 产品化
 
-根据现有数据库和代码设计，不要机械照抄。
+不要只验证 RAG “能不能回答”。
+
+检查并完善：
+
+```text
+Query
+ ↓
+Query Rewrite（如果需要）
+ ↓
+Embedding
+ ↓
+Vector Search
+ ↓
+Metadata Filter
+ ↓
+TopK
+ ↓
+Similarity Threshold
+ ↓
+Rerank（如果当前架构适合）
+ ↓
+Context Construction
+ ↓
+LLM
+```
+
+明确：
+
+* chunk size
+* overlap
+* topK
+* similarity threshold
+* metadata
+* source citation
+* 无相关文档时的行为
+* 多知识库检索
+* KB_ONLY 行为
+
+必须防止：
+
+```text
+没有相关文档
+↓
+强行返回一个看似确定的知识库答案
+```
+
+同时让用户知道答案来自哪里。
+
+---
+
+# 九、Agent Builder
+
+完善 Agent 创建和配置。
 
 至少考虑：
 
 ```text
-agent
-agent_knowledge_base
-agent_tool
+Agent
+ ├── name
+ ├── description
+ ├── system prompt
+ ├── model
+ ├── temperature
+ ├── knowledge bases
+ ├── tools
+ ├── mode
+ └── status
 ```
 
-Agent 至少：
-
-```text
-id
-workspace_id
-name
-description
-system_prompt
-model_config
-memory_config
-status
-created_at
-updated_at
-```
-
----
-
-# 十七、Agent Runtime 与 Agent Definition 分离
-
-这是非常重要的架构设计。
-
-必须区分：
-
-```text
-Agent Definition
-```
-
-和：
-
-```text
-Agent Runtime
-```
-
-即：
-
-```text
-数据库里的 Agent 配置
-        ↓
-AgentDefinition
-        ↓
-Agent Runtime
-        ↓
-AgentLoop
-        ↓
-Tools / RAG / Memory / LLM
-```
-
-不要把数据库 Entity 直接塞给 Agent Loop。
-
----
-
-# 十八、Agent Builder
-
-后端提供：
-
-```text
-Agent CRUD API
-Agent Preview API
-Agent Test Chat API
-```
-
-用户可以先测试 Agent，再发布。
-
-建议存在状态：
+状态至少保证：
 
 ```text
 DRAFT
@@ -968,1823 +434,767 @@ PUBLISHED
 DISABLED
 ```
 
----
-
-# 十九、Phase 5：Tool 用户可配置
-
-将现在代码中的 Tool 注册方式平台化。
-
-最终：
+明确状态转换：
 
 ```text
-Tool Definition
-      ↓
-Tool Registry
-      ↓
-Tool Factory
-      ↓
-Tool Executor
+DRAFT
+ ↓
+PUBLISHED
+ ↓
+DISABLED
 ```
 
-支持数据库配置。
-
-第一阶段至少：
+必要时允许：
 
 ```text
-RAG
-Calculator
-HTTP
-Web Search
+DISABLED
+ ↓
+PUBLISHED
 ```
 
-继续保留：
-
-```text
-knowledge_search
-```
-
-已有 Tool 不允许因为重构而失效。
+检查非法状态转换。
 
 ---
 
-# 二十、Tool 权限体系
+# 十、Agent Tool Calling
 
-这是必须补齐的安全能力。
+检查当前 Tool 系统。
 
-每一个 Tool 要有：
-
-```text
-tool_id
-workspace_id
-owner
-permission
-```
-
-同时定义：
+目标结构：
 
 ```text
-是否允许 Agent 自动调用
-是否需要用户确认
-是否允许普通成员使用
-是否允许管理员使用
-```
-
-建议支持：
-
-```text
-AUTO
-CONFIRM
-DENY
-```
-
-或者基于：
-
-```text
-approval_required
-```
-
-实现。
-
----
-
-# 二十一、`approval_required`
-
-必须真正实现，而不只是文档声明。
-
-执行流程：
-
-```text
+User
+ ↓
 Agent
  ↓
-准备调用 Tool
- ↓
-检查 Tool Policy
- ↓
-approval_required = true
- ↓
-暂停 Agent
- ↓
-产生 Approval Request
- ↓
-SSE 推送给前端
- ↓
-用户批准 / 拒绝
- ↓
-继续 / 终止
-```
-
-例如：
-
-```json
-{
-  "type": "approval_required",
-  "tool": "http_request",
-  "description": "即将访问指定外部 API",
-  "approvalId": "..."
-}
-```
-
-用户：
-
-```text
-批准
-```
-
-Agent：
-
-```text
-继续 Tool Call
-```
-
-或者：
-
-```text
-拒绝
-```
-
-Agent：
-
-```text
-终止当前 Tool 调用
-```
-
----
-
-# 二十二、Agent 审计
-
-建立真正的 Audit 数据模型。
-
-记录：
-
-```text
-谁
-什么时候
-在哪个 Workspace
-通过哪个 Agent
-调用了什么 Tool
-输入是什么
-结果是什么
-是否经过人工审批
-最终状态
-```
-
-尤其记录：
-
-```text
-Tool Call
-Approval
-Workflow
-Model
-```
-
----
-
-# 二十三、Phase 6：用户可配置 Workflow
-
-当前：
-
-```text
-WorkflowEngine
-```
-
-已经存在并能执行。
-
-不要重写执行引擎。
-
-目标：
-
-> **让 Workflow 从“代码/测试定义”升级成“数据库中的用户资源”。**
-
-建立：
-
-```text
-workflow
-workflow_version
-workflow_execution
-node_execution
-```
-
-如果当前数据模型有更合适的设计，也可以调整，但必须保持版本管理能力。
-
----
-
-# 二十四、Workflow Definition 与 Runtime 分离
-
-最终：
-
-```text
-Workflow Definition
-        ↓
-Workflow Version
-        ↓
-Workflow Runtime
-        ↓
-WorkflowEngine
-        ↓
-NodeExecutor
-```
-
-每次发布产生版本：
-
-```text
-v1
-v2
-v3
-```
-
-已发布版本不能因为编辑 Draft 而发生变化。
-
----
-
-# 二十五、Workflow Node Executor
-
-必须保留扩展性。
-
-统一：
-
-```text
-NodeExecutor
-```
-
-具体：
-
-```text
-StartNodeExecutor
-EndNodeExecutor
-LLMNodeExecutor
-RagNodeExecutor
-AgentNodeExecutor
-ConditionNodeExecutor
-HttpNodeExecutor
-```
-
-未来增加：
-
-```text
-LoopNodeExecutor
-ParallelNodeExecutor
-CodeNodeExecutor
-McpNodeExecutor
-```
-
-不要改核心 Engine。
-
----
-
-# 二十六、Workflow Canvas
-
-如果当前已有前端技术栈：
-
-> 在现有框架中增加 Workflow Canvas。
-
-不要为了一个功能强行重做整个前端。
-
-至少支持：
-
-```text
-添加节点
-删除节点
-拖拽
-连线
-节点配置
-保存
-版本
-测试运行
-执行日志
-```
-
-第一阶段可以只做：
-
-```text
-START
 LLM
-RAG
-CONDITION
-AGENT
-HTTP
-END
+ ↓
+Tool Decision
+ ↓
+Tool
+ ↓
+Tool Result
+ ↓
+LLM
+ ↓
+Tool / Final Answer
+```
+
+必须有：
+
+* Tool 白名单
+* Tool 参数校验
+* Tool timeout
+* Tool exception handling
+* 最大 Agent Loop 次数
+* 防止无限循环
+* Tool execution trace
+* Tool result trace
+
+至少测试：
+
+```text
+正常 Tool
+Tool 参数错误
+Tool 超时
+Tool 抛异常
+Tool 返回空结果
+Agent 连续调用 Tool
+超过最大循环次数
 ```
 
 ---
 
-# 二十七、Phase 7：Application
+# 十一、Chat 产品化
 
-这是平台化真正的重要一层。
-
-用户真正使用的是：
+完善：
 
 ```text
-Application
+创建会话
+ ↓
+选择 Agent
+ ↓
+发送消息
+ ↓
+Streaming Response
+ ↓
+保存消息
+ ↓
+保存 Agent Trace
+ ↓
+重新打开会话
 ```
 
-而不是：
+检查：
+
+* 多轮上下文
+* 历史消息
+* 会话列表
+* 删除会话
+* 重命名会话
+* Agent 切换规则
+* SSE / WebSocket
+* 网络断开
+* LLM 超时
+* LLM 错误
+* Tool 错误
+* RAG 错误
+
+确保流式输出中途异常时不会导致数据库产生明显脏数据。
+
+---
+
+# 十二、Trace / Observability
+
+当前已经有 Trace，不要浪费这个基础。
+
+让 Trace 能够清楚展示：
 
 ```text
+Request
+ ↓
 Agent
-VectorStore
-Workflow
-```
-
-Application 可以绑定：
-
-```text
-Agent
-KnowledgeBase
-Workflow
-Model
-```
-
-至少支持：
-
-```text
-CHAT
-AGENT
+ ↓
+LLM
+ ↓
+Tool
+ ↓
 RAG
-WORKFLOW
+ ↓
+Vector Search
+ ↓
+Retrieved Chunks
+ ↓
+Final Answer
 ```
+
+至少记录：
+
+* traceId
+* conversationId
+* agentId
+* userId
+* model
+* token usage（如果模型提供）
+* latency
+* tool calls
+* RAG fragments
+* errors
+
+注意：
+
+不要把 API key、密码、Authorization header 等敏感数据写入日志。
 
 ---
 
-# 二十八、Application 生命周期
+# 十三、前端产品化
 
-建议：
+检查所有页面。
 
-```text
-DRAFT
-PUBLISHED
-DISABLED
-```
+不要只关注“功能能不能点击”。
 
-支持：
+完善：
+
+### Loading
 
 ```text
-保存
-测试
-发布
-下线
-复制
+加载中
+上传中
+解析中
+保存中
+发布中
 ```
 
-一个 Application 可以成为：
-
-```text
-Java 助手
-企业客服
-知识问答
-产品助手
-论文助手
-内部知识助手
-```
-
----
-
-# 二十九、Application 访问方式
-
-至少支持：
-
-```text
-Web Chat
-REST API
-SSE
-```
-
-后续预留：
-
-```text
-OpenAI Compatible API
-Public API
-API Key
-Webhook
-```
-
----
-
-# 三十、Phase 8：Model Provider / Model Config
-
-模型不能继续散落：
-
-```text
-qwen-plus
-deepseek-chat
-```
-
-成为硬编码。
-
-建立统一：
-
-```text
-ModelProvider
-ModelConfig
-ChatModelAdapter
-EmbeddingModelAdapter
-```
-
-第一阶段至少兼容：
-
-```text
-DashScope
-OpenAI Compatible
-DeepSeek
-Ollama
-```
-
-具体实现根据当前项目已经使用的 AI SDK 进行。
-
----
-
-# 三十一、模型 API Key
-
-必须实现：
-
-```text
-API Key 加密存储
-```
-
-要求：
-
-```text
-数据库中不是明文
-日志中不打印
-异常中不泄露
-API 返回时不返回原始 key
-```
-
-前端只能看到：
-
-```text
-************
-```
-
-或者：
-
-```text
-sk-****abcd
-```
-
----
-
-# 三十二、模型资源必须有 Workspace 归属
+### Empty State
 
 例如：
 
 ```text
-Workspace A
- ├── DeepSeek
- ├── Qwen
- └── Ollama
-
-Workspace B
- ├── OpenAI
- └── DeepSeek
+还没有知识库
+还没有 Agent
+还没有会话
+还没有文档
 ```
 
-不同 Workspace 可以有自己的模型配置。
+### Error State
+
+不能只出现：
+
+```text
+500
+Request failed
+```
+
+应该提供用户能理解的信息。
+
+### Confirmation
+
+对于：
+
+```text
+删除
+停用
+清空
+```
+
+增加确认。
+
+### 表单
+
+检查：
+
+* 必填字段
+* 长度限制
+* 非法参数
+* 重复名称
+* 保存失败
+* 网络错误
 
 ---
 
-# 三十三、Phase 9：补齐 HTML / CSV / JSON
+# 十四、安全
 
-扩展 Document Import Pipeline。
+重点检查：
 
-不要在原有：
+* SQL Injection
+* XSS
+* CSRF（根据架构）
+* IDOR / 越权
+* 文件上传
+* 路径穿越
+* SSRF
+* Prompt Injection
+* Tool Injection
+* API Key 泄露
+* 日志泄露
+* 敏感配置提交 Git
 
-```text
-PDF
-DOCX
-MD
-TXT
-Vault
-```
-
-的实现中加入大量：
-
-```java
-if (suffix.equals(...))
-```
-
-建立：
+尤其检查：
 
 ```text
-DocumentParser
+用户上传文档
+ ↓
+文档内容
+ ↓
+RAG
+ ↓
+LLM
+ ↓
+Tool
 ```
 
-例如：
+不能默认相信知识库内容。
 
-```text
-PdfParser
-DocxParser
-MarkdownParser
-HtmlParser
-CsvParser
-JsonParser
-TextParser
-VaultParser
-```
-
-通过：
-
-```text
-ParserRegistry
-```
-
-选择。
-
-未来增加：
-
-```text
-Excel
-URL
-Notion
-GitHub
-```
-
-时不应该改动核心导入流程。
+考虑 Prompt Injection 风险。
 
 ---
 
-# 三十四、HTML Parser
+# 十五、异常处理
 
-必须处理：
+统一后端异常。
 
-```text
-HTML
-标题
-正文
-链接
-列表
-表格
-```
-
-至少保证能提取主要正文内容。
-
----
-
-# 三十五、CSV Parser
-
-考虑：
+不要让 API 到处返回：
 
 ```text
-表头
-行
-列
+500 Internal Server Error
 ```
 
-转换成适合 RAG 的文本表示。
-
-不能简单把整个 CSV 文件作为一段字符串。
-
----
-
-# 三十六、JSON Parser
-
-必须支持结构化 JSON。
-
-例如：
+建立统一错误结构，例如：
 
 ```json
 {
-  "name": "Redis",
-  "description": "...",
-  "features": ["RDB", "AOF"]
+  "code": "AGENT_NOT_FOUND",
+  "message": "Agent 不存在",
+  "requestId": "..."
 }
 ```
 
-应该转换成：
+至少区分：
 
 ```text
-name: Redis
-description: ...
-features:
-- RDB
-- AOF
-```
-
-或者项目中更合理的结构化文本。
-
----
-
-# 三十七、Phase 10：Evaluation 升级
-
-当前已经有：
-
-```text
-要点命中率
-引用有效性
-一键评测
-```
-
-不要重写。
-
-继续增加：
-
-```text
-Retrieval Recall
-Precision@K
-MRR
-NDCG
-Answer Relevance
-Faithfulness
-Citation Accuracy
-```
-
-至少先实现：
-
-```text
-Recall@K
-Precision@K
-MRR
-```
-
-如果实现裁判模型：
-
-必须允许：
-
-```text
-Human evaluation
-Rule-based evaluation
-LLM-as-a-judge
-```
-
-三者并存。
-
----
-
-# 三十八、Evaluation Dataset
-
-最终应该支持：
-
-```text
-Evaluation Dataset
-```
-
-例如：
-
-```text
-question
-expected_answer
-expected_sources
-keywords
-```
-
-每次运行：
-
-```text
-Dataset
- ↓
-Application / Agent / RAG
- ↓
-Run
- ↓
-Metrics
+认证错误
+权限错误
+参数错误
+资源不存在
+业务状态错误
+LLM 错误
+RAG 错误
+Tool 错误
+系统错误
 ```
 
 ---
 
-# 三十九、支持跨 Run 比较
+# 十六、数据库
 
-例如：
+检查所有核心表。
 
-```text
-Run A
-qwen + topK=5
+重点关注：
 
-Run B
-qwen + topK=10
+* 主键
+* 外键
+* 索引
+* 唯一约束
+* user_id
+* tenant_id
+* created_at
+* updated_at
+* status
 
-Run C
-deepseek + hybrid + rerank
-```
-
-然后比较：
-
-```text
-Recall
-MRR
-Answer Score
-Citation Accuracy
-Latency
-Token
-```
-
-不要在 UI 中只显示一个总分。
-
-展示各个指标。
-
----
-
-# 四十、Phase 11：Observability
-
-当前：
+检查是否存在：
 
 ```text
-ObservabilityRegistry
-```
-
-已经存在。
-
-不要丢弃。
-
-继续演进成：
-
-```text
-Metric
-Event
-Trace
-Execution
-```
-
-至少持久化：
-
-```text
-AI Execution
-Tool Execution
-Workflow Execution
-RAG Retrieval
-Model Call
-Failure
-Fallback
-Approval
+N+1 查询
+缺失索引
+重复数据
+删除后的孤儿数据
+事务边界错误
 ```
 
 ---
 
-# 四十一、Observability 数据库
+# 十七、测试体系
 
-设计合理的：
-
-```text
-obs_execution
-obs_event
-obs_metric
-```
-
-或者根据现有模型进行合并。
-
-重点：
-
-> 不要为了表数量而建表。
-
-要解决真实查询需求。
-
-至少能回答：
-
-```text
-今天失败了多少次？
-哪个 Tool 最常失败？
-哪个 Agent 调用最多？
-平均 LLM 延迟是多少？
-RAG 检索失败多少次？
-Fallback 发生多少次？
-哪个 Workflow 最慢？
-```
-
----
-
-# 四十二、工程化：Docker
-
-当前没有 Dockerfile。
-
-补齐：
-
-```text
-Dockerfile
-.dockerignore
-```
-
-需要支持：
-
-```text
-应用镜像
-```
-
-并与现有：
-
-```text
-deploy/
-```
-
-整合。
-
-不要破坏现有 compose。
-
----
-
-# 四十三、Docker Compose
-
-检查当前：
-
-```text
-deploy/
-```
-
-已有：
-
-```text
-compose
-ES
-PG
-```
-
-继续完善为：
-
-```text
-nexus-app
-MySQL
-Redis
-RabbitMQ
-PostgreSQL / pgvector
-Elasticsearch
-```
-
-具体服务以当前代码实际依赖为准。
-
-不要为了“整齐”添加没有使用的基础设施。
-
----
-
-# 四十四、Nginx
-
-增加合理的：
-
-```text
-nginx.conf
-```
-
-负责：
-
-```text
-Frontend
-API
-SSE
-Static
-Reverse Proxy
-```
-
-尤其注意：
-
-> SSE 反向代理不能按照普通短连接请求处理。
-
-需要根据项目实际接口配置：
-
-```text
-proxy buffering
-timeout
-connection
-```
-
----
-
-# 四十五、CI
-
-建立：
-
-```text
-.github/workflows/
-```
-
-至少：
-
-```text
-build.yml
-```
-
-流程：
-
-```text
-Checkout
- ↓
-JDK
- ↓
-Maven Cache
- ↓
-mvn test
- ↓
-mvn package
-```
-
-如果项目存在前端：
-
-```text
-Node
- ↓
-npm install
- ↓
-npm build
-```
-
----
-
-# 四十六、CI 必须适应当前环境限制
-
-因为当前本地 Docker Desktop WSL2 不可用：
-
-不要在 CI 中假设：
-
-```text
-本地 Docker 环境一定可用
-```
-
-测试应该区分：
-
-```text
-Unit
-Integration
-Live
-```
-
-例如：
+最终至少形成：
 
 ```text
 Unit Test
- ↓
-Always Run
-
 Integration Test
- ↓
-环境存在则运行
-
-Live Test
- ↓
-依赖基础设施
+API Test
+E2E Test
 ```
 
-已有：
+重点业务链路：
+
+### 用户
 
 ```text
-18 个 live tests
+注册 → 登录 → 登出
 ```
 
-不要删除。
+### KB
+
+```text
+创建 KB
+→ 上传文件
+→ 处理
+→ 检索
+→ 删除
+```
+
+### Agent
+
+```text
+创建
+→ 配置
+→ 发布
+→ 对话
+→ 停用
+```
+
+### RAG
+
+```text
+问题
+→ Retrieval
+→ Context
+→ Answer
+```
+
+### Agent Tool
+
+```text
+Question
+→ Tool
+→ Tool Result
+→ Answer
+```
+
+### 无 KB
+
+```text
+0 KB
+→ Chat
+→ RAG 0 result
+→ 正确回答
+```
+
+### 权限
+
+```text
+User A
+→ 尝试访问 User B
+→ 必须失败
+```
 
 ---
 
-# 四十七、测试分层
+# 十八、不要为了覆盖率而测试垃圾代码
 
-统一测试分类：
-
-```text
-Unit
-Integration
-Contract
-Live
-E2E
-```
-
-至少明确：
+测试应该优先覆盖：
 
 ```text
-哪些一定执行
-哪些依赖外部基础设施
-哪些默认 skip
+业务核心逻辑
+边界条件
+异常路径
+权限
+数据隔离
+状态转换
 ```
 
-测试报告中不能把：
-
-```text
-SKIPPED
-```
-
-描述成：
-
-```text
-PASSED
-```
-
-必须真实区分。
+而不是为了数字而测试 getter/setter。
 
 ---
 
-# 四十八、当前 Docker/WSL2 限制下的验证原则
+# 十九、部署
 
-本地如果无法启动：
+最终应该能够通过一个清晰的方式启动整个项目。
+
+优先考虑：
+
+```text
+docker compose up -d
+```
+
+启动：
 
 ```text
 MySQL
-ES
-pgvector
-RabbitMQ
+Redis
+Vector DB
+Nacos（如果仍然需要）
+MinIO / OSS
+Backend
+Frontend
+Nginx
 ```
 
-只能验证：
+如果某些服务不能容器化，也必须在 README 中明确说明。
+
+提供：
 
 ```text
-standalone
-H2
-fallback
+.env.example
+docker-compose.yml
+README.md
 ```
 
-禁止因为：
+绝对不要提交：
 
 ```text
-mvn test
-```
-
-通过，就声称：
-
-```text
-完整生产链路已真实验证
-```
-
-文档中明确标记：
-
-```text
-Validated
-Fallback Validated
-Skipped
-Unavailable
+API Key
+密码
+真实 Token
+生产配置
 ```
 
 ---
 
-# 四十九、Demo 数据
+# 二十、README 产品化
 
-保留并完善：
+README 最终应该让一个第一次看到项目的人能够理解：
 
 ```text
-scripts/seed-demo.mjs
+prisdvl-nexus 是什么？
+解决什么问题？
+核心功能是什么？
+技术栈是什么？
+架构是什么？
+如何运行？
+如何配置？
+如何创建第一个 KB？
+如何创建第一个 Agent？
+如何进行第一次对话？
 ```
 
-使其可以稳定创建：
+增加：
 
 ```text
-demo user
-workspace
-knowledge base
-documents
-agent
-tool
-workflow
-application
-conversation
-```
-
-最终应该能够：
-
-```text
-一个命令
- ↓
-恢复演示环境
- ↓
-直接进入平台
-```
-
----
-
-# 五十、文档补齐
-
-补齐：
-
-```text
-docs/rag.md
-docs/agent.md
-docs/mcp.md
-docs/workflow.md
-docs/evaluation.md
-docs/observability.md
-docs/interview.md
-```
-
-不要写营销文案。
-
-文档应该写：
-
-```text
-架构
-原理
-代码结构
-关键类
-关键流程
-数据库
-接口
-测试
-失败场景
-设计取舍
-```
-
----
-
-# 五十一、rag.md
-
-必须解释：
-
-```text
-Document Import
-Parser
-Chunk
-Embedding
-Vector Store
-Keyword Search
-Hybrid Search
-RRF
-Rerank
-Retriever
-RAG
-Source
-SSE
-```
-
-画出：
-
-```text
-导入链
-检索链
-回答链
-```
-
-最好使用 Mermaid。
-
----
-
-# 五十二、agent.md
-
-必须解释：
-
-```text
-Agent Definition
-Agent Runtime
-Agent Loop
-Tool Calling
-Bounded Loop
-Fallback
-Memory
-SSE Events
-Approval
-Permission
-Audit
-```
-
-尤其要解释：
-
-```text
-为什么 Agent Loop 不会无限执行
-```
-
----
-
-# 五十三、workflow.md
-
-解释：
-
-```text
-DAG
-Node
-Edge
-ExecutionContext
-NodeExecutor
-Workflow Version
-Failure
-Retry
-Condition
-```
-
-必须给出：
-
-```text
-一次 Workflow 执行的完整时序图
-```
-
----
-
-# 五十四、mcp.md
-
-解释目前已经完成的：
-
-```text
-initialize
-tools/list
-tools/call
-X-Nexus-User
-```
-
-并明确：
-
-```text
-当前未实现 Client
-当前未实现完整鉴权
-当前未完成第三方客户端接入
-```
-
-不能把未完成能力写成已完成。
-
----
-
-# 五十五、evaluation.md
-
-解释：
-
-```text
-Dataset
-Run
-Metric
-Expected Answer
-Expected Source
-Recall
-MRR
-Precision
-Citation Accuracy
-LLM Judge
-```
-
-并说明：
-
-```text
-当前已完成什么
-未来还需要什么
-```
-
----
-
-# 五十六、observability.md
-
-解释：
-
-```text
-Execution
-Event
-Metric
-Fallback
-Failure
-Latency
-Token
-Tool Call
-Workflow Node
-```
-
-并说明：
-
-```text
-如何从日志 → 指标 → 持久化 → UI
-```
-
----
-
-# 五十七、interview.md
-
-这个文档不是简单介绍项目。
-
-需要专门整理面试题：
-
-```text
-为什么使用 pgvector？
-为什么还需要 Elasticsearch？
-为什么 Hybrid Search？
-RRF 是什么？
-为什么要 Rerank？
-Chunk 如何设计？
-为什么需要 chunk overlap？
-为什么使用 Spring AI？
-Spring AI 与直接调用 SDK 有什么区别？
-Agent Loop 如何避免无限循环？
-Tool Calling 如何做权限控制？
-为什么需要 approval？
-Workflow 和 Agent 的区别？
-Workflow 为什么使用 DAG？
-MCP 解决什么问题？
-SSE 为什么适合 AI 流式输出？
-如何保证多用户资源隔离？
-如何防止 Prompt Injection？
-如何保护 API Key？
-```
-
-并结合当前项目代码回答。
-
----
-
-# 五十八、README 最终升级
-
-README 不允许继续把项目描述成：
-
-```text
-个人 RAG Agent
-```
-
-应该定位成：
-
-> `prisdvl-nexus` 是一个基于 Spring Boot + Spring AI 构建的模块化 AI 应用平台，支持用户管理知识库、RAG、Agent、Tools、Workflow，并将这些能力组合为可运行的 AI Application。
-
-README 至少包含：
-
-```text
-Project Overview
 Architecture
-Features
-Tech Stack
 Quick Start
-Docker
-Local Development
-Knowledge Base
-RAG
-Agent
-Workflow
-Application
-Evaluation
-Observability
+Configuration
+Features
+Screenshots
 API
 Testing
+Deployment
+Troubleshooting
+Security
 Roadmap
 ```
 
 ---
 
-# 五十九、项目最终产品模型
+# 二十一、工程质量要求
 
-最终必须让用户完成：
+所有修改必须保持：
 
 ```text
-注册
- ↓
-创建 Workspace
- ↓
-创建 Knowledge Base
- ↓
-上传 PDF / DOCX / MD / TXT / HTML / CSV / JSON
- ↓
-自动解析
- ↓
-Chunk
- ↓
-Embedding
- ↓
+Java
+Spring Boot
+Spring AI
+MySQL
+Redis
 Vector Store
- ↓
-创建 Agent
- ↓
-选择模型
- ↓
-绑定知识库
- ↓
-添加 Tool
- ↓
-设置权限
- ↓
-创建 Workflow
- ↓
-编排 LLM / RAG / Agent / Tool
- ↓
-创建 Application
- ↓
-发布
- ↓
-用户聊天
- ↓
-SSE
- ↓
-RAG
- ↓
-Agent
- ↓
-Tool
- ↓
-Workflow
- ↓
-Answer
- ↓
-Sources
- ↓
-Conversation
- ↓
-Execution Trace
+Vue
+TypeScript/JavaScript
 ```
+
+现有技术栈优先。
+
+不要为了追求“新技术”随意增加依赖。
+
+每增加一个基础设施组件，都必须回答：
+
+1. 为什么需要？
+2. 当前技术栈为什么解决不了？
+3. 对部署有什么影响？
+4. 对学习价值有什么提升？
+
+如果 MySQL 当前能够满足要求，不要为了“看起来高级”强行替换数据库。
 
 ---
 
-# 六十、最终平台必须做到“用户创建，而不是开发者写死”
+# 二十二、执行方式
 
-重点检查以下地方：
-
-```text
-KnowledgeBase
-Agent
-Tool
-Workflow
-Application
-Model
-```
-
-全部搜索是否存在：
+采用：
 
 ```text
-hard-coded ID
-hard-coded user
-hard-coded workspace
-hard-coded agent
-hard-coded workflow
-hard-coded model
-hard-coded knowledge base
+Audit
+ ↓
+Gap Analysis
+ ↓
+P0
+ ↓
+Test
+ ↓
+P1
+ ↓
+Test
+ ↓
+P2
+ ↓
+Final E2E
+ ↓
+Documentation
 ```
 
-发现必须逐步消除。
+不要一次性修改整个项目。
+
+每完成一个完整阶段：
+
+1. 修改代码
+2. 运行相关测试
+3. 运行构建
+4. 检查 git diff
+5. 更新文档
+6. 总结结果
+7. 再进入下一阶段
 
 ---
 
-# 六十一、安全验收
+# 二十三、每一阶段必须向我报告
 
-必须专门测试以下情况：
-
-### 用户隔离
+使用以下格式：
 
 ```text
-User A
-不能访问
-User B
-```
+## Phase X
 
-### Workspace 隔离
-
-```text
-Workspace A
-不能读取
-Workspace B
-```
-
-### KnowledgeBase 隔离
-
-Agent A 不能检索未授权 Knowledge Base。
-
-### Tool 权限
-
-普通用户不能调用管理员 Tool。
-
-### API Key
-
-任何 API 都不能返回完整 key。
-
-### Prompt Injection
-
-RAG 内容中的恶意指令不能直接改变系统级指令。
-
-### Approval
-
-需要人工确认的 Tool 必须暂停，而不是自动执行。
-
-### Audit
-
-关键 Tool / Workflow / Approval 行为必须留痕。
-
----
-
-# 六十二、最终验收标准
-
-所有新功能必须同时满足：
-
-```text
-代码
-数据库
-API
-Service
-测试
-文档
-```
-
-不能：
-
-```text
-代码完成
-但没有测试
-```
-
-或者：
-
-```text
-数据库完成
-但 API 不支持
-```
-
-或者：
-
-```text
-文档声称完成
-但代码没有实现
-```
-
----
-
-# 六十三、每个阶段必须执行的工作流
-
-严格：
-
-```text
-扫描
- ↓
-分析
- ↓
-设计
- ↓
-修改
- ↓
-测试
- ↓
-编译
- ↓
-检查回归
- ↓
-更新文档
- ↓
-记录变更
-```
-
-禁止：
-
-```text
-一次生成几十个文件
-然后不测试
-```
-
----
-
-# 六十四、每次完成一个 Phase 后输出
-
-必须给出：
-
-```text
+### Goal
 本阶段目标
 
-新增文件
+### Changes
+修改了什么
 
-修改文件
+### Tests
+运行了什么测试
 
-删除文件
+### Result
+通过/失败
 
-数据库 Migration
+### Issues
+发现的问题
 
-新增 API
-
-新增类
-
-架构变化
-
-测试结果
-
-哪些测试执行了
-
-哪些测试跳过
-
-为什么跳过
-
-对已有功能的影响
-
-当前剩余问题
-
+### Next
 下一阶段计划
 ```
 
----
+如果测试失败：
 
-# 六十五、非常重要：不要破坏已经通过真实验证的链路
+不要直接绕过。
 
-这些能力属于“保护区”：
-
-```text
-JWT / RBAC
-Session
-SSE
-STOPPED
-Knowledge Import
-Vault
-Chunk
-Embedding
-pgvector
-ES / IK
-Hybrid RAG
-RRF
-Rerank
-Citation
-Agent Loop
-Tool Streaming
-Workflow Engine
-Evaluation MVP
-ObservabilityRegistry
-```
-
-如果必须修改这些模块：
-
-必须：
+说明：
 
 ```text
-先分析
- ↓
-说明影响
- ↓
-最小修改
- ↓
-运行原有测试
- ↓
-新增回归测试
+Failure
+Root Cause
+Fix
+Regression Test
 ```
 
 ---
 
-# 六十六、当前开发优先级
+# 二十四、最终验收标准
 
-不要平均用力。
+当你认为项目已经完成时，必须实际验证：
 
-按照下面顺序完成：
-
-## P0
+### 用户
 
 ```text
-Retriever Port
-Workspace Resource Isolation
-Document HTML/CSV/JSON
-Agent Definition
-Tool Definition
-Model Config
-API Key Encryption
+注册
+登录
+登出
 ```
 
-## P1
+### Knowledge Base
 
 ```text
-Tool Permission
-Approval
-Audit
-Workflow Persistence
-Workflow Version
-Application
+创建
+上传
+处理
+检索
+删除
 ```
 
-## P2
+### Agent
 
 ```text
-Evaluation Metrics
-Cross-run Compare
-Observability Persistence
-Nginx
-Dockerfile
-Docker Compose
-CI
+创建
+配置
+绑定 KB
+配置 Tool
+发布
+停用
 ```
 
-## P3
+### Chat
 
 ```text
-MCP 完整接入
-Planner
-高级 Memory
-更复杂 Workflow Nodes
-更高级 RAG
+选择 Agent
+发送消息
+Streaming
+多轮对话
+历史记录
 ```
+
+### RAG
+
+```text
+Query
+→ Retrieval
+→ Chunks
+→ Answer
+```
+
+### Agent
+
+```text
+LLM
+→ Tool
+→ Tool Result
+→ Final Answer
+```
+
+### No KB
+
+```text
+0 KB
+→ Chat
+→ 0 Retrieval
+→ 正确回答
+```
+
+### Permission
+
+```text
+User A
+→ User B Resource
+→ 403 / Not Found
+```
+
+### Failure
+
+验证：
+
+```text
+LLM failure
+RAG failure
+Tool failure
+Upload failure
+Invalid request
+Unauthorized
+Forbidden
+```
+
+### Build
+
+最终运行：
+
+```bash
+mvn test
+mvn package
+npm run build
+```
+
+以及所有现有 E2E。
 
 ---
 
-# 六十七、禁止做的事情
+# 二十五、最重要的要求
 
-禁止：
+不要为了完成任务而告诉我：
+
+> “项目已经完善。”
+
+只有在实际检查和测试之后才能这样说。
+
+如果发现：
 
 ```text
-重新建项目
-修改项目名称
-修改 Maven module 名称
-修改基础包名
-推翻当前 Agent Loop
-推翻当前 RAG
-删除现有测试
-删除 live test
-把 skipped 说成 passed
-为了 Docker 验证假装本地环境可用
-硬编码 Agent
-硬编码 Workflow
-硬编码知识库
-硬编码 User
-硬编码 Model
-硬编码 Tool
-在 Controller 堆 AI 逻辑
-把所有功能写进一个 Service
-大量 if/else
-为了“高级感”加入无关技术
+架构问题
+安全问题
+数据隔离问题
+测试问题
+异常处理问题
+用户体验问题
+部署问题
 ```
+
+必须主动指出并修复。
+
+不要因为当前测试已经 green 就停止。
+
+当前 green 只是：
+
+> 已经实现的功能通过了现有测试。
+
+不是：
+
+> 整个项目已经达到生产可用。
 
 ---
 
-# 六十八、最终输出
+# 二十六、现在开始
 
-整个改造完成后，最终输出：
+第一步不要修改业务代码。
 
-```text
-1. 当前项目最终架构
-2. Maven 模块依赖图
-3. 完整包结构
-4. 数据库 ER 图
-5. Workspace / RBAC 模型
-6. Knowledge Base 模型
-7. RAG 架构
-8. Retriever 抽象
-9. Agent 架构
-10. Tool 架构
-11. Approval 流程
-12. Audit 架构
-13. Workflow 架构
-14. Application 架构
-15. Model 架构
-16. Conversation / Memory 架构
-17. SSE 协议
-18. Evaluation 架构
-19. Observability 架构
-20. Docker 部署架构
-21. CI 流程
-22. 完整 API 清单
-23. Migration 清单
-24. 测试清单
-25. 当前已验证能力
-26. 当前仅 fallback 验证能力
-27. 当前未实现能力
-28. 项目启动方式
-29. Demo 数据恢复方式
-30. 面试讲解路线
-```
+先：
 
----
+1. 检查当前 git 状态
+2. 检查项目目录
+3. 阅读 README
+4. 阅读 docs/decisions.md
+5. 阅读现有 E2E
+6. 检查后端核心模块
+7. 检查前端核心页面
+8. 检查数据库结构
+9. 检查 Docker / deployment
+10. 输出 `docs/productization-gap-analysis.md`
 
-# 六十九、最终项目定位
+然后根据 P0/P1/P2 排出实施顺序。
 
-完成这一阶段后：
+**先完成审计和 Gap Analysis，再开始编码。**
 
-不要再把：
+最终目标不是“把代码写得更多”，而是：
 
-```text
-prisdvl-nexus
-```
-
-描述成：
-
-> “个人 RAG 知识库 Agent”
-
-应该定位为：
-
-> **一个基于 Spring Boot + Spring AI 构建的模块化 AI 应用平台，支持多用户 Workspace、可配置 Knowledge Base、Hybrid RAG、Agent、Tools、Workflow、Model Provider、Application、Conversation、Evaluation 和 Observability，并提供 SSE 流式 AI 交互与可扩展的 MCP 能力。**
-
-核心产品逻辑：
-
-```text
-平台提供 AI 能力
-        ↓
-用户创建资源
-        ↓
-用户组合资源
-        ↓
-用户创建 Application
-        ↓
-用户运行自己的 AI 应用
-```
-
-而不是：
-
-```text
-开发者写死一个 Agent
-        ↓
-所有人使用同一个 Agent
-```
-
----
-
-# 七十、执行起点
-
-现在首先只执行：
-
-```text
-Phase 3 前代码基线扫描
-```
-
-不要马上修改全部代码。
-
-先输出：
-
-```text
-《当前架构扫描》
-
-《Phase 3 设计》
-
-《Retriever 抽象方案》
-
-《Workspace 资源隔离迁移方案》
-
-《Agent / Tool / Model 配置化方案》
-
-《数据库变更方案》
-
-《API 变更方案》
-
-《测试方案》
-```
-
-然后按照 P0 → P1 → P2 → P3 增量实施。
-
-每完成一个阶段立即：
-
-```text
-编译
-测试
-回归
-更新文档
-```
-
-并且必须如实报告：
-
-```text
-PASSED
-FAILED
-SKIPPED
-UNAVAILABLE
-```
-
-不得虚构验证结果。
+> **把 prisdvl-nexus 做成一个真正完整、可运行、可验证、可维护、可扩展，并且普通用户能够实际使用的 AI 企业知识库 + Agent 平台。**

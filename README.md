@@ -67,6 +67,7 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | [docs/api.md](docs/api.md) | 统一返回、错误码、REST 与 SSE 协议 | ✅ STEP 1 |
 | [docs/roadmap.md](docs/roadmap.md) | Phase 0–11 任务拆分 + 学习知识点 | ✅ STEP 1 |
 | [docs/decisions.md](docs/decisions.md) | 架构决策记录（ADR-001 ~ ADR-017）+ 官方文档核对结果（附录 A ~ D，含实测验证记录） | ✅ 持续更新 |
+| [docs/productization-gap-analysis.md](docs/productization-gap-analysis.md) | 产品化差距审计：已具备能力的清单 + 16 模块 Gap 表 + P0/P1/P2/P3 分级 + 实施顺序 | ✅ 2026-10-01（每阶段结束后更新状态） |
 | docs/rag.md / agent.md / mcp.md / workflow.md / evaluation.md / observability.md / deployment.md / interview.md | 各阶段深化文档 | ⏳ 随对应 Phase 补齐 |
 
 ## 6. 当前进度
