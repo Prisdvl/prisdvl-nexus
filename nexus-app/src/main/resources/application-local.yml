@@ -38,6 +38,17 @@ nexus:
   jwt:
     # 仅本地开发使用；生产必须通过环境变量 JWT_SECRET 提供
     secret: ${JWT_SECRET:local-dev-only-secret-please-change-in-production-32b}
+  security:
+    # local 有 compose 里的 nexus-redis（deploy/docker-compose.yml），因此走真 Redis。
+    # 这是唯一默认开 Redis 的 profile —— standalone/test 都关着，
+    # 所以"限流生效"这件事不能只靠 local 验证，否则测试环境里它其实是另一套实现。
+    redis-enabled: true
+    register:
+      # ⚠️ 与 test / standalone 同一个坑：本机请求全来自 127.0.0.1，E2E 脚本每轮会自己
+      # 注册临时账号，跑几轮就撞满 application.yml 里的默认 10 次/小时，
+      # 而症状出现在**紧接着的登录 401**上（限流看起来像认证坏了）。
+      # 开发环境放宽；生产（无 profile 覆盖）仍是 10。验真实阈值用 NEXUS_REGISTER_PER_HOUR=10。
+      per-hour-per-ip: ${NEXUS_REGISTER_PER_HOUR:1000}
 
 logging:
   level:

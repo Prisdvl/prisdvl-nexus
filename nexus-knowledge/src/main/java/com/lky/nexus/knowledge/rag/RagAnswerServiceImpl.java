@@ -1,6 +1,7 @@
 package com.lky.nexus.knowledge.rag;
 
 import com.lky.nexus.common.observe.ObservabilityRegistry;
+import com.lky.nexus.common.security.UserContextKeys;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lky.nexus.ai.config.AiModelProperties;
@@ -152,7 +153,7 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         PreparedAnswer prepared = new PreparedAnswer(context.text(), context.used(), context.tokens(),
                 context.truncated(), reranked, false);
         long generateStart = System.currentTimeMillis();
-        String answer = generate(question, prepared, history);
+        String answer = generate(userId, question, prepared, history);
         long generateMs = System.currentTimeMillis() - generateStart;
 
         // ⑤ 引用归位：编号 ↔ 资料块顺序一致
@@ -314,12 +315,15 @@ public class RagAnswerServiceImpl implements RagAnswerService {
      * 失败<b>不落档</b>——{@code kb_qa_record} 只记录真实发生过的问答（连"资料中没有相关内容"
      * 都算，因为那是一条真回答），这里没有"半条回答"可记：{@code generated} 为 null 时压根没生成过。
      */
-    private String generate(String question, PreparedAnswer prepared, List<RagTurn> history) {
+    private String generate(Long userId, String question, PreparedAnswer prepared, List<RagTurn> history) {
         try {
             ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_DEFAULT);
             return client.prompt()
                     .system(systemPrompt())
                     .user(userMessage(question, prepared, history))
+                    // token 记账归属（5.6）：注意这里拿的是 .content()，调用方手上没有 usage 对象；
+                    // 记账由 UsageMeteringAdvisor 在 ChatResponse 那一层完成，与本行拿什么无关
+                    .advisors(a -> a.param(UserContextKeys.USER_ID, userId))
                     .call()
                     .content();
         } catch (Exception ex) {

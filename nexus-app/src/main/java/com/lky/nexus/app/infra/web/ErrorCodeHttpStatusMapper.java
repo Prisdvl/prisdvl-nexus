@@ -31,7 +31,9 @@ public final class ErrorCodeHttpStatusMapper {
             case UNAUTHENTICATED, TOKEN_EXPIRED, INVALID_CREDENTIALS -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN, ACCOUNT_DISABLED, TOOL_PERMISSION_DENIED, APPROVAL_REJECTED, QUOTA_EXHAUSTED ->
                     HttpStatus.FORBIDDEN;
-            case USERNAME_ALREADY_EXISTS -> HttpStatus.CONFLICT;
+            // 2005 / 2007：字段占用。用 409 而不是 400 —— 请求本身是合法的，
+            // 只是与现有资源冲突；前端据此把错误指到对应输入框
+            case USERNAME_ALREADY_EXISTS, EMAIL_ALREADY_EXISTS -> HttpStatus.CONFLICT;
 
             // 3xxx 知识库 / 文档
             case KNOWLEDGE_BASE_NOT_FOUND, DOCUMENT_NOT_FOUND, IMPORT_TASK_NOT_FOUND -> HttpStatus.NOT_FOUND;

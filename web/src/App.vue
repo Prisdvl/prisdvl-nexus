@@ -1,12 +1,54 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { ChatDotRound, Collection, MagicStick, SwitchButton } from '@element-plus/icons-vue'
-import { isLoggedIn, logout, session } from '@/stores/auth'
+import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
+import ProfileDialog from '@/components/ProfileDialog.vue'
+import { getProfile } from '@/api/user'
+import { applyProfile, displayName, isLoggedIn, logout } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+
+const profileVisible = ref(false)
+const passwordVisible = ref(false)
+
+/*
+ * 登录状态一变（含首次进入时"已经登着"这一种）就把资料拉一次：
+ * 侧栏要显示昵称，而昵称在 localStorage 里没有（只有 username）。
+ *
+ * **为什么是 watch 而不是 onMounted**：App.vue 是根组件，整个 SPA 生命周期里只挂载一次。
+ * 若只在 onMounted 里拉，那么"退出 → 再登录"这个极常见的动作之后不会再拉，
+ * 侧栏就一直显示用户名——而用户上一秒刚把昵称设好，看起来像"改了没生效"。
+ * （改密码后强制重新登录正是这条路径，所以它一定会被走到。）
+ *
+ * 失败必须**咽掉**：这是纯展示信息，拉不到就回退显示用户名，
+ * 不能因为一个昵称拿不到就把整个外壳卡住。
+ */
+watch(
+  () => isLoggedIn(),
+  async (loggedIn) => {
+    if (!loggedIn) return
+    try {
+      applyProfile(await getProfile())
+    } catch {
+      // 令牌失效时拦截器已经处理跳转，其余情况侧栏回退显示用户名
+    }
+  },
+  { immediate: true }
+)
+
+/**
+ * 改密码是两个弹窗之间的跳转，不是叠罗汉。
+ *
+ * 资料弹窗里点"修改密码"时先关掉它再开另一个：两个模态框摞在一起，
+ * 用户点关闭很容易关错那一层（关掉上面那个，下面的还在，看起来像没反应）。
+ */
+function openChangePassword() {
+  profileVisible.value = false
+  passwordVisible.value = true
+}
 
 /*
  * 登录页不套外壳；其余页面都是"左导航 + 主区"的常规产品布局。
@@ -29,7 +71,7 @@ const navItems = [
 ]
 
 /** 头像里的首字母：没有头像时比一个通用图标更能区分账号 */
-const initial = computed(() => (session.username || '?').slice(0, 1).toUpperCase())
+const initial = computed(() => (displayName() || '?').slice(0, 1).toUpperCase())
 
 async function handleLogout() {
   await ElMessageBox.confirm('退出后需要重新登录。', '确认退出？', {
@@ -67,10 +109,18 @@ async function handleLogout() {
       </nav>
 
       <div class="sidebar-foot">
-        <div class="who">
+        <!-- 账号入口：整块可点，因为它就是"这是谁"的那一行——
+             想改名字的人第一眼会看这里，不必再去找一个齿轮图标 -->
+        <button
+          type="button"
+          class="who"
+          title="账号设置"
+          aria-label="账号设置"
+          @click="profileVisible = true"
+        >
           <span class="avatar" aria-hidden="true">{{ initial }}</span>
-          <span class="truncate">{{ session.username || '未登录' }}</span>
-        </div>
+          <span class="truncate">{{ displayName() || '未登录' }}</span>
+        </button>
         <el-button
           link
           size="small"
@@ -87,6 +137,9 @@ async function handleLogout() {
     <main class="main">
       <RouterView />
     </main>
+
+    <ProfileDialog v-model="profileVisible" @change-password="openChangePassword" />
+    <ChangePasswordDialog v-model="passwordVisible" />
   </div>
 
   <RouterView v-else />
@@ -195,13 +248,28 @@ async function handleLogout() {
   border-top: 1px solid var(--border-soft);
 }
 
+/* 账号入口是一个 button 而不是 div：它现在真的可点，
+   用 button 才能拿到键盘焦点与回车触发（div + @click 对键盘用户是死的） */
 .who {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  padding: 2px var(--space-2);
+  margin-left: calc(-1 * var(--space-2));
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-chip);
+  font-family: inherit;
   font-size: 13px;
   color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
+}
+
+.who:hover {
+  background: var(--surface-sunken);
+  color: var(--text-strong);
 }
 
 .avatar {

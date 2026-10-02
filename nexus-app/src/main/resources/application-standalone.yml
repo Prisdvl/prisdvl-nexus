@@ -52,10 +52,30 @@ nexus:
   search:
     # 同理：没有 Elasticsearch，关键词检索关闭
     enabled: false
+  security:
+    # 该 profile 的定位就是"零外部基础设施"，所以限流/配额/令牌版本走进程内存实现。
+    # 想用真 Redis 验 `RedisSecurityStore` 时可以命令行覆盖（优先级高于本文件）：
+    #   --nexus.security.redis-enabled=true
+    # 覆盖后别忘了 management.health.redis.enabled 是死的 false，
+    # 即 /actuator/health 不会因此变 DOWN，也不会告诉你 Redis 其实连不上。
+    redis-enabled: false
+    register:
+      # ⚠️ 与 test profile 同一个坑，在**开发 profile 上照样会踩**（2026-10-02 实测）。
+      # 本机所有请求都来自 127.0.0.1，而 E2E 脚本里有好几个会自己注册临时账号
+      # （verify-security.mjs / verify-agent-no-kb.mjs 各一个，一轮全量跑就是 2 个）。
+      # 实测：连续注册到第 9 次开始返回 429/7001「注册过于频繁（每小时上限 10 次）」。
+      # 撞上之后**症状会跑到别处**——注册失败 → 紧接着那次登录自然 401，
+      # 于是"限流"看起来像"认证坏了"。开发环境放宽，生产默认仍是 application.yml 里的 10；
+      # 需要在本机验真实阈值时显式设 NEXUS_REGISTER_PER_HOUR=10。
+      per-hour-per-ip: ${NEXUS_REGISTER_PER_HOUR:1000}
 
 management:
   health:
     rabbit:
+      enabled: false
+    # 引了 spring-boot-starter-data-redis 之后会多一个 Redis 健康指示器，
+    # 它会真去连一次 6379 —— 这个 profile 明确不用 Redis，不关掉就是自找 DOWN。
+    redis:
       enabled: false
 
 logging:

@@ -7,6 +7,7 @@ import com.lky.nexus.app.chat.stream.RetrievalEvent;
 import com.lky.nexus.app.chat.stream.SseEventNames;
 import com.lky.nexus.app.infra.web.RequestIdHolder;
 import com.lky.nexus.app.knowledge.service.RagStreamService;
+import com.lky.nexus.common.security.UserContextKeys;
 import com.lky.nexus.knowledge.rag.PreparedAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswerService;
@@ -96,6 +97,9 @@ public class RagStreamServiceImpl implements RagStreamService {
         Flux<ChatResponse> flux = client.prompt()
                 .system(ragAnswerService.systemPrompt())
                 .user(ragAnswerService.userMessage(question, prepared, history))
+                // token 记账归属（5.6）：本条链路的订阅发生在 boundedElastic 线程上，
+                // 请求线程的 SecurityContext 在那里是空的——所以只能靠 Advisor 上下文传递
+                .advisors(a -> a.param(UserContextKeys.USER_ID, userId))
                 .stream()
                 .chatResponse();
 

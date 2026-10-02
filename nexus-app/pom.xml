@@ -52,6 +52,19 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Redis：限流 / 每日配额 / 令牌版本的存储（Phase 5.6，见 docs/decisions.md ADR-020）。
+             之前 Redis 只存在于 deploy/docker-compose.yml 和注释里，没有任何 Java 依赖。
+             两个必须知道的点：
+             1) Lettuce 是懒连接（eagerInitialization=false），所以 standalone / test
+                这两个"零外部基础设施"的 profile 照样能启动 —— 它们走内存实现
+                （nexus.security.redis-enabled=false）；
+             2) 该 starter 会带来 Redis 健康指示器，它会真去连一次。那两个 profile 必须
+                显式 management.health.redis.enabled=false，否则 /actuator/health 变 DOWN。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <!-- 消息队列：导入任务异步化（Step 2.7）。
              只有"投递/消费"这两个适配器在 nexus-app，领域层通过 ImportTaskPublisher
              接口与具体中间件解耦（依赖倒置），因此 standalone profile 能换成同步实现。 -->

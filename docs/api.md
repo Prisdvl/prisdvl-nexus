@@ -64,7 +64,7 @@
 | --- | --- | --- |
 | `0` | 成功 | `0 success` |
 | `1xxx` | 通用/参数 | `1001 参数校验失败`、`1002 请求体格式错误`、`1003 不支持的排序字段` |
-| `2xxx` | 认证授权 | `2001 未认证`、`2002 Token 已过期`、`2003 无权限访问该资源`、`2004 账号被禁用` |
+| `2xxx` | 认证授权 | `2001 未认证`、`2002 Token 已过期`（**当前无抛出点**：`RestAuthenticationEntryPoint` 不区分过期与非法）、`2003 无权限访问该资源`、`2004 账号被禁用`、`2005 用户名已被占用`、`2006 用户名或密码错误`、`2007 邮箱已被占用` |
 | `3xxx` | 知识库/文档 | `3001 知识库不存在`、`3002 知识库名称重复`、`3003 文档不存在`、`3004 DocumentParseFailed 文档解析失败`、`3005 文件类型不支持`、`3006 文件超出大小限制`、`3007 ZIP 结构非法`、`3008 导入任务不存在` |
 | `4xxx` | AI 模型/嵌入/向量 | `4001 ModelUnavailable 模型不可用`、`4002 ModelTimeout 模型超时`、`4003 TokenLimitExceeded 超出上下文限制`、`4004 EmbeddingFailed 嵌入失败`、`4005 VectorStoreUnavailable 向量库不可用`、`4006 未配置对应逻辑角色的模型`、`4007 ModelAuthFailed 模型服务鉴权失败`（密钥被上游拒绝；**不可重试**，与 4001 的区别见 1.2 的错误归因表） |
 | `5xxx` | 工具/Agent/MCP | `5001 ToolExecutionFailed 工具执行失败`、`5002 AgentMaxIterationsExceeded 超出最大步数`、`5003 人工确认被拒绝`、`5004 工具无权限`、`5005 MCP 服务不可用` |
@@ -91,18 +91,18 @@
 
 ---
 
-## 2. 认证与账号（Phase 0）
+## 2. 认证与账号（Phase 0；账号安全部分 2026-10-02 补齐）
+
+### 2.1 已实现
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/auth/register` | 注册（用户名/邮箱/密码），密码 BCrypt 存储 |
-| POST | `/api/auth/login` | 登录 → `accessToken`(30min) + `refreshToken`(7d) |
-| POST | `/api/auth/refresh` | 刷新访问令牌（Refresh Token 轮换 + 旧 token 立即失效） |
-| POST | `/api/auth/logout` | 登出（吊销 refresh + access jti 进黑名单） |
+| POST | `/api/auth/register` | 注册（用户名 + 密码），密码 BCrypt 存储；按**来源 IP** 限流（10 次/小时，超限 `429/7001`） |
+| POST | `/api/auth/login` | 登录 → `accessToken`（30min）；连续失败达阈值后该用户名被冻结（5 次 / 15 分钟窗口，冻结 15 分钟）→ `429/7001` |
 | GET | `/api/users/me` | 当前用户信息与角色 |
-| PUT | `/api/users/me` | 修改昵称/头像 |
-| PUT | `/api/users/me/password` | 修改密码（验证旧密码，改后吊销所有 refresh） |
-| GET | `/api/admin/users` | 管理员：用户列表（`ADMIN` 角色） |
+| PUT | `/api/users/me` | 修改资料（昵称 / 邮箱） |
+| PUT | `/api/users/me/password` | 修改密码（校验原密码；成功后**该用户全部已签发令牌立即失效**） |
+| GET | `/api/users/me/quota` | 当前用户当日额度（只读，用于界面上"今日 N/M 次 · x/y tokens"那一行） |
 
 ```http
 POST /api/auth/login
@@ -110,9 +110,77 @@ POST /api/auth/login
 
 200 OK
 { "code": 0, "message": "success", "data": {
-    "accessToken": "eyJ...", "refreshToken": "eyJ...",
-    "expiresIn": 1800, "user": { "id": 1001, "nickname": "LKY", "roles": ["USER"] } } }
+    "accessToken": "eyJ...", "username": "lky", "roles": ["USER"] } }
 ```
+
+**`/users/**` 全部没有 userId 参数**：身份只从 JWT 的 `sub` 取（`CurrentUser.requireId()`），
+从请求参数或请求体接收 userId 是水平越权的典型来源（ADR-018 第 8 条）。
+
+#### 修改资料 `PUT /api/users/me`
+
+```http
+PUT /api/users/me
+{ "nickname": "老孔", "email": "lky@example.com" }
+```
+
+**字段语义是"半更新"，两条规则要一起看**：
+
+- **不传某个字段（`null`）= 不修改**；
+- **传空串 = 清空**（邮箱清空后落 `NULL`；昵称清空后界面回退显示用户名）。
+
+一个值不能同时表示"不改"和"清空"，所以这两种意图在 JSON 里必须是不同取值。
+若把"缺失"当成"清空"，前端少渲染一个输入框就会静默删掉用户数据。
+
+错误：邮箱与其他账号重复 → `409 / 2007`（与 `2005` 用户名重复对称）。同一预检也加在注册入口上——
+在此之前，用重复邮箱注册会撞唯一键 → `DataIntegrityViolationException` → `500/9999`，用户看到的是"服务器错误"。
+
+#### 修改密码 `PUT /api/users/me/password`
+
+```http
+PUT /api/users/me/password
+{ "oldPassword": "******", "newPassword": "******" }
+
+// 原密码错误：400（不是 401）
+{ "code": 1001, "message": "原密码不正确" }
+```
+
+**为什么原密码错误返回 `1001 / 400` 而不是 `2006 / 401`**：调用方已经用自己的令牌通过了认证，
+此时回 401 会让前端全局拦截器（`web/src/api/client.ts`）**立刻清 token 并跳登录页**——
+把一个"打错一个字"的输入错误升级成会话中断。（此处也不构成账号枚举：攻击者必须已持有该账号的令牌。）
+代价是登录失败（`2006`）与改密失败（`1001`）口径不同，这是**刻意的区分**：
+登录 = 未认证；改密 = 已认证的参数错误。`verify-security.mjs` 有一条断言专门守这个分支。
+
+**改密成功后本次会话也会失效**：吊销的是该 user 的**全部**令牌（`sys_user.token_version` 自增，
+校验见 ADR-020），包含发起本次请求的这一支。这是"改密码 = 所有设备下线"的正确语义，
+前端必须明说「密码已修改，请用新密码重新登录」并主动跳登录页，而不是等下一个请求撞 401。
+
+#### 当日额度 `GET /api/users/me/quota`
+
+```http
+GET /api/users/me/quota
+
+200 OK
+{ "code": 0, "data": {
+    "requestUsed": 12, "requestLimit": 200,
+    "tokenUsed": 3421, "tokenLimit": 200000,
+    "resetAt": "2026-10-03T00:00:00" } }
+```
+
+`requestUsed` 可能**大于** `requestLimit`：被拒的请求也占一次计数（否则连点没有成本），
+界面展示时用 `min(已用, 上限)` 收敛。
+
+### 2.2 规划中（尚未实现）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/auth/refresh` | 刷新访问令牌（Refresh Token 轮换 + 旧 token 立即失效）——**需要 `sys_refresh_token` 表，迁移尚未写** |
+| POST | `/api/auth/logout` | 登出（吊销 refresh + access jti 进黑名单） |
+| GET | `/api/admin/users` | 管理员：用户列表（`ADMIN` 角色） |
+
+> 本节此前把 refresh / logout / `PUT /users/me` / `PUT /users/me/password` 都写成"已实现"，
+> 实际都不存在（`sys_refresh_token` 表在迁移里也没有，`jti` 声明预置了但从未被存储或校验）。
+> 2026-10-02 把其中两条做成了真的，另两条移到上面这张表里——**文档不实比功能缺失更贵**，
+> 它会让"照文档接一下就有了"的判断落空，且落空发生在集成之后。
 
 ---
 
@@ -708,18 +776,95 @@ POST /api/eval/datasets/1/import
 
 ---
 
-## 12. 限流与配额
+## 12. 限流与配额（2026-10-02 实现）
 
-| 接口组 | 默认限制 |
+### 12.1 已实现
+
+拒绝点是**一个** HTTP 过滤器（`RateLimitQuotaFilter`），挂在 `BearerTokenAuthenticationFilter` 之后：
+
+| 分支 | 路径（`nexus.security.*.paths`，Ant 风格） | 限制 |
+| --- | --- | --- |
+| 注册 | `/api/auth/register` | 每 **IP** 每小时 10 次（`standalone` / `local` / `test` 三个开发 profile 放宽到 1000，理由见下） |
+| 模型入口（花真钱的那几条） | `/api/chat/stream`、`/api/chat/conversations/*/messages`、`/api/knowledge-bases/*/ask`、`/api/knowledge-bases/*/ask/stream`、`/api/agent/ask`、`/api/agents/*/test-chat`、`/api/eval/**`、`/mcp` | 每用户 20 次/分钟 **＋** 每日 200 次 **＋** 每日 200,000 tokens |
+| 只限速、不计配额 | `/api/users/me/password` | 每用户 20 次/分钟 |
+| 其余全部 | —— | 不限（默认放行） |
+
+**为什么挂在过滤器而不是各 Service 里**：五类入口各写一遍检查，等于把"哪些入口花钱"散布到五处，
+漏一个就静默免配额。收口之后路径清单是唯一事实来源。
+
+**⚠️ 为什么是那两条 chat 路径、而不是 `/api/chat/**`**：清单初稿就是那个通配，写错了。
+它会把**读历史消息、列出会话、删除会话、停止生成**一起算进当日额度——
+用户在自己完全不花钱的操作上被扣额度，"今日 N/200 次"也不再等于"问了几次"。
+真机 E2E 里"刚进对话页就显示 1/200"就是这个通配留下的痕迹。
+代价是 `/api/chat` 下的读接口不受限速约束：它们只查库、不调用模型，
+按上面那条口径本来就不该限（`RateLimitQuotaTest.nonModelChatPathsAreNotCharged` 钉住这一点）。
+
+**为什么位置必须在 `BearerTokenAuthenticationFilter` 之后、控制器之前**：那个位置 `SecurityContext`
+已经填好（`CurrentUser` 可用），但仍在 `new SseEmitter` 之前——所以超限时返回的是**统一 JSON**，
+而不是已经开流的 SSE 帧（Phase 5.2 口径：开流前失败走 JSON）。
+
+超限响应：`429` + `7001`（限流）/ `403` + `7002`（配额用尽），带 `Retry-After`
+（分钟级桶 = 60；注册桶 = 3600；**配额用尽不带**——那是次日 00:00 才重置，回 60 秒会让客户端白试一整天）。
+两种 `7002` 的 `message` 是分开的：「今日问答次数已用尽（上限 N 次/天）」vs「配额服务暂时不可用」——
+把"你没额度了"和"我们坏了"说成一句，用户只会去骂产品。
+
+**为什么三个开发 profile 把注册上限放宽到 1000**：本机请求全来自同一个回环地址，
+而 E2E 脚本每轮会自己注册临时账号（`verify-security.mjs` / `verify-agent-no-kb.mjs` 各一个）。
+真机实测：同源连续注册到**第 9 次**开始 `429/7001`，而且**症状出现在别处**——
+注册失败之后紧接的那次登录自然 401，于是"限流"看起来像"认证坏了"（排查方向完全跑偏）。
+生产（不加 profile 覆盖）仍是 **10**；要在开发 profile 上验真实阈值，
+显式设 `NEXUS_REGISTER_PER_HOUR=10` 即可。
+
+**token 记账**：所有 chat 调用都经过 `ChatClientFactory`，因此记账顾问（`UsageMeteringAdvisor`）
+挂在那里一次覆盖六个调用点，各调用点只多一行 `.advisors(a -> a.param(UserContextKeys.USER_ID, userId))`。
+漏传 userId 时**不静默**：计入 `quota.usage.unattributed` 度量并打日志（带模型名）。
+
+### 12.2 存储与降级
+
+| 存储 | 何时用 | 键 |
+| --- | --- | --- |
+| `InMemorySecurityStore`（默认） | `standalone` / `test`（零外部基础设施） | 进程内 `ConcurrentHashMap` |
+| `RedisSecurityStore` | `nexus.security.redis-enabled=true`（`local` / 生产） | 见下 |
+
+```
+nexus:rl:u:{userId}:{yyyyMMddHHmm}   用户分钟级限流计数
+nexus:rl:ip:{ip}:{yyyyMMddHH}        注册限流计数（按小时）
+nexus:q:req:{userId}:{yyyyMMdd}      当日请求次数
+nexus:q:tok:{userId}:{yyyyMMdd}      当日 token 用量
+nexus:auth:lf:{username}             登录失败次数
+nexus:auth:ll:{username}             登录冻结标记
+nexus:auth:tv:{userId}               用户令牌版本（缓存，DB 是事实来源）
+```
+
+**时间片写进键名，是窗口机制本身**（不是装饰）：固定窗口不需要"到点清零"的动作——
+下一分钟是另一个键，计数天然从 0 开始，TTL 只负责回收。这也解释了为什么
+`{ip}` 那一格在真机上是 `0:0:0:0:0:0:0:1`：`getRemoteAddr()` 在 IPv6 栈上返回的是这种写法，
+按字符串入键即可，不需要归一化（同一台机器上不会一半 v4 一半 v6）。
+上表是**实测** `redis-cli KEYS 'nexus:*'` 之后校正的：初稿少了三个时间片后缀。
+
+**降级按关注点分开**（这是刻意的，不是遗漏）：
+
+| 关注点 | 存储故障时 | 为什么 |
+| --- | --- | --- |
+| 登录失败限制 / 限流 | **fail-open**（放行 + 计数） | 否则存储一挂，全体用户被锁在门外，比"少限了几次"严重得多 |
+| 每日配额 | **fail-closed**（拒绝，`7002`） | 否则存储一挂就是无限烧钱。文案区分"已用尽"与"配额服务不可用" |
+| 令牌版本 | **回落查库** | DB 是事实来源，缓存只是加速——故障时"每请求查一次库"，依然正确 |
+
+**⚠️ 多实例部署必须 `nexus.security.redis-enabled=true`**：内存实现每个实例各算一份，限流会被放大 N 倍。
+
+### 12.3 规划中（尚未实现）
+
+| 接口组 | 规划中的限制 |
 | --- | --- |
-| 认证 | 10 次/分钟/IP（防撞库） |
-| 聊天/流式 | 20 次/分钟/用户；5 并发流/用户 |
 | 检索 | 60 次/分钟/用户 |
 | 上传 | 10 次/分钟/用户；单文件 50 MB；ZIP 200 MB |
-| Agent 运行 | 5 次/分钟/用户；最长 5 分钟/次 |
+| 并发流 | 5 并发流/用户 |
+| Agent 运行 | 最长 5 分钟/次 |
 | 评测批量 | 1 次/分钟/用户（后台异步跑） |
 
-实现：Redis 令牌桶（`nexus:ratelimit:{scope}:{userId}`），超限返回 `429` + `7001`，响应头带 `Retry-After`。
+> 本节此前描述的是一套"Redis 令牌桶 + 全接口分组限流"，**全都没有代码**：
+> `7001` / `7002` 两个错误码已定义、已映射（429 / 403），但**零抛出点**，`nexus-app` 里也没有
+> `RedisTemplate`。2026-10-02 只实现了上表 §12.1 那一列；其余保持"规划中"，不再写成已完成。
 
 ---
 

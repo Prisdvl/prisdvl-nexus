@@ -145,7 +145,27 @@ CREATE TABLE sys_user (
 | --- | --- | --- |
 | `sys_role` | `code`(`USER`/`ADMIN`)、`name` | RBAC 角色字典 |
 | `sys_user_role` | `user_id`、`role_id` | 唯一键 `(user_id, role_id)` |
-| `sys_refresh_token` | `user_id`、`token_hash`(SHA-256)、`expires_at`、`revoked`、`device_info` | Refresh Token 轮换与吊销；**存 hash 不存明文** |
+| `sys_refresh_token` | `user_id`、`token_hash`(SHA-256)、`expires_at`、`revoked`、`device_info` | **⚠️ 设计稿，表尚未创建**（迁移里没有它，`/auth/refresh`、`/auth/logout` 也未实现）。Refresh Token 的轮换与吊销要等 ADR-021 的第 ⑤ 阶段 |
+
+#### V18：`sys_user.token_version`（平台化 Phase 5.6）
+
+```sql
+ALTER TABLE sys_user
+    ADD COLUMN token_version BIGINT NOT NULL DEFAULT 0
+        COMMENT '令牌版本：改密码时 +1，使已签发的旧 token 立即失效';
+```
+
+- **只增不改、带默认值**：存量行自动为 0，于是本次改动之前签发的令牌（`ver` 声明缺失时按 0 处理）
+  全部继续有效，**不会集体下线**。
+- 令牌里带 `ver` claim，`TokenVersionValidator` 比对它与 `UserAuthCache.expectedTokenVersion(userId)`；
+  缓存未命中或 Redis 故障时**回落查 `sys_user`**（DB 是事实来源，缓存只是加速）。
+- **为什么是"版本号"而不是 `jti` 黑名单**：黑名单要存到每支令牌的过期时刻，键数随登录次数线性增长；
+  而"改密码"这个唯一场景要的是"全部作废"，版本号每用户一个键，且天然表达"所有设备一起下线"。
+  完整理由与代价见 `docs/decisions.md` ADR-020。
+- `sys_user` 上的**唯一键 `uk_user_email(email, deleted)` 一直存在**，但注册入口此前没有预检邮箱：
+  用重复邮箱注册会撞唯一键 → `DataIntegrityViolationException` → `500/9999`（用户看到"系统内部错误"，
+  不知道该换邮箱）。5.6 补上预检并新增 `EMAIL_ALREADY_EXISTS(2007)` → `409`，与 `2005` 用户名重复对称。
+  **这是"表上已有的约束"与"代码里的校验"不一致造成的静默故障，不是新增约束。**
 
 ### 3.1 `workspace`（平台化 Phase 2，迁移 V9）
 
@@ -611,12 +631,34 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
 
 ## 12. Redis Key 设计
 
+### 12.1 已实现（平台化 Phase 5.6）
+
+| Key | 类型 | TTL | 用途 |
+| --- | --- | --- | --- |
+| `nexus:auth:tv:{userId}` | String | 5m（`nexus.jwt.token-version-cache-ttl`） | 令牌版本缓存；**DB 是事实来源**，未命中/故障时回落查库 |
+| `nexus:auth:lf:{username}` | String(计数) | 15m（窗口） | 登录失败次数 |
+| `nexus:auth:ll:{username}` | String | 15m（冻结时长） | 登录冻结标记 |
+| `nexus:rl:u:{userId}:{yyyyMMddHHmm}` | String(计数) | 1m（+余量） | 用户级分钟限流 |
+| `nexus:rl:ip:{ip}:{yyyyMMddHH}` | String(计数) | 1h（+余量） | 注册限流（IP 维度） |
+| `nexus:q:req:{userId}:{yyyyMMdd}` | String(计数) | 当日结束 | 每日请求次数 |
+| `nexus:q:tok:{userId}:{yyyyMMdd}` | String(计数) | 当日结束 | 每日 token 用量 |
+
+**时间片是键名的一部分，这就是窗口机制**：固定窗口不靠"到点清零"，而是"下一分钟换一个键"，
+旧键交给 TTL 回收。TTL 比窗口长一档，是为了避开时钟边界上"新键刚建就被删"的窄缝。
+`{ip}` 在真机上是 `0:0:0:0:0:0:0:1` 这种 IPv6 写法（`getRemoteAddr()` 的返回值），按字符串入键，
+不做归一化。上表是**实测 `redis-cli KEYS 'nexus:*'` 后校正过的**（初稿漏了三个时间片后缀）。
+
+**这些键只在 `nexus.security.redis-enabled=true` 时存在**；默认走进程内存实现
+（`standalone` / `test` 不依赖任何外部基础设施，键名相同但不在 Redis 里）。
+实测键名与 TTL 记录在 `docs/decisions.md` B.47 末节。
+
+### 12.2 设计稿（尚未实现）
+
 | Key | 类型 | TTL | 用途 |
 | --- | --- | --- | --- |
 | `nexus:auth:refresh:{jti}` | String | 7d | Refresh Token 白名单/吊销 |
 | `nexus:auth:blacklist:{jti}` | String | 与 token 同寿命 | 主动登出 |
 | `nexus:sse:ticket:{ticket}` | String | 60s | SSE 一次性鉴权票据（EventSource/fetch 无法带 Header 的替代方案） |
-| `nexus:ratelimit:{scope}:{userId}` | String(计数) | 1m | 令牌桶/滑动窗口限流 |
 | `nexus:import:lock:{kbId}` | String | 30m | 同一知识库导入互斥（分布式锁） |
 | `nexus:import:progress:{taskId}` | Hash | 1d | 导入进度（与 DB 双写，前端读缓存更快） |
 | `nexus:embed:v1:{sha256(content)}` | String(JSON float[]) | 30d | **Embedding 缓存**：同内容不重复调用、不重复付费 |
@@ -624,6 +666,9 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
 | `nexus:chat:window:{conversationId}` | List | 2h | 会话窗口热缓存（Memory 的加速层，非真源） |
 | `nexus:stream:cancel:{requestId}` | String | 10m | "停止生成"信号，流式循环每 chunk 检查 |
 | `nexus:agent:approval:{runId}` | Hash | 1h | 待人工确认的工具调用快照 |
+
+> 本节表格此前把两栏混在一起，读起来像"这些都实现了"。5.6 拆成 12.1 / 12.2：
+> 只有 12.1 在代码里，其余仍是设计稿（§12.1 里也没有黑名单——吊销走的是版本号，不是黑名单，见 ADR-020）。
 
 ---
 
@@ -635,3 +680,4 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
 4. Phase 2（平台化）：`workspace`（V9）+ `kb_knowledge_base` 的 `workspace_id` / `icon` / `status` / `retrieval_top_k` / `similarity_threshold`（V9 / V10，全部只增不改）。
 5. Phase 3：`kb_chunk` + ES 索引 + 向量写入。
 6. Phase 5–10：按对应 ADR 补 `ai_*` / `wf_*` / `eval_*` / `obs_*`。
+7. 平台化 5.6：`sys_user.token_version`（V18）——只增一列 + 一条预检，没有新表。

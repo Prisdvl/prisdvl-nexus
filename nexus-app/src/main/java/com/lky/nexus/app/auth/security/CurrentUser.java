@@ -28,10 +28,31 @@ public final class CurrentUser {
      * 这里的兜底是为了防止方法被非 Web 场景（如定时任务、内部调用）误用。
      */
     public static Long requireId() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !(authentication.getPrincipal() instanceof Jwt jwt)) {
+        Long userId = idOrNull();
+        if (userId == null) {
             throw new BusinessException(ErrorCode.UNAUTHENTICATED);
         }
-        return Long.valueOf(jwt.getSubject());
+        return userId;
+    }
+
+    /**
+     * 取当前登录用户 ID；未认证返回 {@code null}（不抛异常）。
+     *
+     * <p>给"不一定已认证"的场景用——{@code RateLimitQuotaFilter} 跑在安全链上，
+     * 它要处理的请求里既有已认证的、也有 {@code /api/auth/register} 这种公开端点，
+     * 在那里用 {@link #requireId()} 会让公开端点因为"取不到用户"而 500。
+     * {@code sub} 不是合法数字时同样返回 {@code null}：那属于"令牌内容不对"，
+     * 该由认证环节拒绝，而不是在限流器里炸一个 NumberFormatException。
+     */
+    public static Long idOrNull() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !(authentication.getPrincipal() instanceof Jwt jwt)) {
+            return null;
+        }
+        try {
+            return Long.valueOf(jwt.getSubject());
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 }

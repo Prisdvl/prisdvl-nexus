@@ -208,6 +208,13 @@ class RagStreamRetrievalEventTest {
         when(chatClient.prompt()).thenReturn(requestSpec);
         when(requestSpec.system(anyString())).thenReturn(requestSpec);
         when(requestSpec.user(anyString())).thenReturn(requestSpec);
+        /*
+         * 5.6：生产代码在这条链上多加了一次 `.advisors(...)`（把 userId 交给记账顾问）。
+         * 桩是一条"每步都返回自己"的链，必须跟着补上这一步——否则 Mockito 对未打桩的
+         * 返回对象给 null，NPE 会发生在 `.stream()` 上（报的是"advisors 返回了 null"，
+         * 看起来像生产代码写错了，其实是桩没跟上）。
+         */
+        when(requestSpec.advisors(any(java.util.function.Consumer.class))).thenReturn(requestSpec);
         when(requestSpec.stream()).thenReturn(streamSpec);
         when(streamSpec.chatResponse()).thenReturn(Flux.just(chunk(first), chunk(second)));
         return streamSpec;

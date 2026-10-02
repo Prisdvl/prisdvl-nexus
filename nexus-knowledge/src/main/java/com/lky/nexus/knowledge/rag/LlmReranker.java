@@ -2,6 +2,7 @@ package com.lky.nexus.knowledge.rag;
 
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.common.security.UserContextKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -95,6 +96,11 @@ public class LlmReranker implements Reranker {
         ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_JUDGE);
         return client.prompt()
                 .user(PROMPT.formatted(query, renderCandidates(candidates)))
+                // 显式声明"这是一次系统调用"（5.6）：重排是平台为了让检索质量更好而自己花的钱，
+                // 不属于任何用户的额度。没有这一行，UsageMeteringAdvisor 会把它当成
+                // "调用方忘了传 userId"，于是每次检索都往 quota.usage.unattributed 上记一笔——
+                // 一个给"漏传"报警用的计数器被正常流程刷满，就再没人看得懂它了
+                .advisors(a -> a.param(UserContextKeys.SYSTEM_CALL, Boolean.TRUE))
                 .call()
                 .content();
     }

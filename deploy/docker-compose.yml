@@ -84,8 +84,14 @@ services:
     networks: [nexus-net]
 
   # ----------------------------------------------------------------
-  # Redis：缓存 / 限流 / 分布式锁 / 停止生成信号（Phase 11 起）
+  # Redis：令牌版本 / 登录失败计数 / 限流 / 每日配额（Phase 5.6 起）
   # Redis 8 已内建 Query Engine 与 JSON，不需要 redis-stack
+  #
+  # ⚠️ maxmemory-policy = allkeys-lru：内存吃紧时会**淘汰这些计数键**，
+  # 表现为"当日配额被重置、限流漏掉几次"。它是有意的取舍（宁可少限几次，
+  # 也不要 Redis 写满把写入也拖垮），但意味着配额不是硬保证。
+  # 要做到硬保证得把当日用量落库（见 docs/productization-gap-analysis.md P2-17）。
+  # 另外：应用侧靠 nexus.security.redis-enabled 决定用不用它，关掉时走进程内存。
   # ----------------------------------------------------------------
   redis:
     image: redis:8.10.2

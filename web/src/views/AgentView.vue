@@ -33,6 +33,7 @@ import {
   type AnswerPolicy
 } from '@/api/agents'
 import { listKnowledgeBases, type KnowledgeBase } from '@/api/knowledge'
+import { getQuota, type Quota } from '@/api/user'
 import { renderMarkdown } from '@/utils/markdown'
 
 /**
@@ -240,10 +241,70 @@ function boundAgentLabel(agent: AgentResource): string {
 /** 示例问题：直接点就能跑，省去"第一句该问什么"的犹豫 */
 const samples = ['我的笔记里缓存击穿怎么解决？', '线程池的核心参数有哪些坑？', 'G1 和 ZGC 该怎么选？']
 
+// ---------- 当日额度（5.6） ----------
+
+/**
+ * 配额在界面上只做一件事：让"还剩多少"成为用户能看到的数字。
+ *
+ * <p>在此之前它是个隐形旋钮——被 403 拦住（7002）之前完全不知道有这回事，
+ * 被拦住之后也不知道自己用掉了多少、什么时候恢复。对一个会真实花钱的产品，
+ * 那种体验就是"莫名其妙不能用了"。
+ *
+ * <p>拿不到（接口失败）时**整行不显示**，而不是显示 0/200：一个假的 0 会让用户
+ * 以为额度刚被重置，比不显示更糟。
+ */
+const quota = ref<Quota | null>(null)
+
+async function loadQuota() {
+  try {
+    quota.value = await getQuota()
+  } catch {
+    quota.value = null
+  }
+}
+
+/**
+ * 已用次数要收敛到上限内再显示。
+ *
+ * <p>被拒的请求也占了一次计数（否则"连点"就没有成本了），所以这个数字可能
+ * 短暂超过上限。界面上出现 "205/200" 读起来像个 bug，用户会来问"是不是没拦住"——
+ * 而它恰恰证明拦住了。这里用 min 收敛，真实数值以接口为准。
+ */
+const usedRequests = computed(() =>
+  quota.value ? Math.min(quota.value.requestUsed, quota.value.requestLimit) : 0
+)
+
+const usedTokens = computed(() =>
+  quota.value ? Math.min(quota.value.tokenUsed, quota.value.tokenLimit) : 0
+)
+
+/** 额度用尽：这一行变红，让"为什么发不出去了"在尝试之前就有答案 */
+const quotaExhausted = computed(() =>
+  quota.value
+    ? quota.value.requestUsed >= quota.value.requestLimit || quota.value.tokenUsed >= quota.value.tokenLimit
+    : false
+)
+
+/** 大数用 k 记（3.4k / 200k）：token 数动辄六位数，原样写出来没人读得出量级 */
+function shortNumber(value: number): string {
+  if (value < 1000) return String(value)
+  const thousands = value / 1000
+  // 200k 这种整数不带小数点，3.4k 这种保留一位
+  return (Number.isInteger(thousands) ? String(thousands) : thousands.toFixed(1)) + 'k'
+}
+
+/** 重置时刻：额度按自然日算，说清"什么时候回来"比只说"用完了"有用 */
+const quotaResetLabel = computed(() => {
+  if (!quota.value) return ''
+  const reset = new Date(quota.value.resetAt)
+  return `${String(reset.getHours()).padStart(2, '0')}:${String(reset.getMinutes()).padStart(2, '0')} 重置`
+})
+
 onMounted(async () => {
   await loadConversations()
   await loadKnowledgeBases()
   await loadAgents()
+  await loadQuota()
   // 进来就选中最近一次会话：比让用户看一个空面板更省一步。
   // 但两个 await 期间用户可能已经点过"新对话"——那就尊重他的选择，别再抢回来
   if (!pickedByUser.value && conversations.value.length) {
@@ -514,6 +575,9 @@ async function send(preset?: string) {
       const reloaded = items.value.find((item) => item.id === assistantMessageId)
       if (reloaded) reloaded.retrieval = answer.retrieval
     }
+    // 每轮结束刷新额度：这一轮一定花掉了次数（和 token），不刷新的话那一行会停在旧数字上，
+    // 而它恰恰是用户用来判断"还能问几次"的依据。失败时 loadQuota 自己会把它清成 null。
+    await loadQuota()
   }
 }
 
@@ -663,6 +727,18 @@ watch(activeId, () => {
       </div>
 
       <div class="rail-foot">
+        <!-- 当日额度（5.6）。放在左栏底部而不是对话头部：它是**账号级**的数，
+             与当前选中哪个会话无关，挂在会话标题旁边会被读成"这个会话用掉的"。
+             拿不到数据时整行不渲染（v-if），而不是显示 0/200。 -->
+        <p
+          v-if="quota"
+          class="quota num"
+          :class="{ exhausted: quotaExhausted }"
+          :title="`每日额度按自然日计算，${quotaResetLabel}`"
+        >
+          今日 {{ usedRequests }}/{{ quota.requestLimit }} 次 ·
+          {{ shortNumber(usedTokens) }}/{{ shortNumber(quota.tokenLimit) }} tokens
+        </p>
         <el-button link size="small" :icon="DataAnalysis" @click="evalVisible = true">跑评测集</el-button>
       </div>
     </aside>
@@ -1073,6 +1149,22 @@ watch(activeId, () => {
 .rail-foot {
   padding-top: var(--space-3);
   border-top: 1px solid var(--border-soft);
+}
+
+/* 额度那一行：与"跑评测集"同处左栏底部，两者都是账号级而非会话级的动作/信息 */
+.quota {
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-1);
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+  /* 长数字不该把左栏撑开 */
+  overflow-wrap: anywhere;
+}
+
+/* 用尽：换成危险色。用户"发不出去"的原因在这一行就能看到，不必等一条 403 */
+.quota.exhausted {
+  color: var(--danger);
 }
 
 /* ---------- 右栏 ---------- */

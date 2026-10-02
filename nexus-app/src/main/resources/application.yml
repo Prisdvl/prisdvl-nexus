@@ -68,6 +68,23 @@ spring:
           multiplier: 2
           max-interval: 30s
 
+  data:
+    redis:
+      # 限流 / 每日配额 / 令牌版本的存储（Phase 5.6）。
+      # 这里只声明连接信息，用不用 Redis 由 nexus.security.redis-enabled 决定：
+      #   local      → true（compose 里有 nexus-redis）
+      #   standalone → false（该 profile 的定位就是"零外部基础设施"）
+      #   test       → false
+      # 关掉时走内存实现，此时这几个连接参数完全不会被读取。
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      # 连接超时压短：它决定了"Redis 挂了"多久能被发现。
+      # 默认值偏长，而这里的每次调用都在用户请求路径上（鉴权/限流），
+      # 等 30 秒才降级等于把 Redis 的故障放大成整个应用不可用。
+      connect-timeout: 2s
+      timeout: 2s
+
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
@@ -85,6 +102,63 @@ nexus:
     secret: ${JWT_SECRET:}
     issuer: prisdvl-nexus
     access-token-ttl: ${JWT_ACCESS_TOKEN_TTL:30m}
+    # 令牌版本缓存的 TTL。它同时也是"失效失败时旧令牌还能活多久"的上限：
+    # invalidate 抛异常的话，缓存里那条旧版本会继续被读到、直到过期
+    # （DB 已是新值，所以下一次缓存 miss 就会纠正）。TTL 越短越安全、查库越多。
+    token-version-cache-ttl: ${JWT_TOKEN_VERSION_CACHE_TTL:5m}
+  security:
+    # 限流/配额/令牌版本存储用 Redis 还是进程内存。
+    # 默认 **false** 是刻意的：内存实现让 standalone 与测试保持"零外部基础设施"，
+    # 也让"忘了配 Redis"这件事表现为"单实例限流仍生效"，而不是启动失败。
+    # ⚠️ 多实例部署必须置 true —— 内存实现每个实例各算一份，限流会被放大 N 倍。
+    redis-enabled: ${NEXUS_SECURITY_REDIS_ENABLED:false}
+    login:
+      # 登录失败限制：同一用户名在 window 内失败 max-failures 次 → 冻结 lock-duration。
+      # 诚实代价：按用户名冻结意味着攻击者可以用错密码把某个账号锁住（定向 DoS）。
+      # 窗口与冻结都取 15 分钟，是为了让这种骚扰的恢复时间可接受。
+      max-failures: ${NEXUS_LOGIN_MAX_FAILURES:5}
+      window: ${NEXUS_LOGIN_FAILURE_WINDOW:15m}
+      lock-duration: ${NEXUS_LOGIN_LOCK_DURATION:15m}
+    register:
+      # 注册入口按来源 IP 限流：批量注册是账号体系的常见滥用方式。
+      # ⚠️ 反向代理之后 getRemoteAddr() 拿到的是代理地址，届时全体用户共用一个桶。
+      # 本期刻意**不**信任 X-Forwarded-For（伪造它比伪造 IP 简单），
+      # 部署到代理后面时必须先配好可信代理链，见 docs/decisions.md ADR-020。
+      per-hour-per-ip: ${NEXUS_REGISTER_PER_HOUR:10}
+    rate-limit:
+      # 用户级每分钟请求上限。作用范围刻意**不是**"所有已认证接口"，而是
+      # "quota.paths 里的模型入口" + 下面这几个敏感路径：
+      # 20 次/分钟对人是宽松的，但一个页面同时发十几个请求就够呛，
+      # 把普通读接口也罩进去，用户会在毫无成本的地方撞 429——那种限流只会招骂。
+      per-minute: ${NEXUS_RATE_LIMIT_PER_MINUTE:20}
+      extra-paths:
+        # 改密码接口值得单独限流：它是唯一能用"已认证身份"去暴力试原密码的入口。
+        # 注意它只受每分钟请求数约束，**不计入** token 配额（改密码不花钱）。
+        - /api/users/me/password
+    quota:
+      # 每日额度。只统计"会花掉模型钱"的路径（见 paths），
+      # 读接口、上传、改密码都不消耗额度 —— 把不花钱的操作也算进去，
+      # 用户会在毫无成本的地方撞到配额，那种限流只会招骂。
+      daily-requests: ${NEXUS_QUOTA_DAILY_REQUESTS:200}
+      daily-tokens: ${NEXUS_QUOTA_DAILY_TOKENS:200000}
+      paths:
+        # 这份清单是**架构事实**而不是旋钮：每加一条，就多一个"用户能用它烧钱"的入口。
+        # 新增模型调用接口时必须同步这里，否则新接口天然免配额（静默漏洞）。
+        #
+        # ⚠️ 这里**刻意不写 `/api/chat/**`**（初稿就是那么写的，是错的）：
+        # 那条通配会把"读历史消息 / 列出会话 / 删除会话 / 停止生成"一并算进当日额度，
+        # 于是一屏里的几次用户操作就能无声地吃掉额度——正是上面那句"不花钱的操作
+        # 不该撞配额"要避免的事，而且用户看到的「今日 N/200 次」也不再等于"问了几次"。
+        # 真机 E2E 里"刚进对话页就显示 1/200"就是这个通配的痕迹。
+        # 代价：/api/chat 下的读接口不受限速约束——它们只查库、不调用模型。
+        - /api/chat/stream
+        - /api/chat/conversations/*/messages
+        - /api/knowledge-bases/*/ask
+        - /api/knowledge-bases/*/ask/stream
+        - /api/agent/ask
+        - /api/agents/*/test-chat
+        - /api/eval/**
+        - /mcp
   chat:
     memory:
       # 会话记忆窗口大小（条）。太大：浪费 Token 且可能超出上下文；

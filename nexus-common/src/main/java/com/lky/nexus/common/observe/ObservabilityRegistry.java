@@ -41,6 +41,25 @@ public class ObservabilityRegistry {
      */
     public static final String TOOL_PROMPT_MISMATCH = "tool.prompt.mismatch";
 
+    /**
+     * 安全模块的存储（Redis / 内存）不可用（5.6）。限流器 fail-open 意味着"放行"，
+     * 若不计数，Redis 挂掉就等于**悄悄不设防**——这条计数就是那句"被吞掉的降级必须留痕"。
+     */
+    public static final String SECURITY_STORE_UNAVAILABLE = "security.store.unavailable";
+    /**
+     * 令牌版本缓存失效失败（5.6）：改密码已经把 DB 里的版本推上去，但缓存没删掉，
+     * 于是旧令牌会在缓存 TTL 窗口内继续有效。这是**有界但真实**的泄漏，必须可见。
+     */
+    public static final String SECURITY_TOKEN_VERSION_INVALIDATE_FAILED = "security.token-version.invalidate.failed";
+    /** token 用量写回失败（5.6）：模型已经调用了，账没记上，只能计数、不能回滚。 */
+    public static final String QUOTA_RECORD_FAILED = "quota.record.failed";
+    /**
+     * 一次模型调用没有归属到任何用户（5.6）：调用方忘了把 userId 放进 Advisor 上下文。
+     * 计入 token 配额的功能靠"每个入口都传 userId"，漏一个就会**静默少计**——
+     * 把它变成一条可见的计数，免得这个缺口只在上线对账时才发现。
+     */
+    public static final String QUOTA_USAGE_UNATTRIBUTED = "quota.usage.unattributed";
+
     private final ConcurrentHashMap<String, LongAdder> counters = new ConcurrentHashMap<>();
 
     public void increment(String key) {

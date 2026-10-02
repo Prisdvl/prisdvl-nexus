@@ -2,6 +2,9 @@ package com.lky.nexus.app.auth.config;
 
 import com.lky.nexus.app.auth.security.RestAccessDeniedHandler;
 import com.lky.nexus.app.auth.security.RestAuthenticationEntryPoint;
+import com.lky.nexus.app.auth.security.TokenVersionValidator;
+import com.lky.nexus.app.security.RateLimitQuotaFilter;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -12,13 +15,16 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
@@ -33,8 +39,10 @@ import com.nimbusds.jose.jwk.source.ImmutableSecret;
  *   <li><b>关闭 formLogin / httpBasic</b>：避免 Spring Security 默认弹出 Basic 认证框、
  *       或返回登录页 HTML，破坏 JSON 契约；</li>
  *   <li><b>401 与 403 都自定义</b>：统一成 {@code {code,message,data}}（见两个 handler 的说明）；</li>
- *   <li><b>权限来源是 Token 里的 roles 声明</b>，不是数据库查询：
- *       无状态鉴权不在每个请求上查库，exp 与吊销由令牌机制控制；</li>
+ *   <li><b>权限来源是 Token 里的 roles 声明</b>，不是数据库查询；
+ *       但 5.6 起每个请求会多校验一次"令牌版本"（改密码即刻失效），
+ *       正常情况下读 Redis 缓存、故障时回落查库 —— 这是 ADR-018 第 4 条
+ *       "不在每个请求上查库"的一处**有意例外**，理由与代价见 ADR-020；</li>
  *   <li><b>@Order(2)</b>：给测试/未来其他过滤器链留出靠前的顺序位置。</li>
  * </ol>
  */
@@ -71,7 +79,8 @@ public class SecurityConfig {
     public SecurityFilterChain apiSecurityFilterChain(HttpSecurity http,
                                                       RestAuthenticationEntryPoint authenticationEntryPoint,
                                                       RestAccessDeniedHandler accessDeniedHandler,
-                                                      JwtAuthenticationConverter jwtAuthenticationConverter)
+                                                      JwtAuthenticationConverter jwtAuthenticationConverter,
+                                                      RateLimitQuotaFilter rateLimitQuotaFilter)
             throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
@@ -90,9 +99,32 @@ public class SecurityConfig {
                         .authenticationEntryPoint(authenticationEntryPoint))
                 .exceptionHandling(handling -> handling
                         .authenticationEntryPoint(authenticationEntryPoint)
-                        .accessDeniedHandler(accessDeniedHandler));
+                        .accessDeniedHandler(accessDeniedHandler))
+                // 限流/配额（5.6）：必须挂在 BearerTokenAuthenticationFilter 之后
+                // ——那时 SecurityContext 已填充（CurrentUser 可用），
+                // 又早于任何控制器（所以 SSE 还没开流，超限时回的是统一 JSON）。
+                .addFilterAfter(rateLimitQuotaFilter, BearerTokenAuthenticationFilter.class);
 
         return http.build();
+    }
+
+    /**
+     * 阻止 {@link RateLimitQuotaFilter} 被 Servlet 容器**再注册一次**。
+     *
+     * <p>这是个很容易踩、后果又很具体的坑：Spring Boot 会把容器里任何 {@code Filter} bean
+     * 自动注册到 Servlet 过滤器链上。而上面又把它显式加进了 Security 链——
+     * 于是同一个请求它会跑两遍。
+     *
+     * <p>对 RequestIdFilter 那种幂等过滤器，跑两遍只是浪费；
+     * 但限流器**不幂等**：一次请求自增两次，用户看到的限额直接砍半、
+     * 配额也双倍消耗。所以这里显式关掉容器注册，只保留 Security 链里的那一次。
+     */
+    @Bean
+    public FilterRegistrationBean<RateLimitQuotaFilter> rateLimitQuotaFilterRegistration(
+            RateLimitQuotaFilter filter) {
+        FilterRegistrationBean<RateLimitQuotaFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 
     /** 密码哈希：BCrypt（自带随机盐、可调强度），绝不存明文、不用 MD5/SHA。 */
@@ -107,12 +139,25 @@ public class SecurityConfig {
         return new NimbusJwtEncoder(new ImmutableSecret<>(properties.secretKey()));
     }
 
-    /** 校验器：与签发器共用同一密钥，并限定算法为 HS256（防止算法混淆攻击）。 */
+    /**
+     * 校验器：与签发器共用同一密钥，限定算法为 HS256（防止算法混淆攻击），
+     * 并追加令牌版本校验（5.6：改密码即刻作废旧令牌）。
+     *
+     * <p><b>为什么必须用 {@link DelegatingOAuth2TokenValidator} 包一层</b>：
+     * {@code build()} 已经挂了 {@code JwtValidators.createDefault()}（含 exp / nbf），
+     * 而 {@code setJwtValidator} 是<b>替换</b>语义、不是追加——直接换成版本校验器，
+     * 过期校验就没了，30 分钟后本该过期的令牌会一直有效。
+     * 这是个"看起来只是加一个校验"的改动，代价却是把过期机制整个拆掉，
+     * 所以这里显式把两者组合在一起（并有测试盯着"过期令牌仍然被拒"）。
+     */
     @Bean
-    public JwtDecoder jwtDecoder(NexusJwtProperties properties) {
-        return NimbusJwtDecoder.withSecretKey(properties.secretKey())
+    public JwtDecoder jwtDecoder(NexusJwtProperties properties, TokenVersionValidator tokenVersionValidator) {
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(properties.secretKey())
                 .macAlgorithm(MacAlgorithm.HS256)
                 .build();
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                JwtValidators.createDefault(), tokenVersionValidator));
+        return decoder;
     }
 
     /**

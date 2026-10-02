@@ -47,10 +47,35 @@ nexus:
   search:
     # 同理：测试环境不启动 Elasticsearch（真实 ES 联调由 AI_SEARCH_LIVE=true 的守卫测试覆盖）
     enabled: false
+  security:
+    # 显式写出来（主配置的默认值也是 false）：测试绝不依赖 Redis，
+    # 限流/配额/令牌版本一律走 InMemorySecurityStore，因此 `mvn test` 不需要任何外部进程。
+    # 想验 Redis 那条实现路径只有一条路：起 standalone + 命令行打开开关。
+    redis-enabled: false
+    register:
+      # ⚠️ 必须放宽，理由是一次真实的踩坑：测试全都从 127.0.0.1 发起，
+      # AgentResourceTest 一个类就有 17 个用例、每个都注册一个账号。
+      # 默认 10 次/小时会在第 11 个用例开始返回 429，而**症状出现在别处**——
+      # 注册失败后紧接着的登录自然拿到 401（用户压根没建成），
+      # 于是报错是"登录 401"，排查方向会完全跑偏。
+      # 注册限流本身由 RegisterRateLimitTest 用自己的 properties 压到 2 来验证。
+      per-hour-per-ip: 1000
+    rate-limit:
+      # 同理：模型入口的 20 次/分钟上限在多用例共用一个账号的测试里容易被撞到。
+      # 限流行为由 RateLimitQuotaTest 显式置 0 验证，这里不影响其他用例。
+      per-minute: 1000
+    quota:
+      # 配额默认值（200 次 / 20 万 token）对测试足够宽松，保持不动；
+      # 用尽行为由 QuotaExhaustedTest 显式置 0 验证。
+      daily-requests: 1000
 
 management:
   health:
     rabbit:
+      enabled: false
+    # Redis starter 带来的健康指示器会真去连 6379：测试机没装 Redis 时它就是 DOWN，
+    # 而测试恰恰不应该依赖外部基础设施。
+    redis:
       enabled: false
 
 # 测试用模型配置：

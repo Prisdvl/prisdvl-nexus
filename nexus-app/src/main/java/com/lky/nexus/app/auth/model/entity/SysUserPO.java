@@ -47,6 +47,15 @@ public class SysUserPO {
     /** 最后登录时间 */
     private LocalDateTime lastLoginAt;
 
+    /**
+     * 令牌版本（5.6，迁移 V18）：改密码时 {@code +1}，使该用户此前签发的全部访问令牌立即失效。
+     *
+     * <p>校验发生在 {@code TokenVersionValidator}——它拿令牌里的 {@code ver} 声明与本列比对，
+     * 所以业务代码一般不直接读这个字段（唯一的例外是签发令牌时要把它写进声明）。
+     * 注册时不赋值，落数据库默认值 0。
+     */
+    private Long tokenVersion;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

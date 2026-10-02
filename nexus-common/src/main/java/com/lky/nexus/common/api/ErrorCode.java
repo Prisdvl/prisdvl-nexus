@@ -42,6 +42,15 @@ public enum ErrorCode {
     ACCOUNT_DISABLED(2004, "账号已被禁用"),
     USERNAME_ALREADY_EXISTS(2005, "用户名已被占用"),
     INVALID_CREDENTIALS(2006, "用户名或密码错误"),
+    /**
+     * 2007（5.6）：与 2005 对称的邮箱占用。
+     *
+     * <p>加它的原因是一次**没人报的静默不一致**：{@code sys_user} 上有
+     * {@code uk_user_email(email, deleted)}，但注册只预检了用户名。用重复邮箱注册
+     * 会撞唯一键 → {@code DataIntegrityViolationException} → 9999/500，
+     * 用户看到"系统内部错误"却不知道该换邮箱。分开成 2007 是为了让前端能指到那个输入框。
+     */
+    EMAIL_ALREADY_EXISTS(2007, "邮箱已被占用"),
 
     // ---------- 3xxx 知识库 / 文档 ----------
     KNOWLEDGE_BASE_NOT_FOUND(3001, "知识库不存在"),

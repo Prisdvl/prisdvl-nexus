@@ -26,6 +26,7 @@ import com.lky.nexus.app.chat.stream.StreamCancellationRegistry;
 import com.lky.nexus.app.infra.web.RequestIdHolder;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.security.UserContextKeys;
 import com.lky.nexus.knowledge.rag.PreparedAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswerService;
 import org.slf4j.Logger;
@@ -234,6 +235,10 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                         .advisors(a -> a.advisors(memoryAdvisor)
                                 .param(ChatMemory.CONVERSATION_ID, ChatMemoryKeys.of(conversationId)));
             }
+            // token 记账归属（5.6）：放在 if/else 之外，是因为两个分支都要记账。
+            // RAG 分支不挂记忆 advisor，但它照样要花 token——只在非 RAG 分支里传 userId
+            // 会让"用 RAG 对话永远不扣额度"，而且这种漏记没有任何报错
+            request = request.advisors(a -> a.param(UserContextKeys.USER_ID, userId));
             if (agentMode) {
                 // 提示词 + 工具 + ToolContext 的组装交给 AgentRuntime.configure：一次性调用
                 // （AgentRuntime.ask）走的是同一个方法。两条链路各写一份的话，将来给 Agent

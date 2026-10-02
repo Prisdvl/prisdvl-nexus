@@ -39,6 +39,16 @@ public class NexusJwtProperties {
     private Duration accessTokenTtl = Duration.ofMinutes(30);
 
     /**
+     * "用户当前令牌版本"的缓存 TTL（5.6）。
+     *
+     * <p>这个值不只是性能旋钮——它同时是**缓存失效失败时旧令牌的存活上限**：
+     * 改密码会把版本推上去并主动删缓存，万一删除失败，旧令牌最多再活这么久。
+     * 调大省 DB 查询，但把那个窗口一起放大。见 {@code UserAuthCache.invalidate}。
+     */
+    @NotNull
+    private Duration tokenVersionCacheTtl = Duration.ofMinutes(5);
+
+    /**
      * 构造 HMAC 密钥。
      *
      * <p>HS256 要求密钥长度不少于 256 位（32 字节）；太短的密钥会被 Nimbus 拒绝，

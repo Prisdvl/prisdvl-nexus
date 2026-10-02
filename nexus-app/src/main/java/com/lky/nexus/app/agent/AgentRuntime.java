@@ -5,6 +5,7 @@ import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.agent.tool.AgentToolFactory;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.security.UserContextKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -108,6 +109,9 @@ public class AgentRuntime {
             answer = configure(chatClientFactory.get(definition.modelRole()).prompt(),
                     userId, definition, AgentContext.collector(trace))
                     .user(question)
+                    // token 记账归属（5.6）。Agent 会跑多轮工具循环，而 UsageMeteringAdvisor
+                    // 位于工具循环内侧 ⇒ 每一轮各记一笔。这不是重复：每一轮都真的调了一次模型
+                    .advisors(a -> a.param(UserContextKeys.USER_ID, userId))
                     .call()
                     .content();
         } catch (BusinessException ex) {

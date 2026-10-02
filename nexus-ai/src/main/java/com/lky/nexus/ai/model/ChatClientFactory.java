@@ -3,6 +3,7 @@ package com.lky.nexus.ai.model;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.security.ChatUsageRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -31,6 +32,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>ChatClient 是线程安全的轻量对象，可以缓存复用；这里用
  * {@link ConcurrentHashMap#computeIfAbsent} 做惰性构建，避免启动时就要求所有角色都可用。
+ *
+ * <p>（5.6）每个 client 都挂上 {@link UsageMeteringAdvisor}：这是 token 记账的<b>唯一收口</b>，
+ * 六个真实发起模型调用的入口全都经过本工厂，所以挂在这里一处即可全覆盖。
+ * 代价是"装配期就依赖 {@link ChatUsageRecorder}"——因此 recorder 允许缺省：
+ * 不传就是 {@link ChatUsageRecorder#NOOP}（纯 AI 层的单测不需要配额）。
  */
 public class ChatClientFactory {
 
@@ -38,11 +44,19 @@ public class ChatClientFactory {
 
     private final AiModelProperties properties;
     private final AiModelRegistry registry;
+    private final ChatUsageRecorder usageRecorder;
     private final Map<String, ChatClient> clientsByRole = new ConcurrentHashMap<>();
 
+    /** 不记账的构造：给不关心配额的测试与纯 AI 层使用。 */
     public ChatClientFactory(AiModelProperties properties, AiModelRegistry registry) {
+        this(properties, registry, ChatUsageRecorder.NOOP);
+    }
+
+    public ChatClientFactory(AiModelProperties properties, AiModelRegistry registry,
+                             ChatUsageRecorder usageRecorder) {
         this.properties = properties;
         this.registry = registry;
+        this.usageRecorder = usageRecorder == null ? ChatUsageRecorder.NOOP : usageRecorder;
     }
 
     /**
@@ -67,6 +81,12 @@ public class ChatClientFactory {
                     "逻辑角色 %s 未在 ai.roles 中配置。已配置：%s".formatted(role, configuredRoles()));
         }
         log.debug("为角色 {} 构建 ChatClient，模型引用={}", role, reference);
-        return ChatClient.builder(registry.requireChatModel(reference)).build();
+        return ChatClient.builder(registry.requireChatModel(reference))
+                // 记账顾问在这里挂一次，六个调用点一起覆盖（见类注释）。
+                // defaultAdvisors 与业务代码在请求上追加的 advisors 是**合并**关系
+                // （DefaultChatClient.prompt() 复制的是含默认顾问的模板 spec，链按 order 排序），
+                // 所以聊天记忆顾问与本顾问可以共存，互不挤掉对方
+                .defaultAdvisors(new UsageMeteringAdvisor(usageRecorder))
+                .build();
     }
 }

@@ -91,7 +91,7 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | Phase 8 | Workflow（学习计划 / 知识分析 / 报告） | ⏳ |
 | Phase 9 | Evaluation | ⏳ |
 | Phase 10 | Observability | ⏳ |
-| Phase 11 | 工程化（Docker / Nginx / 安全 / 限流 / CI） | ⏳ |
+| Phase 11 | 工程化（Docker / Nginx / 安全 / 限流 / CI） | 🔄 限流与配额已提前到平台化 5.6 完成（登录失败冻结、用户级限流、每日次数/token 配额）；容器化（P1-17）仍待做 |
 
 平台化升级（另一条轨道，与上面的 Phase 并行）：
 
@@ -106,6 +106,8 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | Phase 4.1 | Agent 配置化（后端）：`agent` 表 + Definition/Runtime 分离 + `/api/agents` CRUD/复制/试跑 + 会话选 Agent + Agent 绑定知识库决定检索范围 | ✅ 后端完成（迁移 V12；见 decisions.md B.35） |
 | Phase 4.2 | Agent 配置化（前端）：Agent 管理页（生命周期全流程）+ 对话页 Agent 选择器 + `resetAgent`（回到内置默认）+ E2E 脚本 | ✅ 完成（真机栈 E2E 全过；试跑因本机无模型 `SKIPPED`；见 decisions.md B.36） |
 | 真机栈补验 | Docker 起来后用 `local`（真 MySQL/ES/pgvector/Redis/RabbitMQ）重跑：13 项 live + 3 项流式 live 全过、三条 E2E 脚本**无跳过退出码 0**；同时逼出两个后端死路与一个界面缺陷 | ✅ 完成（见 decisions.md B.37 / baseline §9.6） |
+| Phase 5.3 – 5.5 | 知识库闭环（单文件上传 / 删文档 / 失败原因）、Agent 闭环（温度 / 工具白名单 / 重命名 / 出处）、多知识库 RAG | ✅ 完成（2026-10-01 / 10-02；见 decisions.md B.44 / B.45 / B.46） |
+| Phase 5.6 | 用户与安全：改密码 + 令牌吊销（`token_version`）、资料编辑、登录失败冻结、限流与每日配额、额度只读接口 | ✅ 完成（2026-10-02，见 decisions.md B.47 与 ADR-020/021）：`mvn test` 541/0/0/18；**真机验收已执行且全程不使用 Docker**（`standalone` + 内存存储 / `standalone` + 本机原生 Redis 两条路径各跑一次 `verify-security.mjs`，均退出 0，降级语义逐条实测） |
 | Phase 3+ | RAG/Agent/Workflow/Application/Model 的抽象上移与用户可配置化 | ⏳ 见分析文档第 12 节 |
 
 ## 7. 本地环境要求
@@ -219,6 +221,12 @@ npm run dev            # http://localhost:5173（/api 由 Vite 代理到后端 8
 以及 **Agent 管理**（`/agents`：新建 → 试跑 → 发布 → 在对话页选用 → 停用 → 删除；
 配提示词、可检索的知识库、**工具白名单**与**采样温度**；草稿不能选用，选择器里会说明原因）。
 
+侧栏底部点自己的名字可打开**账号设置**：改昵称 / 邮箱、改密码。
+**改密码会让所有设备下线**（服务端吊销该用户全部令牌，包括发起本次请求的那一支），
+界面上会说明并主动送回登录页——而不是让用户在下一次点击时撞上"登录已过期"。
+对话页左下角有一行**当日额度**（「今日 12/200 次 · 3.4k/200k tokens」），
+额度用尽时变红——配额在 5.6 之前是个隐形旋钮，被 403 拦住之前没人知道有这回事。
+
 **界面验证（不下载浏览器，复用系统 Edge/Chrome）**：
 
 ```powershell
@@ -232,6 +240,7 @@ node scripts/verify-retrieval-ui.mjs # 检索卡片渲染契约：桩掉 /api/ch
 node scripts/verify-agents.mjs     # Agent 管理页：新建→配置（提示词/知识库/工具白名单/温度）→发布→对话页可选→停用→不可选→删除（11 条腿）
 node scripts/verify-agent-no-kb.mjs # 零知识库的新用户提问：提示 → 检索如实报空 → 回答注明不是来自笔记 → 痕迹刷新后仍在
 node scripts/verify-multi-kb.mjs   # 多知识库 RAG：自建两个库各导入不同内容的文档 → 界面多选绑定 → 提问只有第二个库能答的问题（断言来源标注 + 回答引用其独有事实）→ 越权绑定被拒（自建自删，不依赖 seed-demo）
+node scripts/verify-security.mjs   # 用户安全：改资料（侧栏跟着变）→ 错原密码不把人踢下线（400 而非 401）→ 改密码后被送回登录页 + 旧 token 打接口返回 401 → 新密码登录（自建账号，不依赖 seed-demo）
 ```
 
 > `verify-*.mjs` 都要求后端已按上一节跑起来，并且**已经种好演示数据**
@@ -239,6 +248,8 @@ node scripts/verify-multi-kb.mjs   # 多知识库 RAG：自建两个库各导入
 > 脚本会把截图写进 `docs/screenshots/`。
 > 例外是 `verify-agent-no-kb.mjs`：它**故意不用演示账号**——它要的就是"一个库都没有的新账号"，
 > 所以每次运行自己注册一个 `probe-nokb-*`，也不依赖 `seed-demo`。
+> `verify-security.mjs` 同理自己注册 `sec-check-*`：它要改密码，而**改演示账号的密码会让
+> 后面所有脚本都登不进去**。
 > 没有删号接口，因此**每跑一次会留下一个这样的账号**（代价写在这里，免得以后当成残留 bug 去查）。
 
 > **退出码**：`0` 全部通过 / `1` 真实失败 / `2` 有跳过。跳过只在**环境能力缺失**时发生
@@ -262,6 +273,15 @@ node scripts/verify-multi-kb.mjs   # 多知识库 RAG：自建两个库各导入
 > 见 `docs/decisions.md` B.46 §11。
 > **注意 full 栈仍不等于"部署形态也验了"**：Docker 在这里只是基础设施，
 > 应用本身还是本机 `java -jar` + Vite dev server；容器化部署（Dockerfile/nginx）**未验**。
+
+> **Phase 5.6（用户安全）的两条真机路径都不需要 Docker**，因此按用户"暂停使用 Docker"的要求
+> 依然验完了：`standalone`（H2）+ 进程内存储跑一次 `verify-security.mjs`（退出 0），
+> 再 `--nexus.security.redis-enabled=true` + **本机原生 Redis**（`E:\lky\Redis`，不是容器）
+> 跑第二次（同样退出 0），并用 `redis-cli` 核对键值（`nexus:auth:tv` 在改密后为 1、
+> `nexus:auth:lf/ll` 在连错 5 次后为 5/1）、用 curl 打满分钟级限流看 `Retry-After`、
+> 把 Redis 停掉逐条验降级（登录仍可用 / 模型入口 403·7002 / 旧令牌 401）。
+> **但有代价**：8 个依赖 ES / pgvector / 真模型的既有脚本**本轮未复跑**，
+> 留到 5.7 容器化之后统一复跑。完整证据见 `docs/decisions.md` B.47 末节。
 
 > **`verify-retrieval-ui.mjs` 是桩验证，不是 E2E**：它把 `/api/chat/stream` 换成
 > 手写的 SSE 帧（形状取自 `docs/api.md` §5.2），用来单独验"前端拿到这套帧渲染成什么样"

@@ -253,6 +253,9 @@
 2. **过滤器链无状态**：`STATELESS` + 关闭 CSRF / formLogin / httpBasic / logout。纯 Token API 不用 Cookie，不存在 CSRF 的适用场景。
 3. **401 与 403 都自定义**（`RestAuthenticationEntryPoint` / `RestAccessDeniedHandler`），返回统一 `{code,message,data}`（2001 / 2003）。否则 Spring Security 的默认响应会破坏前端契约，前端无法区分"去登录页"还是"提示无权限"。
 4. **权限来自 Token 的 `roles` 声明**（`JwtAuthenticationConverter` + `ROLE_` 前缀）：无状态鉴权不在每个请求上查库。
+   > ⚠️ **2026-10-02 部分修正**：为了"改密码后旧令牌立即失效"，`jwtDecoder` 现在多挂了一个
+   > `TokenVersionValidator`，正常情况下**每个请求会多一次 Redis GET**（缓存未命中或 Redis 故障时查一次库）。
+   > 权限仍然只来自 Token 声明，这条没有变；变的是"完全不查库"不再成立。见 ADR-020。
 5. **不使用 `AuthenticationManager` / `UserDetailsService`**：手工 `passwordEncoder.matches()` 校验，语义更直接可控（那套机制的默认异常链与我们要的业务码语义冲突）。接入第三方 OAuth2 登录时再引入 `AuthenticationProvider`。
 6. **账号枚举防护**：用户不存在与密码错误返回**完全相同**的 2006 提示（已用测试断言两者 message 相等）；"账号被禁用"只在密码校验通过之后才提示。
 7. **密钥 fail-fast**：`nexus.jwt.secret` 不设默认值，缺失或不足 32 字节直接启动失败——避免开发期弱密钥被带进生产。
@@ -283,6 +286,94 @@
 配置化之后，换网关只是改几行 yaml；出问题时（400/401）日志里也能直接看出是哪个头没发。
 
 **代价**：配置项变多，且头名称是字符串（无编译期检查）→ 用 `LiveModelCallTest` 这类真实调用测试兜底。
+
+---
+
+## ADR-020 令牌吊销用"用户级版本号"，不用黑名单；三个关注点各自定降级方向
+
+**背景**：ADR-018 第 8 条之后，改密码是一个"必须真的生效"的需求——旧令牌不能继续用。
+但 ADR-018 是**无状态** JWT，本身没有撤销机制（当时写的是"Redis 黑名单 + jti，Phase 11 落地"，
+`jti` 声明预置了但从未被存储或校验）。同时本期要加登录失败限制与每日配额，两者都要一个存储，
+而项目的既有范式是"端口 + 内存实现，Redis 作为可选实现"，不能让 `standalone` / `test` 依赖 Redis。
+
+**决策**
+
+1. **吊销粒度 = 用户级版本号，不是 jti 黑名单**。`sys_user.token_version`（V18）自增，
+   令牌里带 `ver` claim，校验时比对。理由：黑名单要存到**每支令牌的过期时刻**，键的数量随
+   登录次数线性增长，且"改密码"这个唯一场景要的是"全部作废"，黑名单表达它反而要多一步枚举。
+   版本号的键是**每个用户一个**，且天然表达"所有设备一起下线"这个正确语义。
+2. **`ver` 缺失按 0 处理** → 本次改动之前签发的令牌全部继续有效，不会集体下线。
+3. **缓存失败回落查库，不是 fail-open/closed 二选一**。`UserAuthCache` 是 cache-aside：
+   Redis GET 未命中或抛异常 → 查 `sys_user` 并回填。**DB 是事实来源，缓存只是加速**，
+   所以故障时降级成"每请求查一次库"，依然正确。这比两种 fail 策略都好，但代价必须说清楚（见下）。
+4. **改密码时 invalidate 而不是写穿**：写穿需要"读旧值 → 写新值"，两个并发改密请求会把
+   旧版本写回去，等于吊销失效。invalidate 之后下一次读必然回源。
+5. **降级方向按关注点分开定**（不是一刀切，也不是遗漏）：
+   - 登录失败限制、分钟级限流 → **fail-open**：存储一挂，全体用户被锁在门外，代价远大于少限几次；
+   - 每日配额 → **fail-closed**：存储一挂就是无限烧钱，宁可报 `7002`（文案区分"已用尽"与"服务不可用"）；
+   - 令牌版本 → **回落查库**（见上）。
+6. **改密时原密码错误返回 `1001 / 400` 而不是 `2006 / 401`**：调用方已通过认证，
+   回 401 会被前端全局拦截器解读为"会话过期"并清 token 跳登录页，把输入错误升级成会话中断。
+   这是**已认证场景**与**登录场景**的刻意区分，`verify-security.mjs` 有一条断言专门守它。
+
+**代价 / 诚实边界**
+
+- **每个请求多一次 Redis GET（故障时是一次查库）**：这与 ADR-018 第 4 条"无状态鉴权不在每个请求上查库"
+  相反，是本条决策的直接代价，不是疏忽。ADR-018 第 4 条已就地标注并回链到这里。
+- **配额可被绕过**：Redis 重启 / `allkeys-lru` 淘汰会丢当日计数；多实例下内存实现不共享
+  （因此多实例必须开 `nexus.security.redis-enabled`）。要真正可靠得把当日用量落到
+  `sys_user_daily_usage` 之类的表，本期不做。
+- **账号 `status` 改动与软删除不会立即吊销已签发令牌**：本期只校验 `token_version`
+  （软删除时 `selectById` 为 null 会被拒，但仅改 `status` 的令牌会活到过期）。已知缺口。
+- **登录冻结按 username 维度 ⇒ 可被用来定向刷锁**某个账号（拿错密码刷到阈值）。
+  按需求以 username 为键，窗口取短（15 分钟）而不是几小时，宁可让攻击者多试几次。
+  跨用户名的分布式猜测不在覆盖范围内。
+- **`/api/auth/register` 的 IP 限流不信任 `X-Forwarded-For`**：反向代理后 `getRemoteAddr()`
+  可能是代理地址，届时该维度会退化成"全局一个桶"。这是**不知道就不猜**的取舍，不是遗漏。
+- **token 记账是尽力而为**：模型已经调用，无法回滚；供应商不回传 usage 时记不到
+  （靠 `quota.usage.unattributed` 让缺口可见，而不是静默少计）。`LlmReranker` 与 embedding
+  不计入用户配额——前者被显式标成系统调用，否则那个缺陷计数会被正常流量打满而失去意义。
+
+---
+
+## ADR-021 Token 从 localStorage 迁到 HttpOnly Cookie：**本期只出设计，不改代码**
+
+**背景**：用户要求"分析 localStorage 的 XSS / Token 泄露风险，给出 HttpOnly Cookie 升级方案，
+**但不要直接大改**"。所以这是一份**设计记录**，本期代码零改动，缺口如实登记。
+
+**现状与风险**
+
+- 令牌存在 `localStorage['nexus.token']`（`web/src/api/client.ts:33`），
+  用户名同样在 `localStorage['nexus.username']`。
+- **任意一次 XSS 即可读走一支 30 分钟有效的令牌**并离线使用。前端已经把 Markdown 输出
+  过 `marked + DOMPurify`（`web/src/utils/markdown.ts`），但"渲染层已消毒"不等于"没有 XSS"——
+  依赖供应链、第三方脚本、内联事件处理器都不在 DOMPurify 的覆盖范围内。
+- 今天的缓解只有 **access token TTL = 30 分钟**，且**没有 refresh token、没有登出**
+  （见 `docs/api.md` §2.2），所以令牌一旦被偷，30 分钟内无法主动止损。
+
+**Cookie 不是"白拿的安全"**——迁移必须一起处理三件事，否则是拿 XSS 换 CSRF：
+
+1. `SecurityConfig` 关 CSRF 的**前提正是"不用 Cookie"**（ADR-018 第 2 条：纯 Token API
+   不存在 CSRF 的适用场景）。换成 Cookie 之后这个前提消失，`CookieCsrfTokenRepository` 必须加回来。
+2. `HttpOnly` + `Secure` + `SameSite` 三者的组合要按部署形态定：
+   `SameSite=Lax` 能挡住跨站表单提交，但前端与后端不同源时（Vite dev 代理、独立域名的生产部署）
+   还要 `withCredentials` 与 CORS `allow-credentials` 一起配。
+3. 前端 401 处理（`client.ts` 拦截器）要从"清 localStorage 跳登录页"改成
+   "回调 `/auth/refresh` 再重放原请求"，否则每一个浏览器重启都会把用户踢出去。
+
+**分阶段迁移路径**（本期均不实施）
+
+| 阶段 | 内容 | 前置 |
+| --- | --- | --- |
+| ① | 登录时**同时**下发 `HttpOnly + Secure + SameSite=Lax` Cookie，保留 `Bearer` 头路径 | 无 |
+| ② | 后端加自定义 `BearerTokenResolver`（**请求头优先、Cookie 兜底**），使两种客户端都能用 | ① |
+| ③ | 前端去掉 localStorage 读写，改为 `withCredentials` | ② |
+| ④ | 开 `CookieCsrfTokenRepository`，前端读 `XSRF-TOKEN` 并回填 `X-XSRF-TOKEN` | ③ |
+| ⑤ | 缩短 access TTL + 引入 refresh token（**需要 `sys_refresh_token` 表**：存哈希、可轮换、可吊销） | ④ |
+
+**诚实边界**：本期不做，所以 **localStorage 的 XSS 暴露面依然存在**，
+只是被 30 分钟的 TTL 限了窗口。这一点登记在 `docs/productization-gap-analysis.md` 里，
+而不是假装它被这一期顺手解决了。
 
 ---
 
@@ -3645,6 +3736,169 @@ ES 9200 + analysis-ik / RabbitMQ / Ollama）+ 后端 `--spring.profiles.active=l
   都留给有评测数据之后；
 - Agent 侧一行没动：`AgentDefinition.kbIds` 与 `KnowledgeSearchTool` 的逐库扇出从 4.1/4.3 起
   就是这样，本期只补了 `likeSingle` 构造 `SearchHit` 时要传 kbId（编译所需）。
+
+---
+
+### B.47 Phase 5.6 实现记录（用户安全体系：四个功能，和一条"无声失效"的框架陷阱）
+
+**做了什么**（四个需求，逐条对应）：
+
+1. **修改密码**：`PUT /api/users/me/password`，BCrypt 验证原密码 → 更新哈希 →
+   `token_version + 1`（一条 `LambdaUpdateWrapper` 同时改两列，`updateById` 表达不了 `+1`）。
+2. **Token 安全**：只出设计（ADR-021），代码零改动——用户明确说"不要直接大改"。
+   `docs/productization-gap-analysis.md` 里登记为**仍存在的缺口**。
+3. **登录失败限制**：`LoginAttemptLimiter`，`nexus:auth:lf:{username}`（计数）+ `nexus:auth:ll:{username}`
+   （冻结标记），5 次 / 15 分钟窗口 / 冻结 15 分钟，fail-open。注册入口另做 IP 限流（10 次/小时）。
+4. **限流 + 每日配额**：`RateLimitQuotaFilter`（一个收口点）+ `QuotaService` + `UsageMeteringAdvisor`。
+
+**三个值得记下来的判断**
+
+**① ★ 记账点选 Advisor，不选"包一层 ChatModel"**。第一直觉是写一个 `ChatModel` 装饰器，
+在方法入口读 `SecurityContext` 拿 userId——最干净。**但它是错的**：
+反编译 `DefaultChatClient$DefaultStreamResponseSpec` 可见 `chatResponse()` 返回
+`Flux.deferContextual(...)`，真正的 `advisorChain.nextStream()` 跑在 `boundedElastic` 线程上，
+请求线程的 `SecurityContext` 在那里是空的。而 `ChatClientRequest.context()` 是**装配期被闭包捕获的普通对象**，
+订阅线程可见（框架自己的 `MessageChatMemoryAdvisor` 取 `CONVERSATION_ID` 就是这个机制）。
+换用 Advisor 之后还有第二个收益：调用方拿到的仍然只是 `String`（`.content()`），
+**不需要为了记账去改它们的取值方式**——advisor 看的是 `ChatResponse`。
+
+**② ★★ 一个 `getOrder()` 恰好等于 `Ordered.LOWEST_PRECEDENCE` 的 Advisor 会被静默跳过**（本次最大的坑）。
+
+这不是推测，是实测（2026-10-02）。`UsageMeteringAdvisor` 一开始把 `ORDER` 设成
+`Ordered.LOWEST_PRECEDENCE`（"链条最内侧，贴近终端"听起来完全合理），测试却报
+`Expecting actual: []`——**记账一笔都没有**。一个临时的探针（注册一串只在 `adviseCall` 里打日志的
+Advisor，顺序分别取 MIN / MIN+100 / MIN+200 / MIN+1000 / 0 / MAX-1 / MAX）打印出：
+
+```
+MIN(order=-2147483648): ENTERED
+MIN+100: ENTERED      …… MIN+1000: ENTERED …… ZERO: ENTERED …… MAX-1(order=2147483646): ENTERED
+MAX: model called     ← 没有 ENTERED：被静默跳过
+```
+
+根因：框架的 `ChatModelCallAdvisor.getOrder()` / `ChatModelStreamAdvisor.getOrder()` **就是**
+`Integer.MAX_VALUE`（`= Ordered.LOWEST_PRECEDENCE`），而它们是在 `buildAdvisorChain()` 里
+**追加**到已排序列表末尾的。同序时终端胜出，我们的顾问**永远不被调用**——
+**不报错、不打日志、模型照调、回答照回**，只是记账永远是 0。
+
+这种失效的形状正是本项目反复吃亏的那一种：**错了也不报错**。所以修法不只是把常量改成
+`Ordered.LOWEST_PRECEDENCE - 100`，还加了一条回归断言把它钉死
+（`orderMustNotCollideWithTheChainTerminal`：断言顾问的 order **严格小于** `LOWEST_PRECEDENCE`），
+靠注释提醒是不够的——注释不会失败。
+
+**③ 静默少计要留下痕迹**。每个调用点都要手动加一行 `.advisors(a -> a.param(UserContextKeys.USER_ID, userId))`，
+**忘了加不会报错**。所以 advisor 拿不到 userId 时**不静默丢弃**：计入
+`quota.usage.unattributed` 并打带模型名的日志。同理，`LlmReranker`（每次都跑的系统调用）
+被显式标成 `UserContextKeys.SYSTEM_CALL` 而彻底跳过——否则那个"缺陷计数"会被正常流量永久打满，
+等于没有。
+
+**一份诚实的偏差说明**：实施计划里写的是"**不改** `LlmReranker`"。实际改了——加了一行
+`SYSTEM_CALL` 标记。这不是顺手扩大范围，而是计划里那条"不改"会**破坏上面第 ③ 条的告警价值**：
+不标记的话，重排每次检索都记一笔 unattributed，那个计数就永远是满的。代码注释里写了原因。
+
+**一个测试侧的教训**：`RagStreamRetrievalEventTest` 里有一串 mock 出来的 ChatClient 链
+（`prompt() → system() → user() → stream()`）。生产代码在这条链上多插了一步 `advisors(...)` 之后，
+测试报的是 `NullPointerException: ... 因为 advisors(...) 的返回值为 null`——
+读起来像是**生产代码写错了**，实际是 Mockito 对未打桩的方法返回 null、桩没跟上。
+修法是在桩里补一行 `when(requestSpec.advisors(any(Consumer.class))).thenReturn(requestSpec)`。
+记下来是因为这种报错会把人往错误的方向带：fluent mock 链上的每一步都是一份契约，
+生产代码每多一步，桩就得跟一步。
+
+**一处自己写的通配，靠真机数字才露出来**：配额路径清单初稿写的是 `/api/chat/**`——看起来
+"把所有 chat 入口都罩住"很稳妥，实际把**读历史消息、列出会话、删除会话、停止生成**
+一起算进了当日额度。它不会报错，只会让用户在自己完全不花钱的操作上被扣额度，
+并且「今日 N/200 次」不再等于"问了几次"。露馅的是真机 E2E：**刚登录、只进了一次对话页
+就显示「今日 1/200 次」**——那一格数字本身就是证据。现在收窄成
+`/api/chat/stream` + `/api/chat/conversations/*/messages`，并加了一条反证测试
+（`nonModelChatPathsAreNotCharged`：限额置 0 时那三条路径仍放行）。
+**教训与 B.47 §① 同源**：配置里的通配和 Advisor 的 order 一样，越界了也不会响，
+只能靠"数字对不对"去发现——所以能显示的计数要显示出来，别只写进日志。
+
+**文档也修了**：`docs/api.md` §2 此前把 `/auth/refresh`、`/auth/logout`、`PUT /users/me`、
+`PUT /users/me/password`、`GET /admin/users` 都写成"已实现"，实际**全都不存在**；
+§12 描述的限流体系同样是**零代码**（`7001`/`7002` 定义好了、映射好了、没有抛出点）。
+本期把其中两条做成真的，其余移进"规划中"表里并注明原因。**文档不实比功能缺失更贵**：
+它会让"照文档接一下就有了"的判断落空，而且落空发生在集成之后。
+
+**验证结果**
+
+- `mvn -B test`：**541 / 0 失败 / 18 跳过**（5.5 基线 462，**净增 79，全部是本期新增的类**——
+  逐类相加 78，再加收窄配额路径后补的那条反证测试 1：`UsageMeteringAdvisor` 9、`QuotaService` 9、`UpdateProfileTest` 9、
+  `UserAuthCache` 8、`PasswordChangeFlowTest` 7、`TokenVersionValidator` 7、`LoginAttemptLimiter` 6、
+  `RateLimitQuota` 6（5 + 反证 1）、`LoginRateLimit` 4、`RateLimiter` 4、`QuotaEndpoint` 3、`RegisterRateLimit` 3、
+  `QuotaExhausted` 2、`SecurityStoreDegradation` 2）。跳过数与 5.5 相同（18），
+  即**没有新出现被环境能力挡掉的用例**。这一步同时证明 `standalone` / `test` 不依赖 Redis：
+  它们用 `InMemorySecurityStore`。
+- `mvn -B package -DskipTests` 与 `cd web && npm run build`（含 `vue-tsc --noEmit`）均成功。
+  前端侧新增 `vue-tsc` 能过的类型（`Quota`、`UserProfile`）不是"编译通过"的装饰——
+  `client.get<never, T>()` 的第二个泛型参数写错会在这里直接失败。
+
+**真机验收（2026-10-02，全程不使用 Docker）**
+
+环境：`java -jar` + `--spring.profiles.active=standalone`（H2 内存库）+ Vite dev server；
+Redis 用本机原生实例（`E:\lky\Redis`，3.0.504，非 Docker 发布），用命令行
+`--nexus.security.redis-enabled=true` 把存储切到 `RedisSecurityStore`。**两条路径都真跑过。**
+
+① **standalone + 内存实现**：`/actuator/health` = **UP** —— 证明引了
+`spring-boot-starter-data-redis` 之后健康指示器确实关掉了，6379 没开也不会 DOWN；
+`verify-security.mjs` **退出 0**（8 条腿全过，含第 ⑦ 条"用改密前的旧 token 打接口 → 401"）。
+② **standalone + 真 Redis**：同样**退出 0**；`redis-cli KEYS 'nexus:*'` 看得到四类键，值都对：
+
+```
+nexus:auth:tv:{userId}              = 1    ttl 265     ← 改密后版本号确实 +1
+nexus:q:req:{userId}:{yyyyMMdd}     = 1    ttl 32800
+nexus:rl:u:{userId}:{yyyyMMddHHmm}  = 3    ttl 96
+nexus:rl:ip:{ip}:{yyyyMMddHH}       = 1    ttl 7172
+```
+
+③ **登录失败冻结**：注册后连错 5 次密码（每次 `401 / 2006`）→ **第 6 次拿正确密码**返回
+`429 {"code":7001,"message":"登录失败次数过多，账号已被暂时锁定，请 15 分钟后再试"}`；
+`nexus:auth:lf:*` = 5、`nexus:auth:ll:*` = 1。这条同时证明**检查发生在校验密码之前**。
+④ **用户级限流**：同一用户一分钟内打到第 21 次 → `429 / 7001 请求过于频繁（每分钟上限 20 次）`，
+响应头 `Retry-After: 60`，`Content-Type: application/json`（**不是** `text/event-stream`）——
+第 ④ 条与"开流前拒绝"是同一个证据的两面。
+⑤ **每日配额**：把上限压到 2 再跑 → 第 3 次 `403 / 7002`
+「今日问答次数已用尽（上限 2 次/天），将于次日 00:00 重置」。**与第 ⑥ 条的"服务不可用"文案可区分**，
+这正是当初把两种 7002 分开写的理由。
+⑥ **降级语义**（把 Redis 停掉之后逐条打）：
+
+| 关注点 | 实测 |
+| --- | --- |
+| 注册（IP 限流器） | `200`（fail-open） |
+| 登录（失败限制器 + 令牌版本） | `200`（fail-open；令牌版本回落查库） |
+| 模型入口 `POST /api/chat/stream` | `403 {"code":7002,"message":"配额服务暂时不可用，请稍后再试"}`（fail-closed） |
+| 改密码（仅限速） | `200`（fail-open） |
+| 改密后的旧令牌打 `GET /users/me` | `401 / 2001`（回落查库读到了新版本） |
+
+**两个被真机验证逼出来的问题**
+
+**① ★ 注册限流会误伤开发环境自己**。`test` profile 早就因为这个坑放宽过（`application-test.yml`
+的注释里写着"必须放宽"），但 `standalone` / `local` **没有**——而 E2E 脚本里有好几个会自己注册
+临时账号（`verify-security.mjs`、`verify-agent-no-kb.mjs` 各一个，外加手工造账号）。
+实测同源连续注册到**第 9 次**开始 `429 / 7001 注册过于频繁（每小时上限 10 次）`；
+更糟的是**症状会跑到别处**：注册失败 → 紧接着那次登录自然 401，于是"限流"看起来像"认证坏了"。
+两个开发 profile 现在把 `per-hour-per-ip` 默认放宽到 1000（`${NEXUS_REGISTER_PER_HOUR:1000}`），
+生产默认仍是 `application.yml` 里的 10（未覆盖任何 profile 时生效）——
+要在这两个 profile 上验真实阈值就显式设 `NEXUS_REGISTER_PER_HOUR=10`。
+**改完复验**：同样连续注册 12 次，**12 次全部 200**（改之前同样这 12 次会在第 9 次断掉）。
+**放宽的是开发环境的默认值，不是阈值本身**：`RegisterRateLimitTest` 照旧压到 2 验真实行为。
+
+**② `spring-boot:repackage` 报 "Unable to rename '…jar' to '…jar.original'"**。
+不是插件的问题：上一轮验证留下的 `java -jar … --spring.profiles.active=local` 进程
+还开着，Windows 上**进程占用中的 jar 不能改名**。这个错误的措辞（"Unable to rename"）
+完全不提"文件被占用"，容易让人去查插件配置或磁盘权限。顺带一提，这次它**被 `| tail` 藏了退出码**
+（外层 shell 看到的是 `tail` 的 0），和 B.46 里记的是同一个坑——
+所以凡是用管道截断输出的构建，都必须显式回显 `${PIPESTATUS[0]}`。
+
+**本期没复跑的那部分，如实记着**：8 个既有 `verify-*.mjs`（`verify-agent-chat` / `verify-stream` /
+`verify-multi-kb` 等）**本轮没有复跑**——它们要 Elasticsearch、pgvector 与真实模型，
+即用户本期明确要求暂停的 Docker 基础设施栈。**这不等于它们没被影响**：本期新增的
+用户级限流（20 次/分钟）恰好作用在这些脚本密集调用的模型入口上，
+所以第 ④ 条改用"直接用 curl 把 21 次打满"来验，而不是靠脚本替我们撞。
+下期（5.7 容器化）跑通 Docker 后应把它们全部复跑一遍。
+
+**已知边界**（完整列表见 ADR-020 与 `productization-gap-analysis.md`）：
+refresh token / 登出仍未实现；配额可被 Redis 重启或淘汰绕过；`status` 改动不立即吊销令牌；
+登录冻结可被定向刷锁；记账是尽力而为（模型已调用无法回滚，供应商不回传 usage 时记不到）。
 
 ---
 
