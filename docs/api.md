@@ -360,6 +360,31 @@ POST /api/search
 | POST | `/api/chat/stream/{requestId}/stop` | 停止生成（写 Redis 取消标记；服务端落库 `status=STOPPED`，保留已生成内容） |
 | POST | `/api/chat/messages/{messageId}/feedback` | 点赞/点踩 + 备注（回流评测集） |
 
+**消息上的产出来源 `agentId`（5.4 · P1-14）**：`GET /api/chat/messages/{conversationId}`
+返回的每条消息多一个 `agentId`。
+
+- **只有助手消息有值，用户消息恒为 `null`**（用户消息不是任何 Agent 产出的；给它也写 id 会让
+  "按 agent_id 聚合"把每轮对话重复计两次）；
+- 值是**解析后**的具体 id：会话没选 Agent 时，落的是**内置默认那一行的真实 id**，不是 `null`——
+  否则"这条是谁答的"永远没有答案；
+- 它与 `Conversation.agentId` **不是一个东西**：那个是**活指针**（会话现在用哪个 Agent，可随时改），
+  这个是**历史事实**（这条回答当时是哪个 Agent 跑的，插入即定）。会话换绑后旧回答仍指回原来那个；
+- 5.4 之前的存量消息为 `null`（当时确实没记，不回填）。
+
+**非流式入口的模式约束（5.4）**：`POST /api/chat/messages` 此前**完全不看会话模式**，
+于是同一个会话走不同入口会得到两种答案，而且都不报错。现在：
+
+| 会话模式 | 非流式 `POST /api/chat/messages` 的行为 |
+| --- | --- |
+| `PLAIN` | 正常回答（与之前一致） |
+| `AGENT` | **正常回答**，且用的是该 Agent 的提示词 / 模型 / 工具（与流式链路同一份装配）；出处照记 |
+| `RAG` | **报 `8003`**（HTTP 409），message 指向 `POST /api/chat/stream`；**在任何副作用之前拒绝**（不落用户消息、不调模型） |
+
+`8003` 是"这个模式没走这个入口"，与 `1001`（参数填错）分开：前者换接口，后者改参数。
+合并成一个码，用户会一直在参数上找问题。RAG 之所以是报错而不是顺手补上检索：
+那需要把流式那条链路的"检索 → 无结果短路 → 提示词组装"在非流式下再实现一遍，
+而多库 RAG（P1-6）本身还没定——现在接上来等于把两个未决问题焊在一起。
+
 ### 5.2 SSE 协议（本项目自定义事件）
 
 ```http
@@ -448,9 +473,9 @@ Content-Type: application/json
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/agents` | 我的 Agent 列表（内置默认 Agent 置顶；`pageNum` / `pageSize`） |
-| POST | `/api/agents` | 创建 Agent：`{code, name, description?, systemPrompt?, modelRole?, answerPolicy?, kbIds?}` → 落 `DRAFT` |
-| GET | `/api/agents/{agentId}` | 详情（含绑定知识库 `kbIds` 与 `answerPolicy`） |
-| PUT | `/api/agents/{agentId}` | 局部更新（null = 不改）：`{name?, description?, systemPrompt?, modelRole?, answerPolicy?, status?, kbIds?}`；`kbIds: []` = 解绑 |
+| POST | `/api/agents` | 创建 Agent：`{code, name, description?, systemPrompt?, modelRole?, answerPolicy?, temperature?, kbIds?, toolCodes?}` → 落 `DRAFT` |
+| GET | `/api/agents/{agentId}` | 详情（含绑定知识库 `kbIds`、工具白名单 `toolCodes`、`answerPolicy` 与 `temperature`） |
+| PUT | `/api/agents/{agentId}` | 局部更新（null = 不改）：`{name?, description?, systemPrompt?, modelRole?, answerPolicy?, temperature?, status?, kbIds?, toolCodes?}`；`kbIds: []` / `toolCodes: []` = 回到"不限制" |
 | POST | `/api/agents/{agentId}/duplicate` | 复制（服务端生成 `-copy` 标识，副本回到 `DRAFT`） |
 | DELETE | `/api/agents/{agentId}` | 删除（内置默认 Agent → 5010） |
 | POST | `/api/agents/{agentId}/test-chat` | 试跑：`{question}` → 与 `/api/agent/ask` 同形的答案 + 工具痕迹。**不受发布状态限制**（草稿正是要被测试的） |
@@ -464,6 +489,17 @@ Content-Type: application/json
 - 内置默认 Agent（`code=builtin.default`）不可删除、不可停用（5010），但可改名、改提示词——
   AGENT 模式因此永远有可用的兜底；`agentId` 为空的 AGENT 会话在执行时解析到它；
 - `kbIds` 为空 = **不限制**（检索该用户全部知识库，注意与 RAG 会话的 kbIds 语义相反）；
+- `toolCodes`（5.4 · P1-9，界面在 5.4 才接上，后端 4.3 起支持）= 工具白名单，**空 = 不限制**
+  （装该用户全部**启用中**的工具，与 `kbIds` 同一套语义）。装配时取"启用中的 ∩ 白名单"，
+  所以白名单里留着一个已停用的 code 不会让它复活——界面上给这类工具标"（已停用）"。可选值来自
+  `GET /api/tools`；
+- `temperature`（5.4 · P1-8，可空字段）：采样温度 **0–2**，越界 → `1001`（错误信息带范围与当前值）。
+  **`null` = 跟随全局 `ai.defaults.temperature`，与 `0` 不是一回事**（0 = 显式要求确定性）。
+  响应里原样返回（含 `null`），服务端**不**把全局默认值回填进字段——回填了用户就分不清
+  "我配过"和"系统给的"。生效范围只限**由 Agent 驱动的调用**（AGENT 模式会话与试跑）；
+  PLAIN / RAG 会话与 `/api/knowledge/**/ask` 仍用全局默认。
+  ⚠️ **没有"改回跟随默认"的传法**：`PUT` 里 `null` 已被"不改"占用（与 `kbIds` 不同，那两个把"空"
+  复用成了"不限制"）。想清空只能新建 Agent；
 - `answerPolicy`（4.4，可空字段；**不传 = 不改**，新建时不传落服务端默认）：
   `KB_PREFERRED`（默认）没有可引用资料时**允许**用模型自身知识回答，但必须注明"不是来自你的笔记"；
   `KB_ONLY` 只依据笔记，没有就直说。两者都**禁止**把自身知识标注成"来源：笔记"，
@@ -475,16 +511,33 @@ Content-Type: application/json
 
 ```http
 PUT /api/agents/12
-{ "status": "PUBLISHED", "kbIds": [3, 7] }
+{ "status": "PUBLISHED", "kbIds": [3, 7], "toolCodes": ["knowledge_search"], "temperature": 0.2 }
 ```
+
+### 6.0.2 已实现：工具目录（平台化 Phase 4.3，界面 5.4 接入）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/tools` | 当前用户的工具目录：`{code, name, description, source, category, enabled, builtin}` |
+| PUT | `/api/tools/{code}` | 启停一个工具（`{enabled}`） |
+
+要点：
+
+- **工具是平台内置的能力，不是用户创建的资源**：`tool` 表里的行只是**用户态覆盖**（启用/停用），
+  真正的实现与它的身份（`code`，即 `@Tool(name=…)`）在服务端代码里。所以这里**只有读与启停**，
+  没有新建/删除——用户能选的是"这个 Agent 允许用哪些"，不是"我能有哪些工具"；
+- 没有覆盖行 = `enabled=true`（默认开着）。**描述等元数据不落库**：唯一真源是代码里的 `@Tool`，
+  库里再存一份就是永远不被读的死数据（见 `database.md` 6.0.1）；
+- **停用的效果是"任何 Agent 都不再装它"**——模型连这个工具的存在都看不到，因此不会再被调用
+  （而不是"调用后被拒"）。拒绝语义（模型看得见但被告知不能用）属审批，落 P1；
+- 界面上配白名单的入口在 **Agent 编辑弹窗**（5.4 · P1-9），字段是 `toolCodes`，
+  不是 `PUT /api/agents/{id}/tools` ——那个端点**不存在**，也不会做（白名单就是 Agent 的一个字段）。
 
 ### 6.1 规划中（尚未实现）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/tools` | 工具列表（来源 BUILTIN/MCP、权限级别、是否需确认、启用状态） |
 | GET | `/api/tools/{code}` | 工具详情（入参 JSON Schema、最近调用记录） |
-| PUT | `/api/agents/{id}/tools` | 配置工具白名单与确认策略（等 Tool 体系落地；今天工具白名单写死为内置 `knowledge_search`） |
 | POST | `/api/agent/runs` | 发起一次 Agent 任务 → `runId`（可流式，同 SSE 协议） |
 | GET | `/api/agent/runs/{runId}` | 运行状态（RUNNING/WAITING_APPROVAL/DONE/FAILED/MAX_ITERATIONS） |
 | GET | `/api/agent/runs/{runId}/steps` | 完整步骤轨迹（THINK/TOOL_CALL/OBSERVATION/ANSWER） |
@@ -599,6 +652,29 @@ POST /api/eval/datasets/1/import
 ---
 
 ## 10. 观测（Phase 10）
+
+### 10.0 已实现（两个端点，**数据来源不同，不要混着看**）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/observability/summary` | 进程内计数快照：降级/不可用/失败次数。**自本次进程启动以来的累计，重启即归零**，且不含任何归属维度（全局） |
+| GET | `/api/observability/agents` | 按 Agent 的用量（5.4 · P1-14）：`[{agentId, code, name, deleted, messages, failed, lastUsedAt}]`，**按消息数倒序** |
+
+`/agents` 要点：
+
+- 数据来自数据库里的 `chat_message`（跨重启的既成事实），**按当前登录用户隔离**；
+  归属取自 JWT、**不接受任何入参**——没有可以填错的参数，也就没有越权查询的入口；
+- 它回答"我配的那些 Agent，到底哪个在被真的用"：加这一列之前只能靠会话上那个**活的**
+  `agentId` 去猜，而它随时会被改、且为 NULL 时连"内置默认在跑"都看不出来（见 `database.md` V17）；
+- 只统计**助手消息**（只有它们有 `agent_id`）；`failed` 单独给出来，因为"用了 100 次"和
+  "用了 100 次、其中 80 次失败"是两句完全不同的话；
+- Agent 被删除（逻辑删除，或行被物理清掉）后，它历史上跑过的消息**仍出现在报表里**，
+  由 `deleted=true` 标注——把那一行抹掉的话，用户会看到总数对不上却找不到少掉的是谁；
+- 没有任何消息时返回**空列表**（不是错误）。
+
+> 同一个数字在 `/summary` 与 `/agents` 上对不上是正常的：一个是"这次进程见过多少"，一个是"库里有多少"。
+
+### 10.1 规划中
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |

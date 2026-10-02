@@ -8,6 +8,7 @@ import com.lky.nexus.common.exception.BusinessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -66,6 +67,17 @@ public class AgentRuntime {
                                                       Long userId,
                                                       AgentDefinition definition,
                                                       AgentContext.ToolCallListener listener) {
+        // 温度（5.4）在这里落地，理由与上面那段完全一样：两条链路都过 configure，
+        // 所以"这个 Agent 跑多热"只有一个地方说了算。
+        //
+        // 用请求级 options 而不是重建 ChatModel：ChatClient 的合并语义是"从模型默认选项
+        // mutate() 出发，逐字段被请求级非空值覆盖"（DefaultChatClientUtils.toPrompt →
+        // combineWith），因此这里只写 temperature，model / baseUrl / apiKey 一个都不会丢。
+        // 也正因如此必须用厂商中立的 ChatOptions.builder()——ChatClientFactory 的类注释
+        // 禁止业务代码出现 OpenAiChatOptions（那会让换厂商时这里先炸）。
+        if (definition.temperature() != null) {
+            request = request.options(ChatOptions.builder().temperature(definition.temperature()));
+        }
         return toolFactory.applyTo(
                 // 提示 = 用户写的那段 + 平台按 answerPolicy 追加的策略块（4.4）。
                 // 组装点只有这一个：本类的一次性调用与流式对话都走 configure，

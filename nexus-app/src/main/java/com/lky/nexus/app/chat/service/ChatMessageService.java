@@ -13,8 +13,19 @@ public interface ChatMessageService {
     /** 追加一条用户消息；同时维护会话的 messageCount / lastMessageAt，必要时自动生成标题。 */
     ChatMessagePO appendUserMessage(Long userId, Long conversationId, String content, String requestId);
 
-    /** 追加一条助手消息（Step 1.6 的 AI 链路调用）。 */
-    ChatMessagePO appendAssistantMessage(Long userId, Long conversationId, AssistantReplyDraft draft);
+    /**
+     * 追加一条助手消息（Step 1.6 的 AI 链路调用）。
+     *
+     * <p>{@code agentId} 是<b>这条消息的出处</b>（5.4）：AGENT 模式下由哪个 Agent 跑出来的，
+     * 非 AGENT 模式传 {@code null}。它是插入即定、永不改变的身份事实，因此走参数而<b>不进</b>
+     * {@link AssistantReplyDraft}——那个对象的字段集实际定义了"哪些字段能被 update 覆盖"
+     * （见 {@link #updateAssistantMessage}），把 agentId 放进去会让它读起来像可以被改写。
+     *
+     * <p>调用方要传的是<b>解析之后的具体 id</b>（含内置默认那一行），而不是会话上的
+     * {@code agentId}：后者可能为 null（"没选"），照抄下来就丢掉了"其实是内置默认在跑"。
+     */
+    ChatMessagePO appendAssistantMessage(Long userId, Long conversationId, Long agentId,
+                                         AssistantReplyDraft draft);
 
     /**
      * 更新一条助手消息（流式生成过程中与结束时调用）。

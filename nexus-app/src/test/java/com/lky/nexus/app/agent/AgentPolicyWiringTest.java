@@ -112,7 +112,7 @@ class AgentPolicyWiringTest {
         // 这条钉的是"内置默认 Agent"那条路：它的 Definition.systemPrompt 就是 AGENT_SYSTEM，
         // 而 AGENT_SYSTEM 本身不含任何策略句——策略仍然只能来自追加的块
         AgentDefinition definition = new AgentDefinition(1L, "builtin.default", "默认助手",
-                AgentPrompts.AGENT_SYSTEM, "chat.agent", List.of(), List.of(),
+                AgentPrompts.AGENT_SYSTEM, "chat.agent", null, List.of(), List.of(),
                 AnswerPolicy.KB_PREFERRED, true);
 
         agentRuntime.ask(1L, definition, "缓存击穿怎么解决");
@@ -150,6 +150,6 @@ class AgentPolicyWiringTest {
     /** 只驱动"装提示词"这一条链路，其余字段取最小合法值（工具与检索范围不参与本类断言）。 */
     private static AgentDefinition definition(AnswerPolicy policy) {
         return new AgentDefinition(1L, "policy-wiring", "策略接线", USER_PROMPT,
-                "chat.agent", List.of(), List.of(), policy, false);
+                "chat.agent", null, List.of(), List.of(), policy, false);
     }
 }

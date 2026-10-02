@@ -32,6 +32,16 @@ public record UpdateAgentRequest(
          */
         String answerPolicy,
 
+        /**
+         * 采样温度（5.4，0–2）；<b>null = 不改</b>，与 {@code answerPolicy} 同一套约定。
+         *
+         * <p>注意这里<b>没有</b>"改回跟随全局"的写法：本字段与 {@code kbIds}/{@code toolCodes}
+         * 不同——那两个把"空"复用成了"不限制"，因为那是它们的正常状态；温度的正常状态是
+         * "跟随全局"，而一个 Double 字段的 null 已经被"不改"占用了。真要清空，只能新建 Agent。
+         * 这在界面上要写清（温度输入框旁标注），否则用户会以为清空输入框就是清掉配置。
+         */
+        Double temperature,
+
         /** DRAFT / PUBLISHED / DISABLED。 */
         String status,
 

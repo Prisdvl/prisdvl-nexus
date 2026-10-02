@@ -26,6 +26,16 @@ public class ChatMessagePO {
     /** 冗余 userId：既要支持"按用户审计"，也避免每次查询都回连会话表 */
     private Long userId;
 
+    /**
+     * 产出这条助手消息的 Agent（5.4）；<b>用户消息恒为 null</b>。
+     *
+     * <p>与 {@code ChatConversationPO.agentId} <b>语义不同、不是重复存储</b>：
+     * 那个是"这个会话现在用哪个"（活指针，可改），这个是"这条消息当时是谁跑的"
+     * （历史事实，插入即定）。会话没选 Agent 时它也会落内置默认那一行的真实 id——
+     * 所以它<b>不是</b> conversation.agentId 的拷贝。理由详见 V17 的文件头。
+     */
+    private Long agentId;
+
     /** USER / ASSISTANT / SYSTEM / TOOL */
     private String role;
 

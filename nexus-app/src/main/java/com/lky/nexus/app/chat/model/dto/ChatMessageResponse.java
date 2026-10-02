@@ -12,6 +12,13 @@ import java.util.List;
 public record ChatMessageResponse(
         Long id,
         String role,
+        /**
+         * 产出这条助手消息的 Agent id（5.4）；用户消息与非 AGENT 模式为 {@code null}。
+         *
+         * <p>它回答的是"这条回答是哪个 Agent 跑的"——会话上的 agentId 会随用户改选而变，
+         * 只有这里记的才是当时的真相（见 V17 的文件头）。
+         */
+        Long agentId,
         String content,
         String model,
         Integer promptTokens,

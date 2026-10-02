@@ -788,6 +788,12 @@ ALTER TABLE kb_knowledge_base ADD COLUMN retrieval_mode VARCHAR(16) NOT NULL DEF
 
 ### 6.3 后续阶段迁移规划（先列清单，实施时逐个落地）
 
+> ⚠️ **这张表是 `platform-phase3` 早期的规划，实际编号已经分叉**（2026-10-02 注）。
+> 产品化这几期为了"迁移号只增不改"，按落地顺序一路占用：**V13=`tool`、V14=`agent.answer_policy`、
+> V15=`kb_import_task.source_name`、V16=`agent.temperature`、V17=`chat_message.agent_id`**——
+> 与下面表格里预留给 workflow / model_config / obs 的号**不是一回事**。
+> 以 `nexus-app/src/main/resources/db/migration/` 目录下的真实文件为准。
+
 | 迁移 | 阶段 | 内容 |
 | --- | --- | --- |
 | V12 | 4 | ✅ 已落地（4.1）：`agent` / `agent_knowledge_base` / `chat_conversation.agent_id`；`agent_tool` 延后到 Tool 体系落地时（B.35 §7） |

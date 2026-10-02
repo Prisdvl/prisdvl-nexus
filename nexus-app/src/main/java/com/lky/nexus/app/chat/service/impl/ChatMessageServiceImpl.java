@@ -93,7 +93,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
     @Override
     @Transactional
-    public ChatMessagePO appendAssistantMessage(Long userId, Long conversationId, AssistantReplyDraft draft) {
+    public ChatMessagePO appendAssistantMessage(Long userId, Long conversationId, Long agentId,
+                                                AssistantReplyDraft draft) {
         ChatConversationPO conversation = conversationService.requireOwned(userId, conversationId);
         // 流式场景下先落一条 STREAMING 骨架（此时还没有内容），因此这种状态不校验内容非空
         boolean streaming = MessageStatus.STREAMING.name().equals(draft.status());
@@ -105,6 +106,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         message.setConversationId(conversationId);
         message.setUserId(userId);
         message.setRole(MessageRole.ASSISTANT.name());
+        // 出处（5.4）：非 AGENT 模式为 null，如实表达"不是任何 Agent 产出的"
+        message.setAgentId(agentId);
         message.setContent(draft.content());
         message.setModel(draft.model());
         message.setProvider(draft.provider());
@@ -136,6 +139,10 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         }
         // 局部更新：只覆盖草稿里给了值的字段。
         // 流式场景下第一次调用可能只有部分内容与状态，后续再补齐 Token / 延迟。
+        //
+        // 【这里刻意没有 agent_id】它不是可更新字段，而是这条消息的出处（5.4）：
+        // 插入时定下、之后任何一次 update 都不该动它。想换 Agent 就是重新生成一条新消息，
+        // 那时新消息自己带新的 agent_id——把旧的改掉等于篡改历史（"这条回答当时是谁跑的"就没答案了）。
         if (draft.content() != null) {
             message.setContent(draft.content());
         }
@@ -231,6 +238,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         return new ChatMessageResponse(
                 message.getId(),
                 message.getRole(),
+                // 出处（5.4）：非 AGENT 模式或老消息为 null，界面据此决定显不显示
+                message.getAgentId(),
                 message.getContent(),
                 message.getModel(),
                 message.getPromptTokens(),

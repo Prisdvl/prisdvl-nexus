@@ -187,7 +187,7 @@ class ChatConversationFlowTest {
         Long conversationId = createConversation(token, null);
 
         chatMessageService.appendUserMessage(userId, conversationId, "帮我解释一下 Redis 缓存击穿", "req-1");
-        chatMessageService.appendAssistantMessage(userId, conversationId, AssistantReplyDraft.builder()
+        chatMessageService.appendAssistantMessage(userId, conversationId, null, AssistantReplyDraft.builder()
                 .content("缓存击穿是指某个热点 key 过期瞬间大量请求打到数据库……")
                 .model("deepseek-v4-flash")
                 .provider("opencode")

@@ -38,6 +38,14 @@ export interface MessageToolCall {
 export interface ChatMessage {
   id: string
   role: 'USER' | 'ASSISTANT' | 'SYSTEM' | 'TOOL'
+  /**
+   * 产出这条回答的 Agent（5.4）。**只有助手消息有值，用户消息恒为 null**。
+   *
+   * 与 `Conversation.agentId` 不是一回事：那个是**活指针**（null = 跟随当前内置默认），
+   * 这个是**历史事实**（这条回答当时是哪个 Agent 跑的，存的是解析后的具体 id）。
+   * 会话换绑 Agent 后，旧回答仍指回原来那个——这才是"这条是谁答的"该有的答案。
+   */
+  agentId: string | null
   content: string | null
   model: string | null
   status: string

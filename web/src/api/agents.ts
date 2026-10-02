@@ -34,11 +34,25 @@ export interface AgentResource {
   modelRole: string | null
   /** 没有可引用资料时怎么答；服务端保证一定返回合法值 */
   answerPolicy: AnswerPolicy
+  /**
+   * 采样温度（5.4）。`null` = **跟随服务端全局默认**，不是 0。
+   *
+   * 0 是一个真实的选择（"我要最确定的回答"），所以两者必须分开显示：
+   * 把 null 显示成 0，用户就分不清"我配过"和"我没配过"。
+   */
+  temperature: number | null
   status: AgentStatus
   /** 内置默认 Agent：不可删除、不可停用，但可改名与改提示词 */
   builtin: boolean
   /** 绑定的知识库；**空数组 = 不限制**（检索全部知识库），与 RAG 会话的 kbIds 语义相反 */
   kbIds: string[]
+  /**
+   * 可用工具的 code 白名单（5.4）；**空数组 = 不限制**（装该用户全部启用中的工具）。
+   *
+   * 与 kbIds 同一套语义。注意它与直觉相反：**空 = 全都能用**，不是"一个都不能用"——
+   * 所以界面上必须写明，否则用户看到空选择框会以为这个 Agent 没有工具。
+   */
+  toolCodes: string[]
   createdAt: string
   updatedAt: string
 }
@@ -51,8 +65,17 @@ export interface AgentPayload {
   modelRole?: string
   /** 不传 = 不改；新建时不传则由服务端落默认 KB_PREFERRED */
   answerPolicy?: AnswerPolicy
+  /**
+   * 采样温度（5.4，服务端校验 0–2）；**不传 = 不改 / 跟随全局默认**。
+   *
+   * 注意这里**没有**"改回跟随默认"的传法——`null` 在这个局部更新接口里已经表示"不改"，
+   * 一个值不能同时是"不改"和"清空"。真要清空只能新建 Agent，界面上也照此说明。
+   */
+  temperature?: number
   status?: AgentStatus
   kbIds?: string[]
+  /** 工具白名单（5.4）；`[]` = 回到"不限制"，不传 = 不改。 */
+  toolCodes?: string[]
 }
 
 export function listAgents(pageSize = 50) {

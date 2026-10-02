@@ -47,6 +47,14 @@ public class AgentPO {
     /** 回答策略（4.4）：KB_PREFERRED / KB_ONLY；为空时由服务层补成默认。 */
     private String answerPolicy;
 
+    /**
+     * 采样温度（5.4）：0.00–2.00；<b>null = 跟随全局 {@code ai.defaults.temperature}</b>。
+     *
+     * <p>null 与 0 不同义（0 = 显式要求确定性），理由见 V16 的文件头。范围校验在服务层，
+     * 这里不设默认值——任何"补个 0.7 兜底"的写法都会让"跟随全局"这条路在内存里先断掉。
+     */
+    private Double temperature;
+
     /** DRAFT / PUBLISHED / DISABLED。 */
     private String status;
 

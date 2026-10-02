@@ -76,6 +76,10 @@ public final class ErrorCodeHttpStatusMapper {
             // 注意：访问别人的会话返回 404 而不是 403 ——
             // 403 等于告诉攻击者"这个 id 确实存在"，而 404 不泄露资源存在性（防资源枚举）。
             case CONVERSATION_NOT_FOUND, MESSAGE_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            // 8003（5.4）：请求本身没问题，是"这个会话的模式没走这个入口"——
+            // 与 AGENT_DISABLED 同一条理由用 409 而不是 400：用户的请求格式是对的，
+            // 换接口就行，改参数没用
+            case CONVERSATION_MODE_UNSUPPORTED -> HttpStatus.CONFLICT;
         };
     }
 }

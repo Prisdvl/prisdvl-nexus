@@ -190,7 +190,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
 > 数据库结构与迁移由 **Flyway** 管理（`nexus-app/src/main/resources/db/migration/`）：
 > V1 账号权限、V2 会话消息、V3 Spring AI 记忆表、V4 知识库与文档、V5 切片与导入任务、
 > V6 原始文件路径、V7 问答留档、V8 文档关联、V9 工作区（平台化）、V10 知识库平台字段、
-> V12 Agent 定义与绑定（**没有 V11**：编号为 Phase 4.1 预留后未用，Flyway 不要求连续）。
+> V12 Agent 定义与绑定、V13 工具注册表、V14 回答策略（`agent.answer_policy`）、
+> V15 导入任务来源名（`kb_import_task.source_name`）、V16 采样温度（`agent.temperature`）、
+> V17 消息上的 Agent 出处（`chat_message.agent_id`）
+> （**没有 V11**：编号为 Phase 4.1 预留后未用，Flyway 不要求连续）。
 > **只增不改**：新增字段一律 `ADD COLUMN` 带默认值，不改名、不删除。
 > 三个 profile 的分工：`local`（真实 MySQL，日常开发）、`standalone`（H2 内存，无 Docker 时应急）、`test`（H2，跑测试）。
 > **新增 profile 配置或迁移脚本后必须重新 `package`**，否则 jar 里还是旧的。
@@ -212,7 +215,7 @@ npm run dev            # http://localhost:5173（/api 由 Vite 代理到后端 8
 **"检索到 N 个片段"卡片只在本次会话内保留**——命中片段还没随消息落库，刷新后会消失，
 这是已知缺口而非渲染问题，见 decisions.md B.37），
 以及 **Agent 管理**（`/agents`：新建 → 试跑 → 发布 → 在对话页选用 → 停用 → 删除；
-配提示词与可检索的知识库；草稿不能选用，选择器里会说明原因）。
+配提示词、可检索的知识库、**工具白名单**与**采样温度**；草稿不能选用，选择器里会说明原因）。
 
 **界面验证（不下载浏览器，复用系统 Edge/Chrome）**：
 
@@ -221,10 +224,10 @@ cd web
 node scripts/screenshot.mjs        # 生成 docs/screenshots/{login,kb-list,kb-detail,kb-search}.png
 node scripts/verify-login.mjs      # 真实走一遍登录表单，确认跳转与刷新后仍保持登录
 node scripts/verify-frontend.mjs   # 知识库列表 → 正文（Markdown/大纲/关联面板）→ 切片
-node scripts/verify-agent-chat.mjs # 对话页两条腿：Agent（工具卡片/真实摘要/刷新后痕迹仍在）+ RAG（"检索到 N 个片段"且先于回答）
+node scripts/verify-agent-chat.mjs # 对话页三条腿：Agent（工具卡片/真实摘要/刷新后痕迹仍在）+ 重命名会话（刷新后名字仍在）+ RAG（"检索到 N 个片段"且先于回答）
 node scripts/verify-stream.mjs     # 知识库问答流式：逐字增长 + 引用 + 生成期间的"检索到 N 个片段"
 node scripts/verify-retrieval-ui.mjs # 检索卡片渲染契约：桩掉 /api/chat/stream，验"检索到 N 个片段"排在回答之前
-node scripts/verify-agents.mjs     # Agent 管理页：新建→配置→发布→对话页可选→停用→不可选→删除（11 条腿）
+node scripts/verify-agents.mjs     # Agent 管理页：新建→配置（提示词/知识库/工具白名单/温度）→发布→对话页可选→停用→不可选→删除（11 条腿）
 node scripts/verify-agent-no-kb.mjs # 零知识库的新用户提问：提示 → 检索如实报空 → 回答注明不是来自笔记 → 痕迹刷新后仍在
 ```
 
@@ -249,6 +252,8 @@ node scripts/verify-agent-no-kb.mjs # 零知识库的新用户提问：提示 �
 > `--spring.profiles.active=local`，2026-09-30）：上面几个脚本的**跳过腿全部真跑、退出码 0**，
 > 另有 13 项 live 真机测试 + 3 项流式 live 测试通过。结果与口径见
 > `docs/platform-phase3-baseline.md` §9.6，过程与踩到的坑见 `docs/decisions.md` B.37。
+> **2026-10-02 复跑**（含 `--profile ai-local` 的 Ollama）：上面 8 个脚本再次**全部退出 0**，
+> 结果与新增的两个坑见 `docs/decisions.md` B.45 §7。
 > **注意 full 栈仍不等于"部署形态也验了"**：Docker 在这里只是基础设施，
 > 应用本身还是本机 `java -jar` + Vite dev server；容器化部署（Dockerfile/nginx）**未验**。
 

@@ -23,9 +23,10 @@ import {
   type AnswerPolicy
 } from '@/api/agents'
 import { listKnowledgeBases, type KnowledgeBase } from '@/api/knowledge'
+import { listTools, type ToolResource } from '@/api/tools'
 
 /**
- * Agent 管理页（Phase 4.2）。
+ * Agent 管理页（Phase 4.2；5.4 补工具与温度）。
  *
  * 页面的主线是 §十八 要求的"先测试再发布"，所以每个 Agent 的按钮顺序就是它的生命周期：
  * 新建（DRAFT）→ 试跑 → 发布 → 用（会话里可选）→ 停用。
@@ -34,13 +35,19 @@ import { listKnowledgeBases, type KnowledgeBase } from '@/api/knowledge'
  * 1. **状态必须看得见**：草稿/已停用不能用于对话，界面上直接标出来，
  *    而不是让用户绑到会话里再吃一个 409；
  * 2. **范围必须看得见**：`kbIds` 为空 = 检索全部知识库（与 RAG 会话的 kbIds 语义相反），
- *    这句话必须写在界面上——它是本项目里最容易误读的一处语义；
+ *    这句话必须写在界面上——它是本项目里最容易误读的一处语义。
+ *    `toolCodes` 沿用同一条约定（空 = 全部工具），因此同样要写；
  * 3. **试跑不要求已发布**：草稿正是要被测的对象，所以试跑按钮对 DRAFT 也可用。
+ *
+ * 5.4 新增两处配置：**工具白名单**与**采样温度**。两个都必须回显到卡片上——
+ * 后端从 4.3 起就支持 `toolCodes`，但界面一直没有入口、也不显示，等于这个能力
+ * 对用户不存在（P1-9）；温度同理，配了却不显示就分不清"我配过没有"（P1-8）。
  */
 
 const loading = ref(false)
 const agents = ref<AgentResource[]>([])
 const knowledgeBases = ref<KnowledgeBase[]>([])
+const tools = ref<ToolResource[]>([])
 
 const createVisible = ref(false)
 const creating = ref(false)
@@ -54,7 +61,13 @@ const editForm = reactive({
   description: '',
   systemPrompt: '',
   answerPolicy: 'KB_PREFERRED' as AnswerPolicy,
-  kbIds: [] as string[]
+  kbIds: [] as string[],
+  toolCodes: [] as string[],
+  /**
+   * 温度用 `number | null` 而不是 0 当空值：**null = 跟随服务端默认，0 = 显式要求确定性**。
+   * el-input-number 清空后给的是 null/undefined，正好对应"不改"（后端也是这么读的）。
+   */
+  temperature: null as number | null
 })
 
 const testVisible = ref(false)
@@ -84,11 +97,18 @@ const POLICY_TEXT: Record<AnswerPolicy, string> = {
 
 const publishedCount = computed(() => agents.value.filter((a) => a.status === 'PUBLISHED').length)
 
-/** 试跑弹窗里显示"这次跑的范围"：与线上一致，否则试跑结论不能代表会话里的行为 */
-const testScopeText = computed(() => (testTarget.value ? kbNames(testTarget.value) : ''))
+/**
+ * 试跑弹窗里显示"这次跑的范围"：与线上一致，否则试跑结论不能代表会话里的行为。
+ *
+ * 5.4 起把工具也报出来——它和白名单是同一层的东西，只报知识库的话，
+ * "试跑没检索"会被当成知识库没配好，而真正的原因可能是工具白名单里没有检索工具。
+ */
+const testScopeText = computed(() => (testTarget.value
+  ? `${kbNames(testTarget.value)}；${toolNames(testTarget.value)}`
+  : ''))
 
 onMounted(async () => {
-  await Promise.all([load(), loadKnowledgeBases()])
+  await Promise.all([load(), loadKnowledgeBases(), loadTools()])
 })
 
 async function load() {
@@ -108,12 +128,47 @@ async function loadKnowledgeBases() {
   }
 }
 
+async function loadTools() {
+  try {
+    tools.value = await listTools()
+  } catch {
+    // 工具目录拿不到不该让整页打不开：它是配置里的附加项，不是页面的主体。
+    // 降级成一个空清单，用户在配置弹窗里看到"没有可选工具"时至少页面还能用。
+    tools.value = []
+  }
+}
+
 /** 绑定的知识库名（列表里显示名字而不是 id：id 对人没有意义） */
 function kbNames(agent: AgentResource): string {
   if (!agent.kbIds?.length) return '全部知识库'
   return agent.kbIds
     .map((id) => knowledgeBases.value.find((kb) => kb.id === id)?.name ?? `#${id}`)
     .join('、')
+}
+
+/**
+ * 工具白名单的显示名。**空 = 全部工具**（与 kbIds 同一套语义）。
+ *
+ * 已停用的工具后面标出来：白名单里留着一个被停用的 code 不会让它复活
+ * （装配时取的是"启用中的 ∩ 白名单"，见 AgentService.replaceTools），
+ * 但用户看到名字会以为它还在用——标出来才不会白排查。
+ */
+function toolNames(agent: AgentResource): string {
+  if (!agent.toolCodes?.length) return '全部工具'
+  return agent.toolCodes
+    .map((code) => {
+      const tool = tools.value.find((item) => item.code === code)
+      if (!tool) return code
+      return tool.enabled ? tool.name : `${tool.name}（已停用）`
+    })
+    .join('、')
+}
+
+/** 温度在卡片上的说法：null 必须显示成"服务端默认"而不是 0（两者含义不同）。 */
+function temperatureText(agent: AgentResource): string {
+  return agent.temperature === null || agent.temperature === undefined
+    ? '服务端默认'
+    : String(agent.temperature)
 }
 
 async function submitCreate() {
@@ -144,6 +199,9 @@ function openEdit(agent: AgentResource) {
   editForm.systemPrompt = agent.systemPrompt ?? ''
   editForm.answerPolicy = agent.answerPolicy ?? 'KB_PREFERRED'
   editForm.kbIds = [...(agent.kbIds ?? [])]
+  editForm.toolCodes = [...(agent.toolCodes ?? [])]
+  // 原样搬过来（含 null）——不能写 `?? 0`：那会把"没配过、跟随全局"变成"我显式要了 0"
+  editForm.temperature = agent.temperature ?? null
   editVisible.value = true
 }
 
@@ -157,7 +215,12 @@ async function submitEdit() {
       description: editForm.description,
       systemPrompt: editForm.systemPrompt,
       answerPolicy: editForm.answerPolicy,
-      kbIds: editForm.kbIds
+      kbIds: editForm.kbIds,
+      // [] = 回到"不限制"（不是"一个都不给"），后端 replaceTools 是这个语义
+      toolCodes: editForm.toolCodes,
+      // 清空输入框 = undefined = 不改。后端没有"改回跟随默认"的传法，
+      // 所以提示文案必须写在后端字段注释与界面 hint 里，别让用户以为清空就是清掉
+      temperature: editForm.temperature ?? undefined
     })
     ElMessage.success('已保存（下一轮对话就生效）')
     editVisible.value = false
@@ -255,7 +318,7 @@ function applyTestQuestion() {
       <div>
         <h1>Agent</h1>
         <p class="sub">
-          每个 Agent 是一套"提示词 + 模型 + 能检索哪些知识库"的配置。
+          每个 Agent 是一套"提示词 + 模型 + 能检索哪些知识库 + 能用哪些工具"的配置。
           对话时选它，模型就按这套配置执行——改完提示词不必重建会话，下一轮就生效。
         </p>
       </div>
@@ -293,6 +356,14 @@ function applyTestQuestion() {
             <div>
               <dt>回答策略</dt>
               <dd>{{ POLICY_TEXT[agent.answerPolicy] ?? POLICY_TEXT.KB_PREFERRED }}</dd>
+            </div>
+            <div>
+              <dt>可用工具</dt>
+              <dd>{{ toolNames(agent) }}</dd>
+            </div>
+            <div>
+              <dt>温度</dt>
+              <dd class="mono">{{ temperatureText(agent) }}</dd>
             </div>
           </dl>
 
@@ -416,6 +487,49 @@ function applyTestQuestion() {
         <p class="hint">
           <b>不选 = 可检索你的全部知识库</b>（不是"检索不到"）。这与"知识库问答"会话必须绑定一个库
           的语义正好相反——两处都写清楚了，是因为它最容易误读。
+        </p>
+        <el-form-item label="可用工具">
+          <!-- 类名与知识库那个选择器分开（样式共用一条规则）：两者在同一弹窗里，
+               共用一个类名会让"按类名定位"这件事变得歧义——界面上看不出来，
+               但 scripts/verify-agents.mjs 那种按元素定位的脚本会直接报"匹配到 2 个" -->
+          <el-select
+            v-model="editForm.toolCodes"
+            multiple
+            clearable
+            placeholder="不选 = 全部工具"
+            class="tool-multi"
+          >
+            <el-option
+              v-for="tool in tools"
+              :key="tool.code"
+              :label="tool.enabled ? tool.name : `${tool.name}（已停用）`"
+              :value="tool.code"
+              :disabled="!tool.enabled"
+            />
+          </el-select>
+        </el-form-item>
+        <p class="hint">
+          <b>不选 = 允许它使用你的全部工具</b>（不是"一个工具都不给"）——与上面的知识库是同一套语义。
+          想收窄范围时才在这里勾选；已停用的工具显示为灰，它不会被装配进任何 Agent，
+          即使白名单里留着它（真要用先去"工具"里启用）。
+        </p>
+        <el-form-item label="采样温度">
+          <el-input-number
+            v-model="editForm.temperature"
+            :min="0"
+            :max="2"
+            :step="0.1"
+            :precision="2"
+            controls-position="right"
+            placeholder="留空 = 服务端默认"
+          />
+        </el-form-item>
+        <p class="hint">
+          0–2，越小越确定、越大越发散。<b>留空 = 跟随服务端的全局默认值</b>，与填 0
+          不是一回事：0 是"我要最确定的回答"，留空是"用系统的默认"。
+          改动只对<b>由 Agent 驱动的对话</b>生效（Agent 模式的会话与试跑）；
+          普通对话与"知识库问答"会话仍用全局默认。注意：这里<b>没有</b>"改回跟随默认"的按钮，
+          留空表示"不动它"，想清掉请复制一个新 Agent。
         </p>
         <p class="hint">
           模型角色暂不在界面上配置：可选值由服务端的模型注册表决定，而列出角色的接口还没有
@@ -640,7 +754,8 @@ function applyTestQuestion() {
   line-height: 1.7;
 }
 
-.kb-multi {
+.kb-multi,
+.tool-multi {
   width: 100%;
 }
 

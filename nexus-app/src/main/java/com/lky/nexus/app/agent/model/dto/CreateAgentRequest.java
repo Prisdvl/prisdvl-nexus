@@ -45,6 +45,14 @@ public record CreateAgentRequest(
          */
         String answerPolicy,
 
+        /**
+         * 采样温度（5.4，0–2）；<b>不传 = 跟随全局默认</b>（不是 0）。
+         *
+         * <p>越界在服务层报 1001（不是 Bean Validation）：错误信息要说清"范围是 0–2、
+         * 你填的是多少"，而 {@code @DecimalMin}/{@code @DecimalMax} 的默认文案给不出这些。
+         */
+        Double temperature,
+
         /** 绑定的知识库 id；空表示不限制。 */
         List<Long> kbIds,
 

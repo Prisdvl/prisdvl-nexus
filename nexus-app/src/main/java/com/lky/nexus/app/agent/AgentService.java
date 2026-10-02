@@ -166,7 +166,7 @@ public class AgentService {
         agent.setOwnerId(userId);
         agent.setCode(code);
         applyEditableFields(agent, request.name(), request.description(),
-                request.systemPrompt(), request.modelRole(), request.answerPolicy());
+                request.systemPrompt(), request.modelRole(), request.answerPolicy(), request.temperature());
         // 新建行必须有策略：这里显式落默认，而不是依赖 DDL 的 DEFAULT——
         // 库里补了默认值，内存里的对象仍然是 null，紧接着的 toResponse 就会回一个 null 给前端
         if (agent.getAnswerPolicy() == null) {
@@ -195,7 +195,7 @@ public class AgentService {
 
         // 局部更新：内部逐个字段判 null（null = 不改）
         applyEditableFields(agent, request.name(), request.description(),
-                request.systemPrompt(), request.modelRole(), request.answerPolicy());
+                request.systemPrompt(), request.modelRole(), request.answerPolicy(), request.temperature());
         if (StringUtils.hasText(request.status())) {
             AgentStatus target = AgentStatus.parse(request.status());
             requireStatusChangeAllowed(agent, target);
@@ -235,6 +235,8 @@ public class AgentService {
         // 策略跟着复制：复制一个 Agent 的意图是"拿它改"，少复制一样会得到一个行为不同的副本
         //（还不报错）——与上面复制 toolCodes 是同一条理由
         copy.setAnswerPolicy(source.getAnswerPolicy());
+        // 温度同理：副本少带一样东西，就是"复制出来的 Agent 行为不一样，还不报错"
+        copy.setTemperature(source.getTemperature());
         copy.setStatus(AgentStatus.DRAFT.name());
         // 副本不是内置项：用户复制出来就是为了改
         copy.setBuiltin(false);
@@ -390,6 +392,10 @@ public class AgentService {
                         ? agent.getSystemPrompt() : AgentPrompts.AGENT_SYSTEM,
                 StringUtils.hasText(agent.getModelRole())
                         ? agent.getModelRole() : AiModelProperties.Role.CHAT_AGENT,
+                // null 原样传下去 = "跟随全局默认"，运行期由 ChatModel 的默认选项兜住。
+                // 这里**不能**补成 ai.defaults.temperature：那会把"跟随全局"变成
+                // "装配时刻的全局值快照"，运维改了配置，老 Agent 却还钉在旧值上
+                agent.getTemperature(),
                 kbIdsOf(agent.getId()),
                 toolCodesOf(agent.getId()),
                 // 空 = 没配过（DDL 默认值把老行补成了 KB_PREFERRED，这里兜住 null）
@@ -402,7 +408,8 @@ public class AgentService {
     // ------------------------------------------------------------------
 
     private void applyEditableFields(AgentPO agent, String name, String description,
-                                     String systemPrompt, String modelRole, String answerPolicy) {
+                                     String systemPrompt, String modelRole, String answerPolicy,
+                                     Double temperature) {
         if (StringUtils.hasText(name)) {
             agent.setName(name.trim());
         }
@@ -423,6 +430,28 @@ public class AgentService {
             // 大小写归一后落库（枚举名是稳定的对外取值）
             agent.setAnswerPolicy(AnswerPolicy.parse(answerPolicy).name());
         }
+        if (temperature != null) {
+            // 与 answerPolicy 同一位置、同一条理由：校验只在这一处，运行期不再兜底。
+            // 界面上的输入框只能拦住手输，拦不住 curl——而越界的温度不会报错，
+            // 它只会让模型悄悄按厂商的默认值跑（OpenAI 直接 400，压到 [0,2] 之外的值
+            // Anthropic 会拒），症状是"这个 Agent 时不时抽风"，最难查的一类
+            agent.setTemperature(requireTemperatureInRange(temperature));
+        }
+    }
+
+    /**
+     * 采样温度必须落在 0–2。
+     *
+     * <p>上限取 2 而不是 1：Anthropic 系模型允许 0–1，OpenAI 允许 0–2，取两家的并集
+     * （0–2）才不会把 OpenAI 上合法的 1.5 挡在门外。超过 2 没有任何厂商接受，
+     * 那才是真正无意义的取值。下限 0 是闭区间：0 = 贪心解码，是完全合法的诉求。
+     */
+    private double requireTemperatureInRange(double temperature) {
+        if (temperature < 0 || temperature > 2) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "采样温度必须在 0 到 2 之间，当前是 " + temperature);
+        }
+        return temperature;
     }
 
     /**
@@ -510,6 +539,9 @@ public class AgentService {
                 agent.getModelRole(),
                 // 对外返回的一定是合法值：直接插库（测试/运维）留下的 null 在这里被收敛成默认
                 AnswerPolicy.parse(agent.getAnswerPolicy()).name(),
+                // 原样返回（含 null = 跟随服务端默认）：界面据此显示"服务端默认"，
+                // 不在这里替换成具体数字——数字一旦回填，用户就分不清那是自己配的还是系统的
+                agent.getTemperature(),
                 agent.getStatus(),
                 agent.getBuiltin(),
                 kbIdsOf(agent.getId()),

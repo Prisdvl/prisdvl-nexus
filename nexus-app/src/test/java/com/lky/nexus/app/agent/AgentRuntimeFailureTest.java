@@ -121,6 +121,6 @@ class AgentRuntimeFailureTest {
 
     private AgentDefinition definition() {
         return new AgentDefinition(1L, "builtin.default", "默认助手",
-                "你是助手", "chat.agent", List.of(), List.of(), AnswerPolicy.DEFAULT, true);
+                "你是助手", "chat.agent", null, List.of(), List.of(), AnswerPolicy.DEFAULT, true);
     }
 }

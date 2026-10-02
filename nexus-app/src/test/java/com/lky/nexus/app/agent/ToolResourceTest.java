@@ -300,7 +300,7 @@ class ToolResourceTest {
                 .andExpect(status().isOk());
 
         AgentDefinition definition = new AgentDefinition(1L, "calc-only", "只要计算器", "回答",
-                "chat.agent", List.of(), List.of("calculator"), AnswerPolicy.KB_PREFERRED, false);
+                "chat.agent", null, List.of(), List.of("calculator"), AnswerPolicy.KB_PREFERRED, false);
         // 两个减项同时命中 → 0 个工具。这是刻意的：一个被用户停用的工具，
         // 不该因为某个 Agent 的白名单里写了它而复活
         assertThat(assembledCodesOf(userId, definition)).isEmpty();

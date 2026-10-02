@@ -78,7 +78,9 @@ class ChatAgentModeTest {
         Long conversationId = createConversation(token, "AGENT");
 
         chatMessageService.appendUserMessage(userId, conversationId, "我的笔记里缓存击穿怎么解决？", "req-trace");
-        ChatMessagePO assistant = chatMessageService.appendAssistantMessage(userId, conversationId,
+        // agentId 传 null：本用例钉的是"工具痕迹能不能原样往返"，出处那一列另有
+        // ChatAgentProvenanceTest 专门盯（那条链路才真的会解析 Agent）
+        ChatMessagePO assistant = chatMessageService.appendAssistantMessage(userId, conversationId, null,
                 AssistantReplyDraft.builder()
                         .content("笔记里给了两种做法：SETNX 互斥锁与逻辑过期。")
                         .status("DONE")
@@ -122,7 +124,7 @@ class ChatAgentModeTest {
         Long conversationId = createConversation(token, "PLAIN");
 
         chatMessageService.appendUserMessage(userId, conversationId, "你好", "req-plain");
-        chatMessageService.appendAssistantMessage(userId, conversationId,
+        chatMessageService.appendAssistantMessage(userId, conversationId, null,
                 AssistantReplyDraft.builder().content("你好，有什么可以帮你？").status("DONE").build());
 
         PageResult<ChatMessageResponse> page =

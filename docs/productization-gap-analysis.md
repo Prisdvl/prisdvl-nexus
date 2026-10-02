@@ -3,7 +3,8 @@
 > 写这份文档的目的：把 prisdvl-nexus 从"核心链路已跑通的 Demo"变成"普通用户能用的产品"
 > 之前，先**如实**列清差距。审计在动手改代码之前完成（update.txt §二十六）。
 >
-> - 审计时间：2026-10-01
+> - 审计时间：2026-10-01（**下面这两行是审计当时的基线，不是最新状态**。
+>   最新进度看 §4 的实施顺序表，模块现状看 §2 的"现状"列——那两处才随每期更新）
 > - 代码基线：分支 `platform-phase3`，HEAD `8ea85d0`，**工作区有 58 个未提交的改动**（Phase 4.x）
 > - 测试基线：`mvn -B test` **382 个用例 / 0 失败 / 0 错误 / 18 跳过**（5.1 后；审计当时是 377。跳过的全部是 live 门控用例，
 >   需要真实模型 key，见 `docs/platform-phase3-baseline.md` §9.6）
@@ -116,10 +117,10 @@ update.txt 第 2 条要求"不要重复实现已经存在的功能"。以下是�
 | **Knowledge Base** | 创建/编辑/删除/禁用/检索参数/workspace，异步导入 + 重试，单文件上传，删单篇文档，失败原因可见 | ✅ **P1-1/P1-2/P1-3 三项均已修（5.3）**：`POST /knowledge-bases/{id}/documents`、`DELETE /knowledge-bases/{kbId}/documents/{documentId}`、`GET /import-tasks/{id}/items` + 面板渲染。删除的清理范围比审计写的宽（存量路径也在漏，见上文"5.3 修正的审计结论"） | ~~P1~~ → 已修 | 见 B.44 |
 | **Document** | 4 种解析器、状态机、增量同步、压缩包防御、逐文件失败明细 | ✅ **P1-4 已修（5.3）**：原方案（给 `DocumentSummary` 补 `errorMsg`）是**死字段**——`DocumentStatus.FAILED` 无写入路径。改为补 `kb_import_task_item` 的读接口；✅ 超 200MB 的失败落到兜底 500 **已修（5.2）** | ~~P1~~ → 已修 | 见 B.44 §1/§6 |
 | **RAG** | 混合检索+Rerank+引用+无命中不调模型 | **多库只取第一个**（`kbIds.get(0)`）；✅ 同步路径把模型异常**当成正常回答**返回并落库**已修（5.2）**；"检索到 N 个片段"不落库 | P1 | ①多库改成合并检索（逐库检索 + 融合，或下推多 `kb_id`）；②`generate()` 的 catch 改为抛业务异常（LLM 错误域），失败落 `FAILED`；③`retrieval` 事件随消息落库 |
-| **Agent** | Definition/Runtime 分离、状态机、白名单、复制、试跑 | **`temperature` 不可配**（全局 `ai.defaults.temperature: 0.7`）；**管理页不能配 Tools**（`AgentPayload` 连 `toolCodes` 都没有）；无 Agent 使用统计 | P1 | ①`agent.temperature`（迁移 V15）+ 请求级 options（字段与读它的机制同一次落地）；②`AgentPayload.toolCodes` + 编辑弹窗多选 + 卡片回显；③可选：消息上记 `agentId` 以支持按 Agent 聚合 |
+| **Agent** | Definition/Runtime 分离、状态机、白名单、复制、试跑 | ✅ **P1-8/P1-9 已修（5.4）**：`temperature` 可配（迁移 V16，NULL = 跟随全局、与 0 不同义；生效点在 `AgentRuntime.configure` 的请求级 options）；管理页可配 Tools（`toolCodes` 多选 + 卡片回显 + "空 = 全部工具"写明）。Agent 使用统计见 Trace 行 | ~~P1~~ → 已修 | 见 B.45 |
 | **Tool** | 注册表 + 用户启停 + 白名单交集 + 执行壳 + 痕迹 | **无 Tool 超时**；✅ **超循环上限没被识别已修（5.2）**（`ToolCallLimitExceededException` 现在 → `5002`，`5002` 不再是死码）；✅ 40/150 上限**已显式配置并真撞测过（5.2）**（但**不是**写 `spring.ai.tools.limits.*`——本项目手工建模型，那两个 key 无人读，见 B.43 §2）| P1 | ~~①显式配置 `spring.ai.tools.limits.*`~~（该方案是假旋钮，已否）；②映射 `ToolCallLimitExceededException` → `5002` + 如实文案；③工具加了超时字段，等第一个会阻塞的外部工具落地时一起实现 |
-| **Chat** | 会话 CRUD/重命名接口/流式四路终止/痕迹落库/多轮 | **重命名在界面上不存在**（`renameConversation` 已定义但无人调用）；✅ 流式错误一律 `4001 模型调用失败`**已修（5.2）**（判定收敛到 `FailureClassifier`）| P1 | ①侧栏会话项加重命名入口；②SSE `error` 帧按来源给码（LLM→4xxx、RAG→RAG 域、Tool→5xxx）；③消息级清空（可选，P3） |
-| **Trace** | requestId + 消息上 8 个字段 + 计数注册表 | **无 trace 表**；消息上不记 `agentId`（只有会话级），无法回答"这条回答是哪个 Agent 跑的"；RAG 片段数不入消息 | P1 | 消息补 `agent_id`（迁移 V15）；`/api/observability/summary` 加按 Agent 聚合；不新增 trace 表（现表已够，别为"看起来完整"造第二份真相） |
+| **Chat** | 会话 CRUD/重命名接口/流式四路终止/痕迹落库/多轮 | ✅ **P1-12 已修（5.4）**：侧栏会话项加重命名入口（接口从 Phase 1 就在，一直无人调用）；✅ 流式错误一律 `4001 模型调用失败`**已修（5.2）**（判定收敛到 `FailureClassifier`）；✅ **5.4 另修一处静默不一致**：非流式入口此前**完全不看会话模式**（AGENT 会话不用该 Agent 的提示词/工具、RAG 会话不查笔记，两者都不报错）→ 抽 `ConversationAgentResolver` 两条链路共用，RAG 非流式显式报 `8003` | ~~P1~~ → 已修 | 见 B.45 §1/§5；消息级清空仍列 P3 |
+| **Trace** | requestId + 消息上 8 个字段 + 计数注册表 | ✅ **P1-14 已修（5.4）**：消息补 `agent_id`（迁移 V17，**只记助手消息**、落**解析后**的具体 id）+ `GET /api/observability/agents` 按 Agent 聚合（`LEFT JOIN`，被删的 Agent 仍留在报表里并由 `deleted` 标注）。仍**无 trace 表**（现表已够，不造第二份真相）；RAG 片段数仍不入消息 | ~~P1~~ → 已修 | 见 B.45 §4 |
 | **Permission** | 后端强制、越权 404、8 组跨用户测试 | ✅ `/mcp` 那条绕过已修（5.1） | ~~P0~~ → 已修 | 见 Security S-1；余下的工具级权限/审批列 P2 |
 | **Data Isolation** | `requireOwned` + 谓词 + 唯一 `selectById` + SQL 内 `kb_id` 过滤 | ✅ `/mcp` 那条绕行已堵（5.1，含"旧实现下测试全红"的反证）；无 `tenant_id`（单层归属，属取舍） | ~~P0~~ → 已修 | `tenant_id` 不做，把"单层归属"的取舍写进 `docs/database.md` |
 | **Error Handling** | 统一 `{code,message,data,requestId}`、8 域错误码、9 条 handler、前端透出后端原话 | ✅ **三处漏洞均已修（5.2）**：上传超限→413/3006；循环超限→5002；同步 RAG 异常→抛业务异常且不落档。真机验证又暴出两处审计没写到的：四个非流式 Agent 入口回 500/9999、`ChatServiceImpl` 把上游原文回显并落库（B.43 §4） | ~~P1~~ → 已修 | 集中在 `FailureClassifier`（判定唯一入口）+ `GlobalExceptionHandler` 补 handler；`error_msg` 改存给用户的话；新增"错误码↔HTTP"契约测试与真实 Tomcat 上传超限测试；**未做**：前端没有体积预检、`retryable` 前端还没消费 |
@@ -200,13 +201,13 @@ private Long resolveUser(String nexusUser) {
 | P1-5 | Document | 超 200MB 上传返回 500「系统内部错误」 | `application.yml:50` 只有 Spring 上限；`GlobalExceptionHandler` **没有** `MaxUploadSizeExceededException` 分支 → 落到兜底 `Exception` → `INTERNAL_ERROR` | ✅ **5.2（2026-10-01）**：`GlobalExceptionHandler` 补 `MaxUploadSizeExceededException` → `413 / 3006`，文案带**配置里读出来的**上限值（不写死）；真机 201MB 实测通过，见 B.43 §6 |
 | P1-6 | RAG | 会话绑多个知识库时**只用第一个** | `ChatStreamServiceImpl.requireKnowledgeBaseId` → `kbIds.get(0)` | 多库合并检索（逐库检索后按分数融合，或把 `kb_id IN (...)` 下推） |
 | P1-7 | RAG | 同步问答把模型异常**当成回答**返回并落库 | `RagAnswerServiceImpl.generate` 的 `catch (Exception ex) { return "生成回答失败：" + ex.getMessage() …}` | ✅ **5.2（2026-10-01）**：改成抛业务异常（`FailureClassifier` 给码），**失败不落档**——`kb_qa_record` 没有 status 列，写进去就是一条假回答（与本文措辞的偏离见 B.43 §5） |
-| P1-8 | Agent | **`temperature` 不可配** | `AgentDefinition` 无该字段；`application.yml` 只有 `ai.defaults.temperature: 0.7` | 迁移 + 字段 + 请求级 options，**同一次改动**落地（否则就是"假旋钮"） |
-| P1-9 | Agent | **管理页不能配 Tools** | `web/src/api/agents.ts` 的 `AgentPayload` 无 `toolCodes`；`AgentsView.vue` 全文无 tool（grep 确认） | 前端补 `toolCodes` 多选 + 卡片回显；后端 `toolCodes` 已支持 |
+| P1-8 | Agent | ~~**`temperature` 不可配**~~ | `AgentDefinition` 无该字段；`application.yml` 只有 `ai.defaults.temperature: 0.7` | ✅ **5.4（2026-10-02）**：迁移 V16 + 字段 + 请求级 options **同一次改动**落地。关键取舍：**NULL（跟随全局）≠ 0（显式贪心）**，响应原样返回 null 不回填；生效点是两条链路唯一的公共装配点 `AgentRuntime.configure`；范围 0–2 取 OpenAI/Anthropic 并集。见 B.45 §2 |
+| P1-9 | Agent | ~~**管理页不能配 Tools**~~ | `web/src/api/agents.ts` 的 `AgentPayload` 无 `toolCodes`；`AgentsView.vue` 全文无 tool（grep 确认） | ✅ **5.4（2026-10-02）**：`toolCodes` 多选 + 卡片回显 + **"空 = 全部工具"写在界面上** + 已停用工具标注。后端 4.3 起就支持，缺的一直只有这一页；顺带修正 `api.md` 把 `GET /api/tools` 列为"规划中"的过期条目。见 B.45 §3 |
 | P1-10 | Tool | **超循环上限被报成"模型调用失败"**，`5002` 是死码 | `AGENT_MAX_ITERATIONS_EXCEEDED(5002)` 仅出现在 `ErrorCode` 与 `ErrorCodeHttpStatusMapper`；框架超限抛 `ToolCallLimitExceededException`（javap 确认）→ 流式 `onError` → `code 4001 "模型调用失败"` | ✅ **5.2（2026-10-01）**：`5002` + 如实文案（分"单工具/合计"两种上限），并补 `ToolCallLimitTest`（真撞一次上限，见 P1-11）；`5002` 不再是死码 |
 | P1-11 | Tool | 框架轮数上限（40/150）**不可见**：没配置、没文档、没测试 | `grep -rn "spring.ai.tools" application.yml` → 无 | ✅ **5.2（2026-10-01）**：**没有**写 `spring.ai.tools.limits.*`——本项目手工建模型（`spring.ai.model.chat=none`），那两个 key 无人读取，写了就是**假旋钮**。改为本项目自己的 `ai.tools.*` + 显式传给模型，见 B.43 §2 |
-| P1-12 | Chat | **重命名会话在界面上不存在** | `web/src/api/chat.ts:91 renameConversation` 有定义；全仓视图无任何调用 | 侧栏会话项加"重命名"（复用已有接口） |
+| P1-12 | Chat | ~~**重命名会话在界面上不存在**~~ | `web/src/api/chat.ts:91 renameConversation` 有定义；全仓视图无任何调用 | ✅ **5.4（2026-10-02）**：侧栏会话项加"重命名"入口（复用已有接口，无新端点）。E2E 断言用"**刷新后名字仍在**"而不是"点保存后文字变了"。见 B.45 §5 |
 | P1-13 | Chat/Error | 流式错误帧不区分错误来源 | `ChatStreamServiceImpl.onError` 写死 `code 4001`、`retryable true` | ✅ **5.2（2026-10-01）**：判定收敛到 `FailureClassifier`（唯一入口），四条链路共用；真机实测同一故障在三处给同一个码同一句话（B.43 §4）。**`retryable` 前端还没消费**，见 B.43 §7 |
-| P1-14 | Trace | 消息上**不记 `agentId`**，无法回答"这条回答是哪个 Agent 跑的" | `ChatMessagePO` 无该列；`agent_id` 只在会话上 | 迁移加 `agent_id`，落库时写入；`/summary` 支持按 Agent 聚合 |
+| P1-14 | Trace | ~~消息上**不记 `agentId`**，无法回答"这条回答是哪个 Agent 跑的"~~ | `ChatMessagePO` 无该列；`agent_id` 只在会话上 | ✅ **5.4（2026-10-02）**：迁移 V17 + 落库 + `GET /api/observability/agents` 按 Agent 聚合（**字段与读它的机制同一次落地**）。三处刻意：只记助手消息、落解析后的 id（含内置默认）、索引带 `user_id` 前缀。**顺带发现并修掉**：非流式入口完全不看会话模式（见 B.45 §1）。见 B.45 §4 |
 | P1-15 | User | 无修改密码 / 无资料编辑 | `UserController` 只有 `GET /me` | `PUT /users/me`、`PUT /users/me/password`（验旧密码 + 撤销旧令牌） |
 | P1-16 | Security | 无速率限制 / 无配额（配了真实 key 后单用户可烧光额度） | `RATE_LIMITED(7001)` / `QUOTA_EXHAUSTED(7002)` 无任何抛出点；`nexus-app` 全仓无 `RedisTemplate` 使用 | 登录/注册/问答三类入口加限流（Redis 已在 compose 里）；配额列 P2 |
 | P1-17 | Deployment | `docker compose up -d` **起不来应用** | `deploy/` 只有 6 个基础设施服务 + ES 的 Dockerfile；无应用 Dockerfile、无 nginx | 见 §2 Deployment 行 |
@@ -278,7 +279,7 @@ private Long resolveUser(String nexusUser) {
 | **Phase 5.1** ✅ 完成 2026-10-01 | **P0-1**：`/mcp` 身份改走 JWT（头直接删除，不留第二身份来源） | 新增 5 条测试（无凭据 401、只带头仍 401、伪造他人 id 只能看到自己的数据、零库调用方、正向对照）+ **旧实现下 5/5 全红**；`mvn test` 382/0/0/18 绿；api.md/deployment.md/.env.example 改口径 |
 | **Phase 5.2** ✅ 完成 2026-10-01 | 错误契约三处漏洞：P1-5（上传超限）、P1-7（同步 RAG 异常）、P1-10（循环超限）+ P1-11（上限显式化）+ P1-13（错误帧不区分来源）。**真机验证把范围扩大了**：`/api/agent/ask` 等四个非流式入口原本回 500/9999、`ChatServiceImpl` 把上游原文回显并落库（B.43 §4） | 新增 24 条测试（含错误码↔HTTP 契约、真实 Tomcat 上传超限、真撞一次工具上限、同步 RAG 失败不落档）；`mvn test` 406/0/0/18 绿；`mvn package` 成功；真机实测三种入口口径一致 + 413/3006 |
 | **Phase 5.3** | 知识库闭环补完：P1-1（单文件上传）、P1-2（删文档）、P1-3/P1-4（失败原因可见）。**动手时范围扩大**：存量删除路径（文档级 + 库级）都在漏，且多出"重新切分"这条孤儿路径，一并修（见 B.44） | ✅ **全部达成**。代码/测试/构建/文档：新增 20 条测试 → `mvn test` 426/0/0/18，`mvn package` 与 `npm run build` 成功；新增 `verify-doc-lifecycle.mjs`（退出 0，三张截图）。**真机验收已执行且全绿**（2026-10-01）：V15 在真 MySQL 落地；PDF/DOCX/TXT/MD 各上传一次全部 `created=1 failed=0`、`source_type='UPLOAD'`；删除后向量 / ES / 切片 / 标签 / 出链全部归零、磁盘原件消失、入链按 Obsidian 语义保留；墓碑路径两轮通过；删库同样归零。证据与脚本陷阱见 B.44 §9 |
-| **Phase 5.4** | Agent 闭环补完：P1-8（temperature）、P1-9（Tools UI）、P1-12（重命名会话）、P1-14（agentId 落库） | `verify-agents.mjs` 扩到覆盖工具选择与温度回读；会话重命名 E2E |
+| **Phase 5.4** | Agent 闭环补完：P1-8（temperature）、P1-9（Tools UI）、P1-12（重命名会话）、P1-14（agentId 落库）。**动手时范围扩大**：非流式入口完全不看会话模式，AGENT 会话不用 Agent 提示词、RAG 会话不查笔记，两者都不报错（见 B.45 §1） | ✅ **全部达成**。较 5.3 净增 14 条测试 → `mvn test` **440/0/0/18**；`mvn package` 与 `npm run build`（含 `vue-tsc`）成功。**真机验收已执行且全绿**（2026-10-02）：V16/V17 在真实 MySQL 落地且结构与设计逐字一致；工具/温度回读、重命名刷新后仍在、出处落库（含"会话没选 Agent 时记内置默认真实 id"）、`/api/observability/agents`（无 token 401）、非流式 AGENT 200 / 非流式 RAG 409+8003 且零副作用；**8 个 verify 脚本全部退出 0**。**跑出两个"脚本在骗人"的问题**（其中一个把成功的重命名判成失败），均已修，见 B.45 §7 |
 | **Phase 5.5** | 多库 RAG：P1-6 | 2 个库各抓一段、答案同时引用两库的测试 |
 | **Phase 5.6** | 用户与安全：P1-15（改密码）、P1-16（限流） | 改密码后旧令牌失效；限流命中返回 7001 |
 | **Phase 5.7** | 部署产品化：P1-17（Dockerfile + nginx + compose 补两个服务） | `docker compose up -d` 后前端能登录并用 Agent 问答 |
@@ -312,8 +313,11 @@ private Long resolveUser(String nexusUser) {
    没有真实数据量下的压测。
 4. **前端只有 5 个视图**，我按行读完了 grep 结果与关键模板，但没有逐行读完 4138 行。
    可能存在我没注意到的局部交互问题。
-5. **`temperature`、单文件上传**等建议方案的**实现成本**没有评估（是否牵连测试、是否需要新依赖），
-   实际动手时若发现成本超出预期会先报告再调整。
+5. ~~**`temperature`、单文件上传**等建议方案的**实现成本**没有评估（是否牵连测试、是否需要新依赖），
+   实际动手时若发现成本超出预期会先报告再调整。~~
+   **两者均已落地**（单文件上传 5.3、temperature 5.4），且成本都低于预期：
+   temperature 的实际牵连是**一次范围扩大**（非流式入口不看会话模式，见 B.45 §1），
+   **不是**新依赖或测试负担。
 
 ---
 
@@ -326,15 +330,19 @@ private Long resolveUser(String nexusUser) {
 
 1. ~~**一条 P0 安全/隔离漏洞**：`/mcp` 无认证且身份可自证 —— 必须最先修；~~
    ✅ **5.1 已完成**（含"旧实现下 5 条测试全红"的反证）；
-2. **闭环的"最后一段"没接到界面上**：配 Tool、重命名会话、导入失败原因、单文件上传、删文档 ——
-   后端大半已经有，缺的是接口或界面；
+2. ~~**闭环的"最后一段"没接到界面上**：配 Tool、重命名会话、导入失败原因、单文件上传、删文档 ——
+   后端大半已经有，缺的是接口或界面；~~ ✅ **已全部接上**：知识库部分 5.3（P1-1/P1-2/P1-3/P1-4），
+   Agent 部分 5.4（P1-9 配 Tool、P1-12 重命名会话、P1-8 温度回显）；
 3. **失败路径的口径不统一**：上传超限→500、循环超限→"模型失败"、同步 RAG 异常→当成回答 ——
    与 §15「统一异常」直接冲突。
 
 **先做 1，再做 3，再做 2**：安全漏洞的暴露面是"零成本"，失败路径的口径问题会让所有后续排查都被误导，
 界面缺口虽然最显眼，但它是唯一"不影响正确性"的一类。
 
-**进度**：1 与 3 已完成（5.1 / 5.2，均 2026-10-01）；第 2 类里的**知识库部分**已完成（5.3，2026-10-01，
-P1-1/P1-2/P1-3/P1-4，**含真机验收**，见 §4）。
+**进度**：1 与 3 已完成（5.1 / 5.2，均 2026-10-01）；第 2 类（"最后一段没接到界面上"）
+**已全部完成**——知识库部分 5.3（2026-10-01，P1-1/P1-2/P1-3/P1-4）、
+Agent 部分 5.4（2026-10-02，P1-8/P1-9/P1-12/P1-14），两期均**含真机验收**，见 §4。
 
-**下一阶段是 5.4**（Agent 闭环补完：P1-8 `temperature`、P1-9 Tools UI、P1-12 重命名会话、P1-14 `agentId` 落库）。
+**下一阶段是 5.5**（多库 RAG：P1-6）。
+
+> 5.4（Agent 闭环补完）**2026-10-02 已完成并真机验收**，见 §4 的 5.4 行与 B.45。

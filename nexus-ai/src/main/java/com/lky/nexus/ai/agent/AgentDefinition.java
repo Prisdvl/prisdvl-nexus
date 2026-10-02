@@ -27,6 +27,11 @@ import java.util.Objects;
  * "没有可引用资料时能不能用模型自身的知识"，与 {@link #kbIds}（检索范围）、
  * {@link #toolCodes}（工具白名单）同层——都是"这个 Agent 被允许做什么"。
  *
+ * <p>{@link #temperature}（5.4）是同一条规则的又一次应用，也是**刻意不做**那两个字段的
+ * 反面对照：{@code maxIterations}/{@code timeoutMs} 被拒是因为没有任何机制会读它们；
+ * 而 temperature 落地时就带着读它的那一行（{@code AgentRuntime.configure} 用请求级
+ * options 覆盖模型默认值），所以它不是假旋钮。
+ *
  * <p>字段语义上的一条<b>刻意区分</b>（与 RAG 会话相反，勿混）：
  * {@link #kbIds} <b>为空表示不限制</b>（检索该用户的全部知识库，即今天的行为），
  * 而 RAG 会话的 {@code kbIds} 为空是"必须先绑定才能提问"的硬错误。
@@ -49,6 +54,20 @@ public record AgentDefinition(
 
         /** 模型逻辑角色（{@code ai.roles} 里的 key），如 {@code chat.agent}。 */
         String modelRole,
+
+        /**
+         * 采样温度（4.3 之后的 5.4 加，{@code agent.temperature}）；<b>{@code null} = 跟随全局默认</b>
+         * （{@code ai.defaults.temperature}）。
+         *
+         * <p>{@code null} 与 {@code 0} <b>不是一回事</b>：{@code 0} 是"显式要求最高确定性"，
+         * 而 {@code null} 是"没配过、跟随运维的全局值"。用 0 当未配置的哨兵，等于让"我想要 0"
+         * 这件事永远表达不出来。
+         *
+         * <p>取值范围的校验在写入口（{@code AgentService}，越界报 1001），不在这里：
+         * 与 {@link #answerPolicy} 同一条"只留一个决定的地方"的理由（见本记录最后一段）。
+         * 生效点在 {@code AgentRuntime.configure}——两条执行链路唯一的公共装配点。
+         */
+        Double temperature,
 
         /** 绑定的知识库；<b>空 = 不限制</b>（检索该用户全部知识库）。 */
         List<Long> kbIds,

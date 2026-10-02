@@ -10,6 +10,11 @@
  * 理由同上——后端发了 retrieval 事件、接口测试全绿，但前端没渲染的话，
  * 用户看到的仍然是"对着空白等十几秒"，而这层只有浏览器能证明。
  *
+ * Phase 5.4 增补第三条腿（P1-12 重命名会话）：侧栏改名 → **刷新后名字还在**。
+ * 这一条必须由浏览器证明，因为"点保存后侧栏文字变了"用纯前端状态也能过：
+ * 接口没被调用、status 500、甚至服务端把标题归一化成了别的样子，界面上看着都一样。
+ * 刷新会把这些全部打回原形，只有真的存下来了名字才留得住。
+ *
  * 退出码：0 = 全部通过；1 = 有真实失败；2 = 有跳过（环境缺少检索能力，见下）。
  */
 import { chromium } from 'playwright-core'
@@ -116,6 +121,69 @@ async function verifyRagLeg() {
   console.log('✓ 已截图 docs/screenshots/agent-chat-rag.png')
 }
 
+/** 侧栏所有会话的标题（正序即界面顺序）。 */
+async function conversationTitles() {
+  return (await page.locator('.rail .conversation .conversation-title').allInnerTexts())
+    .map((text) => text.trim())
+}
+
+/**
+ * 第三条腿（5.4 · P1-12）：重命名当前会话，**刷新后名字仍在**。
+ *
+ * 判定用"名字还在"而不是"接口返回 200"：标题的归一化（trim、以及将来可能加的长度截断）
+ * 发生在服务端，前端照着自己的输入猜一遍迟早会和它对不上——所以这里比对的是
+ * 刷新后侧栏里真实渲染出来的那行文字。
+ */
+async function verifyRenameLeg() {
+  const renamedTitle = `重命名验证 ${Date.now().toString(36)}`
+  const item = page.locator('.rail .conversation.active')
+  const oldTitle = (await item.locator('.conversation-title').innerText()).trim()
+
+  /*
+   * 改名前先数一遍：**同名会话在侧栏里本来就可能不止一个**。
+   * 自动标题来自首条提问，演示账号反复跑同一句"我的笔记里缓存击穿怎么解决？"，
+   * 于是历史上留下的会话必然重名。所以下面不能断言"旧标题不该存在"
+   * （第一版就是这么写的，结果把一次成功的重命名判成了失败——见 B.45 §6），
+   * 只能断言"这个名字少了一个"：这才是"这一个"会话的旧标题没有回来。
+   */
+  const oldTitleCountBefore = (await conversationTitles()).filter((t) => t === oldTitle).length
+
+  // 重命名入口平时是透明的（hover 才显形），先 hover 再点，避免在"看不见的按钮"上做动作
+  await item.hover()
+  await item.locator('.conversation-rename').click()
+  await page.locator('.el-message-box__input input').fill(renamedTitle)
+  await page.click('.el-message-box__btns .el-button--primary')
+  await page.waitForFunction(
+    (title) =>
+      Array.from(document.querySelectorAll('.rail .conversation-title')).some(
+        (node) => node.textContent.trim() === title
+      ),
+    renamedTitle,
+    { timeout: 15000 }
+  )
+  console.log(`⑥ 已重命名为「${renamedTitle}」（原名「${oldTitle}」）`)
+
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.waitForSelector('.rail .conversation', { timeout: 30000 })
+  const titles = await conversationTitles()
+  if (!titles.includes(renamedTitle)) {
+    failures.push(`刷新后重命名的会话不见了（侧栏：${titles.join(' / ') || '(空)'}）——只改了前端状态？`)
+  }
+  // 服务端会把 title_auto 置 0，所以"这一个"会话的自动标题不该再回来。
+  // 判据是"同名数量减少"，不是"这个名字不存在"（别的同时名会话是合法的，见上面的注释）。
+  const oldTitleCountAfter = titles.filter((t) => t === oldTitle).length
+  if (oldTitle && oldTitle !== renamedTitle && oldTitleCountAfter >= oldTitleCountBefore) {
+    failures.push(
+      `重命名后旧标题「${oldTitle}」的数量没变（改前 ${oldTitleCountBefore} 个 / 改后 ${oldTitleCountAfter} 个）` +
+        '——重命名没落库，或自动标题覆盖了它'
+    )
+  }
+  // 改过名的会话仍要能正常打开（重命名不该把列表项点坏）
+  await page.locator('.rail .conversation').filter({ hasText: renamedTitle }).first().click()
+  await page.waitForSelector('.message.from-agent .markdown', { timeout: 30000 })
+  console.log('⑦ 刷新后名字仍在，且该会话仍可正常打开')
+}
+
 try {
   await page.goto(base, { waitUntil: 'networkidle' })
   // ① 从侧边栏进对话页
@@ -193,7 +261,12 @@ try {
     failures.push('刷新后结果摘要仍是占位文案"检索中…"')
   }
 
-  // ⑦ 第二条腿：知识库问答（mode=RAG）。环境缺少检索能力时如实跳过，混进失败项只会误导
+  // 第七条腿：重命名会话（5.4 · P1-12）。刷新前是"界面变了"，刷新后才是"存下来了"
+  await verifyRenameLeg()
+  await page.screenshot({ path: `${outDir}/agent-chat-rename.png` })
+  console.log('✓ 已截图 docs/screenshots/agent-chat-rename.png')
+
+  // ⑧ 第二条腿：知识库问答（mode=RAG）。环境缺少检索能力时如实跳过，混进失败项只会误导
   try {
     await verifyRagLeg()
   } catch (error) {
@@ -222,4 +295,6 @@ if (skipped.length > 0) {
   console.error('跳过项：' + skipped.join('; '))
   process.exit(2)
 }
-console.log('\n对话页界面验证通过：Agent（工具痕迹可回看）+ RAG（检索到 N 个片段且先于回答）。')
+console.log(
+  '\n对话页界面验证通过：Agent（工具痕迹可回看）+ 会话重命名（刷新后仍在）+ RAG（检索到 N 个片段且先于回答）。'
+)

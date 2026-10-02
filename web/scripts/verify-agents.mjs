@@ -6,8 +6,8 @@
  * "不绑知识库 = 全部知识库"这句反直觉的语义有没有写在用户看得见的地方、
  * 试跑失败时用户能不能看到失败原因而不是一个转圈的按钮。这些只有浏览器能证明。
  *
- * 覆盖的生命周期：新建（草稿）→ 配置（提示词 + 回答策略 + 绑知识库）→ 发布 → 在对话页可选用 → 停用
- *                 → 对话页不再列出它 → 删除。
+ * 覆盖的生命周期：新建（草稿）→ 配置（提示词 + 回答策略 + 绑知识库 + 工具白名单 + 采样温度）
+ *                 → 发布 → 在对话页可选用 → 停用 → 对话页不再列出它 → 删除。
  *
  * 退出码：0 = 全部通过；1 = 有真实失败；2 = 有跳过（本机没有可用模型，试跑跑不了，见下）。
  */
@@ -38,6 +38,16 @@ function cardByCode(code) {
   return page.locator('.grid .card').filter({
     has: page.locator('.code').getByText(code, { exact: true })
   })
+}
+
+/**
+ * 卡片 `dl.facts` 里某一项的值。
+ *
+ * 按 `<dt>` 标签定位，而不是"整卡 innerText 包含某段文字"——后者在这个页面上会假通过：
+ * 「模型角色」没配时也显示"服务端默认"，于是"温度显示成服务端默认"这条断言会被它满足。
+ */
+async function factValue(card, label) {
+  return (await card.locator('dl.facts > div').filter({ hasText: label }).locator('dd').innerText()).trim()
 }
 
 /** 当前可见的弹窗（页面上同时存在多个 el-dialog，必须只挑可见的那个） */
@@ -129,6 +139,17 @@ try {
   if (publishable !== 1 || stoppable !== 0) {
     failures.push(`草稿的按钮映射不正确（发布 ×${publishable}、停用 ×${stoppable}）`)
   }
+  // 两项"没配"各有各的说法，都必须在这里是它本来的样子：
+  // 工具空 = 全部工具（与知识库同一套语义），温度空 = 服务端默认（与填 0 不是一回事，
+  // 5.4 的 P1-8 修的就是"配了 0 和没配看起来一样"）
+  const freshTools = await factValue(card, '可用工具')
+  const freshTemperature = await factValue(card, '温度')
+  if (freshTools !== '全部工具') {
+    failures.push(`新建的 Agent 工具范围应显示「全部工具」，实际「${freshTools}」`)
+  }
+  if (freshTemperature !== '服务端默认') {
+    failures.push(`新建的 Agent 温度应显示「服务端默认」，实际「${freshTemperature}」`)
+  }
   await page.screenshot({ path: `${outDir}/agents-list.png` })
   console.log('✓ 已截图 docs/screenshots/agents-list.png')
 
@@ -146,11 +167,29 @@ try {
   await option.waitFor({ timeout: 15000 })
   await option.click()
   await page.keyboard.press('Escape')
+  // 工具白名单（5.4 / P1-9，后端从 4.3 起就支持 toolCodes，缺的一直只有这一页）。
+  // 两个内置工具都勾上：只勾「计算器」的话，下面试跑那条腿会因为它搜不了笔记而
+  // 报"未使用工具"——那是一条真失败，但它的原因跟本步要验的东西无关
+  await editDialog.locator('.tool-multi').click()
+  for (const toolName of ['知识库检索', '计算器']) {
+    const toolOption = page
+      .locator('.el-select-dropdown:visible .el-select-dropdown__item')
+      .filter({ hasText: toolName })
+      .first()
+    await toolOption.waitFor({ timeout: 15000 })
+    await toolOption.click()
+  }
+  await page.keyboard.press('Escape')
+  // 采样温度（5.4 / P1-8）：填一个既不是 0 也不是默认 0.7 的值，卡片回显才能区分
+  // "真的存了"和"只是恰好显示了默认值"
+  await editDialog.locator('.el-input-number input').fill('0.2')
   await editDialog.locator('.el-dialog__footer .el-button--primary').click()
   await page.waitForSelector('.el-dialog:visible', { state: 'detached', timeout: 15000 })
 
   const configuredText = await cardByCode(agentCode).innerText()
-  console.log(`③ 已配置提示词与知识库，卡片范围：${configuredText.includes(demoKb) ? demoKb : '(未生效)'}`)
+  const configuredTools = await factValue(cardByCode(agentCode), '可用工具')
+  const configuredTemperature = await factValue(cardByCode(agentCode), '温度')
+  console.log(`③ 已配置提示词、知识库、工具与温度：可用工具「${configuredTools}」/ 温度「${configuredTemperature}」`)
   if (!configuredText.includes(demoKb)) {
     failures.push(`绑定的知识库没有显示出来（期望出现「${demoKb}」）`)
   }
@@ -163,6 +202,17 @@ try {
   // 卡片上的策略文案来自服务端响应（保存后重新拉列表），所以这一条同时验了"存下去了"与"读回来了"
   if (!configuredText.includes('只依据笔记')) {
     failures.push('回答策略没有回显成「只依据笔记」（选择器可能是假旋钮）')
+  }
+  // 工具与温度同理，都是"存下去了 + 读回来了"两条腿：卡片数据来自保存后重新拉的列表，
+  // 不是弹窗里那份本地状态（只改前端状态的话这条会漏过去）
+  if (configuredTools === '全部工具') {
+    failures.push('勾选工具后卡片仍显示「全部工具」（选择器可能是假旋钮）')
+  }
+  if (!configuredTools.includes('知识库检索') || !configuredTools.includes('计算器')) {
+    failures.push(`勾选的两个工具没有（都）回显在卡片上（实际「${configuredTools}」）`)
+  }
+  if (configuredTemperature !== '0.2') {
+    failures.push(`温度没有回显成 0.2（实际「${configuredTemperature}」）`)
   }
 
   // ---------- ④ 复制：副本必须是草稿 ----------

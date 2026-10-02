@@ -18,6 +18,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -414,6 +416,106 @@ class AgentResourceTest {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.answerPolicy").value("KB_ONLY"));
+    }
+
+    @Test
+    @DisplayName("温度：0.2 能存能回读、不传 = 不改，且 null 与 0 是两个不同的值")
+    void temperatureIsStoredAndNullIsNotZero() throws Exception {
+        String token = registerAndLogin("agent-temperature");
+        String agentId = createAgent(token, "warm-agent", "带温度的 Agent");
+
+        // 没配过 = null。**不能落成 0**：0 是"我要最确定的回答"，是用户真实会做的选择；
+        // 两者混成一个值之后，界面上就再也分不出"我配过"和"我没配过"
+        mockMvc.perform(get("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.temperature").value(nullValue()));
+
+        mockMvc.perform(put("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"temperature":0.2}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.temperature").value(0.2));
+
+        // 回读一次：确认是落库了，而不是只在这一次响应里漂亮
+        mockMvc.perform(get("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(jsonPath("$.data.temperature").value(0.2));
+
+        // 0 存得下、也读得回：这条断言就是"0 没被当成没填"的证据
+        mockMvc.perform(put("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"temperature":0}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.temperature").value(0.0));
+
+        // 局部更新不传 = 不改：上一次的 0 必须还在，而不是被重置回"跟随全局"
+        mockMvc.perform(put("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"只改个名"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.temperature").value(0.0));
+    }
+
+    @Test
+    @DisplayName("温度：越界在写入口报 1001，且文案给出范围（不存在的值不该落库）")
+    void temperatureOutOfRangeIsRejected() throws Exception {
+        String token = registerAndLogin("agent-temperature-range");
+        String agentId = createAgent(token, "range-agent", "越界测试");
+
+        mockMvc.perform(put("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"temperature":2.5}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(1001))
+                // 报错要说清范围，否则用户只能靠猜（与 5011 那条同一套理由）
+                .andExpect(jsonPath("$.message").value(containsString("0 到 2")));
+
+        mockMvc.perform(put("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"temperature":-0.1}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(1001));
+
+        // 两次都没写进去：拒绝必须是"不落库"，而不是"存下再报错"
+        mockMvc.perform(get("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(jsonPath("$.data.temperature").value(nullValue()));
+    }
+
+    @Test
+    @DisplayName("复制：温度跟着复制（少复制一样会得到一个「跑起来不一样」的副本，还不报错）")
+    void duplicateCopiesTemperature() throws Exception {
+        String token = registerAndLogin("agent-temperature-copy");
+        String agentId = createAgent(token, "temperature-copy", "原样温度");
+
+        mockMvc.perform(put("/api/agents/" + agentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"temperature":1.5}
+                                """))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/agents/" + agentId + "/duplicate")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.temperature").value(1.5));
     }
 
     @Test

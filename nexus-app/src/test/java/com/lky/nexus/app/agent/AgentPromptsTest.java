@@ -68,7 +68,7 @@ class AgentPromptsTest {
 
     private AgentDefinition definition(AnswerPolicy policy) {
         return new AgentDefinition(1L, "helper", "笔记助手", "用户写的提示", "chat.agent",
-                List.of(), List.of(), policy, false);
+                null, List.of(), List.of(), policy, false);
     }
 
     private int countOccurrences(String text, String needle) {

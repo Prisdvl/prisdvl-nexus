@@ -3314,6 +3314,185 @@ RabbitMQ）+ `--profile ai-local`（Ollama，`bge-m3`）+ 后端 `--spring.profi
 
 ---
 
+### B.45 Phase 5.4 实现记录（Agent 闭环补完：温度 / 工具白名单 / 重命名 / 出处）
+
+> 编号说明：同 B.42/B.43/B.44，属**产品化**这条线。对应审计里的 P1-8 / P1-9 / P1-12 / P1-14。
+
+**1. 动手时范围扩大了：非流式入口根本不看会话模式**
+
+P1-14 要的是"消息上记 agentId"。加字段之前先去非流式链路 (`ChatServiceImpl.ask`) 找落库点，
+结果发现它**完全不读 `conversation.mode`**——只读 `model_role` 就调模型。于是同一个会话
+走不同入口会得到两种答案，而且**都不报错**：
+
+| 会话模式 | 调 `POST /api/chat/messages`（非流式）原本的行为 | 为什么危险 |
+| --- | --- | --- |
+| `AGENT` | 不用该 Agent 的提示词、不用它的工具，等于裸模型回答 | 用户选的是"严谨的笔记助手"，拿到的是别的东西，**没有任何提示** |
+| `RAG` | 回答里**没有任何笔记内容**，看起来却完全正常 | 最危险的一种：用户以为问的是自己的笔记 |
+
+这两条都不是"功能没做完"，是**同一个会话在不同入口下行为不同**——审计的模块表里没有这一格，
+因为它只有把两条链路并排读才看得见。修法：
+
+- 抽 `ConversationAgentResolver.resolve(agentService, userId, conversation, mode)`，
+  流式与非流式**共用一处**解析（含"会话没选 Agent → 用内置默认那一行"）。分成两份实现的话，
+  下一次给 Agent 加能力只会改一处，症状是"流式能用、非流式不生效"，同样不报错；
+- 非流式 AGENT 走 `AgentRuntime.configure`，与流式**同一份装配**（提示词 + 工具 + ToolContext）；
+- 非流式 RAG **显式报 `8003`** 并指向 `/api/chat/stream`，且**在任何副作用之前**拒绝
+  （不落用户消息、不调模型）。它用的是"列出**能**服务的模式"而不是"列出不能的"——
+  将来加了新模式（工作流模式）默认落到报错，而不是默默按 PLAIN 跑出个不对的答案。
+
+RAG 之所以是报错而不是顺手补上检索：那需要在非流式下把流式那套"检索 → 无结果短路 →
+提示词组装"再实现一遍，而 RAG 会话绑多个库时"用哪个库"（P1-6）本身还没定。
+现在接上来等于把两个未决问题焊在一起，等 5.5 定了再说。
+
+**2. P1-8 温度：它不是假旋钮，区别在于"读它的那一行"一起落地了**
+
+审计对 Agent 配置提过三条候选：`temperature` / `max_iterations` / `timeout_ms`。
+后两条被明确否掉（`database.md` 6.0 第 3 条），理由是**没有任何机制会读它们**——
+存下来但没人读的配置比没有更糟，用户会以为配了就生效。
+
+temperature 的落地**带着读它的那一行**：`AgentRuntime.configure` 里
+`request.options(ChatOptions.builder().temperature(...))`。这是两条执行链路
+（一次性 ask 与流式对话）唯一的公共装配点，所以"这个 Agent 跑多热"只有一个地方说了算。
+
+四个刻意的决定：
+
+1. **NULL 与 0 不合并**（迁移 V16，见 `database.md` 6.0.3）：NULL = 跟随全局
+   `ai.defaults.temperature`，0 = 显式要求贪心解码。用 0 当"未配置"的哨兵，
+   等于让"我想要 0"这件事永远表达不出来。响应里也**原样返回 null**，不回填全局值——
+   回填了用户就分不清"我配过"和"系统给的"；
+2. **用请求级 options，不重建 ChatModel**。`ChatClient` 的合并语义是"从模型默认选项
+   `mutate()` 出发、逐字段被请求级非空值覆盖"（`DefaultChatClientUtils.toPrompt` → `combineWith`），
+   所以只写 temperature，`model` / `baseUrl` / `apiKey` 一个都不会丢。
+   也因此必须用**厂商中立**的 `ChatOptions.builder()`——`ChatClientFactory` 的类注释
+   禁止业务代码出现 `OpenAiChatOptions`，那会让换厂商时这里先炸；
+3. **范围 0–2，取两家的并集**：Anthropic 系允许 0–1，OpenAI 允许 0–2。取交集会把 OpenAI 上
+   合法的 1.5 挡在门外。校验在服务层（越界 `1001`，文案带范围与当前值），**不靠列的宽度**——
+   `DECIMAL(3,2)` 是第二道防线，服务层那条才是给出可读错误的那条；
+4. **生效范围写在界面上**：只作用于**由 Agent 驱动的调用**（AGENT 模式会话与试跑）；
+   PLAIN / RAG 会话与 `/api/knowledge/**/ask` 不走 `configure`，仍用全局默认。
+   这是生效范围的诚实边界，不是遗漏。
+
+**3. P1-9 工具白名单：后端早就有，缺的一直只有界面**
+
+`toolCodes` 从 4.3 起就在 `CreateAgentRequest` / `UpdateAgentRequest` 上，装配逻辑
+（`replaceTools`）也在。但 `web/src/api/agents.ts` 的 `AgentPayload` **连这个字段都没有**，
+`AgentsView.vue` 全文无 `tool`（审计用 grep 确认过）——能力对用户等于不存在。
+
+5.4 补的是三件事，缺一件都会变成"假旋钮"：
+
+- `AgentPayload.toolCodes` + 编辑弹窗多选 + 卡片回显（**存下去了 + 读回来了**两条腿）；
+- **"空 = 全部工具"这句话写在界面上**。它与直觉相反（空选择框看起来像"一个都不给"），
+  但与 `kbIds` 是**同一套语义**——同一页面里两套相反约定才是真的难懂；
+- **已停用的工具标"（已停用）"**。装配取的是"启用中的 ∩ 白名单"，所以白名单里留着一个停用的
+  code 不会让它复活；不标出来，用户会以为它还在用，白排查一轮。
+
+顺带修正了 `api.md` 里的一处过期：`GET /api/tools` 被列在"6.1 规划中（尚未实现）"，
+而它从 4.3 起就在（`ToolController`），5.4 只是接上前端。`PUT /api/agents/{id}/tools`
+则**不存在也不会做**——白名单就是 Agent 的一个字段。
+
+**4. P1-14 出处：两列同名，语义不同**
+
+迁移 V17 给 `chat_message` 加 `agent_id`（见 `database.md`）。要点：
+
+| 列 | 语义 |
+| --- | --- |
+| `chat_conversation.agent_id` | **活指针**：会话现在用哪个 Agent；可改、可为 NULL |
+| `chat_message.agent_id` | **历史事实**：这条回答当时跑的是哪一行；插入即定 |
+
+- **落的是解析后的具体 id**，不是照抄会话上那个可能为 NULL 的值：会话没选 Agent 时，
+  消息上写的是**内置默认那一行的真实 id**。照抄 NULL 的话，"这是谁答的"永远没有答案，
+  而接口一切正常，没人会报 bug；
+- **只记助手消息，用户消息恒为 NULL**：用户消息不是任何 Agent 产出的；给它也写 id 会让
+  "按 agent_id 聚合"把每轮对话重复计两次。落库点是 `appendAssistantMessage` 的**插入参数**
+  （不可被 update 覆盖）；
+- **索引带 `user_id` 前缀**（`idx_msg_user_agent (user_id, agent_id, id)`）而不是裸 `agent_id`：
+  这是多租户表，孤立的 `agent_id` 索引只会被跨租户查询用上——它的存在本身就会**诱导**
+  后来者写出漏 `user_id` 的查询。`user_id` 打头正是为了接住下面的聚合查询；
+- **失败的消息也记出处**：用户问"这条回答是哪个 Agent 跑的"时，失败的那条同样需要一个答案。
+
+字段与读它的机制**同一次落地**（`GET /api/observability/agents`，见 `api.md` 10.0），
+不留"加了列没人读"的中间态——`LEFT JOIN agent` 让被删掉的 Agent 的历史用量仍留在报表里，
+由 `deleted` 标注；`failed` 单独给出来，因为"用了 100 次"和"用了 100 次、80 次失败"
+是两句完全不同的话。
+
+**5. P1-12 重命名会话：接口从 Phase 1 就在，界面一直没有**
+
+`renameConversation` 在 `web/src/api/chat.ts` 里定义了整个 Phase 1–5.3，全仓**无任何调用**。
+用户唯一的改名方式就是再开一个会话——而标题是拿首条提问自动生成的，
+"问了一句就把话题带偏"是常事，改不了名等于这个自动标题变成了枷锁。
+
+实现上没有新接口，只有入口（侧栏 hover 显形的铅笔图标）。两点值得记：
+
+- 服务端会把 `title_auto` 置 0，所以改过名之后的新提问**不会再被自动标题覆盖**——
+  "用户改的就该留住"。E2E 因此专门断言"刷新后旧标题**不该**回来"；
+- 改名后**重新拉一次列表**而不是只改本地那一项：标题归一化（trim，将来可能加长度截断）
+  发生在服务端，在客户端照着猜一遍迟早会和它对不上。
+
+**6. 测试与验证**
+
+`mvn -B test`（JDK 21）：**440 用例 / 0 失败 / 18 跳过**（跳过全是"未配真实模型/外部栈"的
+Live 类，与本期无关）。较 5.3 的 426 **净增 14 条**：
+
+| 测试 | 条数 | 钉住的东西 |
+| --- | --- | --- |
+| `AgentTemperatureWiringTest`（新，`nexus-app`） | 4 | 温度**真的交到模型边界**了吗——桩模型带非空默认温度 0.7，"留空 = 跟随默认"这条断言才有证据；顺带断言合并没把 `model` 冲掉 |
+| `ChatAgentProvenanceTest`（新，`nexus-app`） | 5 | 两条链路的出处：流式/非流式都记**解析后**的 id、会话不选 Agent 时记内置默认的真实 id、用户消息恒 NULL、RAG 非流式报 8003 且不留半条消息、PLAIN 不把默认 Agent 盖上去 |
+| `AgentResourceTest`（扩） | +3 | 温度能存能回读、不传 = 不改、**null 与 0 是两个不同的值**、越界报 1001（含范围文案）、复制时温度跟着复制 |
+| `AgentDefinitionTest`（扩，`nexus-ai`） | +2 | `temperature` 可空、0 不被当成"没配" |
+
+其余改动（`ChatAgentModeTest` / `ChatConversationFlowTest` / `AgentPolicyWiringTest` /
+`ToolResourceTest` / `AgentRuntimeFailureTest`）是 `appendAssistantMessage` 多了 `agentId`
+参数后的**机械跟进**，断言一个字没改。
+
+E2E 脚本已扩：`verify-agents.mjs` 加"工具勾选 + 温度回填**后从列表重新拉回来**"
+（只改前端状态过不了），`verify-agent-chat.mjs` 加第三条腿"重命名 → **刷新后名字仍在**"
+（这层只有浏览器能证明：接口没被调用、500、服务端归一化成别的样子，界面上看着都一样）。
+
+**7. 真机验收：已执行（2026-10-02 10:09–10:15），全部退出码 0**
+
+*环境*：`docker compose --profile ai-local`（MySQL 3307 / PostgreSQL+pgvector 5433 / Redis /
+ES 9200 + analysis-ik / RabbitMQ / Ollama）+ 后端 `--spring.profiles.active=local`（`clean package`
+现打包的 jar，不是上一次的产物）+ `npm run dev`。脚本用系统 Edge，真模型 `deepseek-v4-flash`。
+
+| 验收项 | 结果 |
+| --- | --- |
+| V16 / V17 在真实 MySQL 落地 | `flyway_schema_history` 有 16/17 两行 `success=1`；`agent.temperature` = `decimal(3,2) NULL`、`chat_message.agent_id` = `bigint NULL`；`idx_msg_user_agent` 三段为 `(user_id, agent_id, id)`——**结构与设计逐字一致** |
+| 迁移在真实 PG（向量库）上 | `Successfully validated 1 migration`，`Schema "public" is up to date` |
+| 工具白名单回读（P1-9） | `verify-agents.mjs` ③：勾选后卡片显示「知识库检索、计算器」（数据来自保存后**重新拉取**的列表，不是弹窗本地状态） |
+| 温度回读（P1-8） | 同一条腿：填 `0.2` 后卡片显示「0.2」（不是 0.7，所以区分得出"真存了"与"恰好是默认值"）；新建未配时显示「服务端默认」 |
+| 温度真的到模型（P1-8） | ⑧ 试跑完成，**用了 2 次工具**——真实模型调用走通 |
+| 重命名（P1-12） | `verify-agent-chat.mjs` ⑥⑦：重命名 → 刷新 → 名字仍在 → 该会话仍可正常打开；查库确认 `title_auto=0`、标题已是新值 |
+| 出处（P1-14） | 查库：AGENT 会话的助手消息 `agent_id=2105291121586946050（默认助手）`（**会话没选 Agent，落的仍是解析后的内置默认行**）、用户消息恒 NULL；RAG 会话的助手消息 `agent_id=NULL`（RAG 不由 Agent 驱动） |
+| 聚合端点 | `GET /api/observability/agents` → `[{agentId, code:"builtin.default", name:"默认助手", deleted:false, messages:3, failed:0, lastUsedAt}]`；**不带 token → 401** |
+| 非流式 AGENT（本期扩大范围的那条） | `POST /chat/conversations/{id}/messages` → `200`，助手消息带 agent_id、真实 Token（2597）、`model=deepseek-v4-flash` |
+| 非流式 RAG | → **`409` + `8003`**，message = "该会话是 RAG 模式，非流式接口无法完成检索与引用。请改用流式接口 POST /api/chat/stream"；**该会话消息总数 0**（证明在任何副作用之前拒绝） |
+| 其余 6 个脚本回归 | `verify-login` / `verify-frontend` / `verify-stream` / `verify-retrieval-ui` / `verify-agent-no-kb` / `verify-doc-lifecycle` **全部退出 0** |
+
+*这次跑出来的两个真问题*（都属"脚本在骗人"，不是产品缺陷，但都要留档）：
+
+1. **重命名那条断言第一版是错的，把一次成功的重命名判成了失败。**
+   它写的是"刷新后侧栏里不该再有旧标题"，而侧栏是**全部会话**的列表——自动标题来自首条提问，
+   演示账号反复跑同一句"我的笔记里缓存击穿怎么解决？"，历史上留下的会话必然重名。
+   于是"别的同时名会话还在"被当成了"这一个的旧标题回来了"。改成**数同名数量是否减少一个**
+   （改前 N 个 → 改后 N-1 个），才是"这一个会话的旧标题没有回来"。
+   这与 B.44 §9 记的四个坑同类，但方向相反：那几个是**假装通过**，这个是**假装失败**——
+   后者更危险，因为它会让人去改一段本来正确的产品代码。
+2. **中文经 curl / Python 过 Windows GBK 控制台会失败**：`curl -d '{"title":"中文…"}'` 报
+   `1002 请求体格式错误`（与 B.44 §9 第 3、4 条同源），探针脚本的 `print` 也会
+   `UnicodeEncodeError`。真机探针因此改成**全程 ASCII 输出 + 结果写 UTF-8 文件**，
+   建会话用 ASCII 标题。**这是 shell 的编码问题，不是接口的**——浏览器链路（前端 E2E）全程正常。
+
+**8. 这一期明确没做 / 没验到的**
+
+- **温度没有"改回跟随全局默认"的传法**：局部更新接口里 `null` 已被"不改"占用，
+  与 `kbIds`/`toolCodes` 不同（那两个把"空"复用成了"不限制"，因为那是它们的正常状态）。
+  想清空只能新建 Agent，界面上写明了；
+- **非流式 RAG 未接**（报 8003 而非补检索，理由见 §1）；
+- **`verify-doc-lifecycle.mjs` 结尾那句提醒仍然成立**：向量与 ES 的"无残留"界面看不出来，
+  要靠查库——本期没重跑那条（5.3 已验过，且本期没动删除链路）。
+
+---
+
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
 
 | # | 决策项 | 结论 |

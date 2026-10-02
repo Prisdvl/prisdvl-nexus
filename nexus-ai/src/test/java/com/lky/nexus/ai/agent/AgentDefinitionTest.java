@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * {@link AgentDefinition} 的不可变性契约（Phase 4.1；4.3 补 toolCodes）。
+ * {@link AgentDefinition} 的不可变性契约（Phase 4.1；4.3 补 toolCodes；5.4 补 temperature）。
  *
  * <p>这类"看起来只是 getter 的值对象"最容易在评审里被放过，但它的性质是有实际后果的：
  * <ol>
@@ -93,29 +93,51 @@ class AgentDefinitionTest {
     @Test
     @DisplayName("agentId / code / name / systemPrompt / modelRole / answerPolicy 缺失都在构造期就失败")
     void missingIdentityFieldsFailFast() {
-        assertThatThrownBy(() -> new AgentDefinition(null, "c", "n", "p", "r", List.of(), List.of(),
+        assertThatThrownBy(() -> new AgentDefinition(null, "c", "n", "p", "r", null, List.of(), List.of(),
                 AnswerPolicy.KB_PREFERRED, false))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AgentDefinition(1L, " ", "n", "p", "r", List.of(), List.of(),
+        assertThatThrownBy(() -> new AgentDefinition(1L, " ", "n", "p", "r", null, List.of(), List.of(),
                 AnswerPolicy.KB_PREFERRED, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("code");
-        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "", "p", "r", List.of(), List.of(),
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "", "p", "r", null, List.of(), List.of(),
                 AnswerPolicy.KB_PREFERRED, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("name");
-        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", null, "r", List.of(), List.of(),
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", null, "r", null, List.of(), List.of(),
                 AnswerPolicy.KB_PREFERRED, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("systemPrompt");
-        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", "p", "\t", List.of(), List.of(),
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", "p", "\t", null, List.of(), List.of(),
                 AnswerPolicy.KB_PREFERRED, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("modelRole");
         // 回答策略必填：装配阶段就该定好，运行期不做兜底（否则"没配时用什么"会多出第二个决定的地方）
-        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", "p", "r", List.of(), List.of(), null, false))
+        assertThatThrownBy(() -> new AgentDefinition(1L, "c", "n", "p", "r", null, List.of(), List.of(), null, false))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("answerPolicy");
+    }
+
+    @Test
+    @DisplayName("temperature 可空（null = 跟随全局默认），且 0 不被当成「没配」")
+    void temperatureIsNullableAndZeroIsMeaningful() {
+        // null 与 0 是两件事：前者"没配过"，后者"显式要求最高确定性"。
+        // 若哪天有人把 null 收敛成 0，这条会红——那正是要拦住的那种"顺手补个默认值"
+        assertThat(definition(List.of()).temperature()).isNull();
+
+        AgentDefinition greedy = new AgentDefinition(1L, "helper", "笔记助手", "提示", "chat.agent",
+                0.0, List.of(), List.of(), AnswerPolicy.KB_PREFERRED, false);
+        assertThat(greedy.temperature()).isZero();
+    }
+
+    @Test
+    @DisplayName("describe() 不掺温度：它讲的是「范围有多宽」，温度不是范围")
+    void describeStaysAboutScope() {
+        AgentDefinition hot = new AgentDefinition(1L, "helper", "笔记助手", "提示", "chat.agent",
+                1.8, List.of(1L), List.of(), AnswerPolicy.KB_PREFERRED, false);
+        // 日志里那句话的读法是"哪个 Agent、看几个库、用几个工具"，
+        // 多一个温度会让已有日志的解析方式全部失效
+        assertThat(hot.describe()).isEqualTo("笔记助手(helper, 1 个知识库, 全部工具)");
     }
 
     @Test
@@ -136,6 +158,6 @@ class AgentDefinitionTest {
 
     private AgentDefinition definition(List<Long> kbIds, List<String> toolCodes) {
         return new AgentDefinition(1L, "helper", "笔记助手", "只依据资料回答", "chat.agent",
-                kbIds, toolCodes, AnswerPolicy.KB_PREFERRED, false);
+                null, kbIds, toolCodes, AnswerPolicy.KB_PREFERRED, false);
     }
 }

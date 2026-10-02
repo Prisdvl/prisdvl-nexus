@@ -349,7 +349,7 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 | 表 | 关键列 | 说明 |
 | --- | --- | --- |
 | `chat_conversation` | `id`、`user_id`、`title`、`title_auto`、`mode`(`PLAIN`/`RAG`/`AGENT`)、`kb_ids`(JSON)、`agent_id`（Phase 4.1，仅 AGENT 模式；NULL = 用内置默认 Agent）、`model_role`、`prompt_template_id`、`message_count`、`last_message_at`、`pinned`、`deleted`、时间列 | 索引 `(user_id, deleted, last_message_at)` |
-| `chat_message` | `id`、`conversation_id`、`user_id`、`role`(`USER`/`ASSISTANT`/`SYSTEM`/`TOOL`)、`content`(MEDIUMTEXT)、`reasoning_content`、`model`、`provider`、`prompt_tokens`、`completion_tokens`、`total_tokens`、`latency_ms`、`first_token_ms`、`finish_reason`、`request_id`、`prompt_version_id`、`parent_message_id`、`status`(`STREAMING`/`DONE`/`STOPPED`/`FAILED`)、`error_msg`、`metadata`(JSON)、时间列 | 索引 `(conversation_id, created_at)`、`(request_id)` |
+| `chat_message` | `id`、`conversation_id`、`user_id`、`role`(`USER`/`ASSISTANT`/`SYSTEM`/`TOOL`)、`agent_id`（V17，见下；仅助手消息）、`content`(MEDIUMTEXT)、`reasoning_content`、`model`、`provider`、`prompt_tokens`、`completion_tokens`、`total_tokens`、`latency_ms`、`first_token_ms`、`finish_reason`、`request_id`、`prompt_version_id`、`parent_message_id`、`status`(`STREAMING`/`DONE`/`STOPPED`/`FAILED`)、`error_msg`、`metadata`(JSON)、时间列 | 索引 `(conversation_id, created_at)`、`(request_id)`、`(user_id, agent_id, id)`（V17） |
 | `chat_message_citation` | `id`、`message_id`、`citation_index`(正文中的 `[n]`)、`chunk_id`、`document_id`、`kb_id`、`score`、`rank`、`snippet` | 唯一键 `(message_id, citation_index)`；支撑"点击引用 → 打开文档定位标题" |
 | `chat_feedback` | `id`、`message_id`、`user_id`、`rating`(1/-1)、`comment` | 后续可回流评测集 |
 
@@ -363,6 +363,32 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 | 结论 | 两者**并存**：Memory 负责"发什么给模型"，History 负责"用户看到什么"（Spring AI 官方文档明确二者分离） |
 
 > 注意：Spring AI 2.0.1 的 `JdbcChatMemoryRepository` **不保存 tool-call 消息**（`AssistantMessage` 的工具调用与 `ToolResponseMessage` 会被静默过滤）。Agent 的完整推理链因此落在本项目 `ai_agent_run_step` 中，而不是依赖 ChatMemory。
+
+#### V17：`chat_message.agent_id`（平台化 Phase 5.4 · P1-14）
+
+`BIGINT NULL` + 索引 `idx_msg_user_agent (user_id, agent_id, id)`。
+
+它回答的问题：**"这条回答是哪个 Agent 跑的？"** 加这一列之前答不出来——
+`chat_conversation.agent_id` 只在会话上记了**当前选择**，而它是活的（随时可改、可为 NULL），
+历史消息无法据此回溯。
+
+| 列 | 语义 |
+| --- | --- |
+| `chat_conversation.agent_id` | **活指针**：这个会话现在用哪个 Agent；NULL = 跟随内置默认 |
+| `chat_message.agent_id` | **历史事实**：这条回答当时实际跑的是哪一行；插入即定，不随会话换绑而变 |
+
+三点刻意的设计（详见 `docs/decisions.md` B.45）：
+
+1. **两列同名不同义，不是重复存储**。会话不选 Agent 时，消息上落的仍是**解析后**的内置默认那一行的真实 id——
+   照抄会话上的 NULL 的话，用户问"这是谁答的"就永远没有答案，而接口一切正常，没人会报 bug；
+2. **只记助手消息，用户消息恒为 NULL**：用户消息不是任何 Agent 产出的；给它也写 id 会让
+   "按 agent_id 聚合"把每轮对话重复计两次；
+3. **索引带 `user_id` 前缀而不是裸 `agent_id`**：这是多租户表，全仓查询一律带 `user_id`
+   （同表 `idx_msg_conv` 也是 `(conversation_id, user_id, id)` 这种带归属列的形状）。
+   裸 `agent_id` 索引只会被跨租户查询用上——它的存在本身就会诱导后来者写出漏 `user_id` 的查询。
+   `user_id` 打头正是为了让 P1-14 的聚合查询（`GROUP BY agent_id WHERE user_id = ?`）被索引接住。
+
+存量消息为 NULL = 未知出处（5.4 之前的消息确实无法回溯），如实表达，不回填。
 
 ---
 
@@ -422,6 +448,31 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 2. **只有一列，没有 DML**：整个 migration 目录没有 DML 先例（全是 DDL），存量行的**提示词**
    改写交给 Java 侧按"历史指纹"就地升级（`AgentService.resolveDefault`）。写进 SQL 的话，
    那句中文长字面量会成为提示词的**第三个**真源（另两处是 `AgentPrompts` 常量与库里的行）。
+
+### 6.0.3 已实现：`agent.temperature`（平台化 Phase 5.4 · P1-8，迁移 V16）
+
+`agent` 表**新增一列**：
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `temperature` | `DECIMAL(3,2) NULL` | 采样温度 0.00–2.00；**NULL = 跟随全局 `ai.defaults.temperature`**（0 是"显式要求确定性"，与 NULL 不同义） |
+
+三点说明（详见 `docs/decisions.md` B.45）：
+
+1. **NULL 与 0 是两件事，不要合并**。NULL = 没配过、跟随运维的全局值；0 = 贪心解码、显式要求最高确定性。
+   用 0 当"未配置"的哨兵，等于让"我想要 0"这件事永远表达不出来；
+2. **范围校验在服务层（越界报 1001），不靠列的宽度**。`DECIMAL(3,2)` 结构上容不下 0–2 之外的大数，
+   那是第二道防线；服务层那条才是给出可读错误的那条。**上限取 2 而不是 1**：OpenAI 允许 0–2，
+   Anthropic 允许 0–1，取并集才不会把 OpenAI 上合法的 1.5 挡在门外；
+3. **生效点是 `AgentRuntime.configure`**（两条执行链路唯一的公共装配点），以请求级 `ChatOptions`
+   覆盖模型默认值，**不重建 ChatModel**——`ChatClient` 的合并语义是"从模型默认选项 `mutate()`
+   出发、逐字段被请求级非空值覆盖"，所以只写 temperature，`model` / `baseUrl` / `apiKey` 一个都不会丢。
+   因此它只作用于**由 Agent 驱动的调用**：PLAIN / RAG 会话与 `/api/knowledge/**/ask` 不走 configure，
+   仍用全局默认——这是生效范围的诚实边界，不是遗漏。
+
+> 这一列与 6.0 里"刻意没建 `max_iterations` / `timeout_ms`"是同一条规则的对照：
+> 那两个被拒是因为**没有任何机制会读它们**；temperature 落地时就带着读它的那一行，
+> 所以它不是假旋钮。加配置时必须连同"谁读它"一起落地。
 
 ### 6.1 设计稿（未实现的部分）
 

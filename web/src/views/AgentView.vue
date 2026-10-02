@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ChatDotRound, DataAnalysis, Delete, Promotion, Plus, VideoPause } from '@element-plus/icons-vue'
+import {
+  ChatDotRound,
+  DataAnalysis,
+  Delete,
+  EditPen,
+  Promotion,
+  Plus,
+  VideoPause
+} from '@element-plus/icons-vue'
 import {
   bindAgent,
   bindKnowledgeBase,
@@ -9,6 +17,7 @@ import {
   deleteConversation,
   listConversations,
   listMessages,
+  renameConversation,
   resetConversationAgent,
   stopStream,
   streamChat,
@@ -52,6 +61,14 @@ interface ChatItem {
   toolCalls: MessageToolCall[]
   /** RAG 模式的检索结果（本次流内有效；历史消息不回放，见 toItems 的说明） */
   retrieval?: StreamRetrieval | null
+  /**
+   * 产出这条回答的 Agent（5.4，只有助手消息有）。
+   *
+   * 流式进行中的临时消息拿不到它——id 要等落库后由服务端给。所以下面渲染的是
+   * "已知才显示"，而不是"显示不出来就当作内置默认"：猜一个名字比不显示更糟，
+   * 用户会把猜错的那条当成事实。
+   */
+  agentId?: string | null
   streaming: boolean
   failed?: boolean
 }
@@ -158,6 +175,25 @@ const activeAgentName = computed(() => {
   return agents.value.find((agent) => agent.id === agentId)?.name ?? '已删除的 Agent'
 })
 
+/**
+ * 把消息上的 `agentId` 翻成可读的来源标签（5.4）。返回 null = 不显示。
+ *
+ * 三种情况必须分开，因为它们的含义不同：
+ * - **没有 id**：不显示。流式进行中的临时消息还没有 id（要等落库），5.4 之前的旧消息也没有。
+ *   这里绝不能"取不到就当作内置默认"——那是在替服务端猜，猜错了比不显示更糟。
+ * - **有 id 但列表里没有**：显示短 id 而不是"已删除的 Agent"。列表是分页拉的前 50 条，
+ *   找不到也可能是没加载到；乱贴"已删除"这个结论就是在编。
+ * - **正常**：名字。
+ *
+ * 注意它和 `activeAgentName` 的取值来源不同：那个读**会话**当前的绑定（会随换绑而变），
+ * 这个读**消息**上固化的事实（换绑之后旧回答仍指回原来那个）。这正是 5.4 要回答的问题。
+ */
+function agentLabel(agentId: string | null | undefined): string | null {
+  if (!agentId) return null
+  const found = agents.value.find((agent) => agent.id === agentId)
+  return found ? found.name : `Agent #${agentId.slice(-6)}`
+}
+
 const AGENT_STATE_TEXT: Record<AgentStatus, string> = {
   DRAFT: '草稿',
   PUBLISHED: '已发布',
@@ -240,7 +276,15 @@ async function loadConversations() {
  * 若要回放，需要把命中片段写进消息 metadata（与 Agent 的工具痕迹同一处）。
  * 本次会话内不丢：见 send() 结尾按 assistantMessageId 把命中片段贴回来的那几行。
  */
-function toItems(list: Array<{ id: string; role: string; content: string | null; toolCalls: MessageToolCall[] }>) {
+function toItems(
+  list: Array<{
+    id: string
+    role: string
+    content: string | null
+    agentId: string | null
+    toolCalls: MessageToolCall[]
+  }>
+) {
   return list
     .filter((message) => message.role === 'USER' || message.role === 'ASSISTANT')
     .filter((message) => (message.content ?? '').length > 0 || message.toolCalls.length > 0)
@@ -250,6 +294,8 @@ function toItems(list: Array<{ id: string; role: string; content: string | null;
       content: message.content ?? '',
       toolCalls: message.toolCalls ?? [],
       retrieval: null,
+      // 服务端保证用户消息这里是 null（只有助手消息记产出来源，见 5.4 的 V17）
+      agentId: message.agentId ?? null,
       streaming: false
     }))
 }
@@ -285,6 +331,45 @@ function newConversation() {
   activeId.value = ''
   items.value = []
   input.value = ''
+}
+
+/**
+ * 重命名会话（5.4 · P1-12）。
+ *
+ * 接口从 Phase 1 就在（`renameConversation` 一直没被调用过），但界面上没有入口，
+ * 于是用户唯一的改名方式就是——再开一个会话。标题是自动用首条提问生成的，
+ * 问了一句就把话题带偏是常事，改不了名等于这个自动标题变成了枷锁。
+ *
+ * 两点值得注意：
+ * 1. 服务端会把 `title_auto` 置 0（见 ConversationServiceImpl.update），
+ *    所以改过名之后的新提问不会再被自动标题覆盖——这正是"用户改的就该留住"；
+ * 2. 改完**重新拉一次列表**而不是只改本地那一项：标题归一化（trim）发生在服务端，
+ *    在这里照着猜一遍迟早会和它对不上（多一个空格、或将来加了长度截断）。
+ */
+async function renameConversationItem(conversation: Conversation) {
+  if (streaming.value) {
+    ElMessage.warning('请先停止当前生成')
+    return
+  }
+  let value: string
+  try {
+    const result = await ElMessageBox.prompt('新的会话标题', '重命名会话', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: conversation.title ?? '',
+      // 空标题服务端会报 1001（标题不能为空字符串），这里先拦一道——
+      // 让用户吃一条本可以避免的报错没有意义
+      inputValidator: (text) => (text && text.trim() ? true : '标题不能为空'),
+      inputErrorMessage: '标题不能为空'
+    })
+    value = result.value.trim()
+  } catch {
+    // 用户点了取消：ElMessageBox 以 reject 表示取消，不是错误
+    return
+  }
+  await renameConversation(conversation.id, value)
+  ElMessage.success('已重命名（之后的新提问不会再自动改标题）')
+  await loadConversations()
 }
 
 async function removeConversation(conversation: Conversation) {
@@ -543,6 +628,15 @@ watch(activeId, () => {
             {{ timeLabel(conversation.lastMessageAt || conversation.createdAt) }}
           </span>
           <span
+            class="conversation-rename"
+            role="button"
+            aria-label="重命名会话"
+            title="重命名"
+            @click.stop="renameConversationItem(conversation)"
+          >
+            <el-icon><EditPen /></el-icon>
+          </span>
+          <span
             class="conversation-delete"
             role="button"
             aria-label="删除会话"
@@ -682,6 +776,12 @@ watch(activeId, () => {
             </div>
             <!-- eslint-disable-next-line vue/no-v-html -- 内容经 marked + DOMPurify 处理 -->
             <div v-else class="markdown" v-html="html(message)" />
+
+            <!-- 来源（5.4）：这条回答是哪个 Agent 产出的。存的是**当时**那一行，
+                 所以会话后来换了 Agent，这里也仍然是答它的那个（见 agentLabel 的说明）。 -->
+            <div v-if="message.role === 'ASSISTANT' && agentLabel(message.agentId)" class="provenance">
+              由「{{ agentLabel(message.agentId) }}」回答
+            </div>
           </div>
         </article>
       </div>
@@ -883,10 +983,12 @@ watch(activeId, () => {
   color: var(--text-faint);
 }
 
+/* 行尾的两个操作按钮：默认隐形，悬停整行时才出现（平时不该抢标题的注意力）。
+   两条规则共用一份定位，只有 right 与 hover 配色不同——分开写会漂移。 */
+.conversation-rename,
 .conversation-delete {
   position: absolute;
   top: 50%;
-  right: var(--space-2);
   transform: translateY(-50%);
   display: grid;
   place-items: center;
@@ -898,8 +1000,23 @@ watch(activeId, () => {
   transition: opacity var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
 }
 
+.conversation-delete {
+  right: var(--space-2);
+}
+
+/* 重命名在删除的左边：两个都靠右堆叠，顺序是"轻的在前、危险的在后" */
+.conversation-rename {
+  right: calc(var(--space-2) + 26px);
+}
+
+.conversation:hover .conversation-rename,
 .conversation:hover .conversation-delete {
   opacity: 1;
+}
+
+.conversation-rename:hover {
+  color: var(--accent-600);
+  background: var(--surface-sunken);
 }
 
 .conversation-delete:hover {
@@ -1073,6 +1190,16 @@ watch(activeId, () => {
 }
 
 .trace-result {
+  color: var(--text-muted);
+}
+
+/* 来源标注：压在回答末尾的一行小字。刻意做得很轻——它是"可追溯"的证据，
+   不是用户每轮都要读的内容，抢了正文的注意力就过了。 */
+.provenance {
+  margin-top: var(--space-2);
+  font-size: 11.5px;
+  /* 用 muted 而不是 faint：faint 按约定只给占位/禁用这类装饰，
+     而"这条是谁答的"是真实信息，得满足对比度 */
   color: var(--text-muted);
 }
 
