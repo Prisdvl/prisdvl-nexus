@@ -1,6 +1,103 @@
 # 系统架构（Prisdvl-Nexus）
 
-> STEP 1 设计稿。版本事实以官方文档/源码核对为准，核对结果与未决项见 [decisions.md](decisions.md#appendix-a-版本与-api-核对结果-2026-09-24)。
+> **本文两部分，读的时候请分开：**
+> **§0 是实现现状**——按 Phase 5.8 的真实代码写的，每条都能对到源文件。
+> **§1–§19 是最初的设计稿**（保留原始决策语境），其中 §10–§14 描述的功能（MCP 扩展、Workflow、Evaluation、Observability 看板）**大部分尚未实现**；这些节只在标题上标了目标 Phase，正文是设计意图而非现状描述。§16 部署架构与 §19 阻塞项已在 Phase 5.8 按实际形态更正。
+> 与现状冲突时，以 §0 与 [decisions.md](decisions.md) 附录 B 的实测记录为准。
+
+---
+
+## 0. 系统架构总览（实现现状 · Phase 5.8）
+
+### 0.1 分层架构
+
+```mermaid
+graph TB
+    U["浏览器"]
+
+    subgraph FE["前端层"]
+        SPA["Vue 3 SPA<br/>5 个视图 · 5 条路由"]
+    end
+
+    subgraph EDGE["接入层"]
+        NGX["Nginx（frontend 容器内）<br/>SPA fallback · /api 反代 · /mcp 反代<br/>SSE 不缓冲 · 220m 上传上限"]
+    end
+
+    subgraph APP["应用层 · nexus-app（Spring Boot 4.1.1 / JDK 21）"]
+        CTRL["Controller<br/>auth · user · knowledge · chat<br/>agent · tool · observability · mcp"]
+        SVC["Service<br/>业务流程 + 事务边界"]
+    end
+
+    subgraph AIL["AI 层 · nexus-ai"]
+        CHATC["ChatClient / ChatMemory / Advisors"]
+        RT["Agent Runtime / ToolCallingManager"]
+        RTV["Retriever 端口与策略族<br/>Vector · Keyword · Hybrid · Reranked"]
+        EMB["Embedding / Rerank"]
+    end
+
+    subgraph KNL["知识层 · nexus-knowledge"]
+        PARSE["解析 / 切片"]
+        IDX["ES 索引 / 向量库"]
+        RETR["检索实现 / 多库扇出 / 引用"]
+    end
+
+    subgraph STORE["存储层"]
+        MY[("MySQL 8.4<br/>业务库")]
+        PGV[("PostgreSQL 18 + pgvector<br/>vector(1024) HNSW")]
+        ES[("Elasticsearch 9.4.5 + IK<br/>BM25")]
+    end
+
+    subgraph MID["中间件与外部"]
+        RD[("Redis 8<br/>限流/配额/令牌版本")]
+        MQ[("RabbitMQ 4<br/>异步导入")]
+        OL["Ollama<br/>本地模型（可选）"]
+    end
+
+    U --> SPA --> NGX
+    NGX --> CTRL
+    CTRL --> SVC --> AIL
+    SVC --> KNL
+    AIL --> RTV --> RETR
+    RT --> RTV
+    EMB --> PGV
+    RETR --> ES
+    RETR --> PGV
+    PARSE --> MY
+    IDX --> ES
+    IDX --> PGV
+    SVC --> MY
+    SVC --> RD
+    MQ -.异步消费.-> PARSE
+
+    classDef store fill:#eef,stroke:#557
+    class MY,PGV,ES,RD,MQ store
+```
+
+**一句话读法**：`浏览器 → Nginx → nexus-app（Controller → Service）→ nexus-ai（模型与检索策略）→ nexus-knowledge（怎么落地到 ES / pgvector）→ MySQL / PostgreSQL / Elasticsearch`；`Redis` 与 `RabbitMQ` 是横切设施，`Ollama` 是可替换的模型后端。
+
+### 0.2 为什么是模块化单体，而不是微服务
+
+这不是"因为项目小所以将就"，而是**在这个项目的约束下，微服务换不到东西**。逐条对到本仓的实际情况：
+
+**1）模块边界已经在编译期拿到了。**
+Maven reactor 强制 `nexus-app → nexus-knowledge → nexus-ai → nexus-common` 的依赖方向，反向依赖**编译不过**（`pom.xml` 的 `<modules>` 与各模块 `<dependency>` 声明）。微服务能提供的"边界不可越过"，这里已经以零成本拿到了——不需要一套服务注册中心来保证它。
+
+**2）核心链路的调用密度与数据一致性，正好是微服务最不擅长的形状。**
+一次多库 RAG 请求在进程内要穿过：Controller → Service（归属校验）→ 多库扇出 → **每个库两路召回**（ES BM25 + 嵌入 + pgvector）→ 跨库 RRF → LLM 重排 → 上下文装配 → 生成 → 引用解析 → 写 `kb_qa_record`。这条链上有十几次本地调用和至少一次落库。拆成服务后，每次调用变成一次网络调用，而"生成回答"与"引用落库"之间还得处理分布式失败——**可这两件事本来就在同一个事务边界内**。
+
+**3）运维成本需要规模来摊薄，而这个项目是一个人维护的。**
+服务发现、链路追踪、配置中心、多实例部署、跨服务鉴权——这些是微服务的入场费。它们的收益来自"多个团队各自独立发布"，而本项目没有第二个团队。
+
+**4）本项目已经用一次真实选择证明了这条路线。**
+设计稿（本文 §11）原本计划**新起一个 `nexus-mcp-server` 进程**。实际实现时，MCP 留在了 nexus-app 内、成为端点 `POST /mcp`——因为它需要的只是**复用已有的 JWT 鉴权和 Spring 上下文**。独立进程换不到任何东西，反而要多一套部署、多一份鉴权代码、多一个要同步的配置。`pom.xml` 里 `nexus-mcp-server` 至今是注释掉的占位（`<!-- Phase 7 加入 -->`），这不是忘记，是"按需要拆"的结果。
+
+**5）什么时候才该拆——三条判据，现在一条都不成立。**
+① 某模块需要独立伸缩（例如嵌入推理要 GPU 机器而 Web 层不需要）；② 不同模块的发布节奏真正解耦到互相阻塞；③ 团队大到需要按模块分人。
+接缝已经留好：模块边界清晰、`Retriever` 是端口化的策略族、MCP 走标准协议端点。真要拆时，**是有现成切口可以切的**，而不是要先把一团代码理开。
+
+**代价也如实写在这里：**
+- 所有模块共享一个 JVM 和一个发布单元——**一个模块的内存泄漏或 CPU 尖峰会拖垮全部**，这是模块化单体真实付出的代价。
+- `nexus-common` 有退化成"什么都往里塞"的垃圾桶的风险，一旦如此，边界就名存实亡。本项目的防线是一条硬规则：**`nexus-common` 不依赖任何模块、不引入 Web/Security**（见 §2.1），以及依赖方向由编译期强制。
 
 ---
 
@@ -84,31 +181,36 @@ graph TB
 ```
 prisdvl-nexus              packaging=pom   只做 dependencyManagement + 版本统一
 ├── nexus-common                       jar             无 Spring Web 依赖
-├── nexus-knowledge                    jar             依赖 nexus-common
-├── nexus-app                          Spring Boot jar 依赖 common + knowledge
-└── nexus-mcp-server   (Phase 7)       Spring Boot jar 依赖 common + knowledge
+├── nexus-ai                           jar             依赖 nexus-common（模型接入 / Retriever 端口 / Agent Runtime）
+├── nexus-knowledge                    jar             依赖 nexus-common + nexus-ai
+├── nexus-app                          Spring Boot jar 依赖 common + ai + knowledge
+└── nexus-mcp-server   (未创建)         仅剩 pom 里被注释的占位；MCP 实际是 nexus-app 内的端点
 ```
 
 ```mermaid
 graph LR
-    C["nexus-common"] --> K["nexus-knowledge"]
+    C["nexus-common"] --> AI["nexus-ai"]
+    C --> K["nexus-knowledge"]
+    AI --> K
     C --> APP["nexus-app"]
+    AI --> APP
     K --> APP
-    C --> M["nexus-mcp-server"]
-    K --> M
-    APP -.禁止反向依赖.-> K
+    K -.禁止反向依赖.-> APP
+    APP -.禁止反向依赖.-> AI
 ```
 
 **依赖规则（编译期强制，不靠自觉）**
 
 | 规则 | 理由 |
 | --- | --- |
-| `nexus-common` 不依赖任何模块，不引入 Web/Security | 保证可被 MCP Server 复用 |
-| `nexus-knowledge` 不依赖 `nexus-app`，**不依赖 Spring Security 上下文** | MCP Server 也要用它；租户隔离通过**方法参数显式传 `userId`** 实现，禁止 `SecurityContextHolder` |
+| `nexus-common` 不依赖任何模块，不引入 Web/Security | 保证可被任何模块复用而不拖入 Web 栈；也防止它退化成垃圾桶 |
+| `nexus-ai` 只依赖 `nexus-common` | 模型接入与检索策略不应知道 Web 或持久化细节 |
+| `nexus-knowledge` 不依赖 `nexus-app`，**不依赖 Spring Security 上下文** | 租户隔离通过**方法参数显式传 `userId`** 实现，禁止 `SecurityContextHolder` |
 | `nexus-app` 才能有 `@RestController`、`SecurityFilterChain`、`@Transactional` 事务边界 | Web 关注点集中在一处 |
-| 归档 `nexus-mcp-server` 与 `nexus-app` 之间零依赖 | 拆服务的成本必须为零 |
 
-**执行方式**：用 ArchUnit 写 4 条测试，CI 里跑（Phase 11）。
+**执行方式**：依赖方向目前由 **Maven 编译期**强制（反向依赖写不出可编译的代码）。
+`ChatClientFactory` 里有一处注释提到 Phase 11 会用 **ArchUnit 补断言**——**当前尚未引入 ArchUnit**，这一点不要误读成"已有架构测试"。
+另注：`nexus-ai` 是平台化阶段新增的模块，本文 §1–§19 的原始设计稿里没有它，因此下文出现"`nexus-knowledge` 依赖 `nexus-common`"这类表述时，应理解为**经由 `nexus-ai` 中转**。
 
 ### 2.2 `nexus-app` 内部分包（模块化单体）
 
@@ -639,34 +741,40 @@ graph TB
 
 ## 16. 部署架构
 
+> **本节已于 Phase 5.8 按实际形态重写。** 原文描述的 `--profile full`、nginx `:80/:443`、`nexus-mcp-server :8090` **在现实中都不存在**（该 profile 未定义、MCP 不是独立进程），已删除。
+
 ```mermaid
 graph TB
-    U["浏览器"] --> NG["Nginx :80/:443 静态资源 + /api 反向代理"]
-    NG --> FE["frontend 容器 Vue 构建产物"]
-    NG --> APP["nexus-app :8080"]
-    subgraph Infra["docker compose 基础设施"]
-        MY[("mysql:8.4.11 :3306")]
-        PG[("pgvector/pgvector:0.8.6-pg18 :5432")]
-        ES[("elasticsearch:9.4.5 + ik:9.4.5 :9200")]
-        RD[("redis:8.10.2 :6379")]
-        MQ[("rabbitmq:4.3.6-management :5672/:15672")]
+    U["浏览器"] --> FE["frontend 容器<br/>nginx :8088 对外唯一入口"]
+    FE -->|"/api 反代"| APP["backend 容器<br/>nexus-app :8080（不发布端口）"]
+    FE -->|"/mcp 反代"| APP
+    subgraph Infra["docker compose 基础设施（8 服务）"]
+        MY[("mysql :3306")]
+        PG[("postgres :5432<br/>pgvector 0.8.6")]
+        ES[("elasticsearch :9200<br/>+ analysis-ik")]
+        RD[("redis :6379")]
+        MQ[("rabbitmq :5672 / :15672")]
+        OL["ollama :11434（可选）"]
     end
     APP --> MY
     APP --> PG
     APP --> ES
     APP --> RD
     APP --> MQ
-    APP -.可选.-> OL["ollama :11434"]
-    MCPC["nexus-mcp-server :8090"] --> PG
-    MCPC --> ES
-    APP -.MCP.-> MCPC
+    APP -.可选.-> OL
 ```
 
-- **开发**：`docker compose -f deploy/docker-compose.yml up -d` 只起基础设施；应用在 IDEA 里跑（热重载友好）。
-- **完整部署**：`docker compose --profile full up -d` 额外起 app / mcp-server / frontend / nginx。
-- **profiles**：`infra`（默认）、`full`、`ai-local`（含 ollama）。
-- **集成测试**：Spring Boot Testcontainers 起 MySQL/PG/ES/Redis 真实容器，不 mock 数据库（Phase 11 完善）。
-- **健康检查与依赖顺序**：所有基础设施配 `healthcheck`，app `depends_on: condition: service_healthy`。
+compose 服务名：`mysql` / `postgres` / `redis` / `elasticsearch` / `rabbitmq` / `ollama` / `backend` / `frontend`（`deploy/docker-compose.yml`）。
+
+- **整栈部署（Phase 5.7）**：`cd deploy && docker compose build && docker compose up -d` —— 一条命令起全部 8 个服务，浏览器打开 `http://localhost:8088`。**没有 `--profile full` 这回事**，也不需要它。
+- **仅基础设施（开发形态）**：`docker compose up -d mysql postgres elasticsearch redis rabbitmq ollama`，应用在宿主机 `java -jar --spring.profiles.active=local` 跑。
+- **网络**：8 个服务在自定义 bridge 网络 `nexus-net` 上；应用按**服务名**访问（`mysql:3306` 而非 `localhost:3306`）。
+- **唯一对外的端口是 nginx 的 8088**。`backend` 声明了 `ports: []`——这是刻意的，业务服务不经由宿主机端口暴露。
+- **secret fail-closed**：`JWT_SECRET` 与 `AI_CHAT_API_KEY` 写作 `${VAR:?…}`，**缺失时 `docker compose` 直接拒绝解析配置**，起不来（而不是带着默认值裸奔）。
+- **健康检查与依赖顺序**：所有被依赖的服务配 `healthcheck`，`backend` 的 `depends_on` 全部带 `condition: service_healthy`；`frontend` **刻意不依赖 backend**（静态资源可先就绪，nginx 反代失败只影响请求，不影响容器启动）。
+- **数据持久化**：7 个具名卷（`mysql-data` / `postgres-data` / `redis-data` / `es-data` / `rabbitmq-data` / `ollama-data` / `backend-data`），`docker compose down` 后数据仍在。
+- **停机**：`backend` 配 `stop_grace_period: 30s`，给 SSE 长连接与在途导入留出收尾时间。
+- **集成测试**：**尚未引入 Testcontainers**（这是 gap 分析里的 P2-10），真机回归目前靠人工跑 `verify-*.mjs`。
 
 ---
 
@@ -683,8 +791,11 @@ graph TB
 | nexus-app workflow | | | | | | | | | ✅ | | | |
 | nexus-app evaluation | | | | | | | | | | ✅ | | |
 | nexus-app observability | | 埋点 | | 埋点 | | 埋点 | 埋点 | | 埋点 | 埋点 | ✅ | |
-| nexus-mcp-server | | | | | | | | ✅ | | | | |
+| nexus-mcp-server | | | | | | | | ❌ 未创建 | | | | |
 | frontend | 登录骨架 | Chat | 知识库页 | 引用定位 | | 工具页 | Agent 页 | MCP 页 | 工作流页 | 评测页 | 看板 | 适配 |
+
+> ⚠️ **这张矩阵是最初的规划表，不是现状**。Phase 5.8 实际落在哪，见 §0 与 [../README.md](../README.md) §2 的能力清单。
+> 最典型的偏差：`nexus-mcp-server` **从未创建**（MCP 实现成了 nexus-app 内的 `POST /mcp` 端点）；而当时没规划进去的 `nexus-ai` 模块与"平台化"整条轨道反而做完了。
 
 ---
 
@@ -697,15 +808,20 @@ graph TB
 | 无 Rerank API | 需要自研 | 已设计 `Reranker` 接口 + LLM/HTTP 两种实现（ADR-007） |
 | ES VectorStore 无 BM25 | 需要自研 BM25 | 用原生 ES Java Client 建索引与查询（ADR-006） |
 | 框架无工具权限元数据 API | 权限只能自己做 | 用 `ai_tool_registry` + `ToolPermissionChecker`（ADR-009、Appendix D.6） |
-| 机器内存（ES + MySQL + PG + Redis + MQ） | 本地吃紧 | ES 单节点、`-Xms512m`、关闭 replicas；必要时给 compose 加 `infra-lite` profile，或按需启动单个服务 |
-| ~~沙箱无法授权工作目录~~ | ✅ 已解决 | 会话已切换为 `danger-full-access` |
+| 机器内存（ES + MySQL + PG + Redis + MQ） | 本地吃紧 | ES 单节点、`-Xms512m`、关闭 replicas；按需只启需要的服务（`docker compose up -d mysql postgres elasticsearch ...`）。**注意：不存在 `infra-lite` profile**，compose 里没有定义它 |
 
 ---
 
-## 19. 当前环境阻塞项（必须用户处理）
+## 19. 当前环境阻塞项
 
-| 项 | 实测 | 影响 | 建议 |
-| --- | --- | --- | --- |
-| 文件沙箱 | ✅ 已解除（会话切换为 `danger-full-access`，`pwsh` 可直接执行） | — | 无需处理 |
-| 仅有 JDK 17 | `JAVA_HOME=C:\Program Files\Java\jdk-17`；全盘扫描未发现 JDK 21 | **Java 21 项目无法编译**，Phase 0 全部步骤都受影响 | 安装 JDK 21（Temurin / Microsoft Build），并让 Maven 与 IDEA 指向它 |
-| Docker 守护进程未启动 | `docker ps` 报 `cannot find the file specified`（Docker Desktop 未运行） | 基础设施起不来 | 启动 Docker Desktop 后再执行 Step 0.4 |
+> **本节已于 Phase 5.8 更新。** 原文三条（文件沙箱 / 仅有 JDK 17 / Docker 未启动）**全部已解决**——原文早已过期，读的时候别按它准备环境。
+> 当前真实环境要求见 [../README.md](../README.md) §7 / §10 与 [deployment.md](deployment.md)。
+
+| 项 | 现状 |
+| --- | --- |
+| 文件沙箱 | ✅ 已解除 |
+| JDK 21 | ✅ 已就绪：便携版在 `D:\develop\jdk-21`（Temurin），**未改系统 `JAVA_HOME`**，构建前需显式指定——shell 默认仍是 JDK 17，用错会以误导性的 class file version 报错 |
+| Docker | ✅ 已可用（WSL2 后端）。容器可用内存约 7.5 GiB，ES 堆需压到 512m |
+| 内存 | ⚠️ 15.6 GB，ES + MySQL + PG 同跑时 ES 需按小堆配置（单节点、关副本） |
+
+**当前无阻塞项。** 已知的风险与对策见上一节 §18。

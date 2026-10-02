@@ -505,8 +505,9 @@ curl -s -X POST localhost:8080/mcp \
      资料为空**不调用模型**——从根上防幻觉；流式输出解决长延迟体感；
    - **Agent**：用户可控三要素 = 痕迹可见 + 轮数有界 + 降级如实；再往上
      **MCP Server** 把知识库暴露成标准工具给外部客户端。
-4. **工程素养（讲 30 秒）**：`mvn test` **567/0/0/0**（104 个类；5.7 起那 18 个"依赖基础设施所以跳过"
-   的 live 测试**全部真跑并通过**，见 §8）；容器化后 **11 个 `verify-*.mjs` 全部退出码 0**；
+4. **工程素养（讲 30 秒）**：`mvn test` **567/0/0/18**（基线口径，104 个类；那 18 个"依赖基础设施所以跳过"
+   的 live 测试**在整栈起来并打开 live 开关后全部真跑并通过**，口径为 **567/0/0/0**，见 §8 的第 1 与 1b 行）；
+   容器化后 **11 个 `verify-*.mjs` 全部退出码 0**，另有 5.8 的全链路冒烟 `verify-full-product.mjs` 一次通过；
    **每轮交付都 live 验证**（5.6 那期用 `standalone` + 本机原生 Redis 避开 Docker；
    5.5.1 用桩 SSE 帧验界面层，**5.7 把那条桩腿换成了"真 ES + 一个真挂掉的库"**，见 §2.12）；
    22 条 ADR + B-node 记录踩坑；前端有自己写的动效层；**观测注册表**把"被吞掉的降级"变成可巡检的数字。
@@ -519,6 +520,12 @@ curl -s -X POST localhost:8080/mcp \
 - 嵌入：Ollama `bge-m3`（1024 维），维度在知识库创建时冻结（ADR-008）。
 - 环境坑速查：Docker Desktop 常未启动 → 依赖容器的能力都有降级路径；
   **打包前必须先杀 java**（jar 文件锁会让 repackage 失败）。
+- **跑 `mvn test` 前先把整栈停掉**（`cd deploy && docker compose stop`）：Mockito 通过 ByteBuddy
+  自附加时会再 fork 一个 JVM，而 surefire 本身也在 fork；整栈 8 个容器占着内存时，
+  自附加会失败并报 `Could not self-attach to current VM using external process` /
+  `does not supply a working agent attachment mechanism`——**这个报错指向 JDK，实际是内存不足**，
+  很容易误判成 JDK 装错了（5.8 实测：可用内存 2.0/15.6 GB、339 进程时必现；停栈后全绿）。
+  跑完 `docker compose start` 即可恢复。
 
 ## 8. Phase 5.7 真机验收结果（证据表）
 
@@ -534,7 +541,9 @@ curl -s -X POST localhost:8080/mcp \
 | 4 | compose 配置校验 | REAL ENVIRONMENT | `docker compose config` | 通过；缺 secret 时**拒绝启动**（§2.3） |
 | 5 | 三个镜像构建 | REAL ENVIRONMENT | `docker compose build` | 成功 |
 | 6 | 整栈启动 | REAL ENVIRONMENT | `docker compose up -d` | 8/8 healthy（§2.5） |
-| 7 | 11 个 E2E 脚本（**经 nginx**） | E2E | 见 §8.1 | **11/11 EXIT=0** |
+| 7 | 11 个 E2E 脚本（**经 nginx**，5.7） | E2E | 见 §8.1 | **11/11 EXIT=0** |
+| 7b | **全链路冒烟**（5.8 新增，见 §8.1 末） | E2E + LIVE | `node scripts/verify-full-product.mjs` | **EXIT=0**，13 步全绿 |
+| 7c | **12 个 E2E 脚本整轮复跑**（5.8 收口，经 nginx） | E2E + LIVE | 见 §8.1 | **12/12 EXIT=0**，0 跳过 |
 | 8 | 18 个 live 测试（真 ES / 真 pgvector / 真模型） | LIVE | §8.2 | **18/18 执行并通过**，0 skipped |
 | 9 | 多库真机验收（含"一个库真失败"） | REAL ENVIRONMENT | `verify-multi-kb-failure.mjs` | EXIT=0，逐条见 §2.12 |
 | 10 | 停 / 启 / 数据存活 | REAL ENVIRONMENT | `restart` → `down` → `up -d` | 7 项数据逐项一致（§2.7） |
@@ -560,6 +569,49 @@ verify-doc-lifecycle    EXIT=0   5s
 > 演示账号累计了 82 个 E2E 残留会话，而 `pageSize=50`；脚本新建的会话 `last_message_at` 为 NULL，
 > MySQL 在 `DESC` 下把 NULL 排最后 ⇒ 会话落到第 2 页 ⇒ 消息列表接口没被调用 ⇒ 检索卡片没被清掉。
 > 处理方式是**清理残留会话**（82 → 32），**没有改脚本**。
+
+**5.8 收口：12 个脚本整轮复跑。** 播种（`NEXUS_BASE=http://localhost:8088 node scripts/seed-demo.mjs`，
+幂等，识别出 demo 用户与两个演示库已存在）后，逐个执行：
+
+```
+verify-login 0   verify-frontend 0   verify-doc-lifecycle 0   verify-stream 0
+verify-retrieval-ui 0   verify-multi-kb 0   verify-agent-chat 0   verify-agents 0
+verify-multi-kb-failure 0   verify-agent-no-kb 0   verify-security 0   verify-full-product 0
+```
+
+**12/12 EXIT=0，且没有任何脚本报 `⚠ SKIPPED`**（退出码 2 会说明环境能力缺失；
+本次全部为真实通过）。注意整栈运行下 `WEB_BASE=http://localhost:8088`，
+`verify-agent-no-kb.mjs` 需 `API_BASE=http://localhost:8088/api`、
+`verify-security.mjs` 需 `API_BASE=http://localhost:8088`（两者约定不一致，属既有遗留，未改脚本）。
+
+**5.8 新增：全链路冒烟（`verify-full-product.mjs`）。** 上面那 11 个脚本各验一个功能面，
+且都以"seed-demo 已种好数据"为前提——**没有任何一个证明"全新用户从零能走通整条链路"**。
+本脚本补这一段，并覆盖了此前零 E2E 触及的 **Observability**。
+
+一次真实运行（`API_BASE=http://localhost:8088/api`，整栈容器化，**EXIT=0**）：
+
+```
+✓ 1  注册 + 登录               新账号 smoke-* 拿到令牌
+✓ 2  创建知识库                A / B 两个，id 不同
+✓ 3  上传文档                  两个导入任务入队（异步）
+✓ 4  异步导入(A)(B)            DONE（新增 1 篇，切片 1）—— 轮询到终态，非 sleep 猜
+✓ 5  向量化+索引(A)(B)         4 步全 SUCCESS：统计文档 → 统计切片 → 向量化 → 建索引
+✓ 5b 可检索(A)(B)              hybrid 各 1 条命中（轮询到真有命中，而非"工作流没报错"）
+✓ 6  RAG 问答                  回答含 NX-8153，citations 1 条
+✓ 7  创建 Agent                status=DRAFT，kbIds 两个都在
+✓ 8  发布                      DRAFT → PUBLISHED
+✓ 9  Agent Chat + Tool Calling usedTools=true，痕迹 ["knowledge_search","knowledge_search"]
+✓ 9  Citation（Agent 路径）     回答含 NX-8153 —— 证明检索覆盖到 KB-B
+✓ 10 流式 Agent Chat           事件链 meta→tool_call→tool_result→delta→usage→done，回答含 NX-8153
+✓ 11 Observability             /summary: tool.call.succeeded=3；/agents 里能查到该 Agent 的用量
+✓ 12 用户隔离                  越权读 KB-A：HTTP 404 code=3001
+✓ 13 界面                      真登录表单登录成功，列表里看到两个新库
+```
+
+**这条链路的关键设计**：断言的是**只写在 KB-B 里的独有事实**（`NX-8153` / `180 毫秒`）——
+模型不可能"本来就知道"，所以回答里出现它，才证明"检索真的命中了我上传的那份文档"。
+脚本自建 `smoke-*` 账号、结束时删除会话 / Agent / 两个知识库；
+**账号删不掉**（没有删号接口，属已知缺口），因此每跑一次留一个 `smoke-*` 账号。
 
 ### 8.2 Live 测试（真基础设施 + 真模型）
 
