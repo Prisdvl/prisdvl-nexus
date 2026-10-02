@@ -86,7 +86,8 @@ const streaming = ref(false)
 
 /** 新建会话时选择的模式与知识库：只有"新建"这一刻能选（已建会话的模式不可更改） */
 const draftMode = ref<'AGENT' | 'RAG'>('AGENT')
-const draftKbId = ref('')
+/** 可多选（Phase 5.5）：一次提问同时检索多个库，答案会标明每段出自哪个库 */
+const draftKbIds = ref<string[]>([])
 const knowledgeBases = ref<KnowledgeBase[]>([])
 
 /** AGENT 会话选用的 Agent（'' = 内置默认）。已建会话可在头部换，草稿/停用的不列出来 */
@@ -130,18 +131,31 @@ const activeConversation = computed(() =>
   conversations.value.find((conversation) => conversation.id === activeId.value)
 )
 
-/** RAG 会话改绑/解绑知识库（新建时没绑定、或想换一个库再问）。 */
+/** RAG 会话改绑/解绑知识库（新建时没绑定、或想换一批库再问）。可以选多个。 */
 async function changeBoundKnowledgeBase(value: unknown) {
   const conversation = activeConversation.value
   if (!conversation) return
-  const kbId = String(value ?? '')
+  // el-select 开了 multiple 之后给的是数组（清空是 []，不是 ''）
+  const kbIds = Array.isArray(value) ? value.map((item) => String(item)) : []
   try {
-    await bindKnowledgeBase(conversation.id, kbId ? [kbId] : [])
+    await bindKnowledgeBase(conversation.id, kbIds)
     await loadConversations()
-    ElMessage.success(kbId ? '已绑定知识库' : '已解绑知识库')
+    ElMessage.success(kbIds.length ? '已更新知识库绑定' : '已解绑知识库')
   } catch (error) {
     ElMessage.error('绑定失败：' + (error instanceof Error ? error.message : String(error)))
   }
+}
+
+/**
+ * 命中片段出自哪个知识库（多库时才显示）。
+ *
+ * 单库下这句话是废话（"检索到 3 个片段，全来自你刚选的那个库"），只会占地方；
+ * 绑了两个库之后它就是关键信息——用户要靠它判断"答案引的是产品手册还是内部 FAQ"。
+ * 查不到名字时返回空串，界面按"没有这段"处理，不显示一个假的库名。
+ */
+function knowledgeBaseName(id: string | null) {
+  if (!id) return ''
+  return knowledgeBases.value.find((kb) => kb.id === id)?.name ?? ''
 }
 
 /**
@@ -249,9 +263,10 @@ async function loadAgents() {
 async function loadKnowledgeBases() {
   try {
     knowledgeBases.value = (await listKnowledgeBases()).list
-    // 默认选中第一个库：少一步点击，同时避免"选了 RAG 但没选库"的空状态
-    if (!draftKbId.value && knowledgeBases.value.length) {
-      draftKbId.value = knowledgeBases.value[0].id
+    // 默认选中第一个库：少一步点击，同时避免"选了 RAG 但没选库"的空状态。
+    // 只选一个（不是全选）：多库是用户明确要做的事，替他全勾上只会让每次都慢一倍
+    if (!draftKbIds.value.length && knowledgeBases.value.length) {
+      draftKbIds.value = [knowledgeBases.value[0].id]
     }
   } catch {
     // 知识库列表加载失败不影响 Agent 模式；选到 RAG 时会提示
@@ -396,14 +411,14 @@ async function send(preset?: string) {
   if (!conversationId) {
     // RAG 必须在建会话时就确定知识库：检索范围是会话属性，服务端也会拒绝没绑库的 RAG 提问。
     // 这里提前拦住，用户不必等一个来回才知道少选了东西。
-    if (draftMode.value === 'RAG' && !draftKbId.value) {
+    if (draftMode.value === 'RAG' && !draftKbIds.value.length) {
       ElMessage.warning(knowledgeBases.value.length
-        ? '知识库问答需要先选择一个知识库'
+        ? '知识库问答需要先选择至少一个知识库'
         : '还没有知识库，先到"知识库"页导一份笔记')
       return
     }
     const created = await createConversation(draftMode.value, {
-      kbIds: draftMode.value === 'RAG' ? [draftKbId.value] : [],
+      kbIds: draftMode.value === 'RAG' ? draftKbIds.value : [],
       // Agent 只在 AGENT 模式下有意义；空串 = 不传 = 用内置默认 Agent
       agentId: draftMode.value === 'AGENT' && draftAgentId.value ? draftAgentId.value : null
     })
@@ -669,10 +684,13 @@ watch(activeId, () => {
           <el-tag v-if="activeConversation" size="small" effect="plain">
             {{ activeConversation.mode }}
           </el-tag>
-          <!-- RAG 会话的知识库可以改绑：换了库之后，后续轮次检索的就是新库 -->
+          <!-- RAG 会话的知识库可以改绑（可多选）：换了之后，后续轮次检索的就是这一批库 -->
           <el-select
             v-if="activeConversation?.mode === 'RAG'"
-            :model-value="activeConversation.kbIds?.[0] ?? ''"
+            :model-value="activeConversation.kbIds ?? []"
+            multiple
+            collapse-tags
+            :multiple-limit="10"
             size="small"
             placeholder="未绑定知识库"
             class="kb-select"
@@ -733,6 +751,15 @@ watch(activeId, () => {
             <!-- RAG 的检索结果：先于回答出现，用户不必对着空白等生成 -->
             <div v-if="message.retrieval" class="retrieval">
               <span class="retrieval-count">检索到 {{ message.retrieval.count }} 个片段</span>
+              <!-- 多库时才说"来自 N 个知识库"：单库下这是废话，只是占地方 -->
+              <el-tag
+                v-if="message.retrieval.knowledgeBaseIds.length > 1"
+                size="small"
+                effect="plain"
+                type="info"
+              >
+                {{ message.retrieval.knowledgeBaseIds.length }} 个知识库
+              </el-tag>
               <el-tag v-if="message.retrieval.empty" size="small" effect="plain" type="warning">
                 知识库里没有命中
               </el-tag>
@@ -749,6 +776,12 @@ watch(activeId, () => {
               </el-tag>
               <ul v-if="message.retrieval.hits.length" class="retrieval-hits">
                 <li v-for="hit in message.retrieval.hits.slice(0, 5)" :key="hit.chunkId">
+                  <!-- 每段的出处（多库时才有意义）：没有它，用户无法判断答案是哪个库给的 -->
+                  <span
+                    v-if="message.retrieval.knowledgeBaseIds.length > 1
+                      && knowledgeBaseName(hit.knowledgeBaseId)"
+                    class="hit-kb"
+                  >{{ knowledgeBaseName(hit.knowledgeBaseId) }}</span>
                   {{ hit.documentTitle || '未命名文档' }}
                   <template v-if="hit.headingPath"> › {{ hit.headingPath }}</template>
                 </li>
@@ -794,11 +827,16 @@ watch(activeId, () => {
           <el-radio-button value="AGENT">Agent（自己决定检索）</el-radio-button>
           <el-radio-button value="RAG">知识库问答（先检索再答）</el-radio-button>
         </el-radio-group>
+        <!-- 可多选：一次提问同时检索这几个库，回答里每一段引用都会标明出自哪个库 -->
         <el-select
           v-if="draftMode === 'RAG'"
-          v-model="draftKbId"
+          v-model="draftKbIds"
+          multiple
+          collapse-tags
+          clearable
+          :multiple-limit="10"
           size="small"
-          placeholder="选择知识库"
+          placeholder="选择知识库（可多选）"
           class="kb-select"
         >
           <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
@@ -1327,6 +1365,16 @@ watch(activeId, () => {
   padding-left: 1.1em;
   color: var(--text-muted);
   line-height: 1.7;
+}
+
+/* 命中片段的来源库（只在绑了多个库时出现） */
+.hit-kb {
+  margin-right: 0.4em;
+  padding: 0 0.4em;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-chip);
+  color: var(--accent-600);
+  font-size: 11px;
 }
 
 /* ---------- 输入区 ---------- */

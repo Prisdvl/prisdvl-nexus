@@ -20,6 +20,7 @@ import com.lky.nexus.knowledge.rag.retriever.VectorRetriever;
 import com.lky.nexus.knowledge.search.ChunkIndex;
 import com.lky.nexus.knowledge.search.ChunkSearchHit;
 import com.lky.nexus.knowledge.search.SearchMode;
+import com.lky.nexus.knowledge.service.KnowledgeEmbeddingResolver;
 import com.lky.nexus.knowledge.service.impl.ChunkSearchServiceImpl;
 import com.lky.nexus.knowledge.vector.VectorSearchHit;
 import com.lky.nexus.knowledge.vector.VectorStore;
@@ -118,7 +119,8 @@ class ChunkSearchServiceKnowledgeConfigTest {
                 List.of(vectorRetriever, keywordRetriever, hybridRetriever));
 
         search = new ChunkSearchServiceImpl(knowledgeBaseService, registry,
-                new RetrievalQueryFactory(defaults));
+                new RetrievalQueryFactory(defaults),
+                mock(KnowledgeEmbeddingResolver.class));
     }
 
     // ------------------------------------------------------------------

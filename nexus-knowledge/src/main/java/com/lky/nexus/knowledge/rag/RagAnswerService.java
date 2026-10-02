@@ -42,6 +42,23 @@ public interface RagAnswerService {
                            List<RagTurn> history);
 
     /**
+     * 准备阶段（多知识库版，Phase 5.5）。
+     *
+     * <p>与 {@link #prepare} 的唯一区别是知识库可以有多个：逐库检索 → 跨库归并 → 重排 → 组装。
+     * 重排与上下文预算的策略完全一致（都作用在归并后的结果上），因此"多库"只改变资料的<b>来源</b>，
+     * 不改变资料的<b>条数预算</b>。
+     *
+     * <p>{@code topK} 的语义因此与单库不同，详见
+     * {@link com.lky.nexus.knowledge.service.ChunkSearchService#searchMany}：
+     * 每个库按自己的 {@code retrieval_top_k} 召回，{@code topK} 只决定归并后保留多少条
+     * （null = 用全局默认）。多绑几个库不会让上下文变长。
+     *
+     * <p>任意一个库不存在或不属于该用户，整批失败（3001）——不做部分成功。
+     */
+    PreparedAnswer prepareMany(Long userId, List<Long> knowledgeBaseIds, String question, Integer topK,
+                               List<RagTurn> history);
+
+    /**
      * 把一次问答留档（流式回答在结束后调用）。
      *
      * @param usedHits 资料块里的命中项（用于生成引用编号）

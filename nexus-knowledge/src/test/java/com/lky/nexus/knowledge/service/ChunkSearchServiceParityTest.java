@@ -25,6 +25,7 @@ import com.lky.nexus.knowledge.search.ChunkIndex;
 import com.lky.nexus.knowledge.search.ChunkSearchHit;
 import com.lky.nexus.knowledge.search.IndexedChunk;
 import com.lky.nexus.knowledge.search.SearchMode;
+import com.lky.nexus.knowledge.service.KnowledgeEmbeddingResolver;
 import com.lky.nexus.knowledge.service.impl.ChunkSearchServiceLegacyReference;
 import com.lky.nexus.knowledge.service.impl.ChunkSearchServiceImpl;
 import com.lky.nexus.knowledge.vector.VectorRecord;
@@ -146,7 +147,9 @@ class ChunkSearchServiceParityTest {
         registry = new RetrieverRegistry(
                 List.of(vectorRetriever, keywordRetriever, hybridRetriever, rerankedRetriever));
         current = new ChunkSearchServiceImpl(knowledgeBaseService, registry,
-                new RetrievalQueryFactory(new RetrievalDefaults()));
+                new RetrievalQueryFactory(new RetrievalDefaults()),
+                // 预检只在 searchMany 里跑，单库路径不碰它——传桩即可
+                mock(KnowledgeEmbeddingResolver.class));
     }
 
     // ------------------------------------------------------------------
@@ -359,12 +362,20 @@ class ChunkSearchServiceParityTest {
      *
      * <p>断言顺序刻意如此：如果只比对"两者相等"，两个都错成一样也会通过；
      * 所以每个用例都另有具体期望值断言，这里负责守住"不许偏离旧行为"。
+     *
+     * <p><b>为什么忽略 {@code knowledgeBaseId}</b>：参照实现是单库的，它产出的
+     * {@code SearchHit} 走兼容构造器、该字段恒为 null（见 {@code SearchHit} 上的说明）；
+     * 新实现走 9 参构造器，该字段是真实的库 id。这个字段<b>没有"改造前"的取值可比</b>，
+     * 硬要给参照实现也填一个，就等于动了那个冻结文件。除此之外<b>每个字段仍逐字段严格比对</b>
+     * ——顺序、分数、来源、命中说明都一样容忍不了偏差，护栏没有变松。
      */
     private List<ChunkSearchService.SearchHit> run(SearchMode mode, String query, int topK) {
         List<ChunkSearchService.SearchHit> actual = current.search(USER_ID, KB_ID, query, topK, mode);
         List<ChunkSearchService.SearchHit> baseline = legacyReference.search(USER_ID, KB_ID, query, topK, mode);
         assertThat(actual)
                 .as("新实现（Retriever 家族）必须与改造前逐字段一致，包括顺序")
+                .usingRecursiveComparison()
+                .ignoringFields("knowledgeBaseId")
                 .isEqualTo(baseline);
         return actual;
     }

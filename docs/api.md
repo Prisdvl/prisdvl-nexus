@@ -347,7 +347,7 @@ POST /api/search
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/chat/conversations` | 新建会话（title 可空，首轮后自动生成标题；可指定 mode/kbIds/agentId） |
-| — | — | `mode` ∈ `PLAIN` / `RAG` / `AGENT`；`kbIds` 只在 `RAG` 下有意义，且**最多一个**（多库检索未实现，传多个直接 1001 而不是取第一个） |
+| — | — | `mode` ∈ `PLAIN` / `RAG` / `AGENT`；`kbIds` 只在 `RAG` 下有意义，**可以绑多个**（Phase 5.5，上限 10 个，超限 1001）；重复 id 会去重并保持顺序 |
 | — | — | `agentId`（Phase 4.1）只在 `AGENT` 下有意义，且必须是**自己已发布**的 Agent（草稿 5008、停用 5009、别人的 5006→404）；不传 = 用内置默认 Agent |
 | GET | `/api/chat/conversations` | 会话列表（分页、置顶优先、按最后消息时间倒序） |
 | GET | `/api/chat/conversations/{id}` | 会话详情（含配置：mode、kbIds、agentId、模型角色、prompt 版本） |
@@ -404,7 +404,7 @@ Content-Type: application/json
 | 事件 | 何时发送 | data 示例 |
 | --- | --- | --- |
 | `meta` | 立即（**已实现**） | `{"requestId":"...","conversationId":5001,"userMessageId":91,"assistantMessageId":92,"modelRole":"chat.default","mode":"RAG"}` |
-| `retrieval` | 检索完成、生成前（**已实现**，Phase 3.4） | `{"knowledgeBaseId":"5001","count":2,"hits":[{"chunkId":"9001","documentId":"100","documentTitle":"缓存击穿.md","headingPath":"Redis > 缓存 > 缓存击穿","score":0.83,"source":"hybrid"}],"contextTokens":1200,"truncated":0,"reranked":true,"empty":false}` |
+| `retrieval` | 检索完成、生成前（**已实现**，Phase 3.4；多库形状见 5.5） | `{"knowledgeBaseIds":["5001","5002"],"count":2,"hits":[{"chunkId":"9001","documentId":"100","knowledgeBaseId":"5001","documentTitle":"缓存击穿.md","headingPath":"Redis > 缓存 > 缓存击穿","score":0.83,"source":"hybrid"}],"contextTokens":1200,"truncated":0,"reranked":true,"empty":false}` |
 | `delta` | 每个 token 片段（**已实现**） | `{"text":"缓存击穿是指"}` |
 | `tool_call` | Agent/工具场景（**已实现**） | `{"tool":"knowledge_search","input":"缓存击穿怎么解决"}` |
 | `tool_result` | 工具返回（**已实现**） | `{"tool":"knowledge_search","input":"缓存击穿怎么解决","resultSummary":"3 条结果"}` |
@@ -437,6 +437,10 @@ Content-Type: application/json
   `documents` 文档级列表；`hits[]` 只带展示用的字段（不含正文片段），`meta` 里另有一份更精简的
   `citationPreview`。两条流式链路（`/api/chat/stream` 的 RAG 模式与
   `/api/knowledge-bases/{id}/ask/stream`）共用同一个构造器，因此事件形状完全一致。
+- **`retrieval` 的知识库维度是列表**（Phase 5.5）：`knowledgeBaseIds` 是本次检索覆盖的库，
+  `hits[].knowledgeBaseId` 是**这一片**出自哪个库。会话可以绑多个库，所以"检索到 N 个片段"
+  不再能回答"资料从哪来"——出处必须逐条给。知识库问答流式那条链路固定单库
+  （路径里的 `{id}`），因此 `knowledgeBaseIds` 恒为一个元素、`hits[].knowledgeBaseId` 恒等于它。
 - `citation` / `approval_required` 仍未实现：引用目前随 `usage` 之前的 `done`（或 `meta.citations`）给出。
 - **RAG 流式生成失败**（`/api/knowledge-bases/{id}/ask/stream`，Phase 5.2）不再发 `error` 帧，
   而是把失败放进**最后一个 `done` 帧**：`{"finishReason":"error","error":"<给用户的话>","errorCode":4001,
@@ -450,6 +454,11 @@ Content-Type: application/json
 - **RAG 会话必须绑定知识库**：没绑就提问，在开流之前返回统一 JSON（HTTP 400 / code 1001，
   文案"该会话（RAG 模式）尚未绑定知识库，请先绑定后再提问"），而不是"悄悄退化成不检索"。
   绑定用 `PUT /api/chat/conversations/{id}` 的 `kbIds`：传 `[]` = 解绑，不传该字段 = 不改。
+- **多库检索的口径（Phase 5.5）**：绑了多个库时**逐库检索后跨库归并**——
+  每个库按**自己的** `retrievalTopK` / `similarityThreshold` 召回（不是共用调用方的 `topK`），
+  然后按分数降序归并、再按全局 `topK` 截断（请求值，没传用 `nexus.retrieval.top-k` = 5）。
+  因此**多绑库不会让上下文变长、也不会让回答变慢**（代价是检索本身变慢：逐库串行）。
+  任意一个库不存在或不属于本人 → 整批 404 / `3001`，文案带出是哪个 id，不做部分成功。
 - **换 Agent / 回到内置默认**（Phase 4.2，仅 `AGENT` 会话）：
 
   ```http

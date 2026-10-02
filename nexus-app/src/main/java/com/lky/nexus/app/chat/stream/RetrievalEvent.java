@@ -36,15 +36,18 @@ public final class RetrievalEvent {
     /**
      * 组装 {@code retrieval} 事件负载。
      *
-     * @param knowledgeBaseId 检索的是哪个知识库（会话流式下由会话绑定决定，前端要能显示）
-     * @param prepared        检索/重排/组装后的结果；<b>empty 也要发</b>——
-     *                        "检索到 0 个片段"本身就是要告诉用户的信息，
-     *                        省略事件会让前端把它当成"还没检索完"一直等下去
+     * @param knowledgeBaseIds 本次检索覆盖的知识库（会话流式下由会话绑定决定；Phase 5.5 起可能是多个）。
+     *                         <b>是列表而不是单个 id</b>：多库检索时"检索了哪些库"本身就是要告诉用户的信息，
+     *                         而每命中一条片段出自哪个库，由 {@code hits[].knowledgeBaseId} 逐条给出
+     * @param prepared         检索/重排/组装后的结果；<b>empty 也要发</b>——
+     *                         "检索到 0 个片段"本身就是要告诉用户的信息，
+     *                         省略事件会让前端把它当成"还没检索完"一直等下去
      */
-    public static Map<String, Object> of(Long knowledgeBaseId, PreparedAnswer prepared) {
+    public static Map<String, Object> of(List<Long> knowledgeBaseIds, PreparedAnswer prepared) {
         List<Map<String, Object>> hits = hits(prepared);
         Map<String, Object> payload = new HashMap<>();
-        payload.put("knowledgeBaseId", knowledgeBaseId);
+        payload.put("knowledgeBaseIds",
+                knowledgeBaseIds == null ? List.of() : List.copyOf(knowledgeBaseIds));
         payload.put("count", hits.size());
         payload.put("hits", hits);
         payload.put("contextTokens", prepared.contextTokens());
@@ -54,12 +57,18 @@ public final class RetrievalEvent {
         return payload;
     }
 
-    /** 命中切片明细（顺序即引用编号 {@code [1..n]}）。 */
+    /**
+     * 命中切片明细（顺序即引用编号 {@code [1..n]}）。
+     *
+     * <p>每条带上 {@code knowledgeBaseId}：多库时"这一段出自哪个库"必须逐条能看出来，
+     * 否则界面只能显示"检索到 5 个片段"，而用户绑了两个库，无从判断资料到底来自哪一个。
+     */
     public static List<Map<String, Object>> hits(PreparedAnswer prepared) {
         return prepared.usedHits().stream().map(hit -> {
             Map<String, Object> item = new HashMap<>();
             item.put("chunkId", hit.chunkId());
             item.put("documentId", hit.documentId());
+            item.put("knowledgeBaseId", hit.knowledgeBaseId());
             item.put("documentTitle", hit.documentTitle());
             item.put("headingPath", hit.headingPath());
             item.put("score", hit.score());

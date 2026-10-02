@@ -83,8 +83,8 @@ class RagStreamRetrievalEventTest {
         String kbId = createKnowledgeBase(token, "会话检索库");
         String conversationId = createRagConversation(token, kbId);
 
-        PreparedAnswer prepared = preparedWithHits();
-        when(ragAnswerService.prepare(any(), any(), anyString(), any(), any())).thenReturn(prepared);
+        PreparedAnswer prepared = preparedWithHits(kbId);
+        when(ragAnswerService.prepareMany(any(), any(), anyString(), any(), any())).thenReturn(prepared);
         when(ragAnswerService.systemPrompt()).thenReturn("SYSTEM-PROMPT");
         when(ragAnswerService.userMessage(anyString(), any(), any())).thenReturn("USER-PROMPT");
         stubModel("缓存击穿", "可以用互斥锁。");
@@ -102,7 +102,10 @@ class RagStreamRetrievalEventTest {
         assertThat(JsonPath.<Integer>read(retrieval, "$.count")).isEqualTo(2);
         assertThat(JsonPath.<String>read(retrieval, "$.hits[0].documentTitle")).isEqualTo("缓存击穿.md");
         assertThat(JsonPath.<String>read(retrieval, "$.hits[0].headingPath")).isEqualTo("Redis > 缓存 > 缓存击穿");
-        assertThat(JsonPath.<String>read(retrieval, "$.knowledgeBaseId")).isEqualTo(kbId);
+        // Phase 5.5：库里由单值改成列表，且每条命中各自带出处——否则界面上"检索到 2 个片段"
+        // 无法回答"这两段分别来自哪个库"（会话可以绑多个库了）
+        assertThat(JsonPath.<List<String>>read(retrieval, "$.knowledgeBaseIds")).containsExactly(kbId);
+        assertThat(JsonPath.<String>read(retrieval, "$.hits[0].knowledgeBaseId")).isEqualTo(kbId);
         assertThat(JsonPath.<Boolean>read(retrieval, "$.empty")).isFalse();
 
         // 两条链路共用同一份提示词构造：这里断言会话流式确实走的是 RagAnswerService 的方法，
@@ -117,7 +120,10 @@ class RagStreamRetrievalEventTest {
         String token = registerAndLogin("rag-stream-ask");
         String kbId = createKnowledgeBase(token, "问答检索库");
 
-        when(ragAnswerService.prepare(any(), any(), anyString(), any(), any())).thenReturn(preparedWithHits());
+        // /ask/stream 走的是单库 prepare（路径里带 {id}），这里刻意用单库的桩：
+        // 它证明"知识库问答流式这条路没被多库改造带偏"，会话流式那条才走 prepareMany
+        when(ragAnswerService.prepare(any(), any(), anyString(), any(), any()))
+                .thenReturn(preparedWithHits(kbId));
         when(ragAnswerService.systemPrompt()).thenReturn("SYSTEM-PROMPT");
         when(ragAnswerService.userMessage(anyString(), any(), any())).thenReturn("USER-PROMPT");
         // 留档也要给个真值：mock 默认返回 null，而这条链路结束后会读 recordId / citations，
@@ -134,6 +140,10 @@ class RagStreamRetrievalEventTest {
         assertThat(eventNames(body)).containsSubsequence("meta", "retrieval", "delta", "done");
         assertThat(orderIn(body, "retrieval")).isLessThan(orderIn(body, "delta"));
         assertThat(JsonPath.<Integer>read(dataOf(body, "retrieval"), "$.count")).isEqualTo(2);
+        // 单库链路也发列表（一个元素），两条链路的事件形状完全一致：
+        // 形状分叉意味着前端要写两套解析，而"两份里只改了一份"是这类问题的经典来源
+        assertThat(JsonPath.<List<String>>read(dataOf(body, "retrieval"), "$.knowledgeBaseIds"))
+                .containsExactly(kbId);
     }
 
     @Test
@@ -143,7 +153,7 @@ class RagStreamRetrievalEventTest {
         String kbId = createKnowledgeBase(token, "空库");
         String conversationId = createRagConversation(token, kbId);
 
-        when(ragAnswerService.prepare(any(), any(), anyString(), any(), any()))
+        when(ragAnswerService.prepareMany(any(), any(), anyString(), any(), any()))
                 .thenReturn(PreparedAnswer.none());
         ChatClient.StreamResponseSpec streamSpec = stubModel("x", "y");
 
@@ -165,11 +175,16 @@ class RagStreamRetrievalEventTest {
 
     // ------------------------------------------------------------------ 辅助
 
-    /** 命中两条、已重排的检索结果。 */
-    private PreparedAnswer preparedWithHits() {
+    /**
+     * 命中两条、已重排的检索结果。
+     *
+     * @param kbId 命中项的来源库——生产路径上这个值由检索层填（Phase 5.5），
+     *             桩里也必须填真值，否则"每条命中带不带出处"这条断言等于没测
+     */
+    private PreparedAnswer preparedWithHits(String kbId) {
         return new PreparedAnswer("【1】互斥锁方案……\n【2】逻辑过期方案……",
-                List.of(hit(20001L, 100L, "缓存击穿.md", "Redis > 缓存 > 缓存击穿"),
-                        hit(20002L, 100L, "缓存击穿.md", "Redis > 缓存 > 逻辑过期")),
+                List.of(hit(Long.valueOf(kbId), 20001L, 100L, "缓存击穿.md", "Redis > 缓存 > 缓存击穿"),
+                        hit(Long.valueOf(kbId), 20002L, 100L, "缓存击穿.md", "Redis > 缓存 > 逻辑过期")),
                 1200, 0, true, false);
     }
 
@@ -178,9 +193,10 @@ class RagStreamRetrievalEventTest {
         return new RagAnswer(9001L, "互斥锁与逻辑过期。", List.of(), 1200, 0, true, 3000L);
     }
 
-    private ChunkSearchService.SearchHit hit(Long chunkId, Long documentId, String title, String heading) {
+    private ChunkSearchService.SearchHit hit(Long kbId, Long chunkId, Long documentId, String title,
+                                             String heading) {
         return new ChunkSearchService.SearchHit(chunkId, documentId, title, heading,
-                "互斥锁方案的正文……", 0.83, "hybrid", List.of("BM25 #1", "向量 #2"));
+                "互斥锁方案的正文……", 0.83, "hybrid", List.of("BM25 #1", "向量 #2"), kbId);
     }
 
     /** 把模型换成"吐指定文字"的假客户端，返回流式规范以便断言"到底调没调模型"。 */

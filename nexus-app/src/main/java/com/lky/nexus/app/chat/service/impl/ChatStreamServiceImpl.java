@@ -17,6 +17,7 @@ import com.lky.nexus.app.chat.service.ChatMemoryKeys;
 import com.lky.nexus.app.chat.service.ChatMemoryTurns;
 import com.lky.nexus.app.chat.service.ChatMessageService;
 import com.lky.nexus.app.chat.service.ChatStreamService;
+import com.lky.nexus.app.chat.service.ConversationAgentResolver;
 import com.lky.nexus.app.chat.service.ConversationKbIds;
 import com.lky.nexus.app.chat.service.ConversationService;
 import com.lky.nexus.app.chat.stream.RetrievalEvent;
@@ -125,9 +126,10 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         // Agent 定义同样在落库之前解析：会话选了 DRAFT/DISABLED 的 Agent 时，
         // 用户应当看到一条明确的报错，而不是"先多出一条消息、再在 SSE 里半路失败"。
         // 未指定 Agent（agentId 为空）走内置默认——AGENT 模式永远有兜底，不存在"没有 Agent"的状态。
-        AgentDefinition agentDefinition = mode == ChatMode.AGENT
-                ? resolveAgentDefinition(userId, conversation)
-                : null;
+        //
+        // 解析规则本身在 ConversationAgentResolver：5.4 起非流式入口也要按模式解析，
+        // 两处各写一份的后果是"流式报 5008、非流式照跑"这种不报错的行为漂移。
+        AgentDefinition agentDefinition = ConversationAgentResolver.resolve(agentService, userId, conversation, mode);
         // AGENT 模式下模型角色取自 Agent 定义（Agent 自己声明它需要什么模型），
         // 会话上的 model_role 只是创建时记下的历史值（见 ConversationServiceImpl）
         String modelRole = agentDefinition != null
@@ -143,14 +145,16 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         // ① 知识库未绑定/不属于自己、索引不可用，都会以统一 JSON 报错，而不是"先开一条 SSE 再在半路报错"；
         // ② 检索发生在生成之前，用户等待的就是"检索 + 生成"两段，事件顺序也才好保证。
         boolean ragMode = mode == ChatMode.RAG;
-        Long knowledgeBaseId = ragMode ? requireKnowledgeBaseId(conversation) : null;
+        // 会话可以绑定多个知识库（Phase 5.5）：这里的列表就是"本次检索覆盖哪些库"，
+        // 非 RAG 模式下没有库维度，取空表（下游只在 ragMode 分支里用它）。
+        List<Long> knowledgeBaseIds = ragMode ? requireKnowledgeBaseIds(conversation) : List.of();
         // 历史从 ChatMemory 取（不是 chat_message 全量）：它同时服务两个地方——
         // 消解指代的检索查询串、以及给模型的"之前的问答"。详见 ChatMemoryTurns 的类注释。
         List<RagAnswerService.RagTurn> history = ragMode
                 ? ChatMemoryTurns.read(chatMemory, ChatMemoryKeys.of(conversationId))
                 : List.of();
         PreparedAnswer prepared = ragMode
-                ? ragAnswerService.prepare(userId, knowledgeBaseId, content, null, history)
+                ? ragAnswerService.prepareMany(userId, knowledgeBaseIds, content, null, history)
                 : null;
 
         String requestId = resolveRequestId();
@@ -159,6 +163,10 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         // 先落一条 STREAMING：即使进程中途崩溃，用户也能看到"有一条没生成完"，
         // 而不是消息凭空消失（等生成完再落库的话，崩溃就全丢了）
         ChatMessagePO assistantMessage = chatMessageService.appendAssistantMessage(userId, conversationId,
+                // 出处（5.4）在骨架落库时就写定，不等生成完再补：这条消息从存在的那一刻起
+                // 就有主人。传的是**解析后**的 id 而不是 conversation.getAgentId()——
+                // 后者为 null 时（会话没选）照抄下去就丢掉了"其实是内置默认在跑"
+                agentDefinition == null ? null : agentDefinition.agentId(),
                 AssistantReplyDraft.builder()
                         .requestId(requestId)
                         .status(MessageStatus.STREAMING.name())
@@ -177,7 +185,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         if (ragMode) {
             // 检索事件必须在第一个 delta 之前：前端据此显示"检索到 N 个片段"。
             // 这里是同步发送（flux 还没订阅），顺序由代码结构保证，不靠时序运气。
-            session.sendRetrieval(knowledgeBaseId, prepared);
+            session.sendRetrieval(knowledgeBaseIds, prepared);
         }
 
         // 没有资料就不调用模型（与 /ask/stream 完全一致：省钱，也从根上避免"无资料硬答"）。
@@ -196,7 +204,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
 
         log.info("开始流式生成 requestId={}, conversationId={}, mode={}, modelRole={}{}",
                 requestId, conversationId, mode, modelRole,
-                ragMode ? ", kbId=" + knowledgeBaseId + ", 检索到 " + prepared.usedHits().size() + " 个片段" : "");
+                ragMode ? ", kbIds=" + knowledgeBaseIds + ", 检索到 " + prepared.usedHits().size() + " 个片段" : "");
         return emitter;
     }
 
@@ -238,35 +246,25 @@ public class ChatStreamServiceImpl implements ChatStreamService {
     }
 
     /**
-     * 取会话绑定的知识库（RAG 模式）。
+     * 取会话绑定的知识库（RAG 模式，Phase 5.5 起可以是一个或多个）。
      *
      * <p>这条路径上<b>没有</b>"悄悄退化成不检索"这个选项：RAG 会话拿不到知识库时，
      * 用户真正想要的是"告诉我哪里没配好"，而不是一个看起来正常、其实没查过笔记的回答。
-     */
-    /**
-     * 解析 AGENT 会话这次要用哪份 Agent 定义（Phase 4.1）。
      *
-     * <p>两种来源：会话选定的 Agent，或内置默认 Agent。后者<b>不是</b>代码里的兜底常量，
-     * 而是数据库里的真实一行（{@code AgentService.resolveDefault}），所以它是用户在界面上
-     * 看得见、改得动的——写死的兜底恰恰是 §六十七 禁止的"硬编码 Agent"。
+     * <p><b>为什么这里不再取 {@code get(0)}</b>：绑定是用户在界面上配的，
+     * 静默只查第一个库的后果是"答案确实来自知识库、但只是一部分资料"，看不出少查了。
+     * 库里到底有几个就查几个——"只绑了一个"是 {@code List.of(one)} 这个特例，不是另一条分支。
      *
-     * <p>状态检查放在这里而不是只看创建会话那一次：会话建好之后 Agent 可能被停用/退回草稿，
-     * 那种情况必须<b>当下就报错</b>（5008/5009），而不是继续用一个"已经不该用"的 Agent 回答。
+     * <p>这里<b>不做</b>归属校验：{@code prepareMany} 会先 {@code requireAllOwned}，
+     * 两处都查一遍只是多一次 SQL，还会让"谁负责这件事"变模糊。
      */
-    private AgentDefinition resolveAgentDefinition(Long userId, ChatConversationPO conversation) {
-        Long agentId = conversation.getAgentId();
-        return agentId == null
-                ? agentService.resolveDefault(userId)
-                : agentService.requireDefinition(userId, agentId);
-    }
-
-    private Long requireKnowledgeBaseId(ChatConversationPO conversation) {
+    private List<Long> requireKnowledgeBaseIds(ChatConversationPO conversation) {
         List<Long> kbIds = ConversationKbIds.parse(jsonMapper, conversation.getKbIds());
         if (kbIds.isEmpty()) {
             throw new BusinessException(ErrorCode.PARAM_INVALID,
                     "该会话（RAG 模式）尚未绑定知识库，请先绑定后再提问");
         }
-        return kbIds.get(0);
+        return kbIds;
     }
 
     @Override
@@ -353,9 +351,12 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             send(SseEventNames.META, payload);
         }
 
-        /** 检索事件（RAG 模式）：命中片段、来源、是否重排/截断。必须在第一个 delta 之前发出。 */
-        private void sendRetrieval(Long knowledgeBaseId, PreparedAnswer prepared) {
-            send(SseEventNames.RETRIEVAL, RetrievalEvent.of(knowledgeBaseId, prepared));
+        /**
+         * 检索事件（RAG 模式）：本次查了哪些库、命中哪些片段、是否重排/截断。
+         * 必须在第一个 delta 之前发出。
+         */
+        private void sendRetrieval(List<Long> knowledgeBaseIds, PreparedAnswer prepared) {
+            send(SseEventNames.RETRIEVAL, RetrievalEvent.of(knowledgeBaseIds, prepared));
         }
 
         /**

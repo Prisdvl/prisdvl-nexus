@@ -36,7 +36,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 /**
  * 知识库服务实现。
@@ -264,6 +269,45 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
             throw new BusinessException(ErrorCode.KNOWLEDGE_BASE_NOT_FOUND);
         }
         return entity;
+    }
+
+    @Override
+    public List<KnowledgeBasePO> requireAllOwned(Long userId, List<Long> knowledgeBaseIds) {
+        if (knowledgeBaseIds == null || knowledgeBaseIds.isEmpty()) {
+            return List.of();
+        }
+        // 去重但保序：同一个库绑两次只算一次（否则白跑一轮检索、归并后还会出现重复片段）。
+        // 收口在这里，比要求每个调用方先自己 normalize 一遍可靠。null 元素不去掉——
+        // 它会在下面被判为"查不到"，与 requireOwned(null) 同样是 3001。
+        List<Long> requested = new ArrayList<>(new LinkedHashSet<>(knowledgeBaseIds));
+        List<Long> queryIds = requested.stream().filter(Objects::nonNull).toList();
+
+        Map<Long, KnowledgeBasePO> found = new HashMap<>();
+        // 空集合不能进 IN：MyBatis-Plus 会生成 `IN ()`，那是语法错误而不是空结果
+        if (!queryIds.isEmpty()) {
+            for (KnowledgeBasePO entity : knowledgeBaseMapper.selectList(
+                    Wrappers.<KnowledgeBasePO>lambdaQuery()
+                            .eq(KnowledgeBasePO::getUserId, userId)
+                            .in(KnowledgeBasePO::getId, queryIds))) {
+                found.put(entity.getId(), entity);
+            }
+        }
+
+        // 按**请求顺序**返回（不是数据库的返回顺序）：调用方据此决定检索顺序与展示顺序。
+        // 第一个查不到的 id 直接失败，并把这个 id 带进信息里——多库下一句
+        // "知识库不存在"而不说是哪个，用户面对一屏配置无从判断。
+        List<KnowledgeBasePO> result = new ArrayList<>(requested.size());
+        for (Long id : requested) {
+            KnowledgeBasePO entity = found.get(id);
+            if (entity == null) {
+                // 措辞对"不存在"与"存在但不属于你"必须完全一致：区分开就等于
+                // 用错误信息确认了别人知识库的存在（沿用 3001 → 404 的既有口径）
+                throw new BusinessException(ErrorCode.KNOWLEDGE_BASE_NOT_FOUND,
+                        "知识库不存在或无权访问：id=" + id);
+            }
+            result.add(entity);
+        }
+        return result;
     }
 
     private boolean existsName(Long userId, String name) {

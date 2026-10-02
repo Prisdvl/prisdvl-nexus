@@ -116,7 +116,7 @@ update.txt 第 2 条要求"不要重复实现已经存在的功能"。以下是�
 | **User** | 只有 `GET /api/users/me` | 无资料编辑、无改密码、无账户注销 | P1 | `PUT /api/users/me`（昵称/邮箱）+ `PUT /api/users/me/password`（验旧密码 + BCrypt 重编码 + 撤销旧令牌） |
 | **Knowledge Base** | 创建/编辑/删除/禁用/检索参数/workspace，异步导入 + 重试，单文件上传，删单篇文档，失败原因可见 | ✅ **P1-1/P1-2/P1-3 三项均已修（5.3）**：`POST /knowledge-bases/{id}/documents`、`DELETE /knowledge-bases/{kbId}/documents/{documentId}`、`GET /import-tasks/{id}/items` + 面板渲染。删除的清理范围比审计写的宽（存量路径也在漏，见上文"5.3 修正的审计结论"） | ~~P1~~ → 已修 | 见 B.44 |
 | **Document** | 4 种解析器、状态机、增量同步、压缩包防御、逐文件失败明细 | ✅ **P1-4 已修（5.3）**：原方案（给 `DocumentSummary` 补 `errorMsg`）是**死字段**——`DocumentStatus.FAILED` 无写入路径。改为补 `kb_import_task_item` 的读接口；✅ 超 200MB 的失败落到兜底 500 **已修（5.2）** | ~~P1~~ → 已修 | 见 B.44 §1/§6 |
-| **RAG** | 混合检索+Rerank+引用+无命中不调模型 | **多库只取第一个**（`kbIds.get(0)`）；✅ 同步路径把模型异常**当成正常回答**返回并落库**已修（5.2）**；"检索到 N 个片段"不落库 | P1 | ①多库改成合并检索（逐库检索 + 融合，或下推多 `kb_id`）；②`generate()` 的 catch 改为抛业务异常（LLM 错误域），失败落 `FAILED`；③`retrieval` 事件随消息落库 |
+| **RAG** | 混合检索+Rerank+引用+无命中不调模型 | ✅ **P1-6 已修（5.5）**：多库改为**逐库检索后跨库归并**（~~只取第一个~~ 的 `kbIds.get(0)` 已删），每库按**自己的** `retrieval_top_k` 召回、归并后按全局 `topK` 截断；✅ 同步路径把模型异常**当成正常回答**返回并落库**已修（5.2）**；"检索到 N 个片段"**仍**不落库 | P1 | ~~①多库改成合并检索~~（5.5 已修，且**不需要**下推多 `kb_id`——下推表达不了"每库各自的召回深度"）；~~②`generate()` 的 catch 改为抛业务异常~~（5.2 已修）；③`retrieval` 事件随消息落库（P2-4） |
 | **Agent** | Definition/Runtime 分离、状态机、白名单、复制、试跑 | ✅ **P1-8/P1-9 已修（5.4）**：`temperature` 可配（迁移 V16，NULL = 跟随全局、与 0 不同义；生效点在 `AgentRuntime.configure` 的请求级 options）；管理页可配 Tools（`toolCodes` 多选 + 卡片回显 + "空 = 全部工具"写明）。Agent 使用统计见 Trace 行 | ~~P1~~ → 已修 | 见 B.45 |
 | **Tool** | 注册表 + 用户启停 + 白名单交集 + 执行壳 + 痕迹 | **无 Tool 超时**；✅ **超循环上限没被识别已修（5.2）**（`ToolCallLimitExceededException` 现在 → `5002`，`5002` 不再是死码）；✅ 40/150 上限**已显式配置并真撞测过（5.2）**（但**不是**写 `spring.ai.tools.limits.*`——本项目手工建模型，那两个 key 无人读，见 B.43 §2）| P1 | ~~①显式配置 `spring.ai.tools.limits.*`~~（该方案是假旋钮，已否）；②映射 `ToolCallLimitExceededException` → `5002` + 如实文案；③工具加了超时字段，等第一个会阻塞的外部工具落地时一起实现 |
 | **Chat** | 会话 CRUD/重命名接口/流式四路终止/痕迹落库/多轮 | ✅ **P1-12 已修（5.4）**：侧栏会话项加重命名入口（接口从 Phase 1 就在，一直无人调用）；✅ 流式错误一律 `4001 模型调用失败`**已修（5.2）**（判定收敛到 `FailureClassifier`）；✅ **5.4 另修一处静默不一致**：非流式入口此前**完全不看会话模式**（AGENT 会话不用该 Agent 的提示词/工具、RAG 会话不查笔记，两者都不报错）→ 抽 `ConversationAgentResolver` 两条链路共用，RAG 非流式显式报 `8003` | ~~P1~~ → 已修 | 见 B.45 §1/§5；消息级清空仍列 P3 |
@@ -199,7 +199,7 @@ private Long resolveUser(String nexusUser) {
 | P1-3 | KB | ~~**导入失败原因不可见**：面板只显示 `createdCount / skippedCount`~~ | ✅ **5.3（2026-10-01）**：`GET /import-tasks/{id}/items`（action 过滤 + limit 收敛到 1–500），面板逐条列出路径与原因；`task.errorMsg` 也接上了 | ✅ 按原方案落地，另补一个洞 |
 | P1-4 | Document | ~~每文档的失败原因没进接口~~ | ✅ **5.3（2026-10-01）**：**原方案是个死字段**——`DocumentStatus` 全仓没有任何路径写 `FAILED`（`applyMetadata` 永远写 `READY`/`errorMsg=null`）。真正的原因在 `kb_import_task_item.message`，而那张表**只有写入方**。改补 items 读接口 | ⚠️ 方案被推翻，见 B.44 §1 |
 | P1-5 | Document | 超 200MB 上传返回 500「系统内部错误」 | `application.yml:50` 只有 Spring 上限；`GlobalExceptionHandler` **没有** `MaxUploadSizeExceededException` 分支 → 落到兜底 `Exception` → `INTERNAL_ERROR` | ✅ **5.2（2026-10-01）**：`GlobalExceptionHandler` 补 `MaxUploadSizeExceededException` → `413 / 3006`，文案带**配置里读出来的**上限值（不写死）；真机 201MB 实测通过，见 B.43 §6 |
-| P1-6 | RAG | 会话绑多个知识库时**只用第一个** | `ChatStreamServiceImpl.requireKnowledgeBaseId` → `kbIds.get(0)` | 多库合并检索（逐库检索后按分数融合，或把 `kb_id IN (...)` 下推） |
+| P1-6 | RAG | ~~会话绑多个知识库时**只用第一个**~~ | `ChatStreamServiceImpl.requireKnowledgeBaseId` → `kbIds.get(0)` | ✅ **5.5（2026-10-02）**：改为**逐库检索后跨库归并**（下推 `kb_id IN (...)` 表达不了"每库各自的 `retrieval_top_k`"，且要动 `PgVectorStore`/ES 查询并重做 B.31 的"行为不变"证明）。探索后发现**检索层本来就是多库的、数据库一行不用改**，卡点只是三道人工闸门（写入口拒绝 > 1、读出口 `.get(0)`、门面签名单库）。接口契约随之变化：`retrieval` 事件的 `knowledgeBaseId` → `knowledgeBaseIds` + 每 hit 带 `knowledgeBaseId`。见 B.46 | ✅ 方向不变，成本比原估低（无迁移） |
 | P1-7 | RAG | 同步问答把模型异常**当成回答**返回并落库 | `RagAnswerServiceImpl.generate` 的 `catch (Exception ex) { return "生成回答失败：" + ex.getMessage() …}` | ✅ **5.2（2026-10-01）**：改成抛业务异常（`FailureClassifier` 给码），**失败不落档**——`kb_qa_record` 没有 status 列，写进去就是一条假回答（与本文措辞的偏离见 B.43 §5） |
 | P1-8 | Agent | ~~**`temperature` 不可配**~~ | `AgentDefinition` 无该字段；`application.yml` 只有 `ai.defaults.temperature: 0.7` | ✅ **5.4（2026-10-02）**：迁移 V16 + 字段 + 请求级 options **同一次改动**落地。关键取舍：**NULL（跟随全局）≠ 0（显式贪心）**，响应原样返回 null 不回填；生效点是两条链路唯一的公共装配点 `AgentRuntime.configure`；范围 0–2 取 OpenAI/Anthropic 并集。见 B.45 §2 |
 | P1-9 | Agent | ~~**管理页不能配 Tools**~~ | `web/src/api/agents.ts` 的 `AgentPayload` 无 `toolCodes`；`AgentsView.vue` 全文无 tool（grep 确认） | ✅ **5.4（2026-10-02）**：`toolCodes` 多选 + 卡片回显 + **"空 = 全部工具"写在界面上** + 已停用工具标注。后端 4.3 起就支持，缺的一直只有这一页；顺带修正 `api.md` 把 `GET /api/tools` 列为"规划中"的过期条目。见 B.45 §3 |
@@ -280,7 +280,7 @@ private Long resolveUser(String nexusUser) {
 | **Phase 5.2** ✅ 完成 2026-10-01 | 错误契约三处漏洞：P1-5（上传超限）、P1-7（同步 RAG 异常）、P1-10（循环超限）+ P1-11（上限显式化）+ P1-13（错误帧不区分来源）。**真机验证把范围扩大了**：`/api/agent/ask` 等四个非流式入口原本回 500/9999、`ChatServiceImpl` 把上游原文回显并落库（B.43 §4） | 新增 24 条测试（含错误码↔HTTP 契约、真实 Tomcat 上传超限、真撞一次工具上限、同步 RAG 失败不落档）；`mvn test` 406/0/0/18 绿；`mvn package` 成功；真机实测三种入口口径一致 + 413/3006 |
 | **Phase 5.3** | 知识库闭环补完：P1-1（单文件上传）、P1-2（删文档）、P1-3/P1-4（失败原因可见）。**动手时范围扩大**：存量删除路径（文档级 + 库级）都在漏，且多出"重新切分"这条孤儿路径，一并修（见 B.44） | ✅ **全部达成**。代码/测试/构建/文档：新增 20 条测试 → `mvn test` 426/0/0/18，`mvn package` 与 `npm run build` 成功；新增 `verify-doc-lifecycle.mjs`（退出 0，三张截图）。**真机验收已执行且全绿**（2026-10-01）：V15 在真 MySQL 落地；PDF/DOCX/TXT/MD 各上传一次全部 `created=1 failed=0`、`source_type='UPLOAD'`；删除后向量 / ES / 切片 / 标签 / 出链全部归零、磁盘原件消失、入链按 Obsidian 语义保留；墓碑路径两轮通过；删库同样归零。证据与脚本陷阱见 B.44 §9 |
 | **Phase 5.4** | Agent 闭环补完：P1-8（temperature）、P1-9（Tools UI）、P1-12（重命名会话）、P1-14（agentId 落库）。**动手时范围扩大**：非流式入口完全不看会话模式，AGENT 会话不用 Agent 提示词、RAG 会话不查笔记，两者都不报错（见 B.45 §1） | ✅ **全部达成**。较 5.3 净增 14 条测试 → `mvn test` **440/0/0/18**；`mvn package` 与 `npm run build`（含 `vue-tsc`）成功。**真机验收已执行且全绿**（2026-10-02）：V16/V17 在真实 MySQL 落地且结构与设计逐字一致；工具/温度回读、重命名刷新后仍在、出处落库（含"会话没选 Agent 时记内置默认真实 id"）、`/api/observability/agents`（无 token 401）、非流式 AGENT 200 / 非流式 RAG 409+8003 且零副作用；**8 个 verify 脚本全部退出 0**。**跑出两个"脚本在骗人"的问题**（其中一个把成功的重命名判成失败），均已修，见 B.45 §7 |
-| **Phase 5.5** | 多库 RAG：P1-6 | 2 个库各抓一段、答案同时引用两库的测试 |
+| **Phase 5.5** ✅ 完成 2026-10-02 | 多库 RAG：P1-6。**动手时范围小于原估**：检索层（`RetrievalQuery.knowledgeBaseIds` + 四个 Retriever 的逐库循环）早就是多库的，数据库 `kb_ids` 早就是 JSON 列、Agent 的 `agent_knowledge_base` 也存在——**零迁移**。真正要拆的是三道人工闸门，外加 `SearchHit` 丢掉 `knowledgeBaseId`（见 B.46 §1） | ✅ **全部达成**。较 5.4 净增 22 条测试 → `mvn test` **462/0/0/18**；`mvn package` 与 `npm run build`（含 `vue-tsc`）成功。**真机验收已执行且全绿**（2026-10-02，local + ES + pgvector + 真模型）：两库各导入一份内容不同的文档 → 界面**多选**绑定两库 → 提问只有第二个库能回答的问题，检索卡片显示"检索到 2 个片段 / 2 个知识库"、**每条命中各自标出来源库**，回答引用了第二个库的独有事实（`NX-7741` / `220 毫秒`）；越权绑定返回 404 + 3001 **且文案指名 id**；**8 个既有 verify 脚本全部退出 0**（单库回归）；`flyway_schema_history` 不变。新增脚本 `verify-multi-kb.mjs` |
 | **Phase 5.6** | 用户与安全：P1-15（改密码）、P1-16（限流） | 改密码后旧令牌失效；限流命中返回 7001 |
 | **Phase 5.7** | 部署产品化：P1-17（Dockerfile + nginx + compose 补两个服务） | `docker compose up -d` 后前端能登录并用 Agent 问答 |
 | **Phase 5.8** | README/docs 产品化：P1-18 + P2-12 | 按 update.txt §二十 的十节清单核对 |
@@ -341,8 +341,13 @@ private Long resolveUser(String nexusUser) {
 
 **进度**：1 与 3 已完成（5.1 / 5.2，均 2026-10-01）；第 2 类（"最后一段没接到界面上"）
 **已全部完成**——知识库部分 5.3（2026-10-01，P1-1/P1-2/P1-3/P1-4）、
-Agent 部分 5.4（2026-10-02，P1-8/P1-9/P1-12/P1-14），两期均**含真机验收**，见 §4。
+Agent 部分 5.4（2026-10-02，P1-8/P1-9/P1-12/P1-14）、
+多库 RAG 5.5（2026-10-02，P1-6），三期均**含真机验收**，见 §4。
 
-**下一阶段是 5.5**（多库 RAG：P1-6）。
+**下一阶段是 5.6**（用户与安全：P1-15 资料/密码自助 + P1-16 限流），
+以及紧随其后的 P1-17（应用容器化，`docker compose up -d` 起不来这件事）。
 
 > 5.4（Agent 闭环补完）**2026-10-02 已完成并真机验收**，见 §4 的 5.4 行与 B.45。
+> 5.5（多知识库 RAG）**2026-10-02 已完成并真机验收**，见 §4 的 5.5 行与 B.46。
+> 5.5 是这几期里唯一**没有数据库迁移**的一期：`chat_conversation.kb_ids` 本来就是 JSON 列，
+> Agent 侧的 `agent_knowledge_base` 关联表也早就存在——卡点是三道人工闸门，不是数据结构。

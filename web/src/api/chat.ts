@@ -57,8 +57,9 @@ export interface ChatMessage {
 /**
  * 新建会话。
  *
- * `kbIds` 只在 RAG 模式下有意义（服务端会拒绝给 PLAIN/AGENT 绑库，也会拒绝绑多个）：
+ * `kbIds` 只在 RAG 模式下有意义（服务端会拒绝给 PLAIN/AGENT 绑库）：
  * RAG 会话必须绑定知识库，否则提问时会被明确拒绝——不做"悄悄退化成不检索"。
+ * 可以绑多个（Phase 5.5，上限 10 个），检索时逐库召回后跨库归并。
  *
  * `agentId` 只在 AGENT 模式下有意义，且必须是**已发布**的 Agent
  * （草稿 5008 / 停用 5009 / 别人的 5006）；不传 = 内置默认 Agent。
@@ -120,6 +121,13 @@ export function listMessages(conversationId: string, pageSize = 100) {
 export interface StreamRetrievalHit {
   chunkId: string
   documentId: string
+  /**
+   * 这一片出自哪个知识库（Phase 5.5）。
+   *
+   * 会绑多个库之后，"检索到 5 个片段"不再能回答最要紧的那个问题——**资料是从哪来的**。
+   * 会话可能是"产品手册 + 内部 FAQ"两库，用户要靠这个字段才能判断答案的出处。
+   */
+  knowledgeBaseId: string | null
   documentTitle: string | null
   headingPath: string | null
   score: number
@@ -129,7 +137,8 @@ export interface StreamRetrievalHit {
 
 /** retrieval 事件：检索完成、生成之前到达，供界面显示"检索到 N 个片段"。 */
 export interface StreamRetrieval {
-  knowledgeBaseId: string | null
+  /** 本次检索覆盖的知识库（会话绑了几个就是几个）。 */
+  knowledgeBaseIds: string[]
   count: number
   hits: StreamRetrievalHit[]
   contextTokens: number

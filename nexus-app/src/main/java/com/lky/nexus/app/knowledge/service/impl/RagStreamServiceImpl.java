@@ -71,7 +71,9 @@ public class RagStreamServiceImpl implements RagStreamService {
         // ② 检索过程事件：必须在第一个 delta 之前到达，前端才能先显示"检索到 N 个片段"。
         //    这里是同步发送（订阅还没建立），顺序是结构保证的，不依赖时序运气。
         //    empty 也照发：count=0 是要告诉用户的信息，省略事件会让前端一直等。
-        send(emitter, SseEventNames.RETRIEVAL, RetrievalEvent.of(knowledgeBaseId, prepared));
+        // 这条链路固定单库（路径里的 {id}），所以这里永远是单元素列表——但负载形状
+        // 与会话流式那条多库链路保持一致：事件有两个生产者，形状分叉就得有两套解析逻辑
+        send(emitter, SseEventNames.RETRIEVAL, RetrievalEvent.of(List.of(knowledgeBaseId), prepared));
 
         if (prepared.empty()) {
             // 没有资料就不调用模型（省钱，也从根上避免无资料硬答），但仍走完整的流式事件序列，

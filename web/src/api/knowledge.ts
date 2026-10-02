@@ -394,13 +394,22 @@ export interface StreamDone {
   error?: string
 }
 
-/** retrieval 事件：检索完成、生成之前到达（"检索到 N 个片段"就来自这里）。 */
+/**
+ * retrieval 事件：检索完成、生成之前到达（"检索到 N 个片段"就来自这里）。
+ *
+ * 形状与会话流式（`api/chat.ts` 的 `StreamRetrieval`）**必须保持一致**：
+ * 服务端两条链路共用同一个构造器（`RetrievalEvent`），前端却有两份类型声明。
+ * 这是历史遗留——将来若合并成一个共享类型，这两处可以删掉一份。
+ */
 export interface StreamRetrieval {
-  knowledgeBaseId: string | null
+  /** 本次检索覆盖的知识库。这条链路固定单库（路径里的 {id}），列表长度为 1。 */
+  knowledgeBaseIds: string[]
   count: number
   hits: Array<{
     chunkId: string
     documentId: string
+    /** 这一片出自哪个知识库（单库链路下恒等于路径里的那个库）。 */
+    knowledgeBaseId: string | null
     documentTitle: string | null
     headingPath: string | null
     score: number

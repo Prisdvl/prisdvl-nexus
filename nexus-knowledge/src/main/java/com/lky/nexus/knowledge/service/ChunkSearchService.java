@@ -34,11 +34,41 @@ public interface ChunkSearchService {
                            RetrievalFilters filters);
 
     /**
+     * 多知识库检索：逐库召回后跨库归并（Phase 5.5）。
+     *
+     * <p><b>为什么叫 {@code searchMany} 而不是重载 {@code search}</b>：重载会让
+     * {@code Long} 与 {@code List<Long>} 之间的 Java 重载解析、
+     * 以及测试里裸 {@code any()} 的 Mockito 匹配同时变得含糊——
+     * 后者尤其糟：它会让一批与本次改动无关的桩在编译期报"歧义调用"，
+     * 而报错位置离真正的原因很远。换个名字从根上避开。
+     *
+     * <p><b>{@code topK} 的语义与单库不同</b>，这是最容易搞错的一点：
+     * <ul>
+     *   <li>每个库按<b>它自己的</b> {@code retrieval_top_k} 召回（不受 {@code topK} 影响）；</li>
+     *   <li>{@code topK} 只决定<b>归并之后</b>保留多少条，不随库数放大；</li>
+     *   <li>{@code topK} 传 null 时用全局默认 {@code nexus.retrieval.top-k}。</li>
+     * </ul>
+     * 换句话说，多传几个库不会让上下文变长——只会在同样的条数预算里引入更多来源。
+     * 这与 Agent 侧 {@code knowledge_search} 的口径一致。
+     *
+     * <p>{@code knowledgeBaseIds} 中任意一个不存在或不属于该用户，整批失败（3001）而不是部分成功；
+     * 重复 id 会去重。详见 {@link KnowledgeBaseService#requireAllOwned}。
+     */
+    List<SearchHit> searchMany(Long userId, List<Long> knowledgeBaseIds, String query, Integer topK,
+                               SearchMode mode);
+
+    /** 多知识库检索（带元数据过滤）：过滤条件对每个库分别生效。 */
+    List<SearchHit> searchMany(Long userId, List<Long> knowledgeBaseIds, String query, Integer topK,
+                               SearchMode mode, RetrievalFilters filters);
+
+    /**
      * 命中项（已补齐展示与引用所需的信息）。
      *
-     * @param score     相关性得分：单路时是该路原始分数，融合时是 RRF 分数
-     * @param source    bm25 / vector / hybrid
-     * @param matchedBy 命中来源明细（如 {@code ["BM25 #2", "向量 #1"]}），让"为什么排前面"可解释
+     * @param score           相关性得分：单路时是该路原始分数，融合时是 RRF 分数
+     * @param source          bm25 / vector / hybrid
+     * @param matchedBy       命中来源明细（如 {@code ["BM25 #2", "向量 #1"]}），让"为什么排前面"可解释
+     * @param knowledgeBaseId 命中所属的知识库。多库检索时用来标明"这一段出自哪个库"；
+     *                        生产路径恒为非 null——只有兼容构造器（见下）会产生 null。
      */
     record SearchHit(
             Long chunkId,
@@ -48,6 +78,24 @@ public interface ChunkSearchService {
             String content,
             double score,
             String source,
-            List<String> matchedBy) {
+            List<String> matchedBy,
+            Long knowledgeBaseId) {
+
+        /**
+         * 兼容构造器（{@code knowledgeBaseId = null}）。
+         *
+         * <p><b>只给冻结基线 {@code ChunkSearchServiceLegacyReference} 与测试桩用</b>；
+         * 生产代码一律走 9 参构造器。
+         *
+         * <p>为什么不直接改那个冻结文件、让它的构造点补上库 id：参照实现是
+         * "改造前行为"的可执行定义（Phase 3.1），它存在的意义就是**不许跟着接口漂**。
+         * 为了适配一个新字段去改它，等于把回归基准一起改掉，这层保护就静默失效了。
+         * 参照实现本来就是单库的，"结果来自哪个库"这个维度对它无从谈起，
+         * 因此 null 是如实的，而不是"暂时没填"。
+         */
+        public SearchHit(Long chunkId, Long documentId, String documentTitle, String headingPath,
+                         String content, double score, String source, List<String> matchedBy) {
+            this(chunkId, documentId, documentTitle, headingPath, content, score, source, matchedBy, null);
+        }
     }
 }

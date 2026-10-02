@@ -213,7 +213,9 @@ npm run dev            # http://localhost:5173（/api 由 Vite 代理到后端 8
 关键词检索（每条命中显示来源标签与相关性得分），**Agent 对话**
 （模型自己决定检索什么：检索过程实时可见、工具痕迹随消息落库、随时可停；RAG 会话的
 **"检索到 N 个片段"卡片只在本次会话内保留**——命中片段还没随消息落库，刷新后会消失，
-这是已知缺口而非渲染问题，见 decisions.md B.37），
+这是已知缺口而非渲染问题，见 decisions.md B.37；RAG 会话现在**可以同时绑定多个知识库**
+（上限 10 个，**逐库检索后跨库归并**，每条命中的引用会标出它来自哪个库），
+见 decisions.md B.46），
 以及 **Agent 管理**（`/agents`：新建 → 试跑 → 发布 → 在对话页选用 → 停用 → 删除；
 配提示词、可检索的知识库、**工具白名单**与**采样温度**；草稿不能选用，选择器里会说明原因）。
 
@@ -229,6 +231,7 @@ node scripts/verify-stream.mjs     # 知识库问答流式：逐字增长 + 引�
 node scripts/verify-retrieval-ui.mjs # 检索卡片渲染契约：桩掉 /api/chat/stream，验"检索到 N 个片段"排在回答之前
 node scripts/verify-agents.mjs     # Agent 管理页：新建→配置（提示词/知识库/工具白名单/温度）→发布→对话页可选→停用→不可选→删除（11 条腿）
 node scripts/verify-agent-no-kb.mjs # 零知识库的新用户提问：提示 → 检索如实报空 → 回答注明不是来自笔记 → 痕迹刷新后仍在
+node scripts/verify-multi-kb.mjs   # 多知识库 RAG：自建两个库各导入不同内容的文档 → 界面多选绑定 → 提问只有第二个库能答的问题（断言来源标注 + 回答引用其独有事实）→ 越权绑定被拒（自建自删，不依赖 seed-demo）
 ```
 
 > `verify-*.mjs` 都要求后端已按上一节跑起来，并且**已经种好演示数据**
@@ -254,6 +257,9 @@ node scripts/verify-agent-no-kb.mjs # 零知识库的新用户提问：提示 �
 > `docs/platform-phase3-baseline.md` §9.6，过程与踩到的坑见 `docs/decisions.md` B.37。
 > **2026-10-02 复跑**（含 `--profile ai-local` 的 Ollama）：上面 8 个脚本再次**全部退出 0**，
 > 结果与新增的两个坑见 `docs/decisions.md` B.45 §7。
+> **同日再做一次（Phase 5.5 收尾）**：8 个既有脚本仍**逐一退出 0**（单库行为无回归），
+> 新增的 `verify-multi-kb.mjs` 首次运行即通过（两库导入 → 多选绑定 → 跨库归并 → 越权拒绝），
+> 见 `docs/decisions.md` B.46 §11。
 > **注意 full 栈仍不等于"部署形态也验了"**：Docker 在这里只是基础设施，
 > 应用本身还是本机 `java -jar` + Vite dev server；容器化部署（Dockerfile/nginx）**未验**。
 

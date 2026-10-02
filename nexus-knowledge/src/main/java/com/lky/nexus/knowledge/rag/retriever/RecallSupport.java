@@ -21,8 +21,12 @@ import java.util.List;
  * <p><b>为什么用 RRF 而不是加权求和</b>：BM25 分数无上界，余弦相似度固定在 [-1,1]，
  * 量纲不同，直接相加等于比较苹果和橘子（权重会退化成"看谁量纲大"）。
  * RRF 只用排名，天然免疫量纲问题，详见 {@link RrfFusion}。
+ *
+ * <p><b>可见性</b>：Phase 5.5 起 {@link #merge} 被 {@code ChunkSearchServiceImpl}
+ * 直接调用（多库检索由门面逐库扇出后再归并），因此这个类与那个方法改为 public。
+ * 其余方法仍是包内可见——它们只服务于 Retriever 家族内部。
  */
-final class RecallSupport {
+public final class RecallSupport {
 
     private RecallSupport() {
     }
@@ -73,14 +77,30 @@ final class RecallSupport {
     /**
      * 跨知识库归并。
      *
-     * <p><b>单库时原样返回</b>：这是当前检索链路唯一在用的形态，
+     * <p><b>单库时原样返回</b>：这是一条被 {@code ChunkSearchServiceParityTest} 钉死的路径，
      * 任何"顺手再排一次序"都会引入与改造前不一致的风险，所以要显式绕开。
      *
-     * <p>多库时按分数降序稳定归并，理由是分数可比：同一种召回方式在不同库上是同一量纲
-     * （关键词走同一套分词器；向量走同一嵌入模型，且 {@code KnowledgeEmbeddingResolver}
-     * 会拒绝模型不一致的库）。分数相同时靠稳定排序保持各自库内的相对顺序。
+     * <p>多库时按分数降序归并，分数相同时靠稳定排序保持各自库内的相对顺序，
+     * 最后按 {@code limit} 截断（各库召回深度之和通常远大于它）。
+     *
+     * <p><b>分数可比性是有条件的——这里只保证"同一种召回方式的分"大体可比</b>：
+     * <ul>
+     *   <li><b>向量分真的可比</b>：余弦相似度是绝对量纲，且所有库都必须与同一个全局嵌入配置一致
+     *       （{@code KnowledgeEmbeddingResolver} 逐个库比对，不一致直接拒绝），
+     *       因此各库的向量落在同一个空间里，分数量纲一致；</li>
+     *   <li><b>BM25 分不可比</b>：同一套分词器只保证切词一致，而 BM25 分数还取决于
+     *       各索引自己的词频统计（IDF、文档数、平均长度）。两个库的 "0.9 分" 不是一回事，
+     *       库里文档少、词罕见的那一方会系统性偏高；</li>
+     *   <li><b>RRF 分只是近似可比</b>：它由排名算出，而各库的候选深度取决于各自的
+     *       {@code retrieval_top_k}，深度不同则同一个排名对应的分数贡献不同。</li>
+     * </ul>
+     *
+     * <p>取舍：RAG 与 Agent 实际只走 {@code HYBRID}（库内先 RRF，再跨库归并），
+     * 此时比较的是"库内融合名次"的折算分，偏差有界且不会让某个库整体霸榜。
+     * 若将来要单开 BM25 / VECTOR 的多库模式，这里需要改成<b>按库归一化</b>
+     * （例如折算成库内百分位）再归并，而不是现在这样直接比原始分。
      */
-    static List<RetrievedDocument> merge(List<List<RetrievedDocument>> perKnowledgeBase, int limit) {
+    public static List<RetrievedDocument> merge(List<List<RetrievedDocument>> perKnowledgeBase, int limit) {
         if (perKnowledgeBase.isEmpty()) {
             return List.of();
         }

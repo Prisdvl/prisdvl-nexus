@@ -58,15 +58,19 @@ const legs = [
         citations: []
       }],
       ['retrieval', {
-        knowledgeBaseId: '5001',
+        // Phase 5.5 起负载是 knowledgeBaseIds（列表），且每条命中各带自己的出处。
+        // 这里刻意给两个库：单库的桩证明不了"每段的来源能分开显示"这件事
+        knowledgeBaseIds: ['5001', '5002'],
         count: 2,
         hits: [
           {
-            chunkId: '9001', documentId: '100', documentTitle: '缓存击穿.md',
+            chunkId: '9001', documentId: '100', knowledgeBaseId: '5001',
+            documentTitle: '缓存击穿.md',
             headingPath: 'Redis > 缓存 > 缓存击穿', score: 0.83, source: 'hybrid'
           },
           {
-            chunkId: '9002', documentId: '100', documentTitle: '缓存击穿.md',
+            chunkId: '9002', documentId: '100', knowledgeBaseId: '5002',
+            documentTitle: '缓存击穿.md',
             headingPath: 'Redis > 缓存 > 逻辑过期', score: 0.71, source: 'vector'
           }
         ],
@@ -103,7 +107,7 @@ const legs = [
         citations: []
       }],
       ['retrieval', {
-        knowledgeBaseId: '5001',
+        knowledgeBaseIds: ['5001'],
         count: 0,
         hits: [],
         contextTokens: 0,

@@ -124,8 +124,8 @@ class ChatRagModeTest {
     }
 
     @Test
-    @DisplayName("绑多个知识库 → 1001（多库检索未实现，取第一个等于静默丢条件）")
-    void multipleKnowledgeBasesAreRejected() throws Exception {
+    @DisplayName("绑多个知识库 → 接受，且两个 id 都存下来（Phase 5.5；原来是 1001 拒绝）")
+    void multipleKnowledgeBasesAreAccepted() throws Exception {
         String token = registerAndLogin("rag-bind-multi");
         String first = createKnowledgeBase(token, "多库 A");
         String second = createKnowledgeBase(token, "多库 B");
@@ -136,10 +136,38 @@ class ChatRagModeTest {
                         .content("""
                                 {"mode":"RAG","kbIds":[%s,%s]}
                                 """.formatted(first, second)))
+                .andExpect(status().isOk())
+                // 断言"两个都在"而不是只看状态码：这条测试的全部意义就是
+                // "绑了 2 个就真的记下 2 个"——只收第一个正是本次要消灭的静默丢条件
+                .andExpect(jsonPath("$.data.kbIds.length()").value(2))
+                .andExpect(jsonPath("$.data.kbIds[0]").value(first))
+                .andExpect(jsonPath("$.data.kbIds[1]").value(second));
+    }
+
+    @Test
+    @DisplayName("超过上限（10 个）→ 1001，且文案说明上限是多少（不是含糊的\"参数错误\"）")
+    void tooManyKnowledgeBasesAreRejected() throws Exception {
+        String token = registerAndLogin("rag-bind-too-many");
+        StringBuilder ids = new StringBuilder();
+        for (int i = 0; i < 11; i++) {
+            if (i > 0) {
+                ids.append(',');
+            }
+            ids.append(createKnowledgeBase(token, "上限库 " + i));
+        }
+
+        mockMvc.perform(post("/api/chat/conversations")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"mode":"RAG","kbIds":[%s]}
+                                """.formatted(ids)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(1001))
                 .andExpect(jsonPath("$.message")
-                        .value(org.hamcrest.Matchers.containsString("暂只支持绑定一个知识库")));
+                        .value(org.hamcrest.Matchers.containsString("最多绑定 10 个知识库")))
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("收到 11 个")));
     }
 
     @Test
@@ -157,6 +185,29 @@ class ChatRagModeTest {
                                 """.formatted(otherKbId)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(3001));
+    }
+
+    @Test
+    @DisplayName("两个库里有一个是别人的 → 整批 404 + 3001，且文案指名是哪个 id（Phase 5.5）")
+    void oneForeignKnowledgeBaseAmongManyFailsTheWholeBatch() throws Exception {
+        String other = registerAndLogin("rag-bind-other-multi");
+        String otherKbId = createKnowledgeBase(other, "别人的库");
+        String token = registerAndLogin("rag-bind-self-multi");
+        String ownKbId = createKnowledgeBase(token, "自己的库");
+
+        // 自己的库放在**前面**：只校验第一个 id 的实现会在这里放行，
+        // 于是"绑了 2 个、实际只查了 1 个"这种静默丢条件就漏过去了
+        mockMvc.perform(post("/api/chat/conversations")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"mode":"RAG","kbIds":[%s,%s]}
+                                """.formatted(ownKbId, otherKbId)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(3001))
+                // 多库下"哪个库不合格"必须能定位：只说"知识库不存在"在绑了一串 id 时无从排查
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString(otherKbId)));
     }
 
     @Test

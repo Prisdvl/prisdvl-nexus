@@ -49,6 +49,19 @@ public class ConversationServiceImpl implements ConversationService {
     /** 自动生成标题时截取的字符数。 */
     private static final int AUTO_TITLE_LENGTH = 30;
 
+    /**
+     * 一个 RAG 会话最多绑定几个知识库（Phase 5.5）。
+     *
+     * <p><b>为什么写死在代码里而不是做成配置项</b>：多库检索是逐库<b>串行</b>的
+     * （每库各一次 ES + 一次 pgvector + 一次查询嵌入 + 回表），成本随库数线性增长。
+     * 这个数字表达的是"这条链路的设计承受能力"，不是运维旋钮——
+     * 做成配置项会让人以为调大就能多绑，而真正的瓶颈（串行放大首字延迟）不会因此改变。
+     *
+     * <p>10 的依据：单次 hybrid 检索实测在百毫秒量级，10 个库仍落在"可接受的首字延迟"内。
+     * 将来若真要把它变成可调参数，前提是先把逐库检索并行化。
+     */
+    private static final int MAX_BOUND_KNOWLEDGE_BASES = 10;
+
     private final ChatConversationMapper conversationMapper;
     private final ChatMessageMapper messageMapper;
     private final KnowledgeBaseService knowledgeBaseService;
@@ -203,16 +216,23 @@ public class ConversationServiceImpl implements ConversationService {
     /**
      * 校验并序列化绑定的知识库。
      *
-     * <p>三条规则都是"宁可不做、也不装作做了"：
+     * <p>这几条规则都是"宁可不做、也不装作做了"：
      * <ol>
      *   <li><b>只有 RAG 能用</b>：PLAIN 绑了没用；AGENT 的检索范围由所选 Agent 决定
      *       （Phase 4.1 起 Agent 绑定自己的知识库，见 {@code AgentService}）。
      *       写进会话字段只会让人误以为检索被限定了；</li>
-     *   <li><b>最多一个</b>：检索侧目前是单库签名（{@code ChunkSearchService} 吃一个 kbId），
-     *       绑多个只能"取第一个"，这属于静默丢条件，必须显式拒绝；</li>
-     *   <li><b>必须是自己的库</b>：走 {@code requireOwned}，别人的库返回 3001，
-     *       不留"绑定成功但检索为空"这种无法解释的状态。</li>
+     *   <li><b>最多 {@value #MAX_BOUND_KNOWLEDGE_BASES} 个</b>：多库检索是<b>逐库串行</b>的，
+     *       成本随库数线性增长，超过上限显式拒绝，而不是"先绑上、慢起来再说"；</li>
+     *   <li><b>必须是自己的库</b>：走 {@code requireAllOwned}——<b>一次校验全部 id</b>，
+     *       任意一个不存在或不属于该用户就整批 3001，不做部分成功。
+     *       "绑定成功、检索却少查了一个库"是这里最坏的结果，因为它不报错；</li>
      * </ol>
+     *
+     * <p><b>Phase 5.5 之前这里还有一条"最多绑一个"的拒绝</b>，理由是检索侧当时只有单库签名
+     * （{@code ChunkSearchService} 吃一个 kbId），绑多个只能 {@code get(0)}。
+     * 检索侧支持多库之后那条拒绝就只剩阻塞作用了：它要防的"静默丢条件"已经不存在，
+     * 现在是有几个库查几个库。这条注释留在原处，是为了说明<b>为什么规则变了</b>——
+     * 而不是把旧规则悄悄删掉。
      */
     private String resolveKbIds(Long userId, ChatMode mode, List<Long> rawKbIds) {
         List<Long> kbIds = ConversationKbIds.normalize(rawKbIds);
@@ -226,11 +246,11 @@ public class ConversationServiceImpl implements ConversationService {
                     "只有 RAG 会话可以绑定知识库（当前模式 " + mode + "）；"
                             + "Agent 模式的检索范围由所选 Agent 的知识库绑定决定");
         }
-        if (kbIds.size() > 1) {
+        if (kbIds.size() > MAX_BOUND_KNOWLEDGE_BASES) {
             throw new BusinessException(ErrorCode.PARAM_INVALID,
-                    "暂只支持绑定一个知识库（多库检索尚未实现），收到 " + kbIds.size() + " 个");
+                    "最多绑定 " + MAX_BOUND_KNOWLEDGE_BASES + " 个知识库，收到 " + kbIds.size() + " 个");
         }
-        knowledgeBaseService.requireOwned(userId, kbIds.get(0));
+        knowledgeBaseService.requireAllOwned(userId, kbIds);
         return ConversationKbIds.write(jsonMapper, kbIds);
     }
 

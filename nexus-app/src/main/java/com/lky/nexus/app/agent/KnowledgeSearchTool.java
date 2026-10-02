@@ -297,7 +297,9 @@ public class KnowledgeSearchTool {
                             StringUtils.hasText(chunk.getHeadingPath())
                                     ? chunk.getHeadingPath()
                                     : chunk.getHeading(),
-                            chunk.getContent(), 0.1, "like", List.of("关键词匹配")))
+                            chunk.getContent(), 0.1, "like", List.of("关键词匹配"),
+                            // 降级路径同样是逐库跑的，库 id 就是手上这个 kbId
+                            kbId))
                     .toList();
         } catch (Exception ex) {
             return List.of();

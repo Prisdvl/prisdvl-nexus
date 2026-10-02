@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
@@ -213,13 +214,43 @@ public class RagAnswerServiceImpl implements RagAnswerService {
     @Override
     public PreparedAnswer prepare(Long userId, Long knowledgeBaseId, String question, Integer topK,
                                   List<RagTurn> history) {
-        knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
-        if (question == null || question.isBlank()) {
+        // 先校验归属再判空查询：顺序与改造前一致——空问题 + 越权知识库
+        // 必须仍然报"知识库不存在"，而不是返回一份空资料
+        KnowledgeBasePO knowledgeBase = knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
+        return prepareRetrieved(userId, List.of(knowledgeBase), question, topK, history);
+    }
+
+    @Override
+    public PreparedAnswer prepareMany(Long userId, List<Long> knowledgeBaseIds, String question, Integer topK,
+                                      List<RagTurn> history) {
+        // 与单库同样的顺序：先把归属（含去重、整批不做部分成功）判掉，再判空查询
+        List<KnowledgeBasePO> knowledgeBases = knowledgeBaseService.requireAllOwned(userId, knowledgeBaseIds);
+        return prepareRetrieved(userId, knowledgeBases, question, topK, history);
+    }
+
+    /**
+     * 检索 → 重排 → 组装（单库与多库共用）。
+     *
+     * <p><b>单库时走原来的 {@code search}，而不是让 {@code searchMany} 处理一个元素的列表</b>：
+     * 单库这条路径被 {@code ChunkSearchServiceParityTest} 逐字段钉着，
+     * 绕道就等于把它从护栏里挪出来；而且 {@code searchMany} 会重新做一次归属校验，
+     * 白白多一次数据库查询。分派只看"列表有几个元素"，两条路的差别仅此而已。
+     *
+     * <p>重排与上下文预算作用在<b>归并之后</b>的结果上：多库改变的是资料的来源与排序，
+     * 不改变"重排几条、资料给多少 token"——所以多绑库不会让回答变慢或变长。
+     */
+    private PreparedAnswer prepareRetrieved(Long userId, List<KnowledgeBasePO> knowledgeBases, String question,
+                                           Integer topK, List<RagTurn> history) {
+        if (knowledgeBases.isEmpty() || question == null || question.isBlank()) {
             return PreparedAnswer.none();
         }
         String retrievalQuery = buildRetrievalQuery(question, history);
-        List<ChunkSearchService.SearchHit> hits = chunkSearchService.search(
-                userId, knowledgeBaseId, retrievalQuery, topK, SearchMode.HYBRID);
+        List<ChunkSearchService.SearchHit> hits = knowledgeBases.size() == 1
+                ? chunkSearchService.search(userId, knowledgeBases.get(0).getId(),
+                        retrievalQuery, topK, SearchMode.HYBRID)
+                : chunkSearchService.searchMany(userId,
+                        knowledgeBases.stream().map(KnowledgeBasePO::getId).toList(),
+                        retrievalQuery, topK, SearchMode.HYBRID);
         if (hits.isEmpty()) {
             return PreparedAnswer.none();
         }

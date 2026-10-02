@@ -1680,7 +1680,8 @@ RAG 模式自己读/写历史，两个理由：
   要回放需把命中写进 `chat_message.metadata`——与工具痕迹同一处，是一件独立的小事，本轮没做；
   这条缺口已由 `verify-retrieval-ui.mjs` 断言成**预期行为**（校正后卡片消失、答案仍在），
   免得将来有人把它当回归来"修"；
-- 多库检索：绑定仍限一个（多库要先把 `ChunkSearchService` 的单库签名改成多库，属后续增量）；
+- 多库检索：此处当时绑定仍限一个（多库要先把 `ChunkSearchService` 的单库签名改成多库）。
+  → **已由 B.46（Phase 5.5）取代**：RAG 会话现在可以绑多个库，逐库检索后跨库归并；
 - 历史窗口按**轮数**截断（3 轮 / 300 字摘要），没有按 token 预算；长回答的摘要可能仍然偏长；
 - `citation` 事件仍未实现（引用仍随 `done` / `meta.citations` 给出），`approval_required` 同理；
 - Agent 模式仍不支持绑定知识库（其检索范围由模型决定），若将来要"限定 Agent 的检索范围"，
@@ -3490,6 +3491,160 @@ ES 9200 + analysis-ik / RabbitMQ / Ollama）+ 后端 `--spring.profiles.active=l
 - **非流式 RAG 未接**（报 8003 而非补检索，理由见 §1）；
 - **`verify-doc-lifecycle.mjs` 结尾那句提醒仍然成立**：向量与 ES 的"无残留"界面看不出来，
   要靠查库——本期没重跑那条（5.3 已验过，且本期没动删除链路）。
+
+---
+
+### B.46 Phase 5.5 实现记录（多知识库 RAG：把三道人工闸门拆掉）
+
+> 编号说明：同 B.42–B.45，属**产品化**这条线。对应审计里的 P1-6。
+
+**0. 本增量是什么**
+
+一个 RAG 会话只能绑一个知识库。这一期让它能绑多个：提问时**逐库检索、跨库归并**，
+答案的每一段引用能看出自哪个库。上限 10 个。
+
+**1. 动手前的三个探索结论（它们改变了这一期的形状）**
+
+| 结论 | 证据 |
+| --- | --- |
+| **检索层早就是多库的** | `RetrievalQuery.knowledgeBaseIds` 是 `List<Long>`；三个 Retriever 都已在 for 循环里逐库召回并调 `RecallSupport.merge`。缺的只是**没人喂过长度 > 1 的列表**——那段多库分支此前是死代码 |
+| **数据库不需要任何迁移** | `chat_conversation.kb_ids` 从 V2 起就是 JSON 列；Agent 侧早有关联表 `agent_knowledge_base`（V12）。审计里问的"要不要新建 `agent_kb_relation`"——**它已经存在**，不需要 |
+| **卡点全在上游，是三道人工闸门** | 写入口拒绝 > 1（`ConversationServiceImpl.resolveKbIds`，原 1001"暂只支持绑定一个"）、读出口取 `.get(0)`（`ChatStreamServiceImpl.requireKnowledgeBaseId`）、门面签名是单库（`ChunkSearchService.search` 吃一个 id）。再加 `SearchHit` 丢掉了 `knowledgeBaseId` |
+
+所以这一期是**接线**，不是重建：没有新框架、没有换向量库、没有拆服务、没有重写 Agent Loop，
+也没有 V18。
+
+**2. `topK` 的语义变了——这是本期最容易写错、且错了不报错的一处**
+
+`RetrievalQueryFactory.resolveTopK` 的优先级是**调用方显式指定 > 知识库配置**
+（Phase 3.2 · B.32 的落点）。所以如果把调用方的 `topK` 传进"逐库构造"，
+每个库都会拿到同一个召回深度，**`retrieval_top_k` 整列静默失效**——功能看着完全正常。
+
+定下的口径（与 Agent 工具 `KnowledgeSearchTool` 原本的做法一致）：
+
+- 每个库按**自己的** `retrievalTopK` / `similarityThreshold` 召回（逐库构造时 `requestedTopK = null`）；
+- 归并后按**全局** `topK` 截断（请求值，没传则 `nexus.retrieval.top-k` = 5）——
+  **不随库数放大**，所以多绑库不会让上下文变长、也不会让回答变慢（代价是检索本身变慢，见 §5）。
+
+`ChunkSearchServiceMultiKbTest.eachKnowledgeBaseRecallsAtItsOwnTopK` 把这条钉在
+"传给 ES 的召回深度"这个**具体数字**上（2 与 6 两个库各自 × 3 的深度），
+而不是"有没有读配置"——只有数字能证明参数一路走到了基础设施。
+
+**3. 为什么新方法叫 `searchMany` / `prepareMany`，而不是重载 `search`/`prepare`**
+
+- `ChunkSearchServiceLegacyReference` 是重构前行为的**可执行定义**（B.31），它构造 `SearchHit`
+  时用的还是 8 参形态。给它留一个**兼容构造器**（第 9 个分量 `knowledgeBaseId` = null）即可，
+  那个文件**一行不改**；
+- 真加一个同名重载会让裸 `any()` 的 Mockito 桩变成**歧义调用**（`any()` 同时可绑 `Long` 与
+  `List<Long>`），于是一批与本改动无关的桩要跟着改，而"测试报错看着像功能坏了"是最难查的一类；
+- 换个名字从根上避开 Java 重载解析与 Mockito 歧义，代价只是多一个动词。
+
+**4. 单库那条路一步都没挪**
+
+单库路径被 `ChunkSearchServiceParityTest` 逐字段钉着（改造前后必须完全一致）。
+因此：
+
+- `prepare` 仍调单库 `search`，只有**两个及以上**才分派到 `searchMany`
+  （`RagAnswerServiceImpl.prepareRetrieved` 按 `knowledgeBases.size() == 1` 分派）。
+  让单库绕道 `searchMany` 等于把它挪出护栏，还会白多一次归属校验的 SQL；
+- 一致性断言加 `.ignoringFields("knowledgeBaseId")`，理由写在同一处：该字段没有 legacy 对应物，
+  无可比对；**其余每个字段仍逐字段严格比对**（包括顺序）。
+
+**5. 三个诚实的边界**
+
+1. **成本随库数线性增长，而且是串行的**：每库 = 1 次 ES + 1 次 pgvector + 1 次查询嵌入 + 回表。
+   上限 10 是**写死在代码里的常量**（`MAX_BOUND_KNOWLEDGE_BASES`），刻意不做配置项：
+   它表达的是"这条链路的设计承受能力"，做成旋钮会让人以为调大就能多绑，而真正的瓶颈
+   （串行放大首字延迟）不会因此改变。要让它可调，前提是先把逐库检索并行化；
+2. **查询向量被重复计算**：预检保证所有库用同一个全局嵌入配置，所以同一个 query 的向量
+   对每个库**逐字节相同**，却被嵌入 N 次（`EmbeddingClient.embed` 无缓存）。
+   这是**既有**缺陷（Agent 工具路径今天就这样），多库让它 3–5× 可见。本期**不修**——
+   修它要给 `RetrievalQuery` 加 `queryVector`，属核心 record 变更。将来若做，顺序应是：
+   先预检 → 再单次嵌入 → 再考虑把多库真正下沉到 retriever 层；
+3. **跨库分数可比性是有条件的**：`RecallSupport.merge` 纯按 `score` 排。
+   向量分同源可比（所有库必须等于同一个全局嵌入配置）；**BM25 分不跨索引可比**
+   （term statistics / IDF / 平均长度都不同）；RRF 分依赖各库候选深度，只是近似。
+   在 `HYBRID`（RAG 与 Agent 实际用的唯一模式）下可接受，对 `BM25`/`VECTOR` 单路是真实失真。
+   这段判断写在 `RecallSupport.merge` 的 javadoc 里，并顺手改掉了它原来那句读起来像
+   "库之间互相校验"的表述——实际是**每库与同一个全局配置比对**。
+
+**6. 一处重复、一处闲置（本期接受，写下来备用）**
+
+- 门面 `searchMany` 自己实现了"循环 + 归并"，与 retriever 层已有的那份重复。原因是
+  **下推 `kb_id IN (...)` 表达不了"每库各自的 retrieval_top_k"**（`RetrievalQuery` 只有一个
+  `topK` 字段），而且改下推要动 `PgVectorStore` / `ElasticsearchChunkIndex` 并重做 B.31 的
+  "行为不变"证明。将来若要让多库真正下沉，需把 per-KB 设置收进 `RetrievalQuery`
+  （如 `List<KnowledgeBaseSettings>`），届时把两处合并成一处；
+- 因此 `RetrievalQuery.knowledgeBaseIds` 的多元素能力在本路径上**仍然闲置**
+  （每次仍传单元素），retriever 层那段多库循环依旧不可达。这是有意的取舍。
+
+**7. 逐库降级策略没有合并进 Agent 工具**
+
+`KnowledgeSearchTool` 有意逐库 try/catch 降级（降到 SQL LIKE、跳过不可用的库并**如实上报**，
+含悬空绑定），而门面选择**不吞异常**（保持"响亮失败"）。两者分工不同：门面返回
+`List<SearchHit>`，装不下"每个库失败了什么"，强行合并会让 Agent 的行为倒退。
+门面这边补的是**让失败能定位**：嵌入模型不一致时把 4006 的文案改成带出**是哪个库**，
+归属失败时 3001 带出**是哪个 id**——多库下"某个库不存在"这种不带标识的报错没法排查。
+
+**8. 接口契约变了：`retrieval` 事件的知识库维度是列表**
+
+```json
+{"knowledgeBaseIds":["5001","5002"], "count":2,
+ "hits":[{"chunkId":"9001","documentId":"100","knowledgeBaseId":"5001", "...":"..."}], "...":"..."}
+```
+
+原先的 `knowledgeBaseId`（单值）换成 `knowledgeBaseIds`，且每条命中带 `knowledgeBaseId`——
+会话绑了两个库之后，"检索到 5 个片段"不再能回答最要紧的问题：**资料是从哪来的**。
+
+- 两条流式链路**共用同一个构造器**（B.37 就定下的规矩），所以改这一处两边同时生效。
+  知识库问答流式（`/api/knowledge-bases/{id}/ask/stream`）是固定单库的路径，
+  改成传 `List.of(knowledgeBaseId)` 而不是保留一个 `of(Long)` 委托重载——
+  一个形状、一个构造器，比两个入口产出同一种形状更好维护；
+- 前端有**两份** `StreamRetrieval` 类型声明（`api/chat.ts` 与 `api/knowledge.ts`），
+  两份都改了。这是历史遗留，已在类型注释里注明；
+- `verify-retrieval-ui.mjs` 的两帧手写 SSE 桩也**必须**跟着改：它的断言只读
+  `count`/`hits`/标签，**桩漂移了也不会变红**。这一期顺手把第一帧改成"两个库、每条命中
+  各带来源"，让桩本身也能证明来源标注这件事。
+
+**9. 用户数据隔离的四条老规矩一条没松**
+
+库归属仍走 SQL 层的 `user_id` 条件（`requireAllOwned` 一条 `eq(userId) + in(id)` 查询），
+不接受前端传 `userId`，不存在的库与别人的库返回**完全相同**的 3001（不泄露存在性），
+区别只在文案里的 id。新增一条：**任意一个库不合格就整批失败，不做部分成功**——
+"绑定成功、检索却少查了一个库"是这里最坏的结果，因为它不报错。
+
+**10. 一个测试设计陷阱（值得单独记）**
+
+`ContextAssembler.isDuplicate` **只按 content 去重、不看库**。同一段文字导入两个库会塌成一条
+引用，于是"每个库都有贡献"这条验收可能在夹具共享文本时**假绿**。
+本期的 E2E 夹具因此各写各的独有内容。要不要把去重键改成 `(kbId, content)`？
+本期**不动**——多库下"同一段话在两个库里都有"本来就该只引用一次（引用是给人看的，
+不是给库看的），真正的重复问题属于"跨库去重"，留给有评测数据之后。
+
+**11. 验证结果**
+
+- `mvn -B test`：**462 / 0 失败 / 18 跳过**（5.4 基线 440，净增 22）：
+  `requireAllOwned` 8 + `searchMany` 7 + `prepareMany` 5 + `ChatRagModeTest` 净增 2
+  （原"绑多个被拒"那条**反转**成"绑多个被接受"，另加"超上限"与"其一越权"两条）。
+  单库一致性（`ChunkSearchServiceParityTest`）在改动后仍逐字段通过；
+- 真机 E2E（新增 `web/scripts/verify-multi-kb.mjs`，local profile + ES + pgvector + 真模型）：
+  两个库各导入一份内容不同的文档 → 界面上**多选**绑定两个库（建会话请求体带两个 id）→
+  提问只有第二个库能回答的问题，检索卡片显示"检索到 2 个片段 / 2 个知识库"且**两条命中各自
+  标出了来源库**，回答引用了第二个库的独有事实（代号 `NX-7741`、回源超时 `220 毫秒`）→
+  越权（把别人的库混进列表）返回 404 / 3001 **且文案指名那个 id**；
+- 既有 8 个 `verify-*.mjs` 单库回归全退出 0；
+- `flyway_schema_history` 不变：**本期无迁移**。
+
+**12. 这一期明确没做**
+
+- **非流式 RAG 仍报 8003**（5.4 的决定），不改：多库的会话链路走 `chat_message`，
+  不经过 `RagAnswerServiceImpl.finish`，所以今天不冲突。但 `RagAnswer.RagCitation` 没有 kbId、
+  `kb_qa_record.kb_id` 是单值——**若将来做非流式多库，这两处必须一起改**；
+- `retrieval` 事件仍不落库（刷新后检索卡片消失，已知缺口，见 B.37）；
+- 查询向量单次嵌入、逐库检索并行化、跨库去重/去噪、真 query rewrite、每库独立权重——
+  都留给有评测数据之后；
+- Agent 侧一行没动：`AgentDefinition.kbIds` 与 `KnowledgeSearchTool` 的逐库扇出从 4.1/4.3 起
+  就是这样，本期只补了 `likeSingle` 构造 `SearchHit` 时要传 kbId（编译所需）。
 
 ---
 
