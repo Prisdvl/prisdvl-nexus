@@ -1,0 +1,16 @@
+# 前端镜像的构建上下文 = web/
+#
+# 不在这里排除的东西：nginx.conf（第二个构建阶段要 COPY 它）。
+# 排除的都是"宿主机才有意义"的产物，它们会拖慢 build 且可能带着本地状态：
+#   node_modules —— 镜像里由 npm ci 重装（宿主机是 Windows，二进制不通用）
+#   dist         —— 镜像里由 npm run build 重新构建（拷旧的会让"改了代码没生效"）
+#   scripts      —— Playwright 验证脚本，不是前端运行时的一部分
+#   .demo-*      —— E2E 脚本在宿主机跑出来的令牌/知识库 id
+#   *.png        —— 验证脚本留下的截图
+
+node_modules
+dist
+scripts
+.demo-token
+.demo-kb-id
+*.png

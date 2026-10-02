@@ -4115,6 +4115,97 @@ Agent 复用已有字段（`agent_knowledge_base` 在 V12 就有）、单库/双
 
 ---
 
+### B.49 Phase 5.7 实现记录（容器化：一条命令得到完整系统，和四个只有整栈起来才看得见的问题）
+
+**0. 一句话**
+
+把"跑起来"从"先装 JDK、再起五个基础设施容器、再手敲 `java -jar`"收敛成
+`docker compose up -d`。**业务代码一行没改**——本期动的是编排，不是逻辑。
+
+**1. 做了什么**
+
+| 文件 | 内容 |
+| --- | --- |
+| `deploy/backend/Dockerfile` | **单阶段**运行镜像 `eclipse-temurin:21-jre-jammy`：只把宿主机已产出的 jar 拷进去（镜像内不构建），非 root（uid 1001），`ENTRYPOINT ["java","-XX:MaxRAMPercentage=60","-XX:+ExitOnOutOfMemoryError","-jar","/app/app.jar"]` |
+| `web/Dockerfile` | `node:22-alpine` 里 `npm ci && npm run build`（含 `vue-tsc --noEmit`，类型错就让镜像构建失败）→ 产物进 `nginx:1.29-alpine` |
+| `web/nginx.conf` | `/` → Vue（`try_files` SPA 回退）、`/api` → `backend:8080`、`/api/chat/stream` 关缓冲、`/mcp`、静态探针 `/healthz` |
+| `deploy/docker-compose.yml` | 补 `backend` / `frontend` 两个服务；`backend.ports: []`；六个依赖全 `condition: service_healthy`；`stop_grace_period: 30s`；`backend-data` 卷 |
+| `deploy/.env.example` | 端口/口令/密钥清单；两个必填项留空 |
+| `.dockerignore` / `web/.dockerignore` | 别把 `target/`、`node_modules/`、`.git/` 塞进构建上下文 |
+
+**2. 四个设计取舍（都不是"顺手这么写"）**
+
+1. **镜像里没有开发环境**。运行时镜像只有 JRE；jar 在宿主机用 JDK 21 打包。
+   代价是"打包 JDK 版本错"会以 `class file version` 的形式暴露（已写进 `deployment.md` 常见问题），
+   收益是镜像小、镜像内不可构建、不存在"镜像里的 Maven 用了另一套依赖"这类问题。
+2. **backend 不发布端口**。只有 nginx 需要访问它。"调试走
+   `docker compose exec backend curl localhost:8080/actuator/health`" 是一句可执行的解释，
+   而"端口也开了但你别用"不是。
+3. **secret 的 fail-closed 前移到编排层**。`JWT_SECRET: ${JWT_SECRET:?…}`：
+   缺失时 `docker compose config` 直接报错退出，**连容器都不创建**。
+   为什么不能只靠应用侧校验——`application-local.yml` 里那个开发默认密钥会把它兜住，
+   于是"忘配密钥"的表现是**启动成功、密钥是仓库里人尽皆知的那一个**。
+   这是 B.42 那类"自证身份"问题的镜像：**默认值兜住的不是方便，是漏洞**。
+4. **frontend 刻意没有 `depends_on: backend`**。nginx 启动不需要后端在；
+   `resolver 127.0.0.11` + 变量 upstream 让后端重建后自愈（先 502，起来即正常）。
+   加 `depends_on` 只会让"后端暂时不健康"拖住整个前端。
+
+**3. 真机验收（2026-10-02，Docker Desktop 29.5.2 / Compose v5.1.3，WSL2，容器可用 7.569 GiB）**
+
+| 项 | 结果 |
+| --- | --- |
+| `docker compose config` | 通过；把两个必填项置空后**报错退出**（REAL ENVIRONMENT） |
+| `docker compose build` / `up -d` | 成功；**8/8 服务 healthy**（冷启动 21s 返回、33s 全绿） |
+| 11 个 `verify-*.mjs`（**经 nginx :8088**） | **11/11 EXIT=0** |
+| 18 个 live 测试（真 ES / 真 pgvector / 真 Ollama / 真模型） | **全部真跑并通过**，此前是 skipped |
+| `restart` → `down` → `up -d` | 7 项数据逐项存活（MySQL 行数 / 13 条向量 / 13 条 ES 文档 / RabbitMQ durable 队列 / bge-m3 / `backend-data` 696K） |
+| `verify-multi-kb-failure.mjs`（新增） | EXIT=0：A ✅ / B ❌ / C ✅、`retrieval.kb.failed` 4→5、界面「其中 1 个知识库检索失败」并悬浮点名 |
+
+**5.5.1 留的那条真机腿，本期怎么补的**
+
+`verify-multi-kb-failure.mjs` 用**真实 ES 里一条真实的坏文档**制造单库故障：
+写一条 `_id` 非数字、`knowledge_base_id` 指向 KB-B 的文档，真实检索代码在
+`Long.valueOf(hit.id())` 处抛 `NumberFormatException`——**只在 KB-B 的扇出任务里抛出**。
+没有替换 Bean、没有打桩、没有改业务代码；注入的是真实基础设施里的真实坏数据。
+（另一条路"停掉 ES"不行：ES 是全局共享依赖，停掉会让**所有**库一起失败，
+那验的是"全挂"而不是"隔离"。）
+
+**4. 五个只有整栈起来才看得见的问题**（详见 `productization-gap-analysis.md` §5.7 修正表）
+
+1. **一个 LIVE 测试会清空共享 ES 索引**：`LiveChunkIndexTest.recreateIndexSwitchesAlias`
+   的断言本身没错（重建后确实为空），代价是它清的是**开发栈正在用的那个索引**。
+   BM25 静默失效、向量腿照常召回——症状是"少了一路召回"，不是"搜不到"。
+   **本期只记录，不改**（测试卫生，超出范围）；恢复方式写进 `deployment.md`。
+2. **`recreateIndex()` 不是同一秒幂等的**：物理索引名 `yyyyMMddHHmmss` 秒级，
+   同一秒两次重建 → `resource_already_exists_exception` → 接口 500，
+   且**切片已被标成 `INDEXED` 而索引是空的**（`/index` 报 `total: 0`）。
+   又是一个"错了但看起来正常"。**本期只记录**（Known Gap）。
+3. **E2E 脚本的 `API_BASE` 约定不一致**（`verify-security` 要根地址、其余要 `…/api`；
+   默认 `WEB_BASE` 5173/8088 混用）。容器化后 backend 不发布端口，
+   11 个脚本全部秒挂在 `ERR_CONNECTION_REFUSED`——**看起来像部署坏了，其实是脚本的默认值过期**。
+   按 §十二 的要求**没有改脚本**，改成显式传环境变量。
+4. **`verify-retrieval-ui.mjs` 的失败根因在数据、不在代码**：82 个 E2E 残留会话 + `pageSize=50`
+   + 新会话 `last_message_at` 为 NULL + **MySQL 在 `DESC` 下把 NULL 排最后**
+   → 会话落到第 2 页 → 消息列表接口没被调用 → 检索卡片没被清掉。
+   清掉残留（82 → 32）后 12 条腿全绿，脚本与业务代码都没动。
+5. **一个前端竞态，经过 nginx 之后从"偶发"变成"必现"**：`listMessages` 的响应晚于
+   「新对话」点击回来，无条件写 `items` → 界面写着"新对话"、内容是上一条会话的消息。
+   **本期修**：`AgentView.vue` 的 `messageLoadSeq`（每次加载编号，只有最后一次允许写）。
+   这条很有意思——它提示**部署形态的延迟变化会把潜伏的竞态从偶发放大成必现**，
+   而它只有容器化后才撞得上。
+
+**5. 诚实边界**
+
+- **未验**：生产形态（ES 安全模块仍关闭、无 TLS、密钥仍是环境变量注入而非外置密钥管理、
+  单实例无边车）——属 Phase 11；**WebSocket 未验，因为项目不用**（流式走 SSE）。
+- **未做**（update.txt §十九 明确禁止本期顺手做）：Retrieval Event 持久化（P2-4）
+  ——并行之后它更要紧了，但按要求**只登记为 Known Gap**。
+- §2.13 那些耗时/内存数字是**观察值，不作为性能指标**。
+- **`fanout-timeout=10s` 本期未改**：三库检索段实测 978–3781 ms，仍在同一量级并留有余量；
+  按要求"不要为了追求更快而盲目修改"。
+
+---
+
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
 
 | # | 决策项 | 结论 |

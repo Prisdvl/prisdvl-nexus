@@ -210,7 +210,7 @@ private Long resolveUser(String nexusUser) {
 | P1-14 | Trace | ~~消息上**不记 `agentId`**，无法回答"这条回答是哪个 Agent 跑的"~~ | `ChatMessagePO` 无该列；`agent_id` 只在会话上 | ✅ **5.4（2026-10-02）**：迁移 V17 + 落库 + `GET /api/observability/agents` 按 Agent 聚合（**字段与读它的机制同一次落地**）。三处刻意：只记助手消息、落解析后的 id（含内置默认）、索引带 `user_id` 前缀。**顺带发现并修掉**：非流式入口完全不看会话模式（见 B.45 §1）。见 B.45 §4 |
 | P1-15 | User | ~~无修改密码 / 无资料编辑~~ | `UserController` 只有 `GET /me` | ✅ **5.6（2026-10-02）**：`PUT /users/me`（昵称/邮箱）+ `PUT /users/me/password`。**令牌吊销是真做的**：`sys_user.token_version`（V18）+ `ver` claim + `TokenVersionValidator`（ADR-020），改密后旧令牌 401（E2E 用改密前抓下的 token 直接打接口验证过）。前端同为最小实现：两个弹窗 + 侧栏账号入口 + 昵称即时生效。见 B.47 |
 | P1-16 | Security | ~~无速率限制 / 无配额（配了真实 key 后单用户可烧光额度）~~ | `RATE_LIMITED(7001)` / `QUOTA_EXHAUSTED(7002)` 无任何抛出点；`nexus-app` 全仓无 `RedisTemplate` 使用 | ✅ **5.6（2026-10-02）**：一个过滤器收口（`RateLimitQuotaFilter`），覆盖注册（IP）/ 模型入口（用户分钟级 + 每日次数 + 每日 token）/ 改密（仅限速）。**方案比审计写的宽**：审计只要求"登录/注册/问答三类入口加限流"，实际补了**登录失败冻结**与**每日 token 记账**（记账点选 Advisor，见 B.47 §①②）。**降级方向按关注点分开定**，不是一刀切（ADR-020 第 5 条）。存储默认进程内存——多实例部署必须开 `nexus.security.redis-enabled` |
-| P1-17 | Deployment | `docker compose up -d` **起不来应用** | `deploy/` 只有 6 个基础设施服务 + ES 的 Dockerfile；无应用 Dockerfile、无 nginx | 见 §2 Deployment 行 |
+| P1-17 | Deployment | ~~`docker compose up -d` **起不来应用**~~ | `deploy/` 只有 6 个基础设施服务 + ES 的 Dockerfile；无应用 Dockerfile、无 nginx | ✅ **5.7（2026-10-02）**：新增 `deploy/backend/Dockerfile`（多阶段，**镜像内不构建**——宿主机 `mvn package` 产出的 jar 拷进去，运行时只有 JRE 21 + `java -jar`，非 root）、`web/Dockerfile`（Node 构建 → nginx）、`web/nginx.conf`（`/` → Vue、`/api` → `backend:8080`、SSE 关缓冲、SPA 回退），compose 补 `backend` / `frontend` 两个服务。**业务代码一行没为 Docker 改**；backend `ports: []`；`depends_on` 全部 `condition: service_healthy`；secret 走 `${VAR:?…}` **缺失即拒绝启动**。见 `docs/deployment.md` §2 与 B.49 |
 | P1-18 | README | 进度表停在早期，首次阅读者会误判 | `README.md` §6："Phase 2 Knowledge Base ⏳ / Phase 3 RAG ⏳"，而实现早已完成 | 重写为"功能清单 + 状态"，并补 Troubleshooting/Security/Roadmap/Screenshots |
 
 > P1 共 18 条，按模块归并后是 14 个模块行（表里合并了同模块的项）。
@@ -244,7 +244,20 @@ private Long resolveUser(String nexusUser) {
 | 4 | （未提及） | **`api.md` §2 有五条"声称有、实际没有"的接口**（refresh / logout / `PUT /me` / `PUT /me/password` / `admin/users`），§12 整套限流描述同样是零代码 | 一并改成实话：做成的移进"已实现"，没做的移进"规划中"表。**文档不实比功能缺失更贵**——它让"照文档接一下就有了"的判断落空，而且落空发生在集成之后 |
 | 5 | （未提及） | **一个 order 恰好等于 `Ordered.LOWEST_PRECEDENCE` 的 Advisor 会被静默跳过**（框架的 `ChatModelCallAdvisor` 就占着这个值）：模型照调、回答照回、日志全无，只是记账永远 0 | 加回归断言钉死顺序（B.47 §②）。这是本期最有价值的发现，也是"错了也不报错"这一类问题的又一例 |
 | 6 | P1-16："登录/注册/问答三类入口加限流" | **加上去的注册限流会把开发环境自己拦在外面**：本机请求全来自 `127.0.0.1`（实测报出来是 IPv6 的 `0:0:0:0:0:0:0:1`），而 E2E 脚本每轮会自己注册临时账号。真机实测同源连续注册**第 9 次**开始 `429/7001`，且**症状跑到别处**——注册失败后紧接的登录自然 401，看起来像认证坏了 | `standalone` / `local` 默认放宽到 `1000`（`${NEXUS_REGISTER_PER_HOUR:1000}`），生产默认仍是 10；要验真实阈值显式设 `NEXUS_REGISTER_PER_HOUR=10`。`test` profile 上一期就放宽过，**这次是把同一个结论补到另外两个开发 profile** |
-| 7 | （未提及） | **配额路径清单初稿是 `/api/chat/**` 通配**：读历史消息、列出会话、删除会话、停止生成都被算进当日额度——真机 E2E"刚进对话页就显示 1/200"就是它的痕迹 | 收窄成 `/api/chat/stream` + `/api/chat/conversations/*/messages` 并加反证测试；否则用户在**不花钱的操作**上被扣额度，「今日 N/M 次」也不再等于"问了几次"。**通配与 Advisor 的 order 同类：越界了不会响，只能靠数字对不对去发现** |
+| 7 | （未提及） | **配额路径清单初稿是 `/api/chat/**` 通配**：读历史消息、列出会话、删除会话、停止生成都被算进当日额度——真机 E2E"刚进对话页就显示 1/200"就是它的痕迹 | 收窄成 `/api/chat/stream` + `/api/chat/conversations/*/messages` 并加反证测试；否则用户在**不花钱的操作**上被扣额度，「今日 N 次」也不再等于"问了几次"。**通配与 Advisor 的 order 同类：越界了不会响，只能靠数字对不对去发现** |
+
+#### 5.7 修正的审计结论（动手时发现的，审计当时没看到）
+
+审计把 P1-17 写成"补个 Dockerfile 就行"。实际动手后，**容器化本身没碰业务代码**，
+但真机验证逼出了三个和部署无关、却只有整栈起来才看得见的问题：
+
+| # | 审计写的 | 实际是 | 处置 |
+| --- | --- | --- | --- |
+| 1 | （未提及） | **一个 LIVE 测试会破坏开发数据**：`LiveChunkIndexTest.recreateIndexSwitchesAlias` 断言"重建后索引为空"——它是对的，但代价是**把共享的 ES 索引清空**。对着开发栈跑一次，BM25 那条腿静默失效；向量腿仍能召回，所以症状不是"搜不到"而是"少了一路召回" | **本期只记录，不改**（属测试卫生，超出 5.7 范围）。跑完用 `POST /{kb}/index/recreate` + `POST /{kb}/index` 恢复。已列入 Known Gaps |
+| 2 | （未提及） | **`recreateIndex()` 不是同一秒幂等的**：物理索引名是秒级 `yyyyMMddHHmmss`，同一秒内两次重建 → `resource_already_exists_exception` → 接口 500；更糟的是**切片此时已被标成 `INDEXED`**，而索引其实是空的（`/index` 报 `total: 0`）——又是一个"错了但看起来正常" | **本期只记录**。规避：两次重建之间间隔 ≥ 1 秒。已列入 Known Gaps（建议改成带随机后缀/纳秒，并把状态重置放在 wipe 之前或成功之后） |
+| 3 | （未提及） | **E2E 脚本的环境约定不一致**：`verify-security.mjs` 的 `API_BASE` 要根地址、其余脚本要 `…/api`；默认 `WEB_BASE` 有的写 5173 有的写 8088。容器化后 backend 不发布端口，**11 个脚本全部秒挂在 `ERR_CONNECTION_REFUSED`**，看起来像"部署坏了" | **不改脚本**（§十二 要求），改成显式传 `WEB_BASE` / `API_BASE` 复跑。约定不统一**登记为待办**，不是本期缺陷 |
+| 4 | （未提及） | **`verify-retrieval-ui.mjs` 的失败根因在数据、不在代码**：演示账号累计 82 个 E2E 残留会话（`pageSize=50`），新会话 `last_message_at` 为 NULL，而 **MySQL 在 `DESC` 下把 NULL 排最后** → 会话落到第 2 页 → 消息列表接口没被调用 → 检索卡片没被清掉 | 清理残留会话（82 → 32）后 12 条腿全绿。**脚本与业务代码都没动**；"E2E 会自造数据且不自清"登记为待办 |
+| 5 | （未提及） | **一个前端竞态：经过 nginx 之后稳定复现**。"新对话"之前发出的 `listMessages` 响应晚几十毫秒回来，无条件写 `items`——界面上写着"新对话"、看到的却是上一条会话的消息，接着问的问题还会被算进新会话。`pickedByUser` 只挡"之后才开始"的自动选中，挡不住**已经在飞**的那次 | **本期修**（`AgentView.vue` 的 `messageLoadSeq`：给每次加载编号，只有最后一次允许写 `items`，「新对话」让在飞的那次作废）。这条**只有容器化后才稳定命中**：Vite 本地跑时窗口太窄，经过 nginx + 容器内 MySQL 每跳多几十毫秒就必现——**延迟变化会把潜伏的竞态从"偶发"变成"必现"**，这是容器化顺带挣到的一条 |
 
 ---
 
@@ -257,14 +270,14 @@ private Long resolveUser(String nexusUser) {
 | P2-3 | Security | **令牌存 localStorage（XSS 可窃取）** | ⚠️ **5.6 只出了设计，风险仍在**：ADR-021 给了分阶段迁移路径（Cookie + CSRF + refresh），代码零改动——用户明确要求"不要直接大改"。今天的缓解只有 30 分钟 TTL，且**没有 refresh ⇒ 被盗后无法主动止损** |
 | P2-17 | Security | **配额可被绕过**：Redis 重启 / `allkeys-lru` 淘汰会丢当日计数；多实例下内存实现不共享（每实例各算一份，限流被放大 N 倍） | 5.6 新增。要真正可靠得把当日用量落到表（`sys_user_daily_usage`）或至少确保 Redis 不淘汰这些键；**多实例部署必须 `nexus.security.redis-enabled=true`**（已写进 `application.yml` 注释） |
 | P2-18 | Security | **账号 `status` 改动 / 软删除不会立即吊销已签发令牌** | 5.6 新增。`TokenVersionValidator` 只比对 `token_version`：软删除时 `selectById` 为 null 会被拒，但仅把 `status` 改成禁用，令牌会活到过期（≤30 分钟） |
-| P2-4 | RAG | 「检索到 N 个片段」不落库，刷新即消失 | 已知缺口，B.37 记录在案 |
+| P2-4 | RAG | 「检索到 N 个片段」（含 5.5.1 起的 `failedKnowledgeBases`）不落库，刷新即消失 | 已知缺口，B.37 记录在案。**5.5.1 之后更要紧**：并行扇出下"这次少搜了谁"目前只活在一次流里，刷新即无据可查。**5.7 按要求只记录、不实现**（update.txt §十九 明确把"Retrieval Event 持久化缺口"放进 Known Gaps） |
 | P2-5 | RAG | 无真正的 query rewrite（只有指代拼接） | |
 | P2-6 | Tool | 无 Tool 超时 | 当前唯一工具是进程内调用；**第一个会阻塞的外部工具落地时必须一起补** |
 | P2-7 | Tool | `query` 空串未校验（只校验了 `topK` 边界） | |
 | P2-8 | Tool | 无权限分级 / 人工审批 | update.txt §十 未要求，项目自己标为后续 |
 | P2-9 | Observability | 无 Prometheus 端点；降级事件重启即失 | |
 | P2-10 | Testing | 无 Testcontainers；真机回归靠手工脚本 | |
-| P2-11 | Deployment | 上传文件落本地磁盘（容器化后需卷/MinIO） | 随 P1-17 一起定 |
+| P2-11 | Deployment | ~~上传文件落本地磁盘（容器化后需卷/MinIO）~~ | ✅ **5.7 已定为具名卷**：`nexus_backend-data → /app/data`（`NEXUS_STORAGE_ROOT`），`down`/`up -d` 后实测 696K 原文与 MySQL 记录一致存活。换 MinIO 仍属生产化（多机/对象存储）范围，本期不需要 |
 | P2-12 | Docs | 缺 Troubleshooting / Security / Roadmap / Screenshots 章节 | |
 | P2-13 | Chat | 长会话无"清空消息" | |
 | P2-14 | DB | 无外键约束（全部逻辑关联） | 需在 database.md 写明为什么（MyBatis-Plus 逻辑删除 + 应用层校验） |
@@ -297,8 +310,8 @@ private Long resolveUser(String nexusUser) {
 | **Phase 5.5** ✅ 完成 2026-10-02 | 多库 RAG：P1-6。**动手时范围小于原估**：检索层（`RetrievalQuery.knowledgeBaseIds` + 四个 Retriever 的逐库循环）早就是多库的，数据库 `kb_ids` 早就是 JSON 列、Agent 的 `agent_knowledge_base` 也存在——**零迁移**。真正要拆的是三道人工闸门，外加 `SearchHit` 丢掉 `knowledgeBaseId`（见 B.46 §1） | ✅ **全部达成**。较 5.4 净增 22 条测试 → `mvn test` **462/0/0/18**；`mvn package` 与 `npm run build`（含 `vue-tsc`）成功。**真机验收已执行且全绿**（2026-10-02，local + ES + pgvector + 真模型）：两库各导入一份内容不同的文档 → 界面**多选**绑定两库 → 提问只有第二个库能回答的问题，检索卡片显示"检索到 2 个片段 / 2 个知识库"、**每条命中各自标出来源库**，回答引用了第二个库的独有事实（`NX-7741` / `220 毫秒`）；越权绑定返回 404 + 3001 **且文案指名 id**；**8 个既有 verify 脚本全部退出 0**（单库回归）；`flyway_schema_history` 不变。新增脚本 `verify-multi-kb.mjs` |
 | **Phase 5.6** ✅ 完成 2026-10-02 | 用户与安全：P1-15（改密码 + 资料编辑）、P1-16（限流 + 配额）。**动手时范围扩大**：审计只要求"三类入口加限流"，实际补了登录失败冻结与每日 token 记账；**顺带修掉一个没人报的静默不一致**（重复邮箱注册返回 500 而不是 409，见 §5.6 修正表）；**Redis 那部分照写实现 + 开关**，默认走进程内存（见 B.47） | ✅ **全部达成**。较 5.5 净增 79 条测试（逐类相加 78 + 收窄配额路径后补的反证测试 1）→ `mvn test` **541/0/0/18**；`mvn package` 与 `npm run build`（含 `vue-tsc`）成功。**真机验收已执行且全绿，且全程不使用 Docker**（见 B.47 末节）：`standalone` + 内存实现、`standalone` + **本机原生 Redis（非 Docker）**两条路径各跑一次 `verify-security.mjs`，**均退出 0**；`redis-cli` 直接看到 `nexus:auth:tv` = 1（改密后版本 +1）、`nexus:auth:lf` = 5 / `ll` = 1（连错 5 次后**正确密码也被 429 拦下**）、`nexus:rl:u` / `nexus:q:req` 计数与 TTL 全部符合设计；用户级限流实测第 21 次 `429 + Retry-After: 60`，每日配额压到 2 后第 3 次 `403/7002`（文案与"服务不可用"可区分）；**降级语义逐条实测**（Redis 停掉后：注册/登录/改密照常 200，模型入口 403/7002，旧令牌 401）。**逼出两个问题**（注册限流误伤开发环境、`repackage` 的 jar 占用报错），均见 §5.6 修正表与 B.47。⚠️ **8 个既有 `verify-*.mjs` 本轮未复跑**——它们依赖 Docker 基础设施栈（ES / pgvector / 真模型），留待 5.7 容器化后统一复跑 |
 | **Phase 5.5.1** ✅ 完成 2026-10-02 | 5.5 的收尾：多库检索**并行化 + 逐库失败隔离**（**不是** P1 清单里的新条目，是 P1-6 落地后暴露出的两个缺口）。**动手时范围也小于原估**：需求方提的 7 条要求里 **5 条在 5.5 就已经是真的**（含"要不要建 `agent_knowledge_base_relation`"——V12 就有这张表），所以本期没有再造一个平行的多库实现，只补"没有并行"与"`searchMany` 没有逐库隔离"（见 B.48 §0） | ✅ **全部达成，但**：较 5.6 净增 26 条测试 → `mvn test` **567/0/0/18**；`npm run build`（含 `vue-tsc`）成功；**零迁移**（database.md §6.0 说明了为什么不需要 V19）。**关键决定**：隔离**必须同时可见**（`PreparedAnswer.failures` → 提示词 → `retrieval` 事件 → 前端空结果措辞），否则"某个库静默地什么都没贡献"会变成用户/模型眼里一句斩钉截铁的假否定——那正是本项目一直在防的 bug。四组**证伪跑**（强制串行 / 失败位改成过滤 / 痕迹回放挪线程 / 中断改回"返回空列表"）分别让 8、1、1、1 条测试变红；其中最后一组是**复读 diff 时抓到的一个真缺陷**（中断被吞掉，会让调用方读成"每个库都没命中"），见 B.48 §5。**验到界面层**：`standalone`（H2，不依赖 Docker）+ `verify-retrieval-ui.mjs` 五条腿退出码 0（新增三条打新界面：失败标签与悬浮原因、空结果措辞随有无失败库改口）。⚠️ **但真机检索层未验**：桩帧证明界面渲染，不证明真 ES 下一个库真的挂掉时的观感；8 个 `verify-*.mjs` 也未复跑（依赖 ES / pgvector / 真模型）——已登记为 5.7 的必做项 |
-| **Phase 5.7** | 部署产品化：P1-17（Dockerfile + nginx + compose 补两个服务） | `docker compose up -d` 后前端能登录并用 Agent 问答；**并补跑 5.5.1 的真机腿**："多库 + 其中一个库不可用"要看到界面上的失败提示与 `retrieval.kb.failed` 自增 |
-| **Phase 5.8** | README/docs 产品化：P1-18 + P2-12 | 按 update.txt §二十 的十节清单核对 |
+| **Phase 5.7** ✅ 完成 2026-10-02 | 部署产品化：P1-17（Dockerfile ×2 + nginx + compose 补 backend/frontend）。**动手时没有碰业务代码**——容器化只加了编排，`java -jar` 与 `mvn package` 的构建方式一字未改；secret 的 fail-closed 被**前移到编排层**（`${JWT_SECRET:?…}`）而不是靠应用侧兜底 | ✅ **全部达成**（证据见 [deployment.md](deployment.md) §8）：`mvn test` **567/0/0/18**、`mvn package`、`npm run build` 成功；`docker compose config` / `build` / `up -d` 真实执行，**8/8 服务 healthy**；**11 个 `verify-*.mjs` 经 nginx 全部 EXIT=0**；**此前 18 个 skipped 的 live 测试全部真跑并通过**（真 ES / 真 pgvector / 真 Ollama / 真模型，0 skipped）；`restart` → `down` → `up -d` 全周期后 **7 项数据逐项存活**（MySQL 行数、13 条向量、13 条 ES 文档、RabbitMQ durable 队列、bge-m3、`backend-data` 696K）。**5.5.1 的真机腿已补齐**：`verify-multi-kb-failure.mjs` 用**真实 ES 里一条真实的坏文档**让 KB-B 真失败，实测 A ✅ / B ❌ / C ✅、`retrieval.kb.failed` +1、界面出现「其中 1 个知识库检索失败」并悬浮点名库名与原因。**逼出四个问题**（见 §5.7 修正表），其中两个登记为 Known Gaps。**未做**：ES 安全模块 / TLS / 外置密钥（Phase 11 范围）、WebSocket（项目不用） |
+| **Phase 5.8** | README/docs 产品化：P1-18 + P2-12 | 按 update.txt §二十 的十节清单核对。**5.7 已顺带完成一部分**：README §6 进度表补到 5.7、§9 补整栈启动、`deployment.md` 重写为含 §2 容器化（12 个主题）与 §8 证据表 |
 | **Phase 5.9** | Final E2E + 全量验收 | `mvn test`、`mvn package`、`npm run build`、9 个 `verify-*.mjs` 全绿；update.txt §二十四 的验收矩阵逐项留证 |
 
 ---
@@ -319,6 +332,9 @@ private Long resolveUser(String nexusUser) {
 ## 6. 本次审计**没有**验证到的部分（诚实边界）
 
 1. **真机全栈行为**没有重跑（本次只跑了 `mvn test`）。上一轮真机记录见 `platform-phase3-baseline.md` §9.6。
+   ——**已关闭（Phase 5.7，2026-10-02）**：容器化整栈起来后，11 个 `verify-*.mjs` **经 nginx 全部退出 0**，
+   18 个 live 测试全部真跑通过，`down`/`up -d` 后 7 项数据逐项存活。证据见 [deployment.md](deployment.md) §8。
+   仍然**未验**的：生产形态（ES 安全模块 / TLS / 外置密钥 / 多实例）与 WebSocket（项目不用）。
 2. ~~**MCP 越权是读代码 + 读 Security 配置得出的结论**，我没有实际发一个跨用户请求去验证。~~
    **已关闭（Phase 5.1）**：跨用户请求真的发过了，而且是把**旧实现**放回去发的——
    `McpEndpointAuthTest` 在旧代码上 5/5 全红，其中一条的输出是

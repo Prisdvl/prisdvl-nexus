@@ -1,18 +1,33 @@
 # ============================================================
-# prisdvl-nexus 开发基础设施
+# prisdvl-nexus 单机编排（Phase 5.7）
+#
+#   前置（后端镜像只运行、不构建，见 deploy/backend/Dockerfile）：
+#     JAVA_HOME=<jdk-21> mvn -B package -DskipTests
+#     cp deploy/.env.example deploy/.env && 填 JWT_SECRET / AI_CHAT_API_KEY
 #
 #   cd deploy
-#   docker compose up -d            # 起全部基础依赖
-#   docker compose ps               # 看健康状态
-#   docker compose logs -f mysql    # 看某个服务日志
-#   docker compose down             # 停止（保留数据卷）
-#   docker compose down -v          # 停止并删除数据卷（清库）
+#   docker compose config            # 校验配置与变量替换（含"缺 secret 直接失败"）
+#   docker compose build             # 构建 backend / frontend（ES 镜像首次也要构建）
+#   docker compose up -d             # 启动全部 8 个服务
+#   docker compose ps                # 看健康状态（要看到 healthy，不是仅 Up）
+#   docker compose logs -f backend   # 看某个服务日志
+#   docker compose restart backend   # 重启（数据不丢）
+#   docker compose down              # 停止并删除容器（**保留数据卷**）
+#   docker compose down -v           # 停止并删除数据卷（清库，慎用）
 #
-# 【端口为什么不是默认值】
-# 本机已有原生 MySQL 8.0（服务 MySQL80）占用 3306、
-# 原生 PostgreSQL 18（服务 postgresql-x64-18）占用 5432。
-# 为了避免和已有项目互相干扰，本项目容器使用 3307 / 5433。
-# 想用默认端口：停掉那两个 Windows 服务，或改 deploy/.env 覆盖。
+# 【端口策略：谁能从宿主机访问】
+#   只有 frontend 监听 0.0.0.0（8088）——它是唯一的入口。
+#   其余基础设施端口全部绑定到 127.0.0.1，也就是**只有本机能连**：
+#   保留"宿主机直接跑 java -jar + compose 起基础设施"的开发方式（README §9），
+#   但不把这些无认证的服务暴露到局域网/公网。
+#   基础设施的认证一律不设默认口令之外的加固（见 docs/deployment.md 生产清单）。
+#   backend **不发布端口**：只有 nginx 需要访问它，宿主机调试走
+#     docker compose exec backend curl -s localhost:8080/actuator/health
+#
+# 【容器内一律用 service name】
+#   mysql:3306 / postgres:5432 / redis:6379 / rabbitmq:5672 /
+#   elasticsearch:9200 / ollama:11434
+#   注意端口是**容器内**的端口：PostgreSQL 在宿主机映射成 5433，容器内仍是 5432。
 #
 # 【镜像版本】均按官方源核对过，依据见 docs/decisions.md 附录 B.4
 # ============================================================
@@ -28,7 +43,7 @@ services:
     container_name: nexus-mysql
     restart: unless-stopped
     ports:
-      - "${NEXUS_MYSQL_PORT:-3307}:3306"
+      - "127.0.0.1:${NEXUS_MYSQL_PORT:-3307}:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${NEXUS_MYSQL_ROOT_PASSWORD:-nexus_root_pwd}
       MYSQL_DATABASE: ${NEXUS_MYSQL_DATABASE:-nexus}
@@ -60,7 +75,7 @@ services:
     container_name: nexus-postgres
     restart: unless-stopped
     ports:
-      - "${NEXUS_PG_PORT:-5433}:5432"
+      - "127.0.0.1:${NEXUS_PG_PORT:-5433}:5432"
     environment:
       POSTGRES_DB: ${NEXUS_PG_DATABASE:-nexus_vector}
       POSTGRES_USER: ${NEXUS_PG_USER:-nexus}
@@ -98,7 +113,7 @@ services:
     container_name: nexus-redis
     restart: unless-stopped
     ports:
-      - "${NEXUS_REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${NEXUS_REDIS_PORT:-6379}:6379"
     command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
     volumes:
       - redis-data:/data
@@ -122,7 +137,7 @@ services:
     container_name: nexus-elasticsearch
     restart: unless-stopped
     ports:
-      - "${NEXUS_ES_PORT:-9200}:9200"
+      - "127.0.0.1:${NEXUS_ES_PORT:-9200}:9200"
     environment:
       discovery.type: single-node
       # 开发环境关闭安全模块。生产必须开启（Phase 11）
@@ -152,8 +167,8 @@ services:
     container_name: nexus-rabbitmq
     restart: unless-stopped
     ports:
-      - "${NEXUS_RABBITMQ_PORT:-5672}:5672"
-      - "${NEXUS_RABBITMQ_CONSOLE_PORT:-15672}:15672"
+      - "127.0.0.1:${NEXUS_RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${NEXUS_RABBITMQ_CONSOLE_PORT:-15672}:15672"
     environment:
       RABBITMQ_DEFAULT_USER: ${NEXUS_RABBITMQ_USER:-nexus}
       RABBITMQ_DEFAULT_PASS: ${NEXUS_RABBITMQ_PASSWORD:-nexus_pwd}
@@ -170,19 +185,158 @@ services:
 
   # ----------------------------------------------------------------
   # Ollama：本地嵌入模型 bge-m3（Phase 3）
-  # 默认不启动（占内存较大），需要时：
-  #   docker compose --profile ai-local up -d ollama
-  #   docker compose exec ollama ollama pull bge-m3
+  #
+  # 【Phase 5.7 起**默认启动**，不再是 --profile ai-local】
+  # 原来它挂在 profile 后面（"占内存大，要时才起"）。但容器化的目标就是
+  # `docker compose up -d` 得到**完整系统**，而嵌入是 RAG 检索链路的必经一环：
+  # 缺了它，检索不是"部分可用"，是直接报错（4003/4006）。让用户先 up 一次、
+  # 发现不对、再加 profile 起第二次，是把一个必选依赖伪装成可选项。
+  # 代价是常驻内存（空载约 100~200MB，bge-m3 载入后约 1.2GB），
+  # 资源观察值见 docs/deployment.md。
+  #
+  #   首次启动后模型若不在卷里（本次验收时 bge-m3 已在卷内）：
+  #     docker compose exec ollama ollama pull bge-m3
   # ----------------------------------------------------------------
   ollama:
     image: ollama/ollama:latest
     container_name: nexus-ollama
-    profiles: [ai-local]
     restart: unless-stopped
     ports:
-      - "${NEXUS_OLLAMA_PORT:-11434}:11434"
+      - "127.0.0.1:${NEXUS_OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama-data:/root/.ollama
+    healthcheck:
+      # 用 ollama 自己的 `list`（它要连本机 daemon）：比 curl 打 /api/tags 更能
+      # 说明"daemon 真的在"，而且不需要镜像里恰好装了 curl
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    networks: [nexus-net]
+
+  # ----------------------------------------------------------------
+  # backend：Spring Boot 单体（java -jar）
+  #
+  # 【为什么端口不发布】只有 nginx 需要访问它。宿主机调试走
+  #   docker compose exec backend curl -s localhost:8080/actuator/health
+  # 或直接用入口：http://localhost:8088/api/...
+  #
+  # 【depends_on 为什么用 condition: service_healthy】
+  # 需求里那句"不要简单 depends_on 就假设服务已经可用"说的是默认的
+  # service_started：那个只保证容器**进程**起了。这里全部用 service_healthy，
+  # 即等到对方健康检查真的通过（MySQL 能 ping、PG 能 pg_isready、ES 返回
+  # cluster health、RabbitMQ 能 ping）才启动。
+  # 之所以不需要再加应用侧重试：本项目在连不上时是 fail-fast（Flyway 迁移失败
+  # 直接退出，由 restart: unless-stopped 拉起），所以"起来之前先确认依赖活着"
+  # 比"起来之后反复重连"更符合它的既有语义。
+  # ----------------------------------------------------------------
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/backend/Dockerfile
+    image: nexus-backend:${NEXUS_APP_VERSION:-0.0.1}
+    container_name: nexus-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:         { condition: service_healthy }
+      postgres:      { condition: service_healthy }
+      redis:         { condition: service_healthy }
+      rabbitmq:      { condition: service_healthy }
+      elasticsearch: { condition: service_healthy }
+      ollama:        { condition: service_healthy }
+    ports: []
+    environment:
+      # 单机真实基础设施 = 本项目既有的 local profile（Flyway 开、Redis 限流开）。
+      # 它不是"生产 profile"——生产（外置密钥、ES 开安全、多实例）见 Phase 11。
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      TZ: Asia/Shanghai
+
+      # ---- MySQL：容器内 host 是 service name，端口是**容器端口** 3306 ----
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: ${NEXUS_MYSQL_DATABASE:-nexus}
+      MYSQL_USERNAME: ${NEXUS_MYSQL_USER:-nexus}
+      MYSQL_PASSWORD: ${NEXUS_MYSQL_PASSWORD:-nexus_pwd}
+
+      # ---- PG + pgvector：宿主机是 5433，容器内是 5432 ----
+      NEXUS_VECTOR_ENABLED: "true"
+      NEXUS_VECTOR_URL: jdbc:postgresql://postgres:5432/${NEXUS_PG_DATABASE:-nexus_vector}
+      NEXUS_VECTOR_USER: ${NEXUS_PG_USER:-nexus}
+      NEXUS_VECTOR_PASSWORD: ${NEXUS_PG_PASSWORD:-nexus_pwd}
+
+      # ---- ES ----
+      NEXUS_SEARCH_ENABLED: "true"
+      NEXUS_ES_URIS: http://elasticsearch:9200
+
+      # ---- Redis / RabbitMQ ----
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${NEXUS_RABBITMQ_USER:-nexus}
+      RABBITMQ_PASSWORD: ${NEXUS_RABBITMQ_PASSWORD:-nexus_pwd}
+
+      # ---- 模型：嵌入走 compose 内的 ollama，对话走外部网关 ----
+      AI_EMBEDDING_BASE_URL: http://ollama:11434
+      AI_CHAT_BASE_URL: ${AI_CHAT_BASE_URL:-https://opencode.ai/zen/go/v1}
+      AI_CHAT_MODEL: ${AI_CHAT_MODEL:-deepseek-v4-flash}
+      AI_JUDGE_MODEL: ${AI_JUDGE_MODEL:-glm-5.3-flash}
+
+      # ---- 敏感值：一律来自 deploy/.env，且**缺失即失败** ----
+      # `:?` 的语义：变量未设置或为空时，docker compose 直接报错退出，
+      # 连容器都不会创建。这是把 nexus.jwt.secret 的 fail-closed 语义
+      # 前移到编排层——否则 application-local.yml 里那个开发默认密钥会兜住它，
+      # 于是"忘了配密钥"表现为"启动成功、密钥是仓库里人尽皆知的那个"。
+      # 注意 `.env` 在 .gitignore 里（`deploy/.env` 同理），不进版本库。
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 未配置：请复制 deploy/.env.example 为 deploy/.env 并填入至少 32 字节的随机值}
+      AI_CHAT_API_KEY: ${AI_CHAT_API_KEY:?AI_CHAT_API_KEY 未配置：请复制 deploy/.env.example 为 deploy/.env 并填入模型网关的 Key}
+
+      # ---- 存储：原始文件（增量同步要重新解析原文）----
+      NEXUS_STORAGE_ROOT: /app/data
+    volumes:
+      # 不挂卷的话 docker compose down 会把上传的原文一起带走，
+      # 而 MySQL 里还留着指向它们的记录（"文档存在但打不开"）
+      - backend-data:/app/data
+    healthcheck:
+      # /actuator/health 在 SecurityConfig 里是公开的；默认含 DataSource 探针，
+      # 所以这个健康检查同时证明了"进程活着"和"MySQL 连得上"
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    stop_grace_period: 30s   # server.shutdown=graceful：给在途 SSE 请求收尾的时间
+    networks: [nexus-net]
+
+  # ----------------------------------------------------------------
+  # frontend：Nginx（静态资源 + /api 反代）
+  #
+  # 【没有 depends_on backend】不是漏了：
+  # nginx 启动不需要后端在（它只是转发），且 nginx.conf 用 resolver + 变量
+  # 每次请求重解析 backend 的地址，所以后端晚起/重建都会自愈（先是 502，
+  # 起来后立刻正常）。反过来加 depends_on 只会让"后端暂时不健康"拖住整个前端。
+  # ----------------------------------------------------------------
+  frontend:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    image: nexus-frontend:${NEXUS_APP_VERSION:-0.0.1}
+    container_name: nexus-frontend
+    restart: unless-stopped
+    ports:
+      # 唯一的对外入口。要改端口只改 .env 里的 NEXUS_FRONTEND_PORT
+      - "${NEXUS_FRONTEND_PORT:-8088}:80"
+    environment:
+      TZ: Asia/Shanghai
+    healthcheck:
+      # 打 /healthz（nginx.conf 里的静态探针），不打 `/`：
+      # `/` 会被 SPA fallback 接管，哪怕 dist 丢了也返回 index.html
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks: [nexus-net]
 
 volumes:
@@ -192,6 +346,7 @@ volumes:
   es-data:
   rabbitmq-data:
   ollama-data:
+  backend-data:
 
 networks:
   nexus-net:

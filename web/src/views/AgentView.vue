@@ -122,6 +122,21 @@ const draftAnswerPolicy = computed<AnswerPolicy>(() => {
  * 用户接着发的消息会被算到旧会话名下。所以默认选中只在"用户还没动过"时生效。
  */
 const pickedByUser = ref(false)
+
+/**
+ * 会话消息加载的请求序号（修"已经在飞的那次自动选中"）。
+ *
+ * `pickedByUser` 只挡住了"用户点过之后**才开始**的自动选中"，挡不住**已经在飞**的那一次：
+ * 自动选中的 `listMessages` 在用户点「新对话」之前就发出去了，响应晚几十毫秒才回来，
+ * 回来时无条件写 `items`，于是刚清空的界面又被上一条会话的消息铺满——
+ * 屏幕上写着"新对话"，看到的却是旧消息，用户接着问的问题还会被算成新会话（更莫名其妙）。
+ *
+ * 这条竞态是 Phase 5.7 用真机 E2E 复现的：`verify-agent-chat.mjs` 的"新对话必须是空白"
+ * 那条断言在 Vite 本地跑时窗口太窄没撞上，经过 nginx + 容器里的 MySQL 每跳多几十毫秒后稳定命中。
+ * 修法不是把 `pickedByUser` 判得更早（它已经在起点挡了），而是给每次加载编号：
+ * 只有最后一次请求的响应允许写 `items`，过期响应直接丢弃；「新对话」让在飞的那次作废。
+ */
+let messageLoadSeq = 0
 const requestId = ref('')
 const abortController = ref<AbortController | null>(null)
 const scroller = ref<HTMLElement | null>(null)
@@ -405,11 +420,16 @@ async function selectConversation(id: string) {
   activeId.value = id
   loadingMessages.value = true
   stickToBottom.value = true
+  const seq = ++messageLoadSeq
   try {
-    items.value = toItems((await listMessages(id)).list)
+    const list = (await listMessages(id)).list
+    // 过期响应既不写消息、也不关 loading：否则会把「新对话」清空的界面又填回旧消息，
+    // 或者把后一次请求正在显示的加载态提前收掉
+    if (seq !== messageLoadSeq) return
+    items.value = toItems(list)
     await scrollToBottom(true)
   } finally {
-    loadingMessages.value = false
+    if (seq === messageLoadSeq) loadingMessages.value = false
   }
 }
 
@@ -422,6 +442,10 @@ function newConversation() {
   activeId.value = ''
   items.value = []
   input.value = ''
+  // 让"已经在飞"的会话加载作废：它的响应若晚于这次点击回来，会把上面清空的 items 又填满
+  // （见 messageLoadSeq）。那次响应已经不算数，所以 loading 也在这里收掉
+  messageLoadSeq += 1
+  loadingMessages.value = false
 }
 
 /**

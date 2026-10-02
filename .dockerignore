@@ -1,0 +1,34 @@
+# ============================================================
+# 后端镜像的构建上下文 = **仓库根**（deploy/backend/Dockerfile 要拿 nexus-app 的产物）
+#
+# 为什么放仓库根而不是 deploy/：镜像里唯一需要的东西是
+# nexus-app/target/nexus-app-*.jar，它在 nexus-app 模块下；把上下文放到 deploy/
+# 就得额外拷一份 jar，反而多一处"哪份才是最新"的歧义。
+#
+# 这个文件的作用只有一个：别把 500MB+ 的无关文件塞进构建上下文
+# （它们不会进镜像，但每次 build 都要打包发送给 Docker daemon）。
+# ============================================================
+
+.git
+.gitignore
+*.md
+.secrets
+
+# 前端是独立构建上下文（web/ 下有自己的 Dockerfile），不进后端上下文
+web
+
+# 其它模块的产物：后端只需 nexus-app 的 jar
+nexus-common/target
+nexus-ai/target
+nexus-knowledge/target
+
+# nexus-app/target 里只放行可执行 jar，其余是测试报告与类文件
+# （surefire-reports 一个模块就能有几十 MB）
+nexus-app/target/*
+!nexus-app/target/nexus-app-*.jar
+
+# 运行期数据（原始文件存储根目录；已 gitignore）
+data
+deploy/**/data
+
+docs

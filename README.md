@@ -91,7 +91,7 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | Phase 8 | Workflow（学习计划 / 知识分析 / 报告） | ⏳ |
 | Phase 9 | Evaluation | ⏳ |
 | Phase 10 | Observability | ⏳ |
-| Phase 11 | 工程化（Docker / Nginx / 安全 / 限流 / CI） | 🔄 限流与配额已提前到平台化 5.6 完成（登录失败冻结、用户级限流、每日次数/token 配额）；容器化（P1-17）仍待做 |
+| Phase 11 | 工程化（Docker / Nginx / 安全 / 限流 / CI） | 🔄 限流与配额已提前到平台化 5.6 完成（登录失败冻结、用户级限流、每日次数/token 配额）；**容器化（P1-17）已在平台化 5.7 完成**（应用 Dockerfile + nginx + compose 整栈）；生产加固（ES 安全模块、TLS、外置密钥、多实例）仍待做 |
 
 平台化升级（另一条轨道，与上面的 Phase 并行）：
 
@@ -108,7 +108,8 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | 真机栈补验 | Docker 起来后用 `local`（真 MySQL/ES/pgvector/Redis/RabbitMQ）重跑：13 项 live + 3 项流式 live 全过、三条 E2E 脚本**无跳过退出码 0**；同时逼出两个后端死路与一个界面缺陷 | ✅ 完成（见 decisions.md B.37 / baseline §9.6） |
 | Phase 5.3 – 5.5 | 知识库闭环（单文件上传 / 删文档 / 失败原因）、Agent 闭环（温度 / 工具白名单 / 重命名 / 出处）、多知识库 RAG | ✅ 完成（2026-10-01 / 10-02；见 decisions.md B.44 / B.45 / B.46） |
 | Phase 5.6 | 用户与安全：改密码 + 令牌吊销（`token_version`）、资料编辑、登录失败冻结、限流与每日配额、额度只读接口 | ✅ 完成（2026-10-02，见 decisions.md B.47 与 ADR-020/021）：`mvn test` 541/0/0/18；**真机验收已执行且全程不使用 Docker**（`standalone` + 内存存储 / `standalone` + 本机原生 Redis 两条路径各跑一次 `verify-security.mjs`，均退出 0，降级语义逐条实测） |
-| Phase 5.5.1 | 多库检索的**并行化 + 逐库失败隔离**（5.5 的收尾）：虚拟线程扇出、按输入顺序装配、失败明细进 `retrieval` 事件与提示词、前端点名"其中 N 个知识库检索失败" | ✅ 完成（2026-10-02，见 decisions.md B.48 与 ADR-022）：`mvn test` 567/0/0/18；**零数据库迁移**（绑定表复用 V12，见 database.md §6.0）；`npm run build` 通过；界面层用**桩 SSE 帧**在真后端 + 真前端上验过（`verify-retrieval-ui.mjs` 五条腿，退出码 0，**不需要 Docker**）。⚠️ 真机检索层（真 ES + 一个真挂掉的库）留到 5.7 |
+| Phase 5.5.1 | 多库检索的**并行化 + 逐库失败隔离**（5.5 的收尾）：虚拟线程扇出、按输入顺序装配、失败明细进 `retrieval` 事件与提示词、前端点名"其中 N 个知识库检索失败" | ✅ 完成（2026-10-02，见 decisions.md B.48 与 ADR-022）：`mvn test` 567/0/0/18；**零数据库迁移**（绑定表复用 V12，见 database.md §6.0）；`npm run build` 通过；界面层用**桩 SSE 帧**在真后端 + 真前端上验过（`verify-retrieval-ui.mjs` 五条腿，退出码 0，**不需要 Docker**）。真机检索层（真 ES + 一个真挂掉的库）**已在 5.7 补齐**，见下一行 |
+| Phase 5.7 | 部署产品化：**容器化**（P1-17）——应用 Dockerfile ×2、nginx 入口、compose 补 backend/frontend，`docker compose up -d` 一条命令得到完整系统；**并把 5.5.1 的真机腿补上** | ✅ 完成（2026-10-02）：8/8 服务 healthy、**11 个 E2E 脚本全部 EXIT=0**（经 nginx）、**那 18 个 live 测试全部真跑通过**（0 skipped）、`restart`/`down`/`up -d` 全周期 7 项数据逐项存活、**"多库 + 一个库真的失败"用真实 ES 坏文档验过**（A ✅ / B ❌ / C ✅，`retrieval.kb.failed` 自增，界面明说「其中 1 个知识库检索失败」）。**业务代码一行没为 Docker 改**；缺失 secret 时 compose **拒绝启动**。详见 [docs/deployment.md](docs/deployment.md) §2 与 §8 |
 | Phase 3+ | RAG/Agent/Workflow/Application/Model 的抽象上移与用户可配置化 | ⏳ 见分析文档第 12 节 |
 
 ## 7. 本地环境要求
@@ -117,7 +118,7 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | --- | --- | --- |
 | JDK | 21（LTS） | ✅ **便携版已就绪**：`D:\develop\jdk-21`（Temurin 21.0.12.1，未改系统 `JAVA_HOME`）。构建前请 `$env:JAVA_HOME='D:\develop\jdk-21'` |
 | Maven | 3.9+ | ✅ 3.9.9（本地仓库 `D:\develop\Maven\repository`） |
-| Docker + Compose | 运行中 | ⚠️ 客户端 29.5.2 / Compose v5.1.3 已装，但 **WSL2 后端不可用**：`HCS_E_HYPERV_NOT_INSTALLED`（需管理员启用虚拟机平台 + 安装 WSL2 内核并重启，见 [docs/architecture.md](docs/architecture.md) 第 19 节） |
+| Docker + Compose | 运行中 | ✅ 客户端 29.5.2 / Compose v5.1.3，**WSL2 后端已可用**（2026-10-02 起整栈容器化真机验收通过，见 [docs/deployment.md](docs/deployment.md) §2）。容器可用内存 7.569 GiB，ES 堆需压到 512m |
 | Node.js | 20.19+ 或 22.12+（Vite 8 要求） | ✅ v22.22.0 |
 | 内存 | 建议 ≥ 16 GB（ES + MySQL + PG 同时跑） | ⚠️ 15.6 GB，ES 需按小堆配置（`-Xms512m`、单节点、关闭副本） |
 
@@ -163,13 +164,33 @@ node scripts\seed-demo.mjs
 
 > 数据存在内存里，**重启即清空**。要持久化就等 Docker 就绪后切到 `local` profile（MySQL）。
 
-## 9. 完整运行（Docker + MySQL，推荐）
+## 9. 完整运行（Docker，推荐）
+
+### 9.1 整栈容器化（Phase 5.7）—— 一条命令得到完整系统
+
+```bash
+# 仓库根目录：先用 JDK 21 打出 jar（镜像里只运行、不构建）
+cd deploy
+cp .env.example .env                    # 填 JWT_SECRET 与 AI_CHAT_API_KEY（缺了 compose 会拒绝启动）
+cd .. && JAVA_HOME=/d/develop/jdk-21 mvn -B package -DskipTests
+cd deploy && docker compose build && docker compose up -d
+docker compose ps                       # 等到 8 个服务全部 (healthy)
+# 浏览器打开 http://localhost:8088
+```
+
+容器里只有 JRE 与静态资源，**不需要在容器内装 JDK / Maven / Node**；backend **不发布端口**，
+只有 nginx 对外。架构、环境变量、启停、持久化、健康检查、Nginx/SSE、常见问题与真机验收结果
+全部在 [docs/deployment.md](docs/deployment.md) §2。
+
+### 9.2 仅起基础设施 + 本机 `java -jar`（开发形态）
+
+改代码频繁重启时更方便——基础设施在容器里，后端在宿主机上：
 
 ```powershell
-# 1) 起基础设施（MySQL / PostgreSQL+pgvector / Redis / ES+IK / RabbitMQ）
+# 1) 起基础设施（MySQL / PostgreSQL+pgvector / Redis / ES+IK / RabbitMQ / Ollama）
 cd deploy
-docker compose up -d
-docker compose ps            # 等 5 个服务都变成 (healthy)
+docker compose up -d mysql postgres elasticsearch redis rabbitmq ollama
+docker compose ps            # 等 6 个服务都变成 (healthy)
 
 # 2) 打包并用 local profile 启动（Flyway 会自动建表）
 cd ..
@@ -242,6 +263,7 @@ node scripts/verify-agents.mjs     # Agent 管理页：新建→配置（提示�
 node scripts/verify-agent-no-kb.mjs # 零知识库的新用户提问：提示 → 检索如实报空 → 回答注明不是来自笔记 → 痕迹刷新后仍在
 node scripts/verify-multi-kb.mjs   # 多知识库 RAG：自建两个库各导入不同内容的文档 → 界面多选绑定 → 提问只有第二个库能答的问题（断言来源标注 + 回答引用其独有事实）→ 越权绑定被拒（自建自删，不依赖 seed-demo）
 node scripts/verify-security.mjs   # 用户安全：改资料（侧栏跟着变）→ 错原密码不把人踢下线（400 而非 401）→ 改密码后被送回登录页 + 旧 token 打接口返回 401 → 新密码登录（自建账号，不依赖 seed-demo）
+node scripts/verify-multi-kb-failure.mjs # 多库真机验收（需整栈 + 真 ES）：建 A/B/C 三个真实库 → 单库/双库/三库覆盖逐级扩大 → 部分命中语义 → 往真实 ES 写一条坏文档让 B **真失败**，验 A✅/B❌/C✅、`retrieval.kb.failed` 自增、界面「其中 1 个知识库检索失败」并悬浮点名（自建自删）
 ```
 
 > `verify-*.mjs` 都要求后端已按上一节跑起来，并且**已经种好演示数据**
@@ -272,8 +294,10 @@ node scripts/verify-security.mjs   # 用户安全：改资料（侧栏跟着变�
 > **同日再做一次（Phase 5.5 收尾）**：8 个既有脚本仍**逐一退出 0**（单库行为无回归），
 > 新增的 `verify-multi-kb.mjs` 首次运行即通过（两库导入 → 多选绑定 → 跨库归并 → 越权拒绝），
 > 见 `docs/decisions.md` B.46 §11。
-> **注意 full 栈仍不等于"部署形态也验了"**：Docker 在这里只是基础设施，
-> 应用本身还是本机 `java -jar` + Vite dev server；容器化部署（Dockerfile/nginx）**未验**。
+> **注意 full 栈仍不等于"部署形态也验了"**：上面这些是"应用跑在宿主机 + Docker 只提供基础设施"。
+> 容器化部署（Dockerfile / nginx / compose 整栈）**已由 Phase 5.7 补齐并真机验收**
+> （见 [docs/deployment.md](docs/deployment.md) §2 与 §8：8/8 健康、11 个脚本经 nginx 全部退出 0、
+> 18 个 live 测试全部真跑、`down`/`up -d` 后数据逐项存活）。
 
 > **Phase 5.6（用户安全）的两条真机路径都不需要 Docker**，因此按用户"暂停使用 Docker"的要求
 > 依然验完了：`standalone`（H2）+ 进程内存储跑一次 `verify-security.mjs`（退出 0），
@@ -290,10 +314,11 @@ node scripts/verify-security.mjs   # 用户安全：改资料（侧栏跟着变�
 > 空结果措辞随有无失败库改口），截图见 `docs/screenshots/agent-chat-rag-retrieval-failed-kb.png`。
 > **但它喂的是桩 SSE 帧**：证明界面渲染正确，不等于后端真发这套帧（那是
 > `RagStreamRetrievalEventTest` 的 MockMvc 契约测试），更不等于真机上"一个库真的挂掉"时可用。
-> 8 个 `verify-*.mjs` 仍未复跑（同 5.6 的理由：要 ES / pgvector / 真模型）。**5.7 容器化后必须补的一件事**：
-> `verify-multi-kb.mjs` 之外再跑一次"多库 + 其中一个库不可用"，看界面上的
-> "其中 N 个知识库检索失败"是否真的出现、`retrieval.kb.failed` 是否真的自增。
-> 见 `docs/decisions.md` B.48 §5。
+> **这一条已由 Phase 5.7 补齐**：容器化整栈起来后跑 `verify-multi-kb-failure.mjs`
+> ——用真实 ES 里一条真实的坏文档让 KB-B 真实失败，验证 A ✅ / B ❌ / C ✅、
+> `retrieval.kb.failed` 自增、界面出现「其中 1 个知识库检索失败」并悬浮点名。
+> 8 个 `verify-*.mjs` 也同批全部复跑（退出码全 0）。
+> 见 `docs/deployment.md` §2.12 / `docs/decisions.md` B.48 §5。
 
 > **`verify-retrieval-ui.mjs` 是桩验证，不是 E2E**：它把 `/api/chat/stream` 换成
 > 手写的 SSE 帧（形状取自 `docs/api.md` §5.2），用来单独验"前端拿到这套帧渲染成什么样"
