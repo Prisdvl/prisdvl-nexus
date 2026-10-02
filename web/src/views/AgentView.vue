@@ -160,6 +160,21 @@ function knowledgeBaseName(id: string | null) {
 }
 
 /**
+ * 空结果那句话的措辞，取决于这次**有没有库根本没被搜成**（Phase 5.5.1）。
+ *
+ * "知识库里没有命中"是一句关于**内容**的断言：它告诉用户可以不用再追问了。
+ * 而某个库这次超时/不可用时，这句话是假的——那一库里可能就有答案。
+ * 服务端已经为此做了两件事（提示词里明令模型不许说"资料中没有"、空结果换成
+ * "有知识库暂时无法检索"），界面若还一律显示"知识库里没有命中"，
+ * 同一件事就有了三种口径，而用户看到的恰好是最笃定的那一种。
+ */
+function emptyLabel(retrieval: StreamRetrieval): string {
+  const usable = retrieval.knowledgeBaseIds.length - retrieval.failedKnowledgeBases.length
+  if (usable <= 0) return '知识库本次都没有检索成功'
+  return usable < retrieval.knowledgeBaseIds.length ? '其余知识库没有命中' : '知识库里没有命中'
+}
+
+/**
  * AGENT 会话换 Agent（或回到内置默认）。
  *
  * 换的是"执行者"：提示词、模型角色、能检索哪些库都跟着变，模式不变，
@@ -836,8 +851,32 @@ watch(activeId, () => {
               >
                 {{ message.retrieval.knowledgeBaseIds.length }} 个知识库
               </el-tag>
+              <!-- 检索失败的知识库（Phase 5.5.1）。多库并行之后，单个库失败是被**隔离**掉的：
+                   整次检索照常成功、卡片照常显示"检索到 5 个片段"，而那个库压根没被搜过。
+                   如果答案恰恰在它里面，用户看到的会是一个漏了一整个库的否定结论——
+                   所以他必须能看见"这次少搜了谁"。原因放进悬浮提示：只说"1 个库失败"，
+                   用户无从判断"等会儿重试"还是"去找管理员"。 -->
+              <el-tooltip
+                v-if="message.retrieval.failedKnowledgeBases.length"
+                effect="dark"
+                placement="top"
+              >
+                <template #content>
+                  <div
+                    v-for="failure in message.retrieval.failedKnowledgeBases"
+                    :key="failure.knowledgeBaseId"
+                  >
+                    {{ failure.knowledgeBaseName || `知识库 ${failure.knowledgeBaseId}` }}：{{
+                      failure.reason
+                    }}
+                  </div>
+                </template>
+                <el-tag size="small" effect="plain" type="danger">
+                  其中 {{ message.retrieval.failedKnowledgeBases.length }} 个知识库检索失败
+                </el-tag>
+              </el-tooltip>
               <el-tag v-if="message.retrieval.empty" size="small" effect="plain" type="warning">
-                知识库里没有命中
+                {{ emptyLabel(message.retrieval) }}
               </el-tag>
               <el-tag v-if="message.retrieval.reranked" size="small" effect="plain" type="success">
                 已重排

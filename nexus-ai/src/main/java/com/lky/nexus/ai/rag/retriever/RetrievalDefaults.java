@@ -3,6 +3,10 @@ package com.lky.nexus.ai.rag.retriever;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.convert.DurationUnit;
+
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 
 /**
  * 检索参数的<b>全局默认值</b>（{@code nexus.retrieval.*}）——检索参数优先级里最底下的一层。
@@ -52,4 +56,23 @@ public class RetrievalDefaults {
 
     /** 默认向量相似度下限（取值理由见类注释）。 */
     private double similarityThreshold = RetrievalQuery.DEFAULT_SIMILARITY_THRESHOLD;
+
+    /**
+     * 多库扇出的<b>整体</b>超时（Phase 5.5.1，{@code nexus.retrieval.fanout-timeout}）。
+     *
+     * <p><b>它不在上面那条优先级阶梯里</b>——没有"调用方指定"也没有"按库配置"两层，
+     * 所以这个类里它是个异类，写在这里是因为 {@code nexus.retrieval.*} 只该有一个持有者。
+     * 类注释说的"同一含义的默认值不要散在多处"同样适用于它。
+     *
+     * <p><b>10 秒不是"慢但还能用"的意思</b>：检索这一段一直是百毫秒级
+     * （重排那 28→172 秒的实测见 {@code TimeLimitedCall} 的类注释，时间全在 LLM 调用上）。
+     * 所以撞到 10s 就说明下游某一环卡死了，此时宁可少一个库的资料并<b>如实说出来</b>，
+     * 也不要让整个问答挂在这里——这与"重排超时就保持召回顺序继续"是同一套取舍。
+     *
+     * <p><b>为什么没有"并行度"这个旋钮</b>：扇出跑在虚拟线程上（等待不占平台线程），
+     * 而绑定的知识库数有硬上限（前端 {@code multiple-limit=10}，后端也校验），
+     * 所以"最多并行几个"这个数字永远等于实际库数——加一个只会被人以为它有用。
+     */
+    @DurationUnit(ChronoUnit.SECONDS)
+    private Duration fanoutTimeout = Duration.ofSeconds(10);
 }

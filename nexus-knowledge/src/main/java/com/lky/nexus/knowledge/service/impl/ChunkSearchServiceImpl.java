@@ -7,7 +7,9 @@ import com.lky.nexus.ai.rag.retriever.RetrievedDocument;
 import com.lky.nexus.ai.rag.retriever.RetrieverRegistry;
 import com.lky.nexus.common.exception.BusinessException;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
+import com.lky.nexus.knowledge.rag.retriever.MultiKnowledgeRetriever;
 import com.lky.nexus.knowledge.rag.retriever.RecallSupport;
+import com.lky.nexus.knowledge.rag.retriever.RetrievalFailure;
 import com.lky.nexus.knowledge.rag.retriever.RetrievalQueryFactory;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
@@ -17,7 +19,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -36,6 +37,15 @@ import java.util.List;
  * "按库配置 retrieval_top_k"立刻失效。逐库扇出是唯一能保住这个语义的做法。
  * 代价是 Retriever 层那段"列表长度 &gt; 1"的分支在本路径上仍然走不到，
  * 以及这一层与它各有一份 loop + merge——这处重复是有意接受的，取舍记在 decisions.md B.46。
+ *
+ * <p><b>"怎么并行、失败了怎么办"不在这里</b>（Phase 5.5.1）：那些规则
+ * （单库不切线程、按输入顺序装配、全部失败抛原异常、超时不算空结果）全部归口在
+ * {@link MultiKnowledgeRetriever}。这里只描述"一个库要做什么"，
+ * 并行与隔离是另一件事——两者混在一起，以后调并行策略就会动到检索语义。
+ *
+ * <p><b>失败的库在这里被降级成"空列表占位"，而不是被剔除</b>：
+ * {@link RecallSupport#merge} 有一条"只有一个库就原样返回"的快路径，
+ * 剔除失败库会让它被意外命中，于是全局截断悄悄失效。理由写在 {@code searchManyDetailed} 里。
  *
  * <p><b>为什么要留这一层而不是直接改调用方</b>：对外接口不变，意味着这次重构
  * 是"行为不变"的——五个调用点（检索接口、RAG 问答、Agent 工具、引用构建、上下文组装）
@@ -62,15 +72,18 @@ public class ChunkSearchServiceImpl implements ChunkSearchService {
     private final RetrieverRegistry retrieverRegistry;
     private final RetrievalQueryFactory queryFactory;
     private final KnowledgeEmbeddingResolver embeddingResolver;
+    private final MultiKnowledgeRetriever multiRetriever;
 
     public ChunkSearchServiceImpl(KnowledgeBaseService knowledgeBaseService,
                                   RetrieverRegistry retrieverRegistry,
                                   RetrievalQueryFactory queryFactory,
-                                  KnowledgeEmbeddingResolver embeddingResolver) {
+                                  KnowledgeEmbeddingResolver embeddingResolver,
+                                  MultiKnowledgeRetriever multiRetriever) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.retrieverRegistry = retrieverRegistry;
         this.queryFactory = queryFactory;
         this.embeddingResolver = embeddingResolver;
+        this.multiRetriever = multiRetriever;
     }
 
     @Override
@@ -108,34 +121,61 @@ public class ChunkSearchServiceImpl implements ChunkSearchService {
     @Override
     public List<SearchHit> searchMany(Long userId, List<Long> knowledgeBaseIds, String query, Integer topK,
                                       SearchMode mode, RetrievalFilters filters) {
+        return searchManyDetailed(userId, knowledgeBaseIds, query, topK, mode, filters).hits();
+    }
+
+    @Override
+    public MultiKbSearchResult searchManyDetailed(Long userId, List<Long> knowledgeBaseIds, String query,
+                                                  Integer topK, SearchMode mode, RetrievalFilters filters) {
         // 与单库一致：先校验归属（这一步顺带完成去重与保序），再判空查询——
         // 空查询 + 越权知识库必须仍然报"知识库不存在"，而不是悄悄返回空结果
         List<KnowledgeBasePO> knowledgeBases = knowledgeBaseService.requireAllOwned(userId, knowledgeBaseIds);
         if (knowledgeBases.isEmpty() || query == null || query.isBlank()) {
-            return List.of();
+            return new MultiKbSearchResult(List.of(), List.of());
         }
 
         RetrievalStrategy strategy = toStrategy(mode);
         RetrievalFilters effectiveFilters = filters == null ? RetrievalFilters.none() : filters;
         // 归并后的全局上限。注意这里**不是**每库的召回深度——见下面逐库构造处的说明
         int mergeLimit = queryFactory.resolveTopK(topK, null);
+        // 预检在扇出**之前**：一个库的嵌入模型与全局配置不一致就不该让别的库白跑一轮检索。
+        // 也正因为它在前面，这类失败是整批失败而不是"某个库失败"——不进 failures（见接口注释）
         precheckEmbeddingModels(knowledgeBases);
 
-        List<List<RetrievedDocument>> perKnowledgeBase = new ArrayList<>(knowledgeBases.size());
-        for (KnowledgeBasePO knowledgeBase : knowledgeBases) {
-            // requestedTopK 一律传 null，让每个库用自己的 retrieval_top_k 召回。
-            // 这一步极易写错：RetrievalQueryFactory.resolveTopK 的优先级是"调用方 > 知识库配置"，
-            // 所以把 topK 传进去等于让**每个库**都用全局值召回，retrieval_top_k 整列失效——
-            // 而"让这一列真正生效"正是 Phase 3.2 的全部工作。参考实现见 KnowledgeSearchTool。
-            perKnowledgeBase.add(
-                    retrieveOne(knowledgeBase, mode, query, null, userId, strategy, effectiveFilters));
-        }
+        // 逐库并行召回（Phase 5.5.1）。requestedTopK 一律传 null，让每个库用自己的
+        // retrieval_top_k 召回。这一步极易写错：RetrievalQueryFactory.resolveTopK 的优先级是
+        // "调用方 > 知识库配置"，所以把 topK 传进去等于让**每个库**都用全局值召回，
+        // retrieval_top_k 整列失效——而"让这一列真正生效"正是 Phase 3.2 的全部工作。
+        // 参考实现见 KnowledgeSearchTool。
+        //
+        // 日志仍由 retrieveOne 逐库打在召回**之前**，因此并行之后这些日志会交错出现——
+        // 这正是"真的并行"最直观的证据，排查时不必去找时间戳。
+        MultiKnowledgeRetriever.FanOut<List<RetrievedDocument>> fanOut = multiRetriever.retrieve(
+                knowledgeBases,
+                knowledgeBase -> retrieveOne(
+                        knowledgeBase, mode, query, null, userId, strategy, effectiveFilters));
+
+        // 失败的库填空列表，而不是从列表里剔除。这一行看着多余，其实是在保归并的语义：
+        // RecallSupport.merge 有一条 size()==1 的快路径（原样返回、不做 limit 截断），
+        // 剔除失败库会让"3 个库挂了 2 个"变成单元素快路径，于是全局截断也一起被关掉——
+        // 一个库的失败会顺手改掉另一个库结果的处理方式。占位之后列表长度与库数一致，行为不变。
+        List<List<RetrievedDocument>> perKnowledgeBase = fanOut.ordered().stream()
+                .map(documents -> documents == null ? List.<RetrievedDocument>of() : documents)
+                .toList();
 
         List<RetrievedDocument> merged = RecallSupport.merge(perKnowledgeBase, mergeLimit);
         List<SearchHit> results = merged.stream().map(ChunkSearchServiceImpl::toSearchHit).toList();
+        if (fanOut.hasFailures()) {
+            // 部分库失败要留下痕迹（隔离不静默）：这里只是"这次检索发生了什么"的现场记录，
+            // 计数与 WARN 由扇出统一负责，失败的库名则要一路传到检索事件与提示词里
+            log.warn("多库检索「{}」：{} 个库失败（{}），本次结果只来自其余 {} 个库",
+                    query, fanOut.failures().size(),
+                    fanOut.failures().stream().map(RetrievalFailure::displayName).toList(),
+                    knowledgeBases.size() - fanOut.failures().size());
+        }
         log.info("多库检索「{}」mode={} 共 {} 个库 → 归并后 {} 条（归并上限 {}；各库按其 retrieval_top_k 召回）",
                 query, mode, knowledgeBases.size(), results.size(), mergeLimit);
-        return results;
+        return new MultiKbSearchResult(results, fanOut.failures());
     }
 
     /**

@@ -7,6 +7,7 @@ import com.lky.nexus.ai.rag.retriever.RetrievalStrategy;
 import com.lky.nexus.ai.rag.retriever.RetrieverRegistry;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.knowledge.mapper.ChunkMapper;
 import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.DocumentTagMapper;
@@ -17,6 +18,7 @@ import com.lky.nexus.knowledge.rag.Reranker;
 import com.lky.nexus.knowledge.rag.retriever.ChunkHydrator;
 import com.lky.nexus.knowledge.rag.retriever.HybridRetriever;
 import com.lky.nexus.knowledge.rag.retriever.KeywordRetriever;
+import com.lky.nexus.knowledge.rag.retriever.MultiKnowledgeRetriever;
 import com.lky.nexus.knowledge.rag.retriever.RerankedRetriever;
 import com.lky.nexus.knowledge.rag.retriever.RetrievalFilterResolver;
 import com.lky.nexus.knowledge.rag.retriever.RetrievalQueryFactory;
@@ -149,7 +151,9 @@ class ChunkSearchServiceParityTest {
         current = new ChunkSearchServiceImpl(knowledgeBaseService, registry,
                 new RetrievalQueryFactory(new RetrievalDefaults()),
                 // 预检只在 searchMany 里跑，单库路径不碰它——传桩即可
-                mock(KnowledgeEmbeddingResolver.class));
+                mock(KnowledgeEmbeddingResolver.class),
+                // 单库不切线程：参照实现与新实现在这一点上必须一致（这正是 ParityTest 的职责）
+                new MultiKnowledgeRetriever(new RetrievalDefaults(), new ObservabilityRegistry()));
     }
 
     // ------------------------------------------------------------------

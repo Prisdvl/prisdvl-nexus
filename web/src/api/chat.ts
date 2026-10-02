@@ -135,9 +135,25 @@ export interface StreamRetrievalHit {
   source: string
 }
 
+/**
+ * 本次没能参与检索的知识库（Phase 5.5.1）。
+ *
+ * 多库是**并行**检索、逐库失败隔离的：一个库超时或不可用不会让整次检索失败，
+ * 但也不能就这样消失——只显示"检索到 5 个片段"的话，绑了 3 个库的用户无从知道
+ * 有一个库根本没被搜过，而答案可能就差在那一库里。
+ *
+ * 名字由服务端一并给出（不是前端拿 id 去查表）：查不到时前端只能显示"知识库 1002"，
+ * 对用户没有意义；而 id 也保留，用于和命中片段、库列表对齐。
+ */
+export interface StreamRetrievalFailure {
+  knowledgeBaseId: string
+  knowledgeBaseName: string
+  reason: string
+}
+
 /** retrieval 事件：检索完成、生成之前到达，供界面显示"检索到 N 个片段"。 */
 export interface StreamRetrieval {
-  /** 本次检索覆盖的知识库（会话绑了几个就是几个）。 */
+  /** 本次检索覆盖的知识库（会话绑了几个就是几个）；<b>含检索失败的那些</b>。 */
   knowledgeBaseIds: string[]
   count: number
   hits: StreamRetrievalHit[]
@@ -145,6 +161,13 @@ export interface StreamRetrieval {
   truncated: number
   reranked: boolean
   empty: boolean
+  /**
+   * 本次检索失败、因此<b>没有贡献任何片段</b>的知识库；正常时为空数组（不是缺省）。
+   *
+   * 与 `count` 一起读才有意义：`count = 5, failedKnowledgeBases = [内部 FAQ]` 说的是
+   * "这 5 段只来自其余库"，而不是"内部 FAQ 里没有相关内容"。
+   */
+  failedKnowledgeBases: StreamRetrievalFailure[]
 }
 
 export interface StreamMeta {

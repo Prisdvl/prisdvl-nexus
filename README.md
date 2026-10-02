@@ -108,6 +108,7 @@ prisdvl-nexus/                 (root pom, packaging=pom)
 | 真机栈补验 | Docker 起来后用 `local`（真 MySQL/ES/pgvector/Redis/RabbitMQ）重跑：13 项 live + 3 项流式 live 全过、三条 E2E 脚本**无跳过退出码 0**；同时逼出两个后端死路与一个界面缺陷 | ✅ 完成（见 decisions.md B.37 / baseline §9.6） |
 | Phase 5.3 – 5.5 | 知识库闭环（单文件上传 / 删文档 / 失败原因）、Agent 闭环（温度 / 工具白名单 / 重命名 / 出处）、多知识库 RAG | ✅ 完成（2026-10-01 / 10-02；见 decisions.md B.44 / B.45 / B.46） |
 | Phase 5.6 | 用户与安全：改密码 + 令牌吊销（`token_version`）、资料编辑、登录失败冻结、限流与每日配额、额度只读接口 | ✅ 完成（2026-10-02，见 decisions.md B.47 与 ADR-020/021）：`mvn test` 541/0/0/18；**真机验收已执行且全程不使用 Docker**（`standalone` + 内存存储 / `standalone` + 本机原生 Redis 两条路径各跑一次 `verify-security.mjs`，均退出 0，降级语义逐条实测） |
+| Phase 5.5.1 | 多库检索的**并行化 + 逐库失败隔离**（5.5 的收尾）：虚拟线程扇出、按输入顺序装配、失败明细进 `retrieval` 事件与提示词、前端点名"其中 N 个知识库检索失败" | ✅ 完成（2026-10-02，见 decisions.md B.48 与 ADR-022）：`mvn test` 567/0/0/18；**零数据库迁移**（绑定表复用 V12，见 database.md §6.0）；`npm run build` 通过；界面层用**桩 SSE 帧**在真后端 + 真前端上验过（`verify-retrieval-ui.mjs` 五条腿，退出码 0，**不需要 Docker**）。⚠️ 真机检索层（真 ES + 一个真挂掉的库）留到 5.7 |
 | Phase 3+ | RAG/Agent/Workflow/Application/Model 的抽象上移与用户可配置化 | ⏳ 见分析文档第 12 节 |
 
 ## 7. 本地环境要求
@@ -236,7 +237,7 @@ node scripts/verify-login.mjs      # 真实走一遍登录表单，确认跳转�
 node scripts/verify-frontend.mjs   # 知识库列表 → 正文（Markdown/大纲/关联面板）→ 切片
 node scripts/verify-agent-chat.mjs # 对话页三条腿：Agent（工具卡片/真实摘要/刷新后痕迹仍在）+ 重命名会话（刷新后名字仍在）+ RAG（"检索到 N 个片段"且先于回答）
 node scripts/verify-stream.mjs     # 知识库问答流式：逐字增长 + 引用 + 生成期间的"检索到 N 个片段"
-node scripts/verify-retrieval-ui.mjs # 检索卡片渲染契约：桩掉 /api/chat/stream，验"检索到 N 个片段"排在回答之前
+node scripts/verify-retrieval-ui.mjs # 检索卡片渲染契约：桩掉 /api/chat/stream，五条腿（命中两段 / 一段都没命中 / 一个库失败 / 全部库失败 / 一部分没命中一部分没搜成），验"检索到 N 个片段"排在回答之前、失败库被点名、空结果措辞随有无失败改口
 node scripts/verify-agents.mjs     # Agent 管理页：新建→配置（提示词/知识库/工具白名单/温度）→发布→对话页可选→停用→不可选→删除（11 条腿）
 node scripts/verify-agent-no-kb.mjs # 零知识库的新用户提问：提示 → 检索如实报空 → 回答注明不是来自笔记 → 痕迹刷新后仍在
 node scripts/verify-multi-kb.mjs   # 多知识库 RAG：自建两个库各导入不同内容的文档 → 界面多选绑定 → 提问只有第二个库能答的问题（断言来源标注 + 回答引用其独有事实）→ 越权绑定被拒（自建自删，不依赖 seed-demo）
@@ -283,11 +284,27 @@ node scripts/verify-security.mjs   # 用户安全：改资料（侧栏跟着变�
 > **但有代价**：8 个依赖 ES / pgvector / 真模型的既有脚本**本轮未复跑**，
 > 留到 5.7 容器化之后统一复跑。完整证据见 `docs/decisions.md` B.47 末节。
 
+> **Phase 5.5.1（多库并行）验到了哪一层**：`mvn test` 567/0/0/18、`npm run build` 通过、
+> `standalone`（H2，不依赖 Docker）+ `verify-retrieval-ui.mjs` **五条腿退出码 0**
+> ——其中有三条腿专打新界面（"其中 N 个知识库检索失败"标签与悬浮原因、
+> 空结果措辞随有无失败库改口），截图见 `docs/screenshots/agent-chat-rag-retrieval-failed-kb.png`。
+> **但它喂的是桩 SSE 帧**：证明界面渲染正确，不等于后端真发这套帧（那是
+> `RagStreamRetrievalEventTest` 的 MockMvc 契约测试），更不等于真机上"一个库真的挂掉"时可用。
+> 8 个 `verify-*.mjs` 仍未复跑（同 5.6 的理由：要 ES / pgvector / 真模型）。**5.7 容器化后必须补的一件事**：
+> `verify-multi-kb.mjs` 之外再跑一次"多库 + 其中一个库不可用"，看界面上的
+> "其中 N 个知识库检索失败"是否真的出现、`retrieval.kb.failed` 是否真的自增。
+> 见 `docs/decisions.md` B.48 §5。
+
 > **`verify-retrieval-ui.mjs` 是桩验证，不是 E2E**：它把 `/api/chat/stream` 换成
 > 手写的 SSE 帧（形状取自 `docs/api.md` §5.2），用来单独验"前端拿到这套帧渲染成什么样"
 > ——这是本地无 ES 时唯一能验到那层 UI 的办法。它**不证明**后端真的发这套帧
 > （那是 `RagStreamRetrievalEventTest` 的事），也**不证明**真机检索可用（那是 full 栈的事）。
 > 三件事必须分开说，不能合并成一句"验证通过"。会话创建与消息列表仍走真接口。
+>
+> 桩帧是**手抄的契约**，所以接口一变它必须跟着变——5.5 加 `knowledgeBaseIds` 时改过它，
+> 5.5.1 加 `failedKnowledgeBases` 时也改了。它有个副作用是好的：**忘了改就会立刻红**
+> （界面读一个不存在的字段会直接报错），比"后端改了、前端还在按老形状解析"这种
+> 静默不一致早一步被发现。
 
 > 这两个脚本的意义不只是截图：**"服务返回了 HTML"不等于"页面渲染正常"**。
 > 本项目就是靠它发现了一个真实问题（前端 `@` 别名只配了 tsconfig、没配 Vite，

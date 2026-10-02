@@ -7,7 +7,9 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.ai.rag.retriever.RetrievalFilters;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
+import com.lky.nexus.knowledge.rag.retriever.RetrievalFailure;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
@@ -246,14 +248,25 @@ public class RagAnswerServiceImpl implements RagAnswerService {
             return PreparedAnswer.none();
         }
         String retrievalQuery = buildRetrievalQuery(question, history);
-        List<ChunkSearchService.SearchHit> hits = knowledgeBases.size() == 1
-                ? chunkSearchService.search(userId, knowledgeBases.get(0).getId(),
-                        retrievalQuery, topK, SearchMode.HYBRID)
-                : chunkSearchService.searchMany(userId,
-                        knowledgeBases.stream().map(KnowledgeBasePO::getId).toList(),
-                        retrievalQuery, topK, SearchMode.HYBRID);
+        List<ChunkSearchService.SearchHit> hits;
+        List<RetrievalFailure> failures = List.of();
+        if (knowledgeBases.size() == 1) {
+            hits = chunkSearchService.search(userId, knowledgeBases.get(0).getId(),
+                    retrievalQuery, topK, SearchMode.HYBRID);
+        } else {
+            // 多库走 detailed 那条入口，才能拿到"哪个库没搜到"。这一步不能省：
+            // 只取 hits 的话，一个库挂掉与那个库里没有内容在用户侧完全一样，
+            // 而模型会据此说出"你的笔记里没有 X"——X 可能正躺在那个挂掉的库里
+            ChunkSearchService.MultiKbSearchResult detailed = chunkSearchService.searchManyDetailed(
+                    userId, knowledgeBases.stream().map(KnowledgeBasePO::getId).toList(),
+                    retrievalQuery, topK, SearchMode.HYBRID, RetrievalFilters.none());
+            hits = detailed.hits();
+            failures = detailed.failures();
+        }
         if (hits.isEmpty()) {
-            return PreparedAnswer.none();
+            // 空结果也要带上 failures：没有它，调用方就会把"库没搜成"显示成
+            // "资料中没有相关内容（知识库尚未导入或未建立索引）"——一句与事实不符的断言
+            return PreparedAnswer.none(failures);
         }
         List<ChunkSearchService.SearchHit> head = headWithin(hits);
         List<Double> scores = reranker.score(question, candidatesOf(head));
@@ -261,8 +274,10 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         List<ChunkSearchService.SearchHit> ordered = reranked ? reorder(hits, scores) : hits;
 
         ContextAssembler.AssembledContext context = contextAssembler.assemble(ordered, contextTokenBudget);
+        // 只有一个构造点，empty 由 context 决定：组装后为空（资料全被预算裁掉）时同样是 empty，
+        // 而 failures 照旧带上——理由同上，只不过这次走的是同一条 return
         return new PreparedAnswer(context.text(), context.used(), context.tokens(),
-                context.truncated(), reranked, context.isEmpty());
+                context.truncated(), reranked, context.isEmpty(), failures);
     }
 
     @Override
@@ -291,6 +306,21 @@ public class RagAnswerServiceImpl implements RagAnswerService {
                 }
             }
             user.append('\n');
+        }
+        // 有库没搜到必须**在资料之前**告诉模型（Phase 5.5.1）。
+        // 不说的话，模型会把"这次资料里没有"直接说成"你的笔记里没有"——
+        // 那是一个用户无法分辨的假否定：他看到的是一句斩钉截铁的结论，
+        // 而真相是我们少搜了一整个库。系统提示词里的第 3 条（没内容就说"资料中没有相关内容"）
+        // 恰好会让这种说法显得合规，所以必须在这里显式豁免。
+        if (prepared.hasFailures()) {
+            user.append("【检索范围不完整】\n本次有 ")
+                    .append(prepared.failures().size())
+                    .append(" 个知识库没能检索成功：")
+                    .append(prepared.failures().stream()
+                            .map(failure -> failure.displayName() + "（" + failure.reason() + "）")
+                            .toList())
+                    .append("。其中可能就有答案。若资料不足以回答，请如实说明"
+                            + "\"相关库本次未检索成功\"，不要说\"资料中没有\"。\n\n");
         }
         user.append("【资料】\n").append(prepared.contextText())
                 .append("\n\n【问题】\n").append(question);

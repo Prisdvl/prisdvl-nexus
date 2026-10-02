@@ -1,6 +1,7 @@
 package com.lky.nexus.knowledge.service;
 
 import com.lky.nexus.ai.rag.retriever.RetrievalFilters;
+import com.lky.nexus.knowledge.rag.retriever.RetrievalFailure;
 import com.lky.nexus.knowledge.search.SearchMode;
 
 import java.util.List;
@@ -60,6 +61,42 @@ public interface ChunkSearchService {
     /** 多知识库检索（带元数据过滤）：过滤条件对每个库分别生效。 */
     List<SearchHit> searchMany(Long userId, List<Long> knowledgeBaseIds, String query, Integer topK,
                                SearchMode mode, RetrievalFilters filters);
+
+    /**
+     * 多知识库检索，<b>并如实带出"哪个库这次没搜到"</b>（Phase 5.5.1）。
+     *
+     * <p>与 {@link #searchMany} 只差一件事：多库并行召回后，单个库的失败会被<b>隔离</b>
+     * （否则一个库挂了会让另外几个库的资料一起作废），而隔离必须留下痕迹——
+     * {@code failures} 就是痕迹。没有它就分不清"这个库挂了"与"这个库里本来就没有"，
+     * 用户会看到模型说"你的笔记里没有 X"，而 X 正躺在那个失败的库里。
+     *
+     * <p><b>{@link #searchMany} 是它的薄包装</b>（丢弃 failures）。保留两个入口是因为
+     * 绝大多数调用方（检索接口、Agent 工具）不需要失败明细，让它们都要处理一个新字段，
+     * 只会把"不关心"写成"忽略"——不如让关心的一方明确地要。
+     *
+     * <p><b>哪些失败不被隔离</b>（它们仍然整批失败，因此不会出现在 {@code failures} 里）：
+     * <ul>
+     *   <li>归属校验（{@code requireAllOwned}，3001）：把越权探测变成"部分成功"比报错更糟；</li>
+     *   <li>嵌入模型不一致（4006）：它在扇出<b>之前</b>预检，一个库不合格就不该让别的库白跑一轮。</li>
+     * </ul>
+     * 归属校验之后、单个库自己抛的异常才会被隔离。全部库都失败时不返回本结果，
+     * 而是抛原异常——"所有库都挂了"绝不能伪装成"检索到 0 条"。
+     */
+    MultiKbSearchResult searchManyDetailed(Long userId, List<Long> knowledgeBaseIds, String query, Integer topK,
+                                           SearchMode mode, RetrievalFilters filters);
+
+    /**
+     * 多库检索结果：命中的片段 + 这次没能参与检索的知识库。
+     *
+     * @param hits     跨库归并、截断后的结果（与 {@link #searchMany} 同一条路径、同一份语义）
+     * @param failures 被隔离掉的库；空表示每个库都正常返回了（返回 0 条也算正常）
+     */
+    record MultiKbSearchResult(List<SearchHit> hits, List<RetrievalFailure> failures) {
+
+        public boolean hasFailures() {
+            return !failures.isEmpty();
+        }
+    }
 
     /**
      * 命中项（已补齐展示与引用所需的信息）。

@@ -9,6 +9,8 @@ import com.lky.nexus.knowledge.model.KnowledgeBaseStatus;
 import com.lky.nexus.knowledge.model.entity.ChunkPO;
 import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
+import com.lky.nexus.knowledge.rag.retriever.MultiKnowledgeRetriever;
+import com.lky.nexus.knowledge.rag.retriever.RetrievalFailure;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
 import org.slf4j.Logger;
@@ -37,6 +39,13 @@ import java.util.stream.Collectors;
  *       质量更低但至少不要让模型"空手"；</li>
  *   <li>两者都不可用 → 工具直接说明，模型如实回答"检索不可用"。</li>
  * </ol>
+ *
+ * <p><b>多个知识库并行召回</b>（Phase 5.5.1，与 RAG 共用同一处扇出 {@link MultiKnowledgeRetriever}）：
+ * 上面那条降级阶梯是<b>每个库各自</b>走一遍的，因此一个库降级或不可用都不会影响其余库。
+ * 与 RAG 那条路的差别在于失败怎么表达——RAG 把失败的库隔离掉（照样回答，但如实说明范围不完整），
+ * 本工具则把"这个库没搜成"直接写进回给模型的观察结果（模型据此不会把"搜不到"说成"你没有"）。
+ * 两者共用并行与顺序规则（单库不切线程、按输入顺序装配），失败表达各留各的，
+ * 因为受众不同：一个是终端用户，一个是正在决定要不要改用自身知识回答的模型。
  */
 @Component
 public class KnowledgeSearchTool {
@@ -53,17 +62,20 @@ public class KnowledgeSearchTool {
     private final ChunkMapper chunkMapper;
     private final DocumentMapper documentMapper;
     private final ObservabilityRegistry observabilityRegistry;
+    private final MultiKnowledgeRetriever multiRetriever;
 
     public KnowledgeSearchTool(ChunkSearchService chunkSearchService,
                                KnowledgeBaseMapper knowledgeBaseMapper,
                                ChunkMapper chunkMapper,
                                DocumentMapper documentMapper,
-                               ObservabilityRegistry observabilityRegistry) {
+                               ObservabilityRegistry observabilityRegistry,
+                               MultiKnowledgeRetriever multiRetriever) {
         this.chunkSearchService = chunkSearchService;
         this.knowledgeBaseMapper = knowledgeBaseMapper;
         this.chunkMapper = chunkMapper;
         this.documentMapper = documentMapper;
         this.observabilityRegistry = observabilityRegistry;
+        this.multiRetriever = multiRetriever;
     }
 
     @Tool(name = "knowledge_search",
@@ -123,27 +135,46 @@ public class KnowledgeSearchTool {
             }
         }
 
+        // 逐库并行召回（Phase 5.5.1）。这里用的是与 RAG 同一条扇出：
+        // 单库不切线程、结果按输入顺序装配。
+        //
+        // **注意降级阶梯仍然留在工具里**：每个库的"精确检索 → LIKE → 如实说不可用"
+        // 是任务体内部的既有一层，扇出只负责"并行地跑这些任务"。
+        // 因此任务本身不抛异常，扇出的"全部失败就抛"在这里永远不触发——
+        // 这不是遗漏，而是刻意的分工：工具的契约是"绝不让模型空手且不知道为什么"，
+        // 而 RAG 的契约是"绝不把全挂说成没命中"。两处的失败表达本来就不同。
+        MultiKnowledgeRetriever.FanOut<RecallOutcome> fanOut =
+                multiRetriever.retrieve(searchable, kb -> recallOne(userId, kb, query));
+        Map<Long, RetrievalFailure> failuresById = fanOut.failures().stream()
+                .collect(Collectors.toMap(RetrievalFailure::knowledgeBaseId, failure -> failure));
+
         List<ChunkSearchService.SearchHit> all = new ArrayList<>();
-        for (KnowledgeBasePO kb : searchable) {
-            // 召回条数交给知识库自己的 retrieval_top_k（topK 传 null = 没指定），
-            // 而不是在这里写死 5：工具的参数是"最终给模型看几条"，
-            // 与"每个库召回多深"不是同一件事，混在一起会让按库调参对 Agent 无效
-            int recallTopK = kb.getRetrievalTopK() == null ? DEFAULT_PRESENT_LIMIT : kb.getRetrievalTopK();
-            try {
-                all.addAll(chunkSearchService.search(userId, kb.getId(), query, null, SearchMode.HYBRID));
-            } catch (Exception ex) {
-                List<ChunkSearchService.SearchHit> fallback = likeSearch(kb.getId(), query, recallTopK);
-                if (!fallback.isEmpty()) {
-                    all.addAll(fallback);
-                    observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_DEGRADED);
-                    AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query,
-                            "知识库「" + kb.getName() + "」精确检索不可用，已降级为关键词匹配（"
-                                    + fallback.size() + " 条）"));
-                } else {
-                    observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_UNAVAILABLE);
-                    AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query,
-                            "知识库「" + kb.getName() + "」检索不可用：" + ex.getMessage()));
-                }
+        // 按输入顺序回放：痕迹（AgentContext.record）不能在工作线程上写——它最终推到
+        // SSE emitter，那个不是线程安全的；顺序也必须是确定的，否则同一份资料在两次
+        // 相同的对话里会以不同次序出现在卡片上
+        for (int i = 0; i < searchable.size(); i++) {
+            KnowledgeBasePO kb = searchable.get(i);
+            RecallOutcome outcome = fanOut.ordered().get(i);
+            if (outcome == null) {
+                // 只有超时会走到这里（任务自己吞掉异常）。既有的串行实现没有超时，
+                // 一个卡死的库会把整次工具调用拖住；现在它是"这一个库这次没搜成"，
+                // 如实告诉模型，其余库照常贡献
+                RetrievalFailure failure = failuresById.get(kb.getId());
+                observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_UNAVAILABLE);
+                AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query,
+                        "知识库「" + kb.getName() + "」检索失败："
+                                + (failure == null ? "未返回结果" : failure.reason())));
+                continue;
+            }
+            all.addAll(outcome.hits());
+            if (outcome.kind() == RecallKind.DEGRADED) {
+                observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_DEGRADED);
+            } else if (outcome.kind() == RecallKind.UNAVAILABLE) {
+                observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_UNAVAILABLE);
+            }
+            if (outcome.note() != null) {
+                AgentContext.record(toolContext,
+                        new AgentContext.ToolCallRecord("knowledge_search", query, outcome.note()));
             }
         }
         all.sort(Comparator.comparingDouble(ChunkSearchService.SearchHit::score).reversed());
@@ -179,6 +210,45 @@ public class KnowledgeSearchTool {
         AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query,
                 summary(take, scoped, knowledgeBases, searchable, skipped)));
         return out.toString();
+    }
+
+    /**
+     * 单库召回（跑在扇出的工作线程上，Phase 5.5.1）。
+     *
+     * <p><b>这里绝不碰任何共享的可变状态</b>：不调 {@code AgentContext.record}、不自增计数。
+     * 前者会并发写 SSE emitter（不是线程安全的），后者即使线程安全也会让"痕迹"与"计数"
+     * 分别发生在两个线程上，排查时序对不上。需要留下的一切都装进返回值，由调用线程按输入顺序回放。
+     *
+     * <p>召回条数交给知识库自己的 {@code retrieval_top_k}（{@code topK} 传 null = 没指定），
+     * 而不是在这里写死 5：工具的参数是"最终给模型看几条"，与"每个库召回多深"不是同一件事，
+     * 混在一起会让按库调参对 Agent 无效。
+     */
+    private RecallOutcome recallOne(Long userId, KnowledgeBasePO kb, String query) {
+        int recallTopK = kb.getRetrievalTopK() == null ? DEFAULT_PRESENT_LIMIT : kb.getRetrievalTopK();
+        try {
+            return new RecallOutcome(RecallKind.OK,
+                    chunkSearchService.search(userId, kb.getId(), query, null, SearchMode.HYBRID), null);
+        } catch (Exception ex) {
+            List<ChunkSearchService.SearchHit> fallback = likeSearch(kb.getId(), query, recallTopK);
+            if (!fallback.isEmpty()) {
+                return new RecallOutcome(RecallKind.DEGRADED, fallback,
+                        "知识库「" + kb.getName() + "」精确检索不可用，已降级为关键词匹配（"
+                                + fallback.size() + " 条）");
+            }
+            return new RecallOutcome(RecallKind.UNAVAILABLE, List.of(),
+                    "知识库「" + kb.getName() + "」检索不可用：" + ex.getMessage());
+        }
+    }
+
+    /** 一个库这次的下场：正常 / 降级到关键词匹配 / 完全不可用。 */
+    private enum RecallKind {
+        OK, DEGRADED, UNAVAILABLE
+    }
+
+    /**
+     * 单库召回结果 + 需要在调用线程上回放的那句痕迹（{@code note} 为 null 表示没有可说的）。
+     */
+    private record RecallOutcome(RecallKind kind, List<ChunkSearchService.SearchHit> hits, String note) {
     }
 
     /**

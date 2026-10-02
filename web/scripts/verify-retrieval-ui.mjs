@@ -45,7 +45,15 @@ function sse(frames) {
   return frames.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('')
 }
 
-/** 两条腿的桩帧：先"命中两段"，再"一段都没命中"。 */
+/**
+ * 桩帧四条腿：命中两段 → 一段都没命中 → **其中一库检索失败** → **全部库检索失败**。
+ *
+ * 后两条是 Phase 5.5.1 加的：多库并行之后，单个库失败是被**隔离**掉的，
+ * 界面上"检索到 N 个片段"照样显示——所以"这次少搜了谁"必须由卡片自己说出来。
+ * 这两条腿同时钉住那句措辞：空结果标签**随有没有库失败改口**
+ * （"知识库里没有命中"是一句关于内容的断言，有库没搜成时说它就是假话）。
+ * 桩帧是这个 UI 在没有 ES 时唯一能验到的地方。
+ */
 const legs = [
   {
     name: '命中两段',
@@ -77,7 +85,9 @@ const legs = [
         contextTokens: 1200,
         truncated: 0,
         reranked: true,
-        empty: false
+        empty: false,
+        // Phase 5.5.1：正常时是空数组（不是缺省字段——前端不判空）
+        failedKnowledgeBases: []
       }],
       ['delta', { text: '缓存击穿可以用**互斥锁**，' }],
       ['delta', { text: '也可以用逻辑过期。' }],
@@ -113,7 +123,10 @@ const legs = [
         contextTokens: 0,
         truncated: 0,
         reranked: false,
-        empty: true
+        empty: true,
+        // 一个库、成功检索、只是没命中：这里**没有**失败库，
+        // 因此空结果标签必须说"知识库里没有命中"（与腿四对照）
+        failedKnowledgeBases: []
       }],
       ['delta', { text: '资料中没有相关内容（知识库未导入或未建立索引）。' }],
       ['done', { finishReason: 'empty' }]
@@ -126,6 +139,129 @@ const legs = [
       {
         id: '90004', role: 'ASSISTANT', content: '资料中没有相关内容（知识库未导入或未建立索引）。', model: 'chat.default',
         status: 'SUCCESS', errorMsg: null, createdAt: '2026-09-30T10:01:01', toolCalls: []
+      }
+    ]
+  },
+  {
+    // Phase 5.5.1 的核心界面：绑了两个库，其中一个**没搜成**。
+    // 卡片照样显示"检索到 1 个片段"——不把失败点出来，用户会以为答案涵盖了两个库。
+    name: '其中一个库检索失败',
+    conversationId: '',
+    frames: [
+      ['meta', {
+        requestId: 'stub-req-3',
+        modelRole: 'chat.default',
+        mode: 'RAG',
+        citations: []
+      }],
+      ['retrieval', {
+        knowledgeBaseIds: ['5001', '5002'],
+        count: 1,
+        hits: [
+          {
+            chunkId: '9001', documentId: '100', knowledgeBaseId: '5001',
+            documentTitle: '缓存击穿.md',
+            headingPath: 'Redis > 缓存 > 缓存击穿', score: 0.83, source: 'hybrid'
+          }
+        ],
+        contextTokens: 600,
+        truncated: 0,
+        reranked: true,
+        empty: false,
+        failedKnowledgeBases: [
+          { knowledgeBaseId: '5002', knowledgeBaseName: '内部 FAQ', reason: 'ES 连接被拒绝' }
+        ]
+      }],
+      ['delta', { text: '（资料不全）缓存击穿可以用互斥锁；内部 FAQ 这次没能检索，' }],
+      ['delta', { text: '里面若也有相关内容，需要稍后重试。' }],
+      ['done', { finishReason: 'stop' }]
+    ],
+    messages: [
+      {
+        id: '90005', role: 'USER', content: '缓存击穿怎么解决？', model: null,
+        status: 'SUCCESS', errorMsg: null, createdAt: '2026-09-30T10:02:00', toolCalls: []
+      },
+      {
+        id: '90006', role: 'ASSISTANT', content: '（资料不全）缓存击穿可以用互斥锁；内部 FAQ 这次没能检索，里面若也有相关内容，需要稍后重试。',
+        model: 'chat.default', status: 'SUCCESS', errorMsg: null, createdAt: '2026-09-30T10:02:01', toolCalls: []
+      }
+    ]
+  },
+  {
+    // 两个库全挂：空结果 + 有失败库 → 措辞必须与"检索到了、只是没命中"区分开。
+    // 若这里仍显示"知识库里没有命中"，用户会读成"你的笔记里没有"——
+    // 而真相是一个库都没搜成（服务端为此换掉了固定回答，界面必须跟上）。
+    name: '全部库检索失败',
+    conversationId: '',
+    frames: [
+      ['meta', {
+        requestId: 'stub-req-4',
+        modelRole: 'chat.default',
+        mode: 'RAG',
+        citations: []
+      }],
+      ['retrieval', {
+        knowledgeBaseIds: ['5001', '5002'],
+        count: 0,
+        hits: [],
+        contextTokens: 0,
+        truncated: 0,
+        reranked: false,
+        empty: true,
+        failedKnowledgeBases: [
+          { knowledgeBaseId: '5001', knowledgeBaseName: '产品手册', reason: '超过 10 秒未返回（整体超时）' },
+          { knowledgeBaseId: '5002', knowledgeBaseName: '内部 FAQ', reason: 'ES 连接被拒绝' }
+        ]
+      }],
+      ['delta', { text: '有知识库暂时无法检索（可能正在重建索引或依赖服务不可用），本次没有拿到可用资料。请稍后重试，或先只绑定单个知识库确认。' }],
+      ['done', { finishReason: 'empty' }]
+    ],
+    messages: [
+      {
+        id: '90007', role: 'USER', content: '两个库都挂了的问题', model: null,
+        status: 'SUCCESS', errorMsg: null, createdAt: '2026-09-30T10:03:00', toolCalls: []
+      },
+      {
+        id: '90008', role: 'ASSISTANT', content: '有知识库暂时无法检索（可能正在重建索引或依赖服务不可用），本次没有拿到可用资料。请稍后重试，或先只绑定单个知识库确认。',
+        model: 'chat.default', status: 'SUCCESS', errorMsg: null, createdAt: '2026-09-30T10:03:01', toolCalls: []
+      }
+    ]
+  },
+  {
+    // 两库、一个搜成了但没命中、另一个没搜成：三种空结果的措辞到此才算齐。
+    // 这一条最容易被写成"知识库里没有命中"——那句只对"搜过且没命中"成立。
+    name: '一个库没命中、一个库没搜成',
+    conversationId: '',
+    frames: [
+      ['meta', {
+        requestId: 'stub-req-5',
+        modelRole: 'chat.default',
+        mode: 'RAG',
+        citations: []
+      }],
+      ['retrieval', {
+        knowledgeBaseIds: ['5001', '5002'],
+        count: 0,
+        hits: [],
+        contextTokens: 0,
+        truncated: 0,
+        reranked: false,
+        empty: true,
+        failedKnowledgeBases: [
+          { knowledgeBaseId: '5002', knowledgeBaseName: '内部 FAQ', reason: '超过 10 秒未返回（整体超时）' }
+        ]
+      }],
+      ['delta', { text: '有知识库暂时无法检索（可能正在重建索引或依赖服务不可用），本次没有拿到可用资料。请稍后重试，或先只绑定单个知识库确认。' }],
+      ['done', { finishReason: 'empty' }]
+    ],
+    messages: [
+      {
+        id: '90009', role: 'USER', content: '一个库超时的问题', model: null,
+        status: 'SUCCESS', errorMsg: null, createdAt: '2026-09-30T10:04:00', toolCalls: []
+      },
+      {
+        id: '90010', role: 'ASSISTANT', content: '有知识库暂时无法检索（可能正在重建索引或依赖服务不可用），本次没有拿到可用资料。请稍后重试，或先只绑定单个知识库确认。',
+        model: 'chat.default', status: 'SUCCESS', errorMsg: null, createdAt: '2026-09-30T10:04:01', toolCalls: []
       }
     ]
   }
@@ -289,9 +425,103 @@ try {
   if (!emptyAnswer.includes('资料中没有相关内容')) {
     failures.push(`零命中回答不明确：${emptyAnswer}`)
   }
+  if ((await page.locator('.retrieval .el-tag:has-text("检索失败")').count()) !== 0) {
+    failures.push('没有失败库时不该出现"检索失败"标签（有它就是凭空报故障）')
+  }
+
+  // ---------- 腿三：其中一个库检索失败（Phase 5.5.1 的核心界面） ----------
+  await newRagConversation()
+  await page.fill('.composer textarea', '缓存击穿怎么解决？')
+  holdReload = true
+  await page.click('.composer .send')
+  await waitForCard()
+  // 注意：这一步**先别放行**服务端校正。校正一落地检索卡片就消失（命中片段未落库，已知缺口），
+  // 断言做到一半元素被换掉就成了"时有时无"的假阴性——首轮实测就是这么挂在 hover 上的。
+
+  const partialTag = page.locator('.retrieval .el-tag:has-text("个知识库检索失败")')
+  const partialTagText = (await partialTag.last().innerText()).trim()
+  console.log(`⑧ 部分失败卡片：${partialTagText}`)
+  if (partialTagText !== '其中 1 个知识库检索失败') {
+    failures.push(`部分失败标签文案异常：${partialTagText}`)
+  }
+  if ((await page.locator('.retrieval .el-tag:has-text("知识库里没有命中")').count()) !== 0) {
+    failures.push('有命中时不该出现"知识库里没有命中"')
+  }
+  // 只说"1 个库失败"不够：用户还得知道是**哪个**、**为什么**，否则无从判断能不能重试。
+  // 这里**不用 hover 而用派发事件**：首轮实测 hover 会被 el-loading-mask 挡住指针事件
+  // （会话列表刷新时的遮罩），重试 30 秒永远等不到；派发事件不走命中测试，验的还是同一件事——
+  // Vue 监听到 mouseenter → el-tooltip 渲染出内容。
+  try {
+    await partialTag.last().dispatchEvent('mouseenter')
+    await page.waitForSelector('[role="tooltip"]:has-text("内部 FAQ")', { timeout: 8000 })
+    const tip = (await page.locator('[role="tooltip"]').last().innerText()).trim()
+    console.log(`⑨ 失败明细悬浮提示：${tip}`)
+    if (!tip.includes('ES 连接被拒绝')) {
+      failures.push(`悬浮提示没有给出失败原因：${tip}`)
+    }
+  } catch {
+    failures.push('悬浮"检索失败"标签没有弹出库名与原因')
+  }
+  // 等入场动画落定再截图：首轮截在 zoom-in 的中途，标签在图上是一团糊的，
+  // 作为证据它什么也证明不了（截图的价值就是"人能看懂"）
+  await sleep(700)
+  await page.screenshot({ path: `${outDir}/agent-chat-rag-retrieval-failed-kb.png` })
+  console.log('✓ 已截图 docs/screenshots/agent-chat-rag-retrieval-failed-kb.png')
+  holdReload = false
+
+  // ---------- 腿四：全部库检索失败（空结果的措辞必须改口） ----------
+  await newRagConversation()
+  await page.fill('.composer textarea', '两个库都挂了的问题')
+  holdReload = true
+  await page.click('.composer .send')
+  await waitForCard()
+
+  const allFailCount = (await page.locator('.retrieval-count').last().innerText()).trim()
+  const allFailTags = (await page.locator('.retrieval .el-tag').allInnerTexts())
+    .map((text) => text.trim())
+  console.log(`⑩ 全部失败卡片：${allFailCount} / 标签 ${JSON.stringify(allFailTags)}`)
+  if (allFailCount !== '检索到 0 个片段') {
+    failures.push(`全部失败卡片文案异常：${allFailCount}`)
+  }
+  // 断言用的是"哪个标签在"，不是"第几个标签说什么"——顺序一变就误报的断言没有价值
+  if ((await page.locator('.retrieval .el-tag:has-text("知识库本次都没有检索成功")').count()) !== 1) {
+    failures.push(`有失败库时空结果标签必须改口，实际标签：${JSON.stringify(allFailTags)}`)
+  }
+  if ((await page.locator('.retrieval .el-tag:has-text("知识库里没有命中")').count()) !== 0) {
+    failures.push('库都没搜成时说了"知识库里没有命中"——与腿二对照，这句措辞必须是条件式的')
+  }
+  if ((await page.locator('.retrieval .el-tag:has-text("其中 2 个知识库检索失败")').count()) !== 1) {
+    failures.push('两个库全失败时没有显示"其中 2 个知识库检索失败"')
+  }
+  const allFailAnswer = (await answerText()).trim()
+  console.log(`⑪ 全部失败回答：${allFailAnswer}`)
+  if (!allFailAnswer.includes('有知识库暂时无法检索')) {
+    failures.push(`全部失败时的回答不该说"资料中没有相关内容"：${allFailAnswer}`)
+  }
+  holdReload = false
+
+  // ---------- 腿五：一个库搜成了但没命中、另一个没搜成 ----------
+  await newRagConversation()
+  await page.fill('.composer textarea', '一个库超时的问题')
+  holdReload = true
+  await page.click('.composer .send')
+  await waitForCard()
+
+  const mixedTags = (await page.locator('.retrieval .el-tag').allInnerTexts()).map((t) => t.trim())
+  console.log(`⑫ 部分失败且零命中：${JSON.stringify(mixedTags)}`)
+  if ((await page.locator('.retrieval .el-tag:has-text("其余知识库没有命中")').count()) !== 1) {
+    failures.push(`还有一个库正常搜过时应说"其余知识库没有命中"，实际：${JSON.stringify(mixedTags)}`)
+  }
+  if ((await page.locator('.retrieval .el-tag:has-text("知识库里没有命中")').count()) !== 0) {
+    failures.push('有库没搜成时不能断言"知识库里没有命中"')
+  }
+  holdReload = false
 } catch (error) {
   failures.push(error.message)
   console.error('✗ 验证失败：', error.message)
+  // 失败现场截图：**临时的**，只给当场排查用，不要提交。
+  // （上一版把它提交进了仓库，于是它长期躺在 docs/screenshots 里冒充"当前状态"——
+  //  它记的是某次失败，不是界面该有的样子。失败的证据由退出码和这行日志给。）
   await page.screenshot({ path: `${outDir}/agent-chat-rag-ui-failure.png` })
 } finally {
   // 收尾：删掉本轮建的两个会话。不删也不影响结论（H2 是内存库，重启即清），

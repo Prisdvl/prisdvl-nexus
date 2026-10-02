@@ -1,6 +1,7 @@
 package com.lky.nexus.knowledge.rag;
 
 import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.ai.rag.retriever.RetrievalFilters;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
@@ -75,17 +76,19 @@ class RagAnswerServicePrepareManyTest {
     }
 
     @Test
-    @DisplayName("两个库：走 searchMany，且把两个库 id 都传下去（不是取第一个）")
+    @DisplayName("两个库：走 searchManyDetailed（不是单库 search），且把两个库 id 都传下去")
     void multipleKnowledgeBasesDispatchToSearchMany() {
-        when(chunkSearchService.searchMany(eq(USER_ID), anyList(), anyString(), any(), any()))
-                .thenReturn(hits(KB_A, 101L, KB_B, 201L));
+        when(chunkSearchService.searchManyDetailed(eq(USER_ID), anyList(), anyString(), any(), any(), any()))
+                .thenReturn(detailed(hits(KB_A, 101L, KB_B, 201L)));
         when(reranker.score(any(), anyList())).thenReturn(List.of());
 
         PreparedAnswer prepared =
                 ragAnswerService.prepareMany(USER_ID, List.of(KB_A, KB_B), "问题", null, List.of());
 
-        verify(chunkSearchService).searchMany(eq(USER_ID), eq(List.of(KB_A, KB_B)), eq("问题"),
-                eq(null), eq(SearchMode.HYBRID));
+        // 5.5.1 起多库走 detailed 入口：hits 一样，但能拿到"哪个库没搜到"。
+        // 若改回 searchMany，这一条与下面那条"失败要带出来"都会红
+        verify(chunkSearchService).searchManyDetailed(eq(USER_ID), eq(List.of(KB_A, KB_B)), eq("问题"),
+                eq(null), eq(SearchMode.HYBRID), eq(RetrievalFilters.none()));
         verify(chunkSearchService, never()).search(any(), any(), anyString(), any(), any());
         assertThat(prepared.empty()).isFalse();
     }
@@ -107,8 +110,8 @@ class RagAnswerServicePrepareManyTest {
     @Test
     @DisplayName("多库命中：每条进入资料块的片段各自带着自己的库 id（引用才标得出处）")
     void usedHitsKeepTheirOwnKnowledgeBaseId() {
-        when(chunkSearchService.searchMany(eq(USER_ID), anyList(), anyString(), any(), any()))
-                .thenReturn(hits(KB_A, 101L, KB_B, 201L));
+        when(chunkSearchService.searchManyDetailed(eq(USER_ID), anyList(), anyString(), any(), any(), any()))
+                .thenReturn(detailed(hits(KB_A, 101L, KB_B, 201L)));
         when(reranker.score(any(), anyList())).thenReturn(List.of());
 
         PreparedAnswer prepared =
@@ -130,7 +133,8 @@ class RagAnswerServicePrepareManyTest {
                 USER_ID, List.of(KB_A, 9999L), "问题", null, List.of()))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("9999");
-        verify(chunkSearchService, never()).searchMany(any(), anyList(), anyString(), any(), any());
+        verify(chunkSearchService, never())
+                .searchManyDetailed(any(), anyList(), anyString(), any(), any(), any());
     }
 
     @Test
@@ -140,10 +144,17 @@ class RagAnswerServicePrepareManyTest {
                 ragAnswerService.prepareMany(USER_ID, List.of(KB_A, KB_B), "  ", null, List.of());
 
         assertThat(prepared.empty()).isTrue();
-        verify(chunkSearchService, never()).searchMany(any(), anyList(), anyString(), any(), any());
+        verify(chunkSearchService, never())
+                .searchManyDetailed(any(), anyList(), anyString(), any(), any(), any());
     }
 
     // ------------------------------------------------------------------
+
+    /** 只关心命中，没有失败：这是绝大多数情况的形状。 */
+    private static ChunkSearchService.MultiKbSearchResult detailed(
+            List<ChunkSearchService.SearchHit> hits) {
+        return new ChunkSearchService.MultiKbSearchResult(hits, List.of());
+    }
 
     private static KnowledgeBasePO knowledgeBase(Long id) {
         KnowledgeBasePO entity = new KnowledgeBasePO();

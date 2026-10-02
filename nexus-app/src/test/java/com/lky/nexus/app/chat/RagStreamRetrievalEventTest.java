@@ -5,6 +5,7 @@ import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.knowledge.rag.PreparedAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswerService;
+import com.lky.nexus.knowledge.rag.retriever.RetrievalFailure;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -107,6 +108,9 @@ class RagStreamRetrievalEventTest {
         assertThat(JsonPath.<List<String>>read(retrieval, "$.knowledgeBaseIds")).containsExactly(kbId);
         assertThat(JsonPath.<String>read(retrieval, "$.hits[0].knowledgeBaseId")).isEqualTo(kbId);
         assertThat(JsonPath.<Boolean>read(retrieval, "$.empty")).isFalse();
+        // 全部库都正常时给空列表而不是 null：前端只写一套渲染逻辑，不为"字段在不在"分叉
+        // （5.5.1）
+        assertThat(JsonPath.<List<?>>read(retrieval, "$.failedKnowledgeBases")).isEmpty();
 
         // 两条链路共用同一份提示词构造：这里断言会话流式确实走的是 RagAnswerService 的方法，
         // 而不是自己拼了一份 —— 否则同一个人问同一个问题会得到两种答案，且很难发现
@@ -171,6 +175,43 @@ class RagStreamRetrievalEventTest {
         verify(streamSpec, never()).chatResponse();
         assertThat(body).as("仍要给出一句明确的回答，而不是空白").contains(RagAnswerService.EMPTY_ANSWER);
         assertThat(JsonPath.<String>read(dataOf(body, "done"), "$.finishReason")).isEqualTo("empty");
+    }
+
+    @Test
+    @DisplayName("有库检索失败：retrieval 事件里带上失败明细，且『没有资料』的回答换一种说法")
+    void failedKnowledgeBasesAreAnnouncedAndChangeTheEmptyAnswer() throws Exception {
+        String token = registerAndLogin("rag-stream-kb-failed");
+        String kbA = createKnowledgeBase(token, "正常库");
+        String kbB = createKnowledgeBase(token, "故障库");
+        String conversationId = createRagConversation(token, kbA, kbB);
+
+        // 一个库失败、另一个库也没有命中：这是最容易说假话的那一格——
+        // 没有 failures 时它会被报成"资料中没有相关内容（知识库尚未导入或未建立索引）"，
+        // 而真相是有个库压根没被搜过
+        when(ragAnswerService.prepareMany(any(), any(), anyString(), any(), any()))
+                .thenReturn(PreparedAnswer.none(List.of(new RetrievalFailure(
+                        Long.valueOf(kbB), "故障库", "ES 连接被拒绝"))));
+        ChatClient.StreamResponseSpec streamSpec = stubModel("x", "y");
+
+        String body = streamBody(token, "/api/chat/stream", """
+                {"conversationId":%s,"content":"任意问题"}
+                """.formatted(conversationId));
+
+        String retrieval = dataOf(body, "retrieval");
+        assertThat(JsonPath.<String>read(retrieval, "$.failedKnowledgeBases[0].knowledgeBaseName"))
+                .isEqualTo("故障库");
+        assertThat(JsonPath.<String>read(retrieval, "$.failedKnowledgeBases[0].knowledgeBaseId"))
+                .isEqualTo(kbB);
+        assertThat(JsonPath.<String>read(retrieval, "$.failedKnowledgeBases[0].reason"))
+                .contains("ES 连接被拒绝");
+        // 全部正常时也要给一个空列表（不是 null）：前端的 forEach 不该需要判空
+        assertThat(JsonPath.<List<?>>read(retrieval, "$.failedKnowledgeBases")).hasSize(1);
+
+        verify(streamSpec, never()).chatResponse();
+        assertThat(body)
+                .as("『有库没搜成』不能被说成『资料中没有』——后者是一个与事实不符的断言")
+                .contains(RagAnswerService.RETRIEVAL_FAILED_ANSWER)
+                .doesNotContain(RagAnswerService.EMPTY_ANSWER);
     }
 
     // ------------------------------------------------------------------ 辅助
@@ -273,13 +314,15 @@ class RagStreamRetrievalEventTest {
         return JsonPath.read(response, "$.data.id");
     }
 
-    private String createRagConversation(String token, String kbId) throws Exception {
+    /** 建一个 RAG 会话；可变参数是为了能绑多个库（多库失败那条用例需要）。 */
+    private String createRagConversation(String token, String... kbIds) throws Exception {
+        String ids = String.join(",", List.of(kbIds));
         String response = mockMvc.perform(post("/api/chat/conversations")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"title":"RAG 会话","mode":"RAG","kbIds":[%s]}
-                                """.formatted(kbId)))
+                                """.formatted(ids)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return JsonPath.read(response, "$.data.id");

@@ -377,6 +377,52 @@
 
 ---
 
+## ADR-022 多库检索的并行与失败隔离收在一个独立执行器里，不写进 Retriever 也不散在门面
+
+**背景**：Phase 5.5 让一次问答能绑多个知识库，但那条路是**逐库串行**的
+（3 个库 = 3 次 ES + 嵌入 + pgvector + 回表，尾延迟相加），而且**没有失败隔离**：
+任一库抛异常，整次检索变成 4005。5.5.1 要把这两条补上。
+
+**决策**：新增 `MultiKnowledgeRetriever`（nexus-knowledge），唯一的职责是
+"给定 N 个库和一个逐库动作，并行跑完、按输入顺序装配、把失败隔离并如实记下来"。
+RAG 门面（`ChunkSearchServiceImpl.searchManyDetailed`）与 Agent 工具（`KnowledgeSearchTool`）
+共用它。它**不实现 `Retriever` 端口**。
+
+**备选与为什么不选**
+
+| 备选 | 不选的原因 |
+| --- | --- |
+| 在 `HybridRetriever` 等三个策略内部各自并行 | 策略的语义是"**一个库**怎么召回"（BM25/向量/RRF 只在库内有意义）。把扇出塞进去，"几个库"这件事就有三个实现，而失败表达还得分三份对齐——正是 `ChunkSearchServiceParityTest` 当初存在的理由 |
+| 门面里直接写 `CompletableFuture.allOf` | 两处调用方（RAG + Agent）会各写一遍，而"超时算失败还是算空结果""按输入顺序还是完成顺序装配""全部失败怎么报"这三个判断**每处都要重新做对一次**，且做错时不报错 |
+| `@Async` + `Future` | 依赖 Spring 的线程池与代理；单库路径会**被迫**切线程（异步注解无法表达"只有 N>1 才异步"），而单库路径的运行时行为必须逐字段不变（`ChunkSearchServiceParityTest` 钉着） |
+| `parallelStream()` | 用的是 ForkJoinPool.commonPool，并发度与虚拟线程无关，且**没有任何超时手段**；阻塞式的 ES/JDBC 调用会占死公共池 |
+| `StructuredTaskScope`（JDK 21 孵化） | 需要用 `--enable-preview` 编译整个模块。本项目的 JDK 21 是"目标版本"，不是"预览实验场" |
+| 给扇出加"并行度"配置 | 假旋钮：绑库上限本身是 10（`AgentView.vue` 的 `multiple-limit`），虚拟线程又便宜。只留一个超时（`nexus.retrieval.fanout-timeout`） |
+
+**四条定死的口径**（写在这里，是因为它们属于"决定"，不属于实现）
+
+1. **单库不切线程**：库数 == 1 就在调用线程上直接执行。这不是优化，是**契约**——
+   单库路径的线程、异常、顺序必须和改造前完全一致。
+2. **按输入顺序装配，不按完成顺序**。两处下游对顺序敏感：`RecallSupport.merge` 是稳定排序，
+   `KnowledgeSearchTool` 的 `all.sort(...)` 也是；按完成顺序装配会让**同分条目的次序随
+   网络抖动而变**，同一份资料在两次相同提问里以不同顺序出现在引用编号里。
+3. **失败的库占位成空列表，不是从列表里剔除**。`RecallSupport.merge` 有一条
+   `size() == 1` 的快速路径（直接返回，不截断），剔掉一个失败的库会让"3 个库"变成"1 个库"
+   而静默改变全局截断行为——这一点有专门的测试钉住（改回过滤即变红）。
+4. **两种失败必须分开**：归属校验失败（`requireAllOwned` 的 404/3001）与嵌入模型不一致
+   （4006）**不被隔离**，仍在扇出之前整批失败。把越权探测变成"部分成功"比报错更糟；
+   而"某个库的嵌入模型和别的库不一样"是配置错误，隔离它只会让用户拿到一堆无法解释的缺料。
+
+**代价（如实记）**
+
+- 下游并发压力最多乘 N（N ≤ 10）。虚拟线程本身便宜，但 ES / pgvector / 嵌入服务的压力
+  是真的上升了。`retrieval.kb.failed` 计数与 WARN 日志让"部分失败"可巡检，不至于
+  变成无人察觉的常态化降级。
+- 超时是**尽力取消**（与既有 `TimeLimitedCall` 同一措辞）：`cancel(true)` 能中断等待，
+  但外部 HTTP 请求能否真正停下取决于客户端实现。
+
+---
+
 ## Appendix A. 版本与 API 核对结果（2026-09-24）
 
 > 规则：**不确定的一律不写进代码**。下表 `✅ 已核对` 项可直接使用；`⚠️ 待核对` 项在动手前必须现场验证（Phase 0 Step 0.3）。
@@ -3899,6 +3945,173 @@ nexus:rl:ip:{ip}:{yyyyMMddHH}       = 1    ttl 7172
 **已知边界**（完整列表见 ADR-020 与 `productization-gap-analysis.md`）：
 refresh token / 登出仍未实现；配额可被 Redis 重启或淘汰绕过；`status` 改动不立即吊销令牌；
 登录冻结可被定向刷锁；记账是尽力而为（模型已调用无法回滚，供应商不回传 usage 时记不到）。
+
+---
+
+### B.48 Phase 5.5.1 实现记录（多库检索：并行化，与"隔离了但不能让它消失"）
+
+**0. 本增量是什么**
+
+需求方提的"多知识库 RAG"共 7 条要求。**先逐条核对，5 条在 5.5（B.46）里就已经是真的**：
+多库检索（不是 `kbIds.get(0)`）、管线形状、权限（`requireAllOwned` 单条 SQL 过滤）、
+Agent 复用已有字段（`agent_knowledge_base` 在 V12 就有）、单库/双库/跨用户/空库测试。
+所以本期**没有再造一个平行的多库实现**——那会变成同一件事的两份代码，
+而 `ChunkSearchServiceParityTest`（连同冻结基线 `ChunkSearchServiceLegacyReference`）当初就是为了防这个。
+
+本期真正补的是两条：
+
+1. **没有并行**：`ChunkSearchServiceImpl` 与 `KnowledgeSearchTool` 都是串行 `for`，
+   3 个库 = 3 次（ES + 嵌入 + pgvector + 回表）**尾延迟相加**；
+2. **`searchMany` 没有逐库失败隔离**：任一库抛异常 → 整次检索 4005。
+   （`KnowledgeSearchTool` 里**本来就有**逐库 try/catch + LIKE 兜底，缺的只有 RAG 那条路。）
+
+**1. ★ 为什么"只加隔离"是倒退——这一条决定了本期的形状**
+
+今天的失败是**响亮的**：一个库垮了，整次检索报 4005，用户知道"这次没搜成"。
+只加隔离不加可见性，它就变成"某个库静默地什么都没贡献"：卡片照样显示"检索到 5 个片段"，
+而模型的提示词里也没有任何线索——于是它把"这个库没被搜过"说成"你的笔记里没有"。
+**用户看到一句斩钉截铁的假否定，而这句话在系统提示词第 3 条下还显得完全合规。**
+这正是本项目从头到尾在防的那个 bug（"明明有资料却答不知道"）。
+
+所以隔离**必须同时可见**，而且要在四个地方都可见，缺一层就在那一层变成假话：
+
+| 层 | 改了什么 | 丢了会怎样 |
+| --- | --- | --- |
+| `PreparedAnswer.failures` | record 加第 7 个字段（保留 6 参兼容构造器） | 上游只知道"命中了 5 条" |
+| 提示词（`RagAnswerServiceImpl.userMessage`） | 资料块**之前**加"【检索范围不完整】…其中可能就有答案…不要说\"资料中没有\"" | 模型给出用户可见的假否定 |
+| SSE `retrieval` 事件 | `payload.failedKnowledgeBases = [{knowledgeBaseId, knowledgeBaseName, reason}]` | 界面无从显示"这次少搜了谁" |
+| 空结果文案 | 有失败时用 `RagAnswerService.RETRIEVAL_FAILED_ANSWER`，不再用 `EMPTY_ANSWER` | "资料中没有相关内容（知识库尚未导入或未建立索引）"——**一句与事实不符的断言** |
+
+前端那一层还要再分一次：`empty` 标签的措辞按"有几个库这次真的搜成了"改口
+（`emptyLabel`：全挂 → "知识库本次都没有检索成功"，部分挂 → "其余知识库没有命中"，
+全成 → 才说"知识库里没有命中"）。后端已经把这条区别写进提示词，界面若一律说
+"知识库里没有命中"，同一件事就有了三种口径，而用户看到的恰好是最笃定的那一种。
+
+**2. 三个真陷阱（都是"错了不报错"的那种）**
+
+**① TCCL 不跨线程，而且失败会永久毒化。** 虚拟线程上的 `Thread.currentThread().getContextClassLoader()`
+是 JDK 的 `AppClassLoader`，不是 Boot 的 `LaunchedClassLoader`。`OllamaEmbeddingModel` 的静态初始化
+需要后者，**且失败一次就在整个 JVM 里永久失效**（`EmbeddingClientFactory:100-130` 记着这件事）。
+所以每个任务都要显式设回调用线程的 TCCL。MDC 同理（`RequestIdHolder` 明写不跨线程），
+但 nexus-knowledge 不能 import app 层的 `RequestIdHolder`（模块方向），改用 SLF4J 的
+`MDC.getCopyOfContextMap()` / `setContextMap` / `clear`——没有 requestId 的日志会让
+"哪个请求慢"彻底查不出来。
+
+**② `List.copyOf` 拒绝 null，而"失败位 = null"是契约。** 返回值的语义是
+"与输入等长、失败的位是 null"，用 `List.copyOf` 会直接 NPE（第一版就是这么红的）。
+改成 `freeze()`（`Collections.unmodifiableList(new ArrayList<>(...))`），
+**保留 null 又保留不可变性**。单库那条路原本写的是 `List.of(apply(...))`，同样是 NPE 陷阱。
+
+**③ SSE 监听器不是线程安全的——所以任务里绝不 `record`。**
+`AgentContext.collector` 的 sink 是普通 `ArrayList`；流式那条路的监听器更直接，
+`ChatStreamServiceImpl.StreamSession` 当场推 `SseEmitter.send`，而那个**不是**线程安全的。
+因此扇出的任务体只**返回值**，所有痕迹由调用线程按输入顺序回放——
+顺序也就顺带确定了（`KnowledgeSearchTool` 的 `all.sort(...)` 是稳定排序，
+按完成顺序装配会让**同分条目的次序随网络抖动而变**，同一份资料在两次相同提问里
+以不同顺序出现在引用编号里）。
+
+**④ 失败的库必须占位，不能剔除。** `RecallSupport.merge` 有一条 `size() == 1` 的快速路径
+（直接返回、不做 `limit` 截断）。把一个失败的库从列表里删掉，"3 个库"就成了"1 个库"，
+**全局截断行为被静默改变**。所以失败位是 `List.of()` 占位。
+
+**3. 两条口径属于"决定"而非"实现"**（完整论证见 ADR-022）
+
+- **单库不切线程**：库数 == 1 就在调用线程直接跑。这不是优化，是**契约**——
+  单库路径的线程、异常、顺序必须与改造前逐字段一致，由 `ChunkSearchServiceParityTest` 钉着；
+- **归属错误与嵌入不一致不被隔离**：`requireAllOwned` 的 404/3001 与
+  `precheckEmbeddingModels` 的 4006 仍在扇出**之前**整批失败。把越权探测变成"部分成功"
+  比报错更糟；"某个库的嵌入模型和别的库不一样"是配置错误，隔离它只会让用户拿到一堆无法解释的缺料。
+
+**4. 测试：567 个，0 失败（104 个类 / 18 skip）**
+
+本增量新增 26 条：
+
+| 类 | 条数 | 钉住什么 |
+| --- | --- | --- |
+| `MultiKnowledgeRetrieverTest` | 12 | 单库**不切线程**（断言执行线程 `isSameAs(caller)`）；双库真并行（并发峰值 ≥ 2）；**按输入顺序装配**（用 `CountDownLatch` 让后提交的库先完成）；一个失败被隔离且计数 +1；**全部失败抛原异常**（`isSameAs`）；优先抛 `BusinessException`；超时记 failure 而不是记成空结果；**调用线程被中断时响亮失败**（见 §5）；MDC 与 TCCL 跨线程可见 |
+| `RagAnswerServiceRetrievalFailureTest` | 5 | failures 一路走到 `userMessage`；空结果**仍带 failures**；"检索范围不完整"出现在【资料】**之前**；无失败时一个字都不提；**单库恒无 failures** |
+| `KnowledgeSearchToolFanoutTest` | 3 | 一个库不可用 → 其余库照常贡献 + 降级计数分开；LIKE 兜底仍留在任务体内（用真插一行 `kb_chunk` 验）；**痕迹全部在调用线程回放** |
+| `ChunkSearchServiceMultiKbTest` | +5 | 部分失败 → 部分结果 + 计数；全部失败 → 抛；归属错误不被隔离 |
+| `RagStreamRetrievalEventTest` | +1 | `retrieval` 事件里带 `failedKnowledgeBases`（逐字段钉住 `knowledgeBaseId` / `knowledgeBaseName` / `reason` 三个名字——前端读的就是它们），且空结果文案随之改变 |
+
+**界面这一层也验了，而且是真的跑过一次**（不是只写了脚本）：
+`standalone`（H2，**不需要 Docker**）起后端 + `seed-demo.mjs` 播种 + Vite dev server，
+`node web/scripts/verify-retrieval-ui.mjs` **退出码 0**。这个脚本原来只有两条腿
+（命中两段 / 一段都没命中），本期补到**五条**——其中三条专打新界面：
+
+| 腿 | 帧里的事实 | 断言 |
+| --- | --- | --- |
+| ③ 其中一个库检索失败 | `count=1`，1 个失败库 | 卡片显示"其中 1 个知识库检索失败"；**悬浮提示给出库名与原因**（"内部 FAQ：ES 连接被拒绝"）；不出现"知识库里没有命中" |
+| ④ 全部库检索失败 | `count=0`、`empty=true`、2 个失败库 | 空结果标签改口为"知识库**本次都没有检索成功**"，**不出现**"知识库里没有命中"；回答是 `RETRIEVAL_FAILED_ANSWER` |
+| ⑤ 一个库没命中、一个没搜成 | `count=0`、1 个失败库 | 标签说"**其余**知识库没有命中"——三条分支到此齐了 |
+
+腿④与腿②是一对：同样的 `count=0`、同样显示"检索到 0 个片段"，**只有失败库的有无**不同，
+而措辞必须不同。这一对同时钉住了服务端与界面两侧的同一句话，避免"后端改了口径、
+前端还在说老话"——那正是本期最想防的那类不一致。
+
+两条实测踩到的脚本陷阱也记一下：**①** 卡片会被服务端校正抹掉（命中片段未落库，已知缺口），
+所以断言必须在校正落地**之前**跑完（`holdReload` 先别放行）——首轮就是在这儿挂在
+"元素被替换"上重试到超时；**②** `hover()` 会被会话列表刷新时的 `el-loading-mask`
+挡住指针事件（重试 30 秒也等不到提示框），改用 `dispatchEvent('mouseenter')` 直接派发，
+验的还是同一件事（Vue 收到 mouseenter → el-tooltip 渲染）。
+
+**两组证伪跑**（改坏生产代码、确认测试真的会红，再改回）：
+
+1. 把扇出强制串行（`size() >= 1` 走单库分支）→ **8/11 红**，说明并行不是"碰巧测不出来"；
+2. 把失败位从 `List.of()` 占位改成 `.filter(Objects::nonNull)`（即"看起来更干净"的那种写法）
+   → **恰好 1 条红**（`failingKnowledgeBaseStillOccupiesItsSlotInMerge`，20 条而不是 3 条），
+   证明占位这个决定确实在防一次静默的截断行为变化；
+3. 把工具里的痕迹回放挪到新线程（`join` 之后条数不变、只是线程不同）→
+   **恰好 1 条红**（线程身份断言）。这一条特别值得记：并发写在测试里**常常照样通过**
+   （`ArrayList` 的并发 `add` 多数时候不炸，只是偶尔丢一条），所以那条断言看的是
+   **线程身份**而不是内容——否则它会在最关键的时候给人虚假的安全感；
+4. 把"调用线程被中断"的处理改回第一版的 `return List.of()` → **恰好 1 条红**（见下）。
+
+**5. 复读时抓到的一个真缺陷：中断被吞掉，变成"每个库都没命中"**
+
+第一版的 `runAll` 是这么写的：
+
+```java
+} catch (InterruptedException ex) {
+    Thread.currentThread().interrupt();
+    return List.of();          // ← 错在这里
+}
+```
+
+`invokeAll` 在中途被中断时会取消所有未完成的任务并抛 `InterruptedException`。
+吞掉它、返回空列表，形式上"没有异常"，实际上交出去的是一份**与契约不符的 `ordered`**
+（契约是"与输入等长同序"）。调用方会怎么读它：
+
+- `ChunkSearchServiceImpl` 把缺失的库当成"这个库没命中" → 归并出 0 条 → **"资料中没有相关内容"**；
+- `KnowledgeSearchTool` 直接 `fanOut.ordered().get(i)` → `IndexOutOfBoundsException`。
+
+也就是说，**这一期要防的那句假话，从我自己新写的代码里又长了出来**，而且只在
+"SSE 断开 / 应用停机"这种路径上出现——普通的测试和手工点页面都不会撞到它。
+修法是让它抛 `4005`：中断也**不该**被当成"隔离某个库"，因为 `invokeAll` 已经取消了未完成的任务，
+此刻"哪些库成功了"根本无从得知，给部分结果就是不诚实的。
+（顺带：`fanOut` 里那个 `get()` 的 `InterruptedException` 分支现实中到不了——
+`invokeAll` 返回时任务已全部结束，`get()` 不会阻塞。留着只是因为它是受检异常，注释里写明了。）
+
+这个缺陷能抓出来只因为**复读了 diff**，没有别的机制：它没有测试、没有日志、没有真机路径。
+
+**6. 诚实边界**
+
+- **验到了什么、没验到什么，分三层说清楚**（合并成一句"验证通过"就是骗人）：
+  1. **契约层**（已验）：`RagStreamRetrievalEventTest` 用 MockMvc 抓真实响应体，
+     逐字段钉住 `retrieval` 事件里的失败明细与空结果文案；
+  2. **界面层**（已验）：`verify-retrieval-ui.mjs` 五条腿在**真后端 + 真前端**上跑，退出码 0
+     ——但它喂的是**桩 SSE 帧**，所以它证明的是"给定这套帧，界面渲染正确"，
+     **不证明**后端真的发这套帧（那是第 1 层的事）；
+  3. **真机检索层**（**未验**）：真 ES + pgvector + 一个**真的**挂掉的知识库，
+     这一层需要 Docker 基础设施栈，本轮按要求暂停 → 留到 5.7。
+- **8 个 `verify-*.mjs` 仍未复跑**（`verify-agent-chat` / `verify-stream` / `verify-multi-kb` 等）。
+  **这不等于它们没被影响**：`KnowledgeSearchTool` 的执行路径改了（串行 → 扇出 + 回放），
+  真机上"多库 + 一个库不可用"的观感必须在 5.7 容器化后实测一次。
+- **扇出把下游并发乘最多 10×**（绑库上限）。虚拟线程本身便宜，但 ES / pgvector / 嵌入的真实压力
+  上升了。`retrieval.kb.failed` 计数 + WARN 点名让"部分失败"可巡检，不至于变成无人察觉的常态化降级。
+- **超时是尽力取消**（与既有 `TimeLimitedCall` 同一措辞）：`cancel(true)` 能中断等待，
+  外部 HTTP 能否真正停下取决于客户端。
+- 部分成功时回答建立在**不完整**的资料上——这正是第 1 节那张表里提示词那一层必须存在的原因。
 
 ---
 

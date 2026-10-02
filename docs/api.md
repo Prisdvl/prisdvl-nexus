@@ -472,7 +472,7 @@ Content-Type: application/json
 | 事件 | 何时发送 | data 示例 |
 | --- | --- | --- |
 | `meta` | 立即（**已实现**） | `{"requestId":"...","conversationId":5001,"userMessageId":91,"assistantMessageId":92,"modelRole":"chat.default","mode":"RAG"}` |
-| `retrieval` | 检索完成、生成前（**已实现**，Phase 3.4；多库形状见 5.5） | `{"knowledgeBaseIds":["5001","5002"],"count":2,"hits":[{"chunkId":"9001","documentId":"100","knowledgeBaseId":"5001","documentTitle":"缓存击穿.md","headingPath":"Redis > 缓存 > 缓存击穿","score":0.83,"source":"hybrid"}],"contextTokens":1200,"truncated":0,"reranked":true,"empty":false}` |
+| `retrieval` | 检索完成、生成前（**已实现**，Phase 3.4；多库形状见 5.5；失败明细见 5.5.1） | `{"knowledgeBaseIds":["5001","5002"],"count":2,"hits":[{"chunkId":"9001","documentId":"100","knowledgeBaseId":"5001","documentTitle":"缓存击穿.md","headingPath":"Redis > 缓存 > 缓存击穿","score":0.83,"source":"hybrid"}],"contextTokens":1200,"truncated":0,"reranked":true,"empty":false,"failedKnowledgeBases":[{"knowledgeBaseId":"5002","knowledgeBaseName":"内部 FAQ","reason":"ES 连接被拒绝"}]}` |
 | `delta` | 每个 token 片段（**已实现**） | `{"text":"缓存击穿是指"}` |
 | `tool_call` | Agent/工具场景（**已实现**） | `{"tool":"knowledge_search","input":"缓存击穿怎么解决"}` |
 | `tool_result` | 工具返回（**已实现**） | `{"tool":"knowledge_search","input":"缓存击穿怎么解决","resultSummary":"3 条结果"}` |
@@ -495,7 +495,7 @@ Content-Type: application/json
 | 配置 | 事件序列 |
 | --- | --- |
 | `mode=PLAIN` | `meta` → `delta…` → `usage` → `done`（异常时 `error`） |
-| `mode=RAG` | `meta` → **`retrieval`** → `delta…` → `usage` → `done`；知识库无命中时 `retrieval(count=0)` → 一句固定回答 → `done{finishReason:"empty"}`（**不调模型**） |
+| `mode=RAG` | `meta` → **`retrieval`** → `delta…` → `usage` → `done`；知识库无命中时 `retrieval(count=0)` → 一句固定回答（**有库检索失败时措辞不同**，见下）→ `done{finishReason:"empty"}`（**不调模型**） |
 | `mode=AGENT` | `meta` → (`tool_call` → `tool_result`)* → `delta…` → `usage` → `done` |
 
 - 工具事件的实际字段是 `{tool, input, resultSummary}`（`tool` 为工具名，如 `knowledge_search`），
@@ -525,8 +525,19 @@ Content-Type: application/json
 - **多库检索的口径（Phase 5.5）**：绑了多个库时**逐库检索后跨库归并**——
   每个库按**自己的** `retrievalTopK` / `similarityThreshold` 召回（不是共用调用方的 `topK`），
   然后按分数降序归并、再按全局 `topK` 截断（请求值，没传用 `nexus.retrieval.top-k` = 5）。
-  因此**多绑库不会让上下文变长、也不会让回答变慢**（代价是检索本身变慢：逐库串行）。
+  因此**多绑库不会让上下文变长、也不会让回答变慢**。
   任意一个库不存在或不属于本人 → 整批 404 / `3001`，文案带出是哪个 id，不做部分成功。
+- **逐库并行 + 失败隔离（Phase 5.5.1）**：上面那条管线不变，但**逐库那一段是并行跑的**
+  （虚拟线程，整体 deadline 由 `nexus.retrieval.fanout-timeout` 控制，默认 10s），
+  结果按**输入顺序**装配。单个库失败不再让整次检索报错，而是：
+  - 失败的库在 `failedKnowledgeBases` 里点名（`{knowledgeBaseId, knowledgeBaseName, reason}`），
+    `hits` 里不会有它的一条——所以 `count = 5, failedKnowledgeBases = [内部 FAQ]` 读作
+    "这 5 段只来自其余库"，**不是**"内部 FAQ 里没有相关内容"；
+  - 全部库都失败 → 整批发 `4005`（不把"全挂"降级成 `count = 0`）；
+  - 空结果且**有**失败库时，固定回答换成"有知识库暂时无法检索…请稍后重试"，
+    `done.finishReason` 仍为 `empty`——此时**不能**说"资料中没有相关内容"，那是假话
+    （同上，模型也被明令不许这么说，见 `RagAnswerServiceImpl.userMessage`）。
+  两种失败**不被隔离**，仍在扇出之前整批失败：归属校验（404/`3001`）与嵌入模型不一致（`4006`）。
 - **换 Agent / 回到内置默认**（Phase 4.2，仅 `AGENT` 会话）：
 
   ```http

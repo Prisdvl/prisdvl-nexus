@@ -54,7 +54,32 @@ public final class RetrievalEvent {
         payload.put("truncated", prepared.truncated());
         payload.put("reranked", prepared.reranked());
         payload.put("empty", prepared.empty());
+        payload.put("failedKnowledgeBases", failedKnowledgeBases(prepared));
         return payload;
+    }
+
+    /**
+     * 本次没能参与检索的知识库（Phase 5.5.1）：{@code [{knowledgeBaseId, knowledgeBaseName, reason}]}。
+     *
+     * <p><b>没有它，检索卡片就会说谎</b>：多库并行后单个库的失败被隔离，卡片上照样显示
+     * "检索到 5 个片段"，用户绑的 3 个库里有一个压根没被搜过——他无从知道，
+     * 而模型也可能因此给出一个漏掉整个库的否定结论。失败明细必须与命中的片段
+     * 在<b>同一个事件</b>里到达前端：分开两次推送，前端就可能先渲染出"检索完成"再补一条错误。
+     *
+     * <p>注意这里给的是库名而不是只给 id：界面上"知识库 1002 检索失败"对用户没有意义。
+     * 但 id 也保留——前端据此把这条失败标到对应的库上，而不是靠名字去猜。
+     *
+     * <p>字段顺序与含义与 {@link PreparedAnswer#failures()} 一致；单库恒为空列表
+     * （不是 null——前端的 {@code forEach} 不该需要判空）。
+     */
+    public static List<Map<String, Object>> failedKnowledgeBases(PreparedAnswer prepared) {
+        return prepared.failures().stream().map(failure -> {
+            Map<String, Object> item = new HashMap<>();
+            item.put("knowledgeBaseId", failure.knowledgeBaseId());
+            item.put("knowledgeBaseName", failure.knowledgeBaseName());
+            item.put("reason", failure.reason());
+            return item;
+        }).toList();
     }
 
     /**

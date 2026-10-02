@@ -6,6 +6,7 @@ import com.lky.nexus.ai.rag.retriever.RetrievalFilters;
 import com.lky.nexus.ai.rag.retriever.RetrieverRegistry;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.knowledge.mapper.ChunkMapper;
 import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.DocumentTagMapper;
@@ -15,6 +16,7 @@ import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.rag.retriever.ChunkHydrator;
 import com.lky.nexus.knowledge.rag.retriever.HybridRetriever;
 import com.lky.nexus.knowledge.rag.retriever.KeywordRetriever;
+import com.lky.nexus.knowledge.rag.retriever.MultiKnowledgeRetriever;
 import com.lky.nexus.knowledge.rag.retriever.RetrievalFilterResolver;
 import com.lky.nexus.knowledge.rag.retriever.RetrievalQueryFactory;
 import com.lky.nexus.knowledge.rag.retriever.VectorRetriever;
@@ -78,6 +80,7 @@ class ChunkSearchServiceMultiKbTest {
     private KnowledgeEmbeddingResolver embeddingResolver;
     private ChunkMapper chunkMapper;
     private RetrievalDefaults defaults;
+    private ObservabilityRegistry observabilityRegistry;
 
     private KnowledgeBasePO kbA;
     private KnowledgeBasePO kbB;
@@ -91,6 +94,7 @@ class ChunkSearchServiceMultiKbTest {
         vectorStore = mock(VectorStore.class);
         knowledgeBaseService = mock(KnowledgeBaseService.class);
         embeddingResolver = mock(KnowledgeEmbeddingResolver.class);
+        observabilityRegistry = new ObservabilityRegistry();
         chunkMapper = mock(ChunkMapper.class);
         DocumentMapper documentMapper = mock(DocumentMapper.class);
 
@@ -136,7 +140,8 @@ class ChunkSearchServiceMultiKbTest {
                 List.of(vectorRetriever, keywordRetriever, hybridRetriever));
 
         search = new ChunkSearchServiceImpl(knowledgeBaseService, registry,
-                new RetrievalQueryFactory(defaults), embeddingResolver);
+                new RetrievalQueryFactory(defaults), embeddingResolver,
+                new MultiKnowledgeRetriever(defaults, observabilityRegistry));
     }
 
     // ------------------------------------------------------------------
@@ -242,6 +247,91 @@ class ChunkSearchServiceMultiKbTest {
         // 预检在召回之前：一个库不合格就不该让别的库白跑一轮检索
         verify(chunkIndex, never()).search(any(), anyString(), anyInt(), any());
         verify(vectorStore, never()).search(any(), any(float[].class), anyInt(), any(double.class), anyList());
+    }
+
+    // ------------------------------------------------------------------
+    // 逐库失败隔离（Phase 5.5.1）
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("一个库检索失败：其余库照常返回，失败被记进 failures 并计数（不是静默少搜）")
+    void oneFailingKnowledgeBaseIsIsolatedAndReported() {
+        kbA.setRetrievalTopK(3);
+        kbB.setRetrievalTopK(3);
+        when(chunkIndex.search(eq(KB_B), anyString(), anyInt(), any()))
+                .thenThrow(new IllegalStateException("ES 连接被拒绝"));
+
+        ChunkSearchService.MultiKbSearchResult result = search.searchManyDetailed(
+                USER_ID, List.of(KB_A, KB_B), QUERY, 10, SearchMode.BM25, RetrievalFilters.none());
+
+        // A 的命中照常返回，且每条的出处都是 A——B 一条都不能混进来
+        assertThat(result.hits()).isNotEmpty()
+                .allSatisfy(hit -> assertThat(hit.knowledgeBaseId()).isEqualTo(KB_A));
+        assertThat(result.hasFailures()).isTrue();
+        assertThat(result.failures()).hasSize(1);
+        assertThat(result.failures().get(0).knowledgeBaseId()).isEqualTo(KB_B);
+        assertThat(result.failures().get(0).reason()).contains("ES 连接被拒绝");
+        assertThat(observabilityRegistry.snapshot())
+                .as("隔离不静默：这一条计数与检索事件里的失败明细是同一件事的两个出口")
+                .containsEntry(ObservabilityRegistry.RETRIEVAL_KB_FAILED, 1L);
+    }
+
+    @Test
+    @DisplayName("失败的库仍然占位：归并仍按多库路径走，全局 topK 截断不因一个库挂掉而失效")
+    void failingKnowledgeBaseStillOccupiesItsSlotInMerge() {
+        kbA.setRetrievalTopK(20);
+        kbB.setRetrievalTopK(20);
+        when(chunkIndex.search(eq(KB_B), anyString(), anyInt(), any()))
+                .thenThrow(new IllegalStateException("ES 连接被拒绝"));
+
+        ChunkSearchService.MultiKbSearchResult result = search.searchManyDetailed(
+                USER_ID, List.of(KB_A, KB_B), QUERY, 3, SearchMode.BM25, RetrievalFilters.none());
+
+        // 若把失败的库从列表里剔掉，RecallSupport.merge 会命中 size()==1 的快路径，
+        // 结果就会变成 A 的 20 条全部返回——"一个库挂了"顺手把全局截断也关掉了
+        assertThat(result.hits()).as("归并上限仍是 3，与库好坏无关").hasSize(3);
+    }
+
+    @Test
+    @DisplayName("全部库失败：抛原异常，而不是返回『检索到 0 条』")
+    void allKnowledgeBasesFailingThrowsInsteadOfReturningEmpty() {
+        IllegalStateException boom = new IllegalStateException("向量库不可用");
+        when(chunkIndex.search(eq(KB_A), anyString(), anyInt(), any())).thenThrow(boom);
+        when(chunkIndex.search(eq(KB_B), anyString(), anyInt(), any())).thenThrow(boom);
+
+        assertThatThrownBy(() -> search.searchManyDetailed(
+                USER_ID, List.of(KB_A, KB_B), QUERY, 5, SearchMode.BM25, RetrievalFilters.none()))
+                .as("把『所有库都挂了』说成『知识库里没有』是最坏的一种假话")
+                .isSameAs(boom);
+        assertThat(observabilityRegistry.snapshot())
+                .doesNotContainKey(ObservabilityRegistry.RETRIEVAL_KB_FAILED);
+    }
+
+    @Test
+    @DisplayName("归属校验失败不被隔离：越权 id 仍整批 3001，且一个库都不会被检索")
+    void ownershipFailureIsNeverIsolated() {
+        when(knowledgeBaseService.requireAllOwned(eq(USER_ID), anyList())).thenThrow(
+                new BusinessException(ErrorCode.KNOWLEDGE_BASE_NOT_FOUND, "知识库不存在或无权访问：9999"));
+
+        assertThatThrownBy(() -> search.searchManyDetailed(
+                USER_ID, List.of(KB_A, 9999L), QUERY, 5, SearchMode.BM25, RetrievalFilters.none()))
+                .as("部分成功会让越权探测变成『拿到了别人的一半资料』")
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode())
+                        .isEqualTo(ErrorCode.KNOWLEDGE_BASE_NOT_FOUND.getCode()));
+        verify(chunkIndex, never()).search(any(), anyString(), anyInt(), any());
+        assertThat(observabilityRegistry.snapshot()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("searchMany 是 searchManyDetailed 的薄包装：结果逐字段一致")
+    void searchManyUnwrapsDetailedResult() {
+        kbA.setRetrievalTopK(3);
+        kbB.setRetrievalTopK(3);
+
+        assertThat(search.searchMany(USER_ID, List.of(KB_A, KB_B), QUERY, 10, SearchMode.BM25))
+                .isEqualTo(search.searchManyDetailed(USER_ID, List.of(KB_A, KB_B), QUERY, 10,
+                        SearchMode.BM25, RetrievalFilters.none()).hits());
     }
 
     // ------------------------------------------------------------------

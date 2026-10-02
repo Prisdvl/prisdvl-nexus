@@ -52,13 +52,20 @@ public class ConversationServiceImpl implements ConversationService {
     /**
      * 一个 RAG 会话最多绑定几个知识库（Phase 5.5）。
      *
-     * <p><b>为什么写死在代码里而不是做成配置项</b>：多库检索是逐库<b>串行</b>的
-     * （每库各一次 ES + 一次 pgvector + 一次查询嵌入 + 回表），成本随库数线性增长。
-     * 这个数字表达的是"这条链路的设计承受能力"，不是运维旋钮——
-     * 做成配置项会让人以为调大就能多绑，而真正的瓶颈（串行放大首字延迟）不会因此改变。
+     * <p><b>为什么写死在代码里而不是做成配置项</b>：这个数字表达的是"这条链路的设计承受能力"，
+     * 不是运维旋钮。做成配置项会让人以为调大就能多绑，而它约束的其实不是用户偏好，
+     * 是<b>下游</b>（ES / pgvector / 嵌入服务 / 连接池）吃得下多少并发——
+     * 这件事不会因为谁改了配置文件而改变。
      *
      * <p>10 的依据：单次 hybrid 检索实测在百毫秒量级，10 个库仍落在"可接受的首字延迟"内。
-     * 将来若真要把它变成可调参数，前提是先把逐库检索并行化。
+     *
+     * <p><b>Phase 5.5.1 起这条上限守的东西变了，数字没变</b>：并行之前它守的是"逐库串行
+     * （每库各一次 ES + 一次 pgvector + 一次查询嵌入 + 回表）叠加出来的首字延迟"，
+     * 当时留了一句"将来要可调，前提是先把逐库检索并行化"。并行已经做了
+     * （扇出到虚拟线程，整体 10s 截止），延迟不再是限制，限制换成<b>并发放大</b>：
+     * 一次问答会把下游的并发度乘到最多库数倍，也就是要求连接池上限 ≥ 绑库数
+     * （理由写在 {@code MultiKnowledgeRetriever} 的类注释与 ADR-022 里）。
+     * 所以前置条件虽然已经满足，这里也不该顺手把它改成配置项——换的是一个理由，不是一个旋钮。
      */
     private static final int MAX_BOUND_KNOWLEDGE_BASES = 10;
 
@@ -221,8 +228,12 @@ public class ConversationServiceImpl implements ConversationService {
      *   <li><b>只有 RAG 能用</b>：PLAIN 绑了没用；AGENT 的检索范围由所选 Agent 决定
      *       （Phase 4.1 起 Agent 绑定自己的知识库，见 {@code AgentService}）。
      *       写进会话字段只会让人误以为检索被限定了；</li>
-     *   <li><b>最多 {@value #MAX_BOUND_KNOWLEDGE_BASES} 个</b>：多库检索是<b>逐库串行</b>的，
-     *       成本随库数线性增长，超过上限显式拒绝，而不是"先绑上、慢起来再说"；</li>
+     *   <li><b>最多 {@value #MAX_BOUND_KNOWLEDGE_BASES} 个</b>：多库检索是<b>并行</b>的
+     *       （Phase 5.5.1 起扇出到虚拟线程，整体 10s 截止），所以上限防的不再是"线性变慢"，
+     *       而是<b>并发放大</b>——一次问答会把 ES / pgvector / 嵌入服务 / 连接池的并发度
+     *       乘到最多库数倍（每个库在 Retriever 里还要各做一次归属查询）。
+     *       也就是说：上限的存在没变，但它守的东西从"延迟"换成了"下游压力"。
+     *       超过上限仍然显式拒绝，而不是"先绑上、压垮了再说"；</li>
      *   <li><b>必须是自己的库</b>：走 {@code requireAllOwned}——<b>一次校验全部 id</b>，
      *       任意一个不存在或不属于该用户就整批 3001，不做部分成功。
      *       "绑定成功、检索却少查了一个库"是这里最坏的结果，因为它不报错；</li>
@@ -233,6 +244,11 @@ public class ConversationServiceImpl implements ConversationService {
      * 检索侧支持多库之后那条拒绝就只剩阻塞作用了：它要防的"静默丢条件"已经不存在，
      * 现在是有几个库查几个库。这条注释留在原处，是为了说明<b>为什么规则变了</b>——
      * 而不是把旧规则悄悄删掉。
+     *
+     * <p>同理，上面第 2 条在 Phase 5.5.1 被改的是<b>理由</b>而不是数字：
+     * 并行之后"逐库串行、成本线性增长"这句话不再成立（继续留着它，会让下一个人
+     * 按错误的模型去调这个上限）。这类"注释比代码先过期"的地方必须跟着改——
+     * 它不报错，只是把人引到错误的方向上。
      */
     private String resolveKbIds(Long userId, ChatMode mode, List<Long> rawKbIds) {
         List<Long> kbIds = ConversationKbIds.normalize(rawKbIds);

@@ -60,6 +60,18 @@ public class ObservabilityRegistry {
      */
     public static final String QUOTA_USAGE_UNATTRIBUTED = "quota.usage.unattributed";
 
+    /**
+     * 多库检索里有知识库失败（5.5.1）：这一条是"失败隔离"与"静默少搜"之间的分界线。
+     *
+     * <p>隔离之前，某个库挂了会让整个问答报错——响亮，但至少没人被误导。
+     * 隔离之后那一个库会安静地什么都不贡献，于是"这个库挂了"与"这个库里本来就没内容"
+     * 在用户侧长得一模一样（模型会说"你的笔记里没有 X"，而 X 就在那个库里）。
+     * 计数是这条分界线的一部分——另两部分是 WARN 日志与检索事件里的如实告知。
+     *
+     * <p><b>全部库失败时不计这一条</b>：那时会直接抛异常，本身就是响亮的失败。
+     */
+    public static final String RETRIEVAL_KB_FAILED = "retrieval.kb.failed";
+
     private final ConcurrentHashMap<String, LongAdder> counters = new ConcurrentHashMap<>();
 
     public void increment(String key) {

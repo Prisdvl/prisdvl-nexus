@@ -431,6 +431,14 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
    （轮数上限在 Spring AI 的 `ToolCallingManager`，超时在 HTTP 层，记忆策略由模式决定）。
    存下来但没人读的配置比没有这个配置更糟——用户会以为配了就生效。
 
+> **多知识库（Phase 5.5 / 5.5.1）没有产生任何迁移，也不需要 V19。** 需求里问的
+> "要不要建 `agent_knowledge_base_relation`"——**这张表 V12 就有了**（就是上面这张，
+> 带唯一键 `uk_agent_kb`）。会话侧的多库绑定走 `chat_conversation.kb_ids`（V2 起就是 JSON 列）。
+> 5.5.1 只改了**怎么并发地读这些绑定**（扇出 + 逐库失败隔离），读的还是同一批行。
+> 顺带记一个反例：把绑定改成 `agent` 表上的 JSON 列会**丢掉**唯一约束，
+> 以及"这个库被哪些 Agent 用了"的反查能力（`idx_agent_kb_kb` 就是为此建的）——
+> 所以"复用已有表"在这里不只是省事，是唯一正确的选择。
+
 ### 6.0.1 已实现：`tool` / `agent_tool`（平台化 Phase 4.3，迁移 V13）
 
 | 表 | 关键列 | 说明 |
@@ -681,3 +689,5 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
 5. Phase 3：`kb_chunk` + ES 索引 + 向量写入。
 6. Phase 5–10：按对应 ADR 补 `ai_*` / `wf_*` / `eval_*` / `obs_*`。
 7. 平台化 5.6：`sys_user.token_version`（V18）——只增一列 + 一条预检，没有新表。
+8. 平台化 5.5 / 5.5.1（多知识库 RAG）：**零迁移**。绑定表复用 V12 的 `agent_knowledge_base`，
+   会话侧复用 V2 的 `chat_conversation.kb_ids`；并行化与失败隔离都是纯读路径的改动。

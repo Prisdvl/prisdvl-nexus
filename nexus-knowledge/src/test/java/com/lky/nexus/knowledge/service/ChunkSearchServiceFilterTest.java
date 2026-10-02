@@ -4,6 +4,7 @@ import com.lky.nexus.ai.model.EmbeddingClient;
 import com.lky.nexus.ai.rag.retriever.RetrievalDefaults;
 import com.lky.nexus.ai.rag.retriever.RetrievalFilters;
 import com.lky.nexus.ai.rag.retriever.RetrieverRegistry;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.knowledge.mapper.ChunkMapper;
 import com.lky.nexus.knowledge.mapper.DocumentMapper;
 import com.lky.nexus.knowledge.mapper.DocumentTagMapper;
@@ -13,6 +14,7 @@ import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.rag.retriever.ChunkHydrator;
 import com.lky.nexus.knowledge.rag.retriever.HybridRetriever;
 import com.lky.nexus.knowledge.rag.retriever.KeywordRetriever;
+import com.lky.nexus.knowledge.rag.retriever.MultiKnowledgeRetriever;
 import com.lky.nexus.knowledge.rag.retriever.RetrievalFilterResolver;
 import com.lky.nexus.knowledge.rag.retriever.RetrievalQueryFactory;
 import com.lky.nexus.knowledge.rag.retriever.VectorRetriever;
@@ -131,7 +133,8 @@ class ChunkSearchServiceFilterTest {
 
         search = new ChunkSearchServiceImpl(knowledgeBaseService, registry,
                 new RetrievalQueryFactory(new RetrievalDefaults()),
-                mock(KnowledgeEmbeddingResolver.class));
+                mock(KnowledgeEmbeddingResolver.class),
+                new MultiKnowledgeRetriever(new RetrievalDefaults(), new ObservabilityRegistry()));
     }
 
     @Test

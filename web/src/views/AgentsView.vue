@@ -138,12 +138,22 @@ async function loadTools() {
   }
 }
 
-/** 绑定的知识库名（列表里显示名字而不是 id：id 对人没有意义） */
+/**
+ * 绑定的知识库（列表里显示名字而不是 id：id 对人没有意义）。
+ *
+ * 带上数量（Phase 5.5.1）："产品手册、内部 FAQ、运维手册"要数一遍才知道是 3 个，
+ * 而数量正是用户判断这个 Agent 的检索范围是否符合预期的第一眼信息——
+ * 卡片上还要显示模型角色、策略等好几行，长名字列表会把它挤成看不懂的一坨。
+ * 上面的 AgentView（单选改多选）早就是这个格式，这里跟上，免得两个页面各说各的。
+ *
+ * 空绑定仍是"全部知识库"：那是**语义**（不限制），不是"绑了零个"，不能写成"0 个库"。
+ */
 function kbNames(agent: AgentResource): string {
   if (!agent.kbIds?.length) return '全部知识库'
-  return agent.kbIds
-    .map((id) => knowledgeBases.value.find((kb) => kb.id === id)?.name ?? `#${id}`)
-    .join('、')
+  const names = agent.kbIds.map(
+    (id) => knowledgeBases.value.find((kb) => kb.id === id)?.name ?? `#${id}`
+  )
+  return `${names.length} 个库（${names.join('、')}）`
 }
 
 /**

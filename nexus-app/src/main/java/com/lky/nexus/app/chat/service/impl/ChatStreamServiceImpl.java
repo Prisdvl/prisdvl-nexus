@@ -192,7 +192,12 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         // 没有资料就不调用模型（与 /ask/stream 完全一致：省钱，也从根上避免"无资料硬答"）。
         // 仍走完整的流式事件序列，前端只有一套处理逻辑。
         if (ragMode && prepared.empty()) {
-            session.finishWithoutModel(RagAnswerService.EMPTY_ANSWER);
+            // 同样是"没有资料"，但两种原因的用户可见文案必须不同：一个是查证结果（库里没有），
+            // 一个是故障（有库没搜成，我们并不知道里面有没有）。混为一谈就是让用户
+            // 把基础设施故障当成自己笔记的结论（Phase 5.5.1）
+            session.finishWithoutModel(prepared.hasFailures()
+                    ? RagAnswerService.RETRIEVAL_FAILED_ANSWER
+                    : RagAnswerService.EMPTY_ANSWER);
             return emitter;
         }
 
