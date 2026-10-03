@@ -21,6 +21,7 @@ import {
   resetConversationAgent,
   stopStream,
   streamChat,
+  type ChatCitation,
   type Conversation,
   type MessageToolCall,
   type StreamRetrieval
@@ -62,6 +63,15 @@ interface ChatItem {
   toolCalls: MessageToolCall[]
   /** RAG 模式的检索结果（本次流内有效；历史消息不回放，见 toItems 的说明） */
   retrieval?: StreamRetrieval | null
+  /**
+   * 这条回答引用的资料片段，**随消息落库**，因此刷新/切换会话后仍在。
+   *
+   * 与上面的 `retrieval` 分工：那个是"这次搜到了什么"（含重排、截断、失败的库），
+   * 只活在本次流里；这个是"这条回答照着什么说的"（含模型有没有真的引用），
+   * 是历史记录。RAG 的流内视图里两者都在，此时只渲染检索卡片
+   * （它已经把片段列出来了，再列一遍是同一件事说两遍）。
+   */
+  citations?: ChatCitation[]
   /**
    * 产出这条回答的 Agent（5.4，只有助手消息有）。
    *
@@ -172,6 +182,17 @@ async function changeBoundKnowledgeBase(value: unknown) {
 function knowledgeBaseName(id: string | null) {
   if (!id) return ''
   return knowledgeBases.value.find((kb) => kb.id === id)?.name ?? ''
+}
+
+/**
+ * 这组引用是不是来自**不止一个**知识库。
+ *
+ * 单库时出处是废话（整个会话就绑着这一个），只在多库时才标出来。
+ * 判据是引用自身跨了几个库，而不是"会话绑了几个"：绑了三个库、
+ * 这次只从其中一个检索到资料时，标出处反而会让用户以为另外两个库也贡献了。
+ */
+function citationsFromMultipleKnowledgeBases(citations: ChatCitation[]): boolean {
+  return new Set(citations.map((citation) => citation.knowledgeBaseId).filter(Boolean)).size > 1
 }
 
 /**
@@ -377,10 +398,11 @@ async function loadConversations() {
 /**
  * 后端消息 → 界面消息。空内容的骨架消息（生成中崩溃留下的）不显示。
  *
- * 注意：这里不带 retrieval。RAG 的命中片段目前<b>只在本次流里可见</b>——它没有随消息落库
- * （chat_message 只存正文与工具痕迹），因此刷新后不显示。这是已知缺口，不是渲染 bug：
- * 若要回放，需要把命中片段写进消息 metadata（与 Agent 的工具痕迹同一处）。
- * 本次会话内不丢：见 send() 结尾按 assistantMessageId 把命中片段贴回来的那几行。
+ * 注意：这里不带 retrieval。RAG 的**检索事件**（含重排/截断/失败的库）只在本次流里可见，
+ * 它没有随消息落库，因此刷新后不显示。但其中真正要紧的那半——**这一轮用了哪几段资料**——
+ * 现在由 `citations` 回放（随消息落库，见 update.txt §五），所以"刷新后引用就没了"
+ * 这件事不再成立：片段、出处、模型有没有真的引用，历史里都还在。
+ * 本次会话内更不丢：见 send() 结尾按 assistantMessageId 把检索结果贴回来的那几行。
  */
 function toItems(
   list: Array<{
@@ -389,6 +411,7 @@ function toItems(
     content: string | null
     agentId: string | null
     toolCalls: MessageToolCall[]
+    citations: ChatCitation[]
   }>
 ) {
   return list
@@ -400,6 +423,7 @@ function toItems(
       content: message.content ?? '',
       toolCalls: message.toolCalls ?? [],
       retrieval: null,
+      citations: message.citations ?? [],
       // 服务端保证用户消息这里是 null（只有助手消息记产出来源，见 5.4 的 V17）
       agentId: message.agentId ?? null,
       streaming: false
@@ -528,13 +552,21 @@ async function send(preset?: string) {
   }
 
   input.value = ''
-  items.value.push({ id: `local-user-${Date.now()}`, role: 'USER', content, toolCalls: [], streaming: false })
+  items.value.push({
+    id: `local-user-${Date.now()}`,
+    role: 'USER',
+    content,
+    toolCalls: [],
+    citations: [],
+    streaming: false
+  })
   const answer: ChatItem = {
     id: `local-assistant-${Date.now()}`,
     role: 'ASSISTANT',
     content: '',
     toolCalls: [],
     retrieval: null,
+    citations: [],
     streaming: true
   }
   items.value.push(answer)
@@ -582,7 +614,11 @@ async function send(preset?: string) {
           answer.content += text
           void scrollToBottom()
         },
-        onDone: () => {
+        onDone: (done) => {
+          // 引用随 done 一起到（`referenced` 要在完整正文里比对编号才算得出来）：
+          // 先写进本地这条，紧接着的校正会用服务端那一份（同一个形状）覆盖它，
+          // 因此实时与刷新后看到的是同一份数据
+          answer.citations = done.citations ?? []
           answer.streaming = false
         }
       },
@@ -604,12 +640,12 @@ async function send(preset?: string) {
     abortController.value = null
     // 用服务端数据校正一次（真实 id、真实工具痕迹），同时刷新会话列表的顺序与标题
     await reloadActiveConversation()
-    // 检索卡片必须活过这次校正：服务端不存命中片段（见 toItems 的注释），校正会把本地这份冲掉。
-    // 这一点是**真机跑出来的**（2026-09-30，见 decisions.md B.37）：本地服务+本地模型下
-    // 整段回答一口气到达，卡片在 DOM 里只活了 41ms 就被冲掉——用户等于从没见过它；
-    // 而在无 ES 的 standalone 里这条链路根本走不到，所以之前没暴露。
-    // 按 assistantMessageId 贴回去，至少保证"本次会话里回看得到"；刷新页面仍会丢，
-    // 那是同一个已知缺口（要彻底解决得把命中片段落库，与工具痕迹同处）。
+    // 检索卡片必须活过这次校正：它承载的重排/截断/失败的库没有落库（见 toItems 的注释），
+    // 校正会把本地这份冲掉。这一点是**真机跑出来的**（2026-09-30，见 decisions.md B.37）：
+    // 本地服务+本地模型下整段回答一口气到达，卡片在 DOM 里只活了 41ms 就被冲掉——
+    // 用户等于从没见过它；而在无 ES 的 standalone 里这条链路根本走不到，所以之前没暴露。
+    // 按 assistantMessageId 贴回去，保证本次会话里回看得到。
+    // （引用那一半没有这个问题：它已随消息落库，校正拿回来的就是服务端那一份。）
     if (answer.retrieval && assistantMessageId) {
       const reloaded = items.value.find((item) => item.id === assistantMessageId)
       if (reloaded) reloaded.retrieval = answer.retrieval
@@ -948,6 +984,33 @@ watch(activeId, () => {
             </div>
             <!-- eslint-disable-next-line vue/no-v-html -- 内容经 marked + DOMPurify 处理 -->
             <div v-else class="markdown" v-html="html(message)" />
+
+            <!-- 引用（update.txt §五）：这条回答照着哪几段资料说的。**随消息落库**，
+                 因此刷新页面、切换会话、过几天再回来都还在——"出处"必须活得过刷新。
+                 RAG 的流内视图里上面那张检索卡片已经把同样的片段列出来了，
+                 这里就不再重复一遍（避免同一份资料在一屏里出现两次）。 -->
+            <div
+              v-if="message.role === 'ASSISTANT' && message.citations?.length && !message.retrieval"
+              class="citations"
+            >
+              <div class="citations-title">参考 {{ message.citations.length }} 段资料</div>
+              <ul class="citation-list">
+                <li v-for="citation in message.citations" :key="citation.index">
+                  <span class="citation-index">[{{ citation.index }}]</span>
+                  <!-- 出处（多库时才有意义）：会话绑了多个库时，用户要靠它判断答案来自哪个库 -->
+                  <span
+                    v-if="citationsFromMultipleKnowledgeBases(message.citations)
+                      && knowledgeBaseName(citation.knowledgeBaseId)"
+                    class="hit-kb"
+                  >{{ knowledgeBaseName(citation.knowledgeBaseId) }}</span>
+                  {{ citation.documentTitle || '未命名文档' }}
+                  <template v-if="citation.headingPath"> › {{ citation.headingPath }}</template>
+                  <!-- 模型漏引：这段资料摆在了它面前，正文里却没有对应的 [n]。
+                       如实标出来，而不是替它补一个编号——那会让人以为模型真的引用了。 -->
+                  <span v-if="!citation.referenced" class="citation-unused">未引用</span>
+                </li>
+              </ul>
+            </div>
 
             <!-- 来源（5.4）：这条回答是哪个 Agent 产出的。存的是**当时**那一行，
                  所以会话后来换了 Agent，这里也仍然是答它的那个（见 agentLabel 的说明）。 -->
@@ -1529,6 +1592,44 @@ watch(activeId, () => {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-chip);
   color: var(--accent-600);
+  font-size: 11px;
+}
+
+/* ---------- 引用（随消息落库：刷新后仍在） ---------- */
+.citations {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-chip);
+  background: var(--surface-2, transparent);
+  font-size: 12.5px;
+}
+
+.citations-title {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.citation-list {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.1em;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.citation-index {
+  margin-right: 0.3em;
+  color: var(--accent-600);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 模型漏引：摆在了它面前却没用上。不是错误，但用户有权知道 */
+.citation-unused {
+  margin-left: 0.4em;
+  padding: 0 0.4em;
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-chip);
+  color: var(--text-faint);
   font-size: 11px;
 }
 

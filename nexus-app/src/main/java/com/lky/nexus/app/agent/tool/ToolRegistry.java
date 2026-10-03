@@ -116,6 +116,25 @@ public class ToolRegistry {
     }
 
     /**
+     * 该用户<b>启用中</b>的工具（只过用户那一层，不含 Agent 白名单）。
+     *
+     * <p>给"直调工具"的路径用：MCP 的 {@code tools/list} 与 {@code tools/call}（5.9 八）。
+     * 那里没有 Agent，因此只有"用户启用/停用"这一维——但也正因为没有 Agent，
+     * 此前这条路径<b>完全没有权限判定</b>：用户在界面上停用了 {@code knowledge_search}，
+     * {@code tools/list} 照旧把它列出来、{@code tools/call} 照旧执行。
+     * 那是"开关看起来生效、实际只生效了一半"的典型。
+     *
+     * <p>与 {@link #resolveFor} 的关系：同一个 {@code overridesOf}，不复制一份判定逻辑，
+     * 所以"停用优先于白名单"这类规则将来只会有一个版本。
+     */
+    public List<ToolCatalog.Registered> enabledFor(Long userId) {
+        Map<String, Boolean> overrides = overridesOf(userId);
+        return catalog.all().stream()
+                .filter(registered -> overrides.getOrDefault(registered.code(), true))
+                .toList();
+    }
+
+    /**
      * 提示词里点名了某个工具、而这次装配又没给它——把这件事留痕。
      *
      * <p><b>为什么这是 4.3 才有的问题</b>：在此之前，"提示词里写的那个工具"永远会被装上

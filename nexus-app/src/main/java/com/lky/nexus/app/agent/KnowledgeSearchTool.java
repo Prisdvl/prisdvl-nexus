@@ -180,6 +180,11 @@ public class KnowledgeSearchTool {
         all.sort(Comparator.comparingDouble(ChunkSearchService.SearchHit::score).reversed());
 
         int take = Math.min(limit, all.size());
+        // 把"实际交给模型的这几段"如实上报（顺序即下面 [1..n] 的编号）。
+        // 与痕迹分开：痕迹说"3 条结果"，这里留下的是哪三段——只有后者能在刷新之后
+        // 还原成引用列表。调用点必须在这里（扇出已结束、在调用线程上），
+        // 否则就是并发写 SSE 监听器
+        AgentContext.retrieval(toolContext, "knowledge_search", all.subList(0, take));
         StringBuilder out = new StringBuilder();
         if (scoped != null) {
             out.append("检索范围：本 Agent 绑定的 ").append(scoped.size()).append(" 个知识库");

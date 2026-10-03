@@ -8,6 +8,7 @@ import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.agent.tool.AgentToolFactory;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
@@ -116,7 +117,9 @@ class AgentRuntimeFailureTest {
         };
 
         // agentService 只在 askWithDefault 里用到，ask 用不上
-        return new AgentRuntime(factory, noTools, null);
+        // 观测注册表：不接 Micrometer 的那个构造，指标记录是空操作——
+        // 本用例验的是"失败怎么报"，与指标无关
+        return new AgentRuntime(factory, noTools, null, new ObservabilityRegistry());
     }
 
     private AgentDefinition definition() {

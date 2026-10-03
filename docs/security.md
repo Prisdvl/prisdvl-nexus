@@ -17,7 +17,7 @@
 
   | claim | 值 | 行号 |
   |---|---|---|
-  | `iss` | `nexus.jwt.issuer`，默认 `prisdvl-nexus` | `TokenService.java:65`，默认值见 `NexusJwtProperties.java:35` |
+  | `iss` | `nexus.jwt.issuer`，默认 `prisdvl-nexus`（5.9 九 起**校验**：不符或缺席 → 401） | `TokenService.java:65`，默认值见 `NexusJwtProperties.java:35` |
   | `iat` | 签发时刻 | `TokenService.java:66` |
   | `exp` | 签发时刻 + TTL，默认 30 分钟 | `TokenService.java:67`，TTL 见 `NexusJwtProperties.java:39` |
   | `sub` | 用户 ID（`String.valueOf(userId)`） | `TokenService.java:68` |
@@ -41,13 +41,22 @@
 - 安全链：`SecurityConfig.java:77-109`，`@Order(2)` 的 `SecurityFilterChain`。
 - 启用 OAuth2 Resource Server 的 JWT 校验：`SecurityConfig.java:97-99`。
 - 解码器：`NimbusJwtDecoder.withSecretKey(...).macAlgorithm(MacAlgorithm.HS256)`（`SecurityConfig.java:155-157`）——**限定算法为 HS256**，防算法混淆。
-- 校验器：`new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefault(), tokenVersionValidator)`（`SecurityConfig.java:158-159`）。`createDefault()` 只含时间戳校验（exp/nbf），另加令牌版本校验，见 §3。
+- 校验器：`new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefaultWithIssuer(...), tokenVersionValidator)`（`SecurityConfig.java:169-170`）。`createDefaultWithIssuer` 含时间戳校验（exp/nbf）**与签发者校验（iss）**，另加令牌版本校验，见 §3。
+  注意 `setJwtValidator` 是**替换**语义而非追加：这三个校验器必须挂在同一个 `DelegatingOAuth2TokenValidator` 上，漏掉任何一个都不会报错，只会静默少一道校验。
 - 放行端点：仅 `/api/auth/register`、`/api/auth/login`（`SecurityConfig.java:64-67`）与 `/actuator/health*`、`/actuator/info`、`/error`（`:70-75`）；`/api/admin/**` 要求 `hasRole("ADMIN")`（`:94`）；其余一律 `authenticated()`（`:96`）。
 - 认证失败 → 401 + `UNAUTHENTICATED(2001)`，由 `RestAuthenticationEntryPoint.java:40-43` 输出，且响应体不携带失败细节（类注释 `:28` "入口对所有认证异常都是一句话"）。
 
 ### 1.4 已知缺口（如实）
 
-- **`iss` 写了但从不校验**。签发时写入（`TokenService.java:65`），但解码器的校验器只有 `createDefault()`（时间戳）+ `TokenVersionValidator`（`SecurityConfig.java:158-159`）；全仓 grep 无 `JwtIssuerValidator` / `withIssuer` / issuer 相关校验器。因此 `iss` 的取值对令牌是否被接受没有任何影响。
+- ~~**`iss` 写了但从不校验**~~ → **已于 2026-10-02（Phase 5.9 九）关闭**。此前签发时写入
+  （`TokenService.java:65`），校验侧却只有 `createDefault()`（时间戳）+ `TokenVersionValidator`，
+  `iss` 的取值对令牌是否被接受没有任何影响。现在校验器是
+  `JwtValidators.createDefaultWithIssuer(...)`（`SecurityConfig.java:170`），
+  错误或缺席的 `iss` 一律 401。它此前算不上可被利用的缺口（对称密钥已经决定了
+  只有本应用签得出令牌），关闭它的理由是：**一个写了却从不验证的声明，会让人以为这条链路
+  已经校验过它**——将来出现第二个签发方、或别的组件共用同一个密钥时，这一条就是唯一能
+  区分"谁签的"的东西。测试：`JwtIssuerValidationTest`（同一套声明签三支令牌、
+  只有 `iss` 不同：正确放行 / 错误 401 / 缺失 401）。
 - **无 refresh token**：代码中没有任何路径读取 `JWT_REFRESH_TOKEN_TTL`；该变量在 `.env.example:98-101` 被显式标注为"死的"。
 - **无服务端注销**：`.logout(AbstractHttpConfigurer::disable)`（`SecurityConfig.java:89`），会话策略 `STATELESS`（`:90`）。前端 `logout()` 只是清掉本地存储（`web/src/stores/auth.ts:48-54`、`web/src/api/client.ts:62-65`）——**logout = 客户端丢 token**，令牌在服务端仍然有效直到过期。
 
@@ -308,7 +317,7 @@
 
 1. **Token 存 localStorage，暴露于 XSS**：前端令牌存 `localStorage`（键 `nexus.token`，`web/src/api/client.ts:33,50,58,63`），没有 HttpOnly Cookie。任何 XSS 都能读取并外带令牌。
 2. **无服务端注销、无 refresh token**：`.logout` 关闭、会话 STATELESS（`SecurityConfig.java:89-90`）；logout 仅前端清 token（`web/src/stores/auth.ts:48-54`）；refresh token 无任何实现（`.env.example:98-101`）。
-3. **`iss` 从不校验**：见 §1.4，签发写入但校验器未包含 issuer 校验。
+3. ~~**`iss` 从不校验**~~ → **已关闭**（2026-10-02 Phase 5.9 九），见 §1.4。
 4. **限流在存储不可用时 fail-open，可被绕过**：Redis/内存不可用时限流直接放行（`RateLimiter.java:95-104`）；登录冻结同样 fail-open（`LoginAttemptLimiter.java:60-64,81-92`）。
 5. **`redis-enabled=false` 时多实例限流失效**：进程内实现各实例独立计数，额度乘以实例数（`SecurityStore.java:14-21`；`.env.example:34-38`）。即便开 Redis，`allkeys-lru` 淘汰也会重置计数（`docker-compose.yml:105-108`）。
 6. **停用账号不立即吊销已签发令牌**：`status=0` 只在登录时检查（`AuthServiceImpl.java:148-150`）；`TokenVersionValidator` / `UserAuthCache` 只按用户存在与版本号判断，**不检查 status**，故停用后既有令牌仍有效至过期。（软删除会立即失效，见 §3.3，两者行为不同。）

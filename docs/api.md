@@ -477,7 +477,7 @@ Content-Type: application/json
 | `tool_call` | Agent/工具场景（**已实现**） | `{"tool":"knowledge_search","input":"缓存击穿怎么解决"}` |
 | `tool_result` | 工具返回（**已实现**） | `{"tool":"knowledge_search","input":"缓存击穿怎么解决","resultSummary":"3 条结果"}` |
 | `approval_required` | 需要人工确认（Phase 8 预留，未实现） | `{"approvalId":"a1","toolCode":"createStudyPlan","arguments":{...},"reason":"该操作会写入你的学习计划"}` |
-| `citation` | 生成结束后（Phase 3 预留，仍未实现） | `{"citations":[{...}]}` |
+| `citation` | 生成结束后（Phase 3 预留，**仍未作为独立事件实现**） | 引用随 `done` 的 `citations` 字段给出，并同时落库（见下） |
 | `usage` | 结束前（**已实现**） | `{"promptTokens":1820,"completionTokens":240,"totalTokens":2060,"latencyMs":2900,"firstTokenMs":380}` |
 | `done` | 正常结束（**已实现**） | `{"finishReason":"stop"}`；用户停止时 `{"finishReason":"stopped","stopped":true}` |
 | `error` | 异常结束（**已实现**） | `{"code":4001,"message":"模型调用失败，请稍后重试","retryable":true}`；`code`/`message`/`retryable` 由 `FailureClassifier` 判定，可能是 `4007`（密钥被拒，不可重试）、`4002`（超时）、`5002`（工具轮数超限）等，见 1.2 的失败归因表 |
@@ -509,14 +509,22 @@ Content-Type: application/json
   `hits[].knowledgeBaseId` 是**这一片**出自哪个库。会话可以绑多个库，所以"检索到 N 个片段"
   不再能回答"资料从哪来"——出处必须逐条给。知识库问答流式那条链路固定单库
   （路径里的 `{id}`），因此 `knowledgeBaseIds` 恒为一个元素、`hits[].knowledgeBaseId` 恒等于它。
-- `citation` / `approval_required` 仍未实现：引用目前随 `usage` 之前的 `done`（或 `meta.citations`）给出。
+- `citation` 事件 / `approval_required` 仍未实现：引用随 `done` 的 `citations` 字段给出，
+  并**同时写进 `chat_message.metadata.citations`（Phase 5.9 五）**——刷新聊天页面后引用仍在。
 - **RAG 流式生成失败**（`/api/knowledge-bases/{id}/ask/stream`，Phase 5.2）不再发 `error` 帧，
   而是把失败放进**最后一个 `done` 帧**：`{"finishReason":"error","error":"<给用户的话>","errorCode":4001,
   "retryable":true,"citations":[]}`。理由是这条链路此时已经产出过 `retrieval` 与部分 `delta`，
   收尾仍以 `done` 结束，前端只需要处理"一个终止帧"；`errorCode` 的取值同 1.2 的失败归因表。
   若失败前一个字都没产出，**不写问答留档**（`kb_qa_record` 只记真实发生过的问答）。
-- 命中片段**不随消息落库**：刷新后 `retrieval` 卡片不再显示（正文与引用仍在）。回放需要把命中写进
-  `chat_message.metadata`，与工具痕迹同一处，属后续增量。
+- **引用随消息落库（Phase 5.9 五）**：回答结束时把 `Citations.build` / `Citations.merge` 的结果
+  （即 `done` 里那份 `citations`，含 `knowledgeBaseId` / `chunkId` / `documentId` / `documentTitle` /
+  `headingPath` / `snippet` / `score` / `referenced`）写进 `chat_message.metadata.citations`，
+  与工具痕迹**同一列**。刷新聊天页面后引用仍在，多库下还标得出"这一片出自哪个库"。
+  用的是与同步问答同一个 `RagCitation`，**没有第二套引用系统、没有新表**。
+  `referenced` 是"模型正文里有没有真的出现 `[n]`"——未引用也返回，用于核对模型有没有漏引。
+- 仍然**不落库**的是 `retrieval` 事件里的命中列表本身：刷新后"检索到 N 个片段"那张卡片不再显示
+  （正文与引用仍在）。引用列表回答的是"这条回答照着什么说的"，检索事件回答的是"这次搜到了什么"，
+  两者不是同一件事；前者已留档，后者仍然只活在这一次连接里。
 - `mode` 在**建会话时**指定（`POST /api/chat/conversations` 的 `mode` 字段），
   不是每次发送时指定；`/api/chat/stream` 的请求体只有 `conversationId` 与 `content`。
 - **RAG 会话必须绑定知识库**：没绑就提问，在开流之前返回统一 JSON（HTTP 400 / code 1001，
@@ -678,8 +686,8 @@ JSON-RPC 2.0 over HTTP（MCP Streamable HTTP 的最小子集）。
 | --- | --- |
 | `initialize` | 协议握手（返回 `protocolVersion` / `capabilities` / `serverInfo`） |
 | `ping` | 存活探测 |
-| `tools/list` | 工具清单：`@Tool` 方法由注册表反射而来（名称/描述/schema 单一来源），另有非 `@Tool` 的便利入口 `qa_ask` |
-| `tools/call` | 执行工具；失败时 `result.isError = true`，未知工具 `error.code = -32601` |
+| `tools/list` | 工具清单：**只列该用户启用中的工具**（`@Tool` 方法由注册表反射而来，名称/描述/schema 单一来源），另有非 `@Tool` 的便利入口 `qa_ask` |
+| `tools/call` | 执行工具；失败时 `result.isError = true`，未知工具 `error.code = -32601`，**工具被该用户停用** `error.code = -32003`（见下） |
 
 ```bash
 TOKEN=$(curl -s -X POST localhost:8080/api/auth/login -H 'Content-Type: application/json' \
@@ -695,8 +703,28 @@ curl -s -X POST localhost:8080/mcp \
 **未认证时**返回的是本项目的统一失败体（HTTP 401 / `code 2001`），不是 JSON-RPC 的 `error` 对象：
 认证发生在协议层之前。**兜底错误不回传异常原文**，只给 `-32603` + `requestId`。
 
-**如实声明**：用户对工具的"启停"**不作用于**这条直调路径（启停生效在 Agent 装配那一侧）；
-要让"停用即拒"在这里也成立，需要连 `tools/call` 的拒绝一起做——属于权限档，列在 P1。
+**工具权限（Phase 5.9 八）**：`tools/list` 与 `tools/call` 遵守**同一份**用户工具权限
+（`ToolRegistry.enabledFor`，与 Agent 装配是同一个判定）。用户停用 `knowledge_search` 后：
+
+- `tools/list` **不再返回**它（客户端不该拿到一个"看起来能用"的名字）；
+- `tools/call` 拒绝，回 JSON-RPC `error`：
+
+  ```json
+  {"jsonrpc":"2.0","id":1,
+   "error":{"code":-32003,
+            "message":"工具调用无权限：knowledge_search 已被停用（业务码 5004）",
+            "data":{"businessCode":5004,"tool":"knowledge_search"}}}
+  ```
+
+为什么是 `error` 而不是 `result.isError=true`：本端点里 `isError` 的含义是"工具真的跑了、但失败了"，
+而这里工具**一次都没跑**——混在一起，调用方就再也分不清是用户的开关生效了，还是检索真的出错了。
+为什么是 `-32003` 而不是标准码：JSON-RPC 2.0 只规定了"方法不存在（`-32601`）""参数不合法（`-32602`）"，
+没有"无权限"这一档。**`-32601`（名字写错了）与 `-32003`（你的开关生效了）刻意不合并**，
+它们各自指向完全不同的下一步动作。
+
+`qa_ask` 不受这个开关影响（它不是 `@Tool`，而是"跑一次默认 Agent"的入口）：
+它内部的检索同样按用户启停过滤，因此停用检索工具后它仍会回答、只是不再检索
+（这一点由 `AGENT_TOOLS_EMPTY` 计数与 WARN 留痕，不静默）。
 
 ---
 
@@ -761,6 +789,32 @@ POST /api/eval/datasets/1/import
 - 没有任何消息时返回**空列表**（不是错误）。
 
 > 同一个数字在 `/summary` 与 `/agents` 上对不上是正常的：一个是"这次进程见过多少"，一个是"库里有多少"。
+
+**运行指标：`/actuator/metrics`（Phase 5.9 六）**
+
+上面两个端点回答"哪些降级发生了多少次、哪个 Agent 在被用"；运行指标回答"系统忙不忙、慢不慢"。
+两者**共用同一个上报口**（`ObservabilityRegistry`），只是读法不同——刻意**不**写第二套采集逻辑：
+同一个事实有两处记录，一旦对不上就没人知道该信哪个。
+
+| 指标名（`/actuator/metrics/{name}`） | 类型 | 含义 |
+| --- | --- | --- |
+| `nexus.llm.calls` | counter | 模型调用次数（含 Agent 工具循环的每一轮、以及重排这种系统调用） |
+| `nexus.llm.tokens` | summary | 单次调用的 token 总量（prompt + completion） |
+| `nexus.llm.latency` | timer | 单次调用耗时（从**订阅**那一刻起算，不含排队等待） |
+| `nexus.chat.requests` | counter | 对话请求数（流式与非流式各算一次） |
+| `nexus.chat.latency` | timer | 一次对话的端到端耗时（入口 → 落库/返回） |
+| `nexus.retrieval.requests` | counter | 真正发起检索的次数（"没有库可搜"不计） |
+| `nexus.agent.executions` | counter | Agent 执行次数 |
+| `nexus.errors` | counter | 以错误结束的请求数（全局异常处理器与流式失败各记一次） |
+
+降级类计数（`agent.search.degraded`、`retrieval.kb.failed` 等，见 `/summary`）同样以
+`nexus.` 前缀暴露在 `/actuator/metrics` 上，名字就是 `nexus.` + `/summary` 里的键。
+
+两点如实说明：①**没有引入任何指标后端**（无 Prometheus / Grafana），
+暴露的就是 Micrometer 的进程内注册表 + Actuator 的 JSON——这正是本阶段要的粒度；
+②token 与耗时**只在真的发生了调用/时长 ≥ 0 时记录**。供应商不回传 usage（流式下常见）时
+token 记不到，但"调了几次、花了多久"仍然记——把它一起丢掉会让指标整片为空，
+看起来像"没人在用"。
 
 ### 10.1 规划中
 

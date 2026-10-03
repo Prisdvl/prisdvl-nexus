@@ -21,6 +21,7 @@ import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.api.PageQuery;
 import com.lky.nexus.common.api.PageResult;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.knowledge.rag.RagAnswer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -28,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -52,6 +54,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
     /** metadata JSON 里工具痕迹的字段名（与前端约定，改这里等于改协议）。 */
     private static final String TOOL_CALLS_FIELD = "toolCalls";
+
+    /** metadata JSON 里引用明细的字段名（与前端约定，改这里等于改协议）。 */
+    private static final String CITATIONS_FIELD = "citations";
 
     private final ChatMessageMapper messageMapper;
     private final ChatConversationMapper conversationMapper;
@@ -120,7 +125,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         message.setRequestId(draft.requestId());
         message.setErrorMsg(draft.errorMsg());
         message.setStatus(StringUtils.hasText(draft.status()) ? draft.status() : MessageStatus.DONE.name());
-        message.setMetadata(toMetadata(draft.toolCalls()));
+        message.setMetadata(toMetadata(draft.toolCalls(), draft.citations()));
         message.setCreatedAt(LocalDateTime.now());
         messageMapper.insert(message);
 
@@ -176,8 +181,11 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         if (draft.errorMsg() != null) {
             message.setErrorMsg(draft.errorMsg());
         }
-        if (draft.toolCalls() != null) {
-            message.setMetadata(toMetadata(draft.toolCalls()));
+        // 痕迹与引用共用 metadata 这一列：任意一个非 null 就整列重写。
+        // 只写其中一个会把另一个抹掉——而流式落库时两者是同时拿到的（见 ChatStreamServiceImpl.persist），
+        // 所以"只给了一半"只可能来自别的调用方，那时按"这一半就是全部"处理才是对的
+        if (draft.toolCalls() != null || draft.citations() != null) {
+            message.setMetadata(toMetadata(draft.toolCalls(), draft.citations()));
         }
         // 刻意不调用 touchConversation：这条消息在流开始时已经计入 messageCount，
         // 否则"先插 STREAMING 再更新"会让计数翻倍。
@@ -250,24 +258,58 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 message.getStatus(),
                 message.getErrorMsg(),
                 message.getCreatedAt(),
-                parseToolCalls(message.getMetadata()));
+                parseToolCalls(message.getMetadata()),
+                parseCitations(message.getMetadata()));
     }
 
     /**
-     * 工具痕迹 → metadata JSON。
+     * 工具痕迹 + 引用 → metadata JSON。
+     *
+     * <p>两者共用一列（{@code chat_message.metadata}）而不是各占一列：它们都是
+     * "这条回答的附属事实"，列数不该随附属事实的个数增长；而两列会让"读到一半"成为可能
+     * （只更新了工具痕迹那一列，引用那列还是上一轮的值）。
      *
      * <p>序列化失败时返回 null 而不是抛异常：留档是<b>附加价值</b>，
      * 不能因为它失败就让一条已经生成好的回答落不了库。
      */
-    private String toMetadata(List<MessageToolCall> toolCalls) {
-        if (toolCalls == null || toolCalls.isEmpty()) {
+    private String toMetadata(List<MessageToolCall> toolCalls, List<RagAnswer.RagCitation> citations) {
+        boolean hasToolCalls = toolCalls != null && !toolCalls.isEmpty();
+        boolean hasCitations = citations != null && !citations.isEmpty();
+        if (!hasToolCalls && !hasCitations) {
             return null;
         }
         try {
-            return jsonMapper.writeValueAsString(Map.of(TOOL_CALLS_FIELD, toolCalls));
+            // LinkedHashMap 而不是 Map.of：后者不允许 null 值，也固定不住字段顺序
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            if (hasToolCalls) {
+                metadata.put(TOOL_CALLS_FIELD, toolCalls);
+            }
+            if (hasCitations) {
+                metadata.put(CITATIONS_FIELD, citations);
+            }
+            return jsonMapper.writeValueAsString(metadata);
         } catch (Exception ex) {
-            log.warn("工具调用痕迹序列化失败，本次不留档：{}", ex.getMessage());
+            log.warn("消息 metadata 序列化失败，本次不留档：{}", ex.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * metadata JSON → 引用明细。解析失败按空列表处理（与工具痕迹同理）。
+     *
+     * <p>H2 与 MySQL 对 {@code JSON} 列的差异见 {@link #parseToolCalls}。
+     */
+    private List<RagAnswer.RagCitation> parseCitations(String metadata) {
+        JsonNode node = metadataNode(metadata, CITATIONS_FIELD);
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        try {
+            return jsonMapper.readValue(node.toString(), new TypeReference<List<RagAnswer.RagCitation>>() {
+            });
+        } catch (Exception ex) {
+            log.warn("消息 metadata 里的引用解析失败，按无引用处理：{}", ex.getMessage());
+            return List.of();
         }
     }
 
@@ -285,23 +327,39 @@ public class ChatMessageServiceImpl implements ChatMessageService {
      * 两种都接受，前端拿到的都是同一份数据。
      */
     private List<MessageToolCall> parseToolCalls(String metadata) {
-        if (!StringUtils.hasText(metadata)) {
+        JsonNode node = metadataNode(metadata, TOOL_CALLS_FIELD);
+        if (node == null || !node.isArray()) {
             return List.of();
+        }
+        try {
+            return jsonMapper.readValue(node.toString(), new TypeReference<List<MessageToolCall>>() {
+            });
+        } catch (Exception ex) {
+            log.warn("消息 metadata 里的工具痕迹解析失败，按无痕迹处理：{}", ex.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * 取 metadata 里某个字段的节点；拿不到就返回 null。
+     *
+     * <p>剥字符串节点那一层的原因见 {@link #parseToolCalls} 的类注释（H2 与 MySQL 对 JSON 列的差异）。
+     * 抽出来是因为 metadata 现在有<b>两个</b>字段，两边各写一遍解析只会让那份差异说明
+     * 有一半被漏掉。
+     */
+    private JsonNode metadataNode(String metadata, String field) {
+        if (!StringUtils.hasText(metadata)) {
+            return null;
         }
         try {
             JsonNode root = jsonMapper.readTree(metadata);
             if (root.isString()) {
                 root = jsonMapper.readTree(root.asString());
             }
-            JsonNode node = root.path(TOOL_CALLS_FIELD);
-            if (!node.isArray()) {
-                return List.of();
-            }
-            return jsonMapper.readValue(node.toString(), new TypeReference<List<MessageToolCall>>() {
-            });
+            return root.path(field);
         } catch (Exception ex) {
-            log.warn("消息 metadata 解析失败，按无工具痕迹处理：{}", ex.getMessage());
-            return List.of();
+            log.warn("消息 metadata 解析失败，按空处理：{}", ex.getMessage());
+            return null;
         }
     }
 }

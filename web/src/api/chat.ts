@@ -35,6 +35,33 @@ export interface MessageToolCall {
   resultSummary: string
 }
 
+/**
+ * 一条引用（随消息落库，刷新后仍在）。
+ *
+ * 与 `StreamRetrievalHit` 是同一件事的两种载体：那个是检索**当下**推给界面的事件，
+ * 只活在这一次连接里；这个是**回答结束时**写进 `chat_message.metadata` 的留档。
+ * 前者回答"这次搜到了什么"，后者回答"这条回答是照着什么说的"。
+ *
+ * 字段与服务端 `RagAnswer.RagCitation` 一一对应（编号是**列表里的位置**，
+ * 单库时与正文里的 `[n]` 严格对齐）。
+ */
+export interface ChatCitation {
+  index: number
+  /**
+   * 这一片出自哪个知识库。多库检索下**没有它就无法回答"资料是哪来的"**——
+   * 而会话可能同时绑着"产品手册"和"内部 FAQ"，答案的可靠性取决于出处。
+   */
+  knowledgeBaseId: string | null
+  chunkId: string | null
+  documentId: string | null
+  documentTitle: string | null
+  headingPath: string | null
+  snippet: string | null
+  score: number
+  /** 正文里是否真的出现了 `[index]`；未引用也返回，便于核对模型有没有漏引。 */
+  referenced: boolean
+}
+
 export interface ChatMessage {
   id: string
   role: 'USER' | 'ASSISTANT' | 'SYSTEM' | 'TOOL'
@@ -52,6 +79,13 @@ export interface ChatMessage {
   errorMsg: string | null
   createdAt: string
   toolCalls: MessageToolCall[]
+  /**
+   * 这条回答引用的资料片段（无检索的对话为空数组）。
+   *
+   * 落库是必须的：检索事件只在流里发一次，刷新页面就没了——于是"这条回答照着什么说的"
+   * 在历史回放里无从查证。它也是**未引用**标记的来源（模型漏引时看得出来）。
+   */
+  citations: ChatCitation[]
 }
 
 /**
@@ -182,6 +216,14 @@ export interface StreamMeta {
 export interface StreamDone {
   finishReason?: string
   stopped?: boolean
+  /**
+   * 本轮引用（没有检索或没有命中时**不带这个字段**）。
+   *
+   * 跟着 `done` 走而不是单开一个事件：`referenced` 要在完整正文里比对编号才算得出来，
+   * 而回答结束时前端必然已经收到全部正文。这样实时视图与刷新后的历史视图
+   * 渲染的是同一份数据，不会出现"刷新一下引用才出来"。
+   */
+  citations?: ChatCitation[]
 }
 
 export interface StreamUsage {

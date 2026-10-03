@@ -31,6 +31,21 @@
             <artifactId>jakarta.validation-api</artifactId>
         </dependency>
 
+        <!--
+            Micrometer 只提供「指标 API + 简单实现」，不引入任何后端（Prometheus / Graphite 等），
+            因此它仍然属于「语言/规范级」的依赖，没有把 common 变成 Spring 模块。
+
+            optional=true：本模块只用到 MeterRegistry 这一个接口，运行时的实现由 app 层
+            经 spring-boot-starter-actuator 带进来（那里才有真正的 CompositeMeterRegistry）。
+            不标 optional 会把 micrometer-core 传给每一个依赖 common 的模块，
+            而它们（ai / knowledge）一个都不需要看指标 API。
+        -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

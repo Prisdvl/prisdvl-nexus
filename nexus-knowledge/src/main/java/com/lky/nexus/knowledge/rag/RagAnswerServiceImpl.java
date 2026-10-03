@@ -127,6 +127,12 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         //    topK 为 null（调用方没指定）时由检索层用知识库配置的 retrieval_top_k，
         //    这里不写死数字——"按库调检索参数"必须对问答同样生效。
         String retrievalQuery = buildRetrievalQuery(question, history);
+        // 检索计数在这里也要记一次：本方法是**自带检索的独立路径**（它不经过 prepare/prepareMany），
+        // 只在 prepareRetrieved 里计数等于"从知识库问答页发起的检索一次都不算"——
+        // 那个页面有一等入口，指标却对它完全失明（5.9 真机验证时在 /actuator/metrics 上看出来的：
+        // 问了两次、`nexus.llm.calls` 是 4，`nexus.retrieval.requests` 却根本不存在）。
+        // 判据与 prepareRetrieved 一致：空问题已在上面早退，走到这里就是"真的搜了"。
+        observabilityRegistry.increment(ObservabilityRegistry.RETRIEVAL_REQUESTS);
         List<ChunkSearchService.SearchHit> hits =
                 chunkSearchService.search(userId, knowledgeBaseId, retrievalQuery, topK, SearchMode.HYBRID);
         if (hits.isEmpty()) {
@@ -247,6 +253,10 @@ public class RagAnswerServiceImpl implements RagAnswerService {
         if (knowledgeBases.isEmpty() || question == null || question.isBlank()) {
             return PreparedAnswer.none();
         }
+        // 计数放在这两道"根本没得搜"的早退之后：没有知识库、没有问题是**没发生检索**，
+        // 把它们算进检索次数会让"检索了多少次"这个数虚高，
+        // 而且它们分别有更准确的去处（没有库 = 请求参数问题，空问题 = 请求参数问题）
+        observabilityRegistry.increment(ObservabilityRegistry.RETRIEVAL_REQUESTS);
         String retrievalQuery = buildRetrievalQuery(question, history);
         List<ChunkSearchService.SearchHit> hits;
         List<RetrievalFailure> failures = List.of();

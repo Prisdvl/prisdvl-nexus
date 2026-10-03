@@ -369,26 +369,27 @@ docker compose down -v         # 连数据卷一起删（清库，慎用）
 `fanout-timeout` 默认 10s：实测三库检索段落在 **978 ~ 3781 ms**，仍在同一量级内、
 留有约 2.6× 以上余量；**没有修改这个值**（§十五要求"不要为了追求更快而盲目修改"）。
 
-**本期新发现的两个真实缺陷**（**已记录，未在本期顺手修**，见 §2.13 与 Known Gaps）：
+**本期新发现的三个真实缺陷**（当时**只记录、未顺手修**，后续在 5.9 逐条关闭）：
 
-1. `LiveChunkIndexTest.recreateIndexSwitchesAlias`（一个 **LIVE** 测试）会**清空共享的
-   ES 索引**——对着开发栈跑一次，BM25 那条腿就静默失效（向量那条腿仍工作，所以症状很隐蔽：
-   检索仍有结果，只是少了关键词召回）。**本期实际撞了两次**（第一次在 5.5.1 收尾时，
-   第二次就是上面 1b 那次 live 复跑）：跑完 `nexus_chunk/_count` 从 13 变成 **0**，
-   而 `/search?mode=hybrid` 仍有结果——因为向量那一路还在。
-   恢复办法（已实测）：`POST /{kbId}/index/recreate` 把切片状态重置，再
-   `POST /{kbId}/index` 重建；两个库要**先全部 recreate、再全部 index**，
-   否则后一个库的 recreate 会把前一个刚建好的索引一起换掉（重建是**全局**的）。
-3. **一个前端竞态，容器化之后从偶发变成必现**（**本期唯一一处业务代码改动**）：
+1. ~~`LiveChunkIndexTest.recreateIndexSwitchesAlias`（一个 **LIVE** 测试）会清空共享的 ES 索引~~
+   → **5.9 七 已修**。`Live*` 测试改为自带一次性容器（Testcontainers，见
+   `nexus-app/.../support/LiveInfrastructure.java`）：本机那套开发栈的数据**碰不到**了。
+   修复前的症状值得记住：跑完 `nexus_chunk/_count` 从 13 变成 **0**，
+   而 `/search?mode=hybrid` 仍有结果——因为向量那一路还在，只是 BM25 那条腿静默失效。
+3. **一个前端竞态，容器化之后从偶发变成必现**（**5.7 唯一一处业务代码改动**）：
    自动选中会话时发出的 `listMessages` 响应晚于用户点「新对话」回来，无条件写 `items`
    ——界面上写着"新对话"、内容却是上一条会话的消息。Vite 本地跑窗口太窄撞不上，
    经过 nginx + 容器内 MySQL 每跳多几十毫秒就稳定命中。
    修法：`AgentView.vue` 加 `messageLoadSeq`（每次加载编号，只有最后一次允许写 `items`；
    「新对话」让在飞的那次作废）。见 `docs/decisions.md` B.49 §4.5。
-2. `ElasticsearchChunkIndex.recreateIndex()` 的物理索引名是**秒级**的
-   （`yyyyMMddHHmmss`），同一秒内调用两次会撞名 →
-   `resource_already_exists_exception` → 接口 500，且此时切片已被标成 `INDEXED`
-   而索引其实是空的（表现为 `/index` 报 `total: 0`）。
+2. ~~`ElasticsearchChunkIndex.recreateIndex()` 的物理索引名是秒级的（`yyyyMMddHHmmss`），
+   同一秒内调用两次会撞名 → `resource_already_exists_exception` → 接口 500，
+   且此时切片已被标成 `INDEXED` 而索引其实是空的（表现为 `/index` 报 `total: 0`）~~
+   → **5.9 四 已修**：物理索引名尾部加了一个 `AtomicLong` 序号，
+   并有 `LiveChunkIndexTest.recreateIndexIsRepeatableWithinTheSameSecond` 盯着这条路径。
+   同一期还改了更重的那件事：**索引从"全局一份"改成"每知识库一份"**
+   （别名 `<base-alias>_<kbId>`）——此前重建 KB-A 会把 KB-B/C 的文档一起删掉，
+   而 B/C 的切片状态仍是 `DONE`，于是它们的 BM25 **永久静默失效**。
 
 ### 2.13 数据持久化 / 资源 / 启动耗时的**观察值**
 
@@ -505,8 +506,9 @@ curl -s -X POST localhost:8080/mcp \
      资料为空**不调用模型**——从根上防幻觉；流式输出解决长延迟体感；
    - **Agent**：用户可控三要素 = 痕迹可见 + 轮数有界 + 降级如实；再往上
      **MCP Server** 把知识库暴露成标准工具给外部客户端。
-4. **工程素养（讲 30 秒）**：`mvn test` **567/0/0/18**（基线口径，104 个类；那 18 个"依赖基础设施所以跳过"
-   的 live 测试**在整栈起来并打开 live 开关后全部真跑并通过**，口径为 **567/0/0/0**，见 §8 的第 1 与 1b 行）；
+4. **工程素养（讲 30 秒）**：`mvn test` **598/0/0/21**（基线口径，111 个类；那 21 个"依赖基础设施所以跳过"
+   的 live 测试**在整栈起来并打开 live 开关后全部真跑并通过**——5.7 那轮的口径是 **567/0/0/0**，
+   见 §8 的第 1 与 1b 行）；
    容器化后 **11 个 `verify-*.mjs` 全部退出码 0**，另有 5.8 的全链路冒烟 `verify-full-product.mjs` 一次通过；
    **每轮交付都 live 验证**（5.6 那期用 `standalone` + 本机原生 Redis 避开 Docker；
    5.5.1 用桩 SSE 帧验界面层，**5.7 把那条桩腿换成了"真 ES + 一个真挂掉的库"**，见 §2.12）；
@@ -547,6 +549,9 @@ curl -s -X POST localhost:8080/mcp \
 | 8 | 18 个 live 测试（真 ES / 真 pgvector / 真模型） | LIVE | §8.2 | **18/18 执行并通过**，0 skipped |
 | 9 | 多库真机验收（含"一个库真失败"） | REAL ENVIRONMENT | `verify-multi-kb-failure.mjs` | EXIT=0，逐条见 §2.12 |
 | 10 | 停 / 启 / 数据存活 | REAL ENVIRONMENT | `restart` → `down` → `up -d` | 7 项数据逐项一致（§2.7） |
+| 11 | 全量测试（5.9 收口，不带开关） | UNIT + INTEGRATION | `JAVA_HOME=/d/develop/jdk-21 mvn -B test` | **598 / 0 失败 / 0 错误 / 21 跳过**（111 个类）；四模块 19 + 66 + 170 + 343 |
+| 12 | 前端构建（含 `vue-tsc --noEmit`） | — | `npm run build` | exit 0（仅有既存的 chunk 体积警告） |
+| 13 | 5.9 的 E2E 复跑 | E2E + LIVE | 12 个 `verify-*.mjs` | **NOT VERIFIED（本轮未跑）**，见 §8.3 |
 
 ### 8.1 E2E 复跑（`WEB_BASE=http://localhost:8088`，经 nginx 打整栈）
 
@@ -625,10 +630,26 @@ verify-multi-kb-failure 0   verify-agent-no-kb 0   verify-security 0   verify-fu
 | 嵌入 | 2 | `nexus-ollama`（bge-m3） | `AI_EMBEDDING_LIVE=true` | `LiveEmbeddingTest`（0.50s） |
 | 模型 | 7 | 外部网关 | `AI_CHAT_API_KEY` | `AgentLoopTest`（25.2s）·`LiveModelCallTest`（4.8s）·`ChatStreamLiveTest`（32.0s）·`MultiTurnMemoryTest`（6.5s） |
 
-> ⚠️ 跑这组之前要知道 **`LiveChunkIndexTest` 会清空共享的 ES 索引**（§2.12 缺陷①）。
-> 本期的做法是：先跑测试，再 `recreate` + `index` 把两个演示知识库重建回来
-> （恢复后 `ES _count = 13`，BM25 对两个库都能召回）。
-> 这是**已知代价**，不是"跑完什么都没发生"。
+> ⚠️ 上面这张表记的是 **5.7 那一轮**的口径。当时 `LiveChunkIndexTest` 会清空共享的 ES 索引
+> （§2.12 缺陷①），做法是"先跑测试，再 `recreate` + `index` 把两个演示知识库重建回来"。
+> **5.9 七 之后这条代价没有了**：两个检索类自带一次性容器，碰不到开发栈的数据。
+
+### 8.2b Live 测试的容器化（5.9 七）
+
+| 组 | 数量 | 5.9 起的基础设施 | 门控 |
+| --- | --- | --- | --- |
+| ES | 8 | **Testcontainers 自起** `nexus-elasticsearch:9.4.5`（含 IK） | `AI_SEARCH_LIVE=true` |
+| pgvector | 4 | **Testcontainers 自起** `pgvector/pgvector:0.8.6-pg18-trixie` + 部署脚本建扩展 | `AI_VECTOR_LIVE=true` |
+| MySQL | — | 上述两类的 Spring 上下文都需要，同样自起 | 同上 |
+| 嵌入 | 2 | 仍连开发栈的 Ollama（bge-m3） | `AI_EMBEDDING_LIVE=true` |
+| 模型 | 7 | 仍连外部网关（要真花钱） | `AI_CHAT_API_KEY` |
+
+三点如实说明：①容器端口一律**随机映射**，因此跑测试时开发栈那套 3307/5433/9200 不用停；
+②镜像 tag 与 `deploy/docker-compose.yml` **逐字相同**，否则"测试绿了、真机红了"又会变得可能；
+③代价是这三个容器约 2~3 GB 内存与 30~60 秒启动，所以它**仍不是 `mvn test` 的默认行为**
+（默认行为一个容器都不起）——嵌入与模型的 9 条测试仍连开发栈/外部网关，
+**本轮未改成容器**（Ollama 权重太大、模型要花钱），因此"Live 测试完全自包含"这句话
+现在**只有检索那两类成立**。
 
 ### 8.3 未验证 / 已知风险（如实列出）
 
@@ -636,10 +657,12 @@ verify-multi-kb-failure 0   verify-agent-no-kb 0   verify-security 0   verify-fu
 - **NOT VERIFIED · 生产形态**：ES 安全模块仍关闭（开发态）、无 TLS、无外置密钥管理、
   单实例无边车。这些是 **Phase 11** 的范围，本期只做"单机整栈可跑"。
 - **NOT VERIFIED · 多机 / 高可用**：compose 是单机编排。
-- **Known Gap · 检索事件不落库**：`retrieval` 事件目前活在一次流里，刷新即失。
-  并行化之后"这次少搜了谁"更要紧，但**本期按范围要求不实现**，见
-  `productization-gap-analysis.md` P2-4。
-- **Known Gap · `recreateIndex()` 非同一秒幂等**（§2.12 缺陷②）。
-- **Known Gap · `LiveChunkIndexTest` 会清空共享 ES 索引**（§2.12 缺陷①）——
-  它是 LIVE 测试，对着开发栈跑要小心。
+- **NOT VERIFIED · 5.9 的 E2E 脚本未复跑**：本轮的改动（ES 索引按库隔离、引用落库、
+  MCP 权限、JWT `iss`、Micrometer 指标）用 **UNIT + INTEGRATION** 层验过，
+  12 个 `verify-*.mjs` 里依赖整栈的那几条**本轮没有重跑**——它们的结论停留在 5.8。
+  写在这里而不是含糊过去：**测试通过不等于真机验收通过**。
+- **Known Gap · `retrieval` 事件的命中列表不落库**：刷新即失（引用列表已落库，两者不是同一件事），
+  见 `productization-gap-analysis.md` P2-4。
 - **观察值不作指标**：§2.13 的耗时/内存是单机观察值。
+- ~~**Known Gap · `recreateIndex()` 非同一秒幂等**~~ → **5.9 四 已修**（序号兜住秒级时间戳）。
+- ~~**Known Gap · `LiveChunkIndexTest` 会清空共享 ES 索引**~~ → **5.9 七 已修**（自带容器）。

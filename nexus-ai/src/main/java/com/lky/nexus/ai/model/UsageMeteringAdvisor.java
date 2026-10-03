@@ -1,5 +1,6 @@
 package com.lky.nexus.ai.model;
 
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.ChatUsageRecorder;
 import com.lky.nexus.common.security.UserContextKeys;
 import org.slf4j.Logger;
@@ -17,6 +18,7 @@ import org.springframework.core.Ordered;
 import reactor.core.publisher.Flux;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -73,9 +75,21 @@ public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
     private static final int ORDER = Ordered.LOWEST_PRECEDENCE - 100;
 
     private final ChatUsageRecorder recorder;
+    private final ObservabilityRegistry observability;
 
+    /**
+     * 不带观测注册表：指标记录退化为空操作。
+     *
+     * <p>保留它是为了纯 AI 层的单测——那里验的是"账记到谁头上"，
+     * 不该为了跑起来而拖进一个指标注册表。
+     */
     public UsageMeteringAdvisor(ChatUsageRecorder recorder) {
+        this(recorder, new ObservabilityRegistry());
+    }
+
+    public UsageMeteringAdvisor(ChatUsageRecorder recorder, ObservabilityRegistry observability) {
         this.recorder = recorder == null ? ChatUsageRecorder.NOOP : recorder;
+        this.observability = observability == null ? new ObservabilityRegistry() : observability;
     }
 
     @Override
@@ -90,7 +104,10 @@ public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
 
     @Override
     public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+        long startedNanos = System.nanoTime();
         ChatClientResponse response = chain.nextCall(request);
+        Metrics.of(observability, request, response == null ? null : response.chatResponse())
+                .record(elapsedMillis(startedNanos));
         recordUsage(request, response == null ? null : response.chatResponse());
         return response;
     }
@@ -101,8 +118,12 @@ public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
         // 所以留最后一帧有量的，而不是把每一帧加起来——那会把同一次调用记成 N 笔。
         AtomicReference<ChatResponse> lastWithTokens = new AtomicReference<>();
         AtomicBoolean recorded = new AtomicBoolean();
+        // 计时从「订阅那一刻」起，而不是本方法被调用时：返回 Flux 到真正订阅之间可能隔着
+        // 线程调度（本项目的流式链路正是如此），算进来会把排队时间记成模型耗时。
+        AtomicLong startedNanos = new AtomicLong();
 
         return chain.nextStream(request)
+                .doOnSubscribe(subscription -> startedNanos.set(System.nanoTime()))
                 .doOnNext(response -> {
                     ChatResponse chatResponse = response == null ? null : response.chatResponse();
                     if (hasTokens(chatResponse)) {
@@ -115,9 +136,44 @@ public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
                     // 同一轮只记一次：Flux 若被重复订阅（重试、重放），
                     // 没有这道闸就会把一次调用记成多笔
                     if (recorded.compareAndSet(false, true)) {
-                        recordUsage(request, lastWithTokens.get());
+                        ChatResponse last = lastWithTokens.get();
+                        long started = startedNanos.get();
+                        Metrics.of(observability, request, last)
+                                .record(started == 0 ? -1 : elapsedMillis(started));
+                        recordUsage(request, last);
                     }
                 });
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000;
+    }
+
+    /**
+     * 一次模型调用的指标（5.9 六）：调用次数、token 量、耗时。
+     *
+     * <p><b>什么时候记</b>：只要这次调用真的发生了就记，<b>不取决于有没有 usage</b>。
+     * 供应商不回传 usage（流式下很常见）时，token 量记不到——但"调用了几次、花了多久"
+     * 是本地就能观测的事实，把它一起丢掉会让指标在那些供应商上整片为空，
+     * 看起来像"没人在用"。token 为 0 与"没有这次调用"是两件事。
+     *
+     * <p>系统调用（重排）也照记：它确实花了钱和时间，只是不归属到任何用户。
+     * 把它排除在指标外，运维看到的模型开销就永远比账单少一截。
+     */
+    private record Metrics(ObservabilityRegistry observability, Integer promptTokens,
+                           Integer completionTokens) {
+
+        static Metrics of(ObservabilityRegistry observability, ChatClientRequest request,
+                          ChatResponse response) {
+            Usage usage = hasTokens(response) ? response.getMetadata().getUsage() : null;
+            return new Metrics(observability,
+                    usage == null ? null : usage.getPromptTokens(),
+                    usage == null ? null : usage.getCompletionTokens());
+        }
+
+        void record(long latencyMillis) {
+            observability.recordLlmCall(promptTokens, completionTokens, latencyMillis);
+        }
     }
 
     // ------------------------------------------------------------------

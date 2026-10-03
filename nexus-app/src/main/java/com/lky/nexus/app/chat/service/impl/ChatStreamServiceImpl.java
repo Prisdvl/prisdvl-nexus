@@ -26,9 +26,13 @@ import com.lky.nexus.app.chat.stream.StreamCancellationRegistry;
 import com.lky.nexus.app.infra.web.RequestIdHolder;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.UserContextKeys;
+import com.lky.nexus.knowledge.rag.Citations;
 import com.lky.nexus.knowledge.rag.PreparedAnswer;
+import com.lky.nexus.knowledge.rag.RagAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswerService;
+import com.lky.nexus.knowledge.service.ChunkSearchService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -97,6 +101,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
     private final AgentService agentService;
     private final AgentRuntime agentRuntime;
     private final JsonMapper jsonMapper;
+    private final ObservabilityRegistry observabilityRegistry;
 
     public ChatStreamServiceImpl(ConversationService conversationService,
                                  ChatMessageService chatMessageService,
@@ -106,7 +111,8 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                                  RagAnswerService ragAnswerService,
                                  AgentService agentService,
                                  AgentRuntime agentRuntime,
-                                 JsonMapper jsonMapper) {
+                                 JsonMapper jsonMapper,
+                                 ObservabilityRegistry observabilityRegistry) {
         this.conversationService = conversationService;
         this.chatMessageService = chatMessageService;
         this.chatClientFactory = chatClientFactory;
@@ -116,14 +122,24 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         this.agentService = agentService;
         this.agentRuntime = agentRuntime;
         this.jsonMapper = jsonMapper;
+        this.observabilityRegistry = observabilityRegistry;
     }
 
     @Override
     public SseEmitter stream(Long userId, Long conversationId, String content) {
         // 归属校验放在最前面：异常会走全局异常处理器返回统一 JSON，而不是开一个 SSE 再报错
         ChatConversationPO conversation = conversationService.requireOwned(userId, conversationId);
+        // 请求次数在**校验通过之后**才计：越权/不存在的会话是请求参数问题，
+        // 计进去会让"对话请求量"把探测性请求也算成正常流量
+        observabilityRegistry.increment(ObservabilityRegistry.CHAT_REQUESTS);
         // 模式决定这条链路走法：PLAIN 纯生成、RAG 先检索再回答、AGENT 由模型自己决定检索什么
         ChatMode mode = ChatMode.parse(conversation.getMode());
+        // Agent 执行次数（5.9 六）：与 chat.requests 分开计，因为两者回答的问题不同——
+        // "用户问了多少次"与"跑 Agent 跑了多少次"在 PLAIN/RAG 会话多起来之后会分叉，
+        // 合成一个数就看不出 Agent 这一路实际承担了多少流量
+        if (mode == ChatMode.AGENT) {
+            observabilityRegistry.increment(ObservabilityRegistry.AGENT_EXECUTIONS);
+        }
         // Agent 定义同样在落库之前解析：会话选了 DRAFT/DISABLED 的 Agent 时，
         // 用户应当看到一条明确的报错，而不是"先多出一条消息、再在 SSE 里半路失败"。
         // 未指定 Agent（agentId 为空）走内置默认——AGENT 模式永远有兜底，不存在"没有 Agent"的状态。
@@ -187,6 +203,9 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             // 检索事件必须在第一个 delta 之前：前端据此显示"检索到 N 个片段"。
             // 这里是同步发送（flux 还没订阅），顺序由代码结构保证，不靠时序运气。
             session.sendRetrieval(knowledgeBaseIds, prepared);
+            // 交给模型的那几段同时留一份：回答结束后它们要变成随消息落库的引用。
+            // 顺序就是提示词里的 [1..n]，与回答正文里的编号同一套
+            session.rememberRetrieval(prepared.usedHits());
         }
 
         // 没有资料就不调用模型（与 /ask/stream 完全一致：省钱，也从根上避免"无资料硬答"）。
@@ -327,6 +346,20 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         /** 工具调用痕迹：工具在订阅线程上执行、结束时在订阅线程上落库，但仍然按并发安全的容器声明 */
         private final List<MessageToolCall> toolCalls = Collections.synchronizedList(new ArrayList<>());
 
+        /**
+         * 这一轮<b>交给模型的</b>资料片段，按"第几次召回"分组（RAG 模式恰好一组，
+         * Agent 模式每次工具调用各一组）。
+         *
+         * <p>为什么要分组：编号规则不同。RAG 的 {@code [n]} 是这一组内的位置；
+         * Agent 的 {@code [n]} 是<b>每次工具调用各自</b>从 1 开始的（工具是无状态的，
+         * 它不知道自己是本轮的第二次调用）。而"这段资料被引用了吗"只能拿
+         * <b>它自己那一组的编号</b>去回答正文里比对——拉平之后再算，
+         * 第二次调用的第 1 条会被拿去比对第一次调用的 {@code [1]}，
+         * 结论就反了。因此在 {@link #citations()} 里逐组算、算完再合并编号。
+         */
+        private final List<List<ChunkSearchService.SearchHit>> retrievalGroups =
+                Collections.synchronizedList(new ArrayList<>());
+
         private volatile Usage lastUsage;
         private volatile String model;
         private volatile String finishReason;
@@ -370,6 +403,32 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         }
 
         /**
+         * 留一份本轮交给模型的片段（RAG 模式在订阅之前调用，Agent 模式由工具回调调用）。
+         *
+         * <p>不推事件：片段已经在 {@code retrieval} 事件里推过了，这里只是"落库要用的那份"。
+         */
+        private void rememberRetrieval(List<ChunkSearchService.SearchHit> hits) {
+            if (hits != null && !hits.isEmpty()) {
+                retrievalGroups.add(List.copyOf(hits));
+            }
+        }
+
+        /**
+         * 交给模型的片段 → 随消息落库的引用列表。
+         *
+         * <p>合并规则（分组算 {@code referenced}、按 chunkId 去重、统一重编号）在
+         * {@link Citations#merge} 里，那里是三条链路共用的一处；这里只负责把
+         * 收集到的分组交出去。
+         */
+        private List<RagAnswer.RagCitation> buildCitations() {
+            List<List<ChunkSearchService.SearchHit>> groups;
+            synchronized (retrievalGroups) {
+                groups = List.copyOf(retrievalGroups);
+            }
+            return Citations.merge(groups, assembled.toString());
+        }
+
+        /**
          * 没有资料时的收尾：不调用模型，仍然按完整的事件序列把固定回答推给前端。
          *
          * <p>与 {@code /ask/stream} 的空结果分支行为一致（同一句 {@link RagAnswerService#EMPTY_ANSWER}），
@@ -406,6 +465,18 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             send(SseEventNames.TOOL_RESULT, payload);
         }
 
+        /**
+         * 工具把资料交给了模型（Agent 模式）。
+         *
+         * <p>只留档、不推事件：工具痕迹事件（{@code tool_result}）已经告诉前端
+         * "这一步命中了几条"，再把每一段正文推一遍只是把同一件事说两遍。
+         * 而落库需要的是<b>哪几段</b>——那正是痕迹里没有的东西。
+         */
+        @Override
+        public void onRetrieval(String tool, List<ChunkSearchService.SearchHit> hits) {
+            rememberRetrieval(hits);
+        }
+
         private void onChunk(ChatResponse chunk) {
             if (finalized.get()) {
                 return;
@@ -429,7 +500,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             }
             persist(MessageStatus.DONE, null);
             sendUsage();
-            send(SseEventNames.DONE, Map.of("finishReason", finishReason == null ? "stop" : finishReason));
+            send(SseEventNames.DONE, donePayload(finishReason == null ? "stop" : finishReason));
             finish();
         }
 
@@ -455,6 +526,9 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             FailureClassifier.Failure failure = FailureClassifier.classify(error);
             log.error("流式生成失败 requestId={}, conversationId={}, code={}",
                     requestId, conversationId, failure.code().getCode(), error);
+            // 流式失败不走全局异常处理器（SSE 已经打开，只能发 error 帧），
+            // 因此这里必须自己计一次；否则"对话失败了多少次"在指标里永远是 0
+            observabilityRegistry.increment(ObservabilityRegistry.ERRORS);
             persist(MessageStatus.FAILED, truncate(failure.message()));
             send(SseEventNames.ERROR, Map.of(
                     "code", failure.code().getCode(),
@@ -471,7 +545,9 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             dispose();
             persist(MessageStatus.STOPPED, null);
             sendUsage();
-            send(SseEventNames.DONE, Map.of("finishReason", "stopped", "stopped", true));
+            Map<String, Object> payload = donePayload("stopped");
+            payload.put("stopped", true);
+            send(SseEventNames.DONE, payload);
             finish();
             log.info("用户停止生成 requestId={}, 已保留部分内容 {} 字", requestId, assembled.length());
         }
@@ -496,6 +572,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             synchronized (toolCalls) {
                 trace = List.copyOf(toolCalls);
             }
+            List<RagAnswer.RagCitation> citations = buildCitations();
             chatMessageService.updateAssistantMessage(userId, assistantMessageId, AssistantReplyDraft.builder()
                     .content(assembled.toString())
                     .model(model)
@@ -510,7 +587,14 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                     .errorMsg(errorMsg)
                     // 工具痕迹随消息落库：刷新页面后"当时检索了什么"仍然可查
                     .toolCalls(trace.isEmpty() ? null : trace)
+                    // 引用同理：检索事件只在流里发一次，不落库的话刷新页面就没了——
+                    // "这条回答是照着什么说的"在历史回放里无从查证（update.txt §五）
+                    .citations(citations.isEmpty() ? null : citations)
                     .build());
+            // 端到端耗时（5.9 六）：从请求进来到这一轮落库为止，含检索 + 全部模型往返 + 工具调用。
+            // 记在这里而不是 sendUsage 里，是因为四条终止路径（正常/停止/异常/断开）都汇到 persist，
+            // 只有它保证"每一轮各记一次、不会漏也不会重复"
+            observabilityRegistry.recordDuration(ObservabilityRegistry.CHAT_LATENCY, elapsedMillis());
             rememberTurn();
         }
 
@@ -530,6 +614,24 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             } catch (Exception ex) {
                 log.warn("会话记忆写入失败（不影响本轮落库）conversationId={}: {}", conversationId, ex.getMessage());
             }
+        }
+
+        /**
+         * {@code done} 事件的负载：结束原因 + 本轮引用（没有引用就不带这个字段）。
+         *
+         * <p>引用跟着 {@code done} 走、而不是另开一个事件类型：它本来就要等回答结束才算得出来
+         * （{@code referenced} 是在完整正文里比对编号），而前端也需要它在<b>实时</b>与
+         * <b>刷新后</b>两个视图里长得一样——只落库不发事件的话，同一轮对话
+         * 刷新前看不到引用、刷新后却出现了，看起来像是"刷新把数据变多了"。
+         */
+        private Map<String, Object> donePayload(String reason) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("finishReason", reason);
+            List<RagAnswer.RagCitation> citations = buildCitations();
+            if (!citations.isEmpty()) {
+                payload.put("citations", citations);
+            }
+            return payload;
         }
 
         private void sendUsage() {

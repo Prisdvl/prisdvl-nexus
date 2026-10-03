@@ -454,11 +454,11 @@ class ChunkSearchServiceParityTest {
         }
 
         @Override
-        public void ensureIndex() {
+        public void ensureIndex(Long knowledgeBaseId) {
         }
 
         @Override
-        public void recreateIndex() {
+        public void recreateIndex(Long knowledgeBaseId) {
         }
 
         @Override

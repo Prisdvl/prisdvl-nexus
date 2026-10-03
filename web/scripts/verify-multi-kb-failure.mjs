@@ -9,11 +9,16 @@
  *      失败被一路可见（检索事件 `failedKnowledgeBases` + 计数 `retrieval.kb.failed` + 界面文案）。
  *
  * 【③ 的失败是真实故障，不是 mock】
- * 多库的检索依赖（ES 别名、pgvector 表、嵌入客户端）在这个架构里是**全局共享**的：
+ * 多库的检索依赖（ES 集群、pgvector 表、嵌入客户端）在这个架构里是**全局共享**的：
  * 停掉 Elasticsearch 会让**所有**库一起失败（那条路径由 `verify-retrieval-outage` 的手工
  * 演练覆盖，见 docs/deployment.md）。因此"只让一个库失败"必须落在这个库**自己的数据**上。
  * 本脚本用的是真实索引里的一个真实坏文档：往真实 Elasticsearch 里写一条
  * `_id` 非数字、但 `knowledge_base_id` 指向 KB-B 的文档。真实检索代码在把命中
+ *
+ * ⚠️ 写入位置是 **KB-B 自己的别名**（`<基名>_<库 id>`），不是全局基名：
+ * Phase 5.9 起索引按知识库隔离（`ElasticsearchChunkIndex.aliasFor`），
+ * 全局那个基名已经没有读方了（见下面 `ES_ALIAS_BASE` 处的说明）。
+ * 下面这段的其余部分（坏在 `_id` 上、只在 B 的扇出里炸）不受影响。
  * 映射成 `ChunkSearchHit` 时会 `Long.valueOf(hit.id())` 抛 NumberFormatException——
  * 这个异常只在 KB-B 的那次扇出任务里抛出，A 与 C 不受影响。
  * 它没有替换任何 Bean、没有打桩、没有改写业务代码；注入的是真实基础设施里的真实坏数据。
@@ -28,7 +33,20 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const base = process.env.WEB_BASE ?? 'http://localhost:8088'
 const es = process.env.ES_BASE ?? 'http://localhost:9200'
-const ES_ALIAS = process.env.ES_INDEX_ALIAS ?? 'nexus_chunk'
+/**
+ * ES 别名的**基名**（后端配置项 `nexus.search.index-alias`）。
+ *
+ * ⚠️ Phase 5.9 起索引按知识库隔离：每个库的别名是 `<基名>_<知识库 id>`
+ * （见 `ElasticsearchChunkIndex.aliasFor`），**不存在**一个读全部库的全局别名。
+ * 因此故障注入必须写进被测库自己的别名。写去全局基名的后果有两种，都不报错：
+ *   - 基名不存在 → 而 ES 默认允许自动建索引，于是**凭空造出一个同名物理索引**，
+ *     坏文档落进去，B 的检索（读别名）根本看不到它；
+ *   - 基名还在（升级前留下的旧索引）→ 坏文档落进一个**谁都不读**的地方。
+ * 两种都是"故障没发生"，而断言会以「恰好 1 个库失败（实际 0）」这种
+ * **看起来像功能坏了**的方式红——这一条是 2026-10-03 真机跑出来的，见 decisions.md B.51。
+ */
+const ES_ALIAS_BASE = process.env.ES_INDEX_ALIAS ?? 'nexus_chunk'
+const kbAlias = (knowledgeBaseId) => `${ES_ALIAS_BASE}_${knowledgeBaseId}`
 const outDir = resolve(here, '../../docs/screenshots')
 
 const sleep = (ms) => new Promise((resolve_) => setTimeout(resolve_, ms))
@@ -307,7 +325,17 @@ try {
   console.log('\n⑥ 一个库真的失败（往真实 ES 里给 B 写一条 _id 非数字的坏文档）')
   const question5 = '堆外内存上限是多少？Agent 循环的最大步数是多少？'
   corruptDocId = `acceptance-corrupt-${stamp}`
-  const put = await fetch(`${es}/${ES_ALIAS}/_doc/${encodeURIComponent(corruptDocId)}?refresh=true`, {
+  // 注入前先确认 B 的别名真的存在：别名不存在时 ES 会**自动建一个同名物理索引**，
+  // 坏文档落进去、B 的检索读不到 → 故障静默失效（详见文件头与 ES_ALIAS_BASE 的说明）。
+  // 不带这一步的话，"注入失败"会伪装成"失败隔离功能坏了"。
+  const aliasHead = await fetch(`${es}/_alias/${kbAlias(kbB)}`)
+  if (aliasHead.status !== 200) {
+    throw new Error(
+      `KB-B 的 ES 别名不存在（${kbAlias(kbB)}，HTTP ${aliasHead.status}）：`
+        + 'B 尚未建立索引，注入坏文档无从谈起（先跑通前面的检索步骤）'
+    )
+  }
+  const put = await fetch(`${es}/${kbAlias(kbB)}/_doc/${encodeURIComponent(corruptDocId)}?refresh=true`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -328,7 +356,7 @@ try {
   if (put.status !== 201) {
     throw new Error(`注入坏文档失败：HTTP ${put.status} ${await put.text()}`)
   }
-  console.log(`   已写入 ${ES_ALIAS}/${corruptDocId}（knowledge_base_id=${kbB}）`)
+  console.log(`   已写入 ${kbAlias(kbB)}/${corruptDocId}（knowledge_base_id=${kbB}）`)
 
   const before = (await api('GET', '/api/observability/summary')).json?.data?.['retrieval.kb.failed'] ?? 0
   const { retrieval, answer } = await ragAsk([kbA, kbB, kbC], question5)
@@ -436,7 +464,7 @@ try {
 } finally {
   // ---------- 清理：坏文档与三个库都要删掉，不留痕迹 ----------
   if (corruptDocId) {
-    await fetch(`${es}/${ES_ALIAS}/_doc/${encodeURIComponent(corruptDocId)}?refresh=true`, { method: 'DELETE' })
+    await fetch(`${es}/${kbAlias(kbB)}/_doc/${encodeURIComponent(corruptDocId)}?refresh=true`, { method: 'DELETE' })
       .then((r) => console.log(`清理坏文档：HTTP ${r.status}`))
       .catch((error) => console.log(`清理坏文档失败：${error.message}`))
   }

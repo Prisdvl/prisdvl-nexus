@@ -3,6 +3,7 @@ package com.lky.nexus.ai.model;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.ChatUsageRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +46,7 @@ public class ChatClientFactory {
     private final AiModelProperties properties;
     private final AiModelRegistry registry;
     private final ChatUsageRecorder usageRecorder;
+    private final ObservabilityRegistry observability;
     private final Map<String, ChatClient> clientsByRole = new ConcurrentHashMap<>();
 
     /** 不记账的构造：给不关心配额的测试与纯 AI 层使用。 */
@@ -52,11 +54,18 @@ public class ChatClientFactory {
         this(properties, registry, ChatUsageRecorder.NOOP);
     }
 
+    /** 不记指标的构造：模型调用次数/耗时/Token 不上报（纯 AI 层单测用它）。 */
     public ChatClientFactory(AiModelProperties properties, AiModelRegistry registry,
                              ChatUsageRecorder usageRecorder) {
+        this(properties, registry, usageRecorder, new ObservabilityRegistry());
+    }
+
+    public ChatClientFactory(AiModelProperties properties, AiModelRegistry registry,
+                             ChatUsageRecorder usageRecorder, ObservabilityRegistry observability) {
         this.properties = properties;
         this.registry = registry;
         this.usageRecorder = usageRecorder == null ? ChatUsageRecorder.NOOP : usageRecorder;
+        this.observability = observability == null ? new ObservabilityRegistry() : observability;
     }
 
     /**
@@ -86,7 +95,7 @@ public class ChatClientFactory {
                 // defaultAdvisors 与业务代码在请求上追加的 advisors 是**合并**关系
                 // （DefaultChatClient.prompt() 复制的是含默认顾问的模板 spec，链按 order 排序），
                 // 所以聊天记忆顾问与本顾问可以共存，互不挤掉对方
-                .defaultAdvisors(new UsageMeteringAdvisor(usageRecorder))
+                .defaultAdvisors(new UsageMeteringAdvisor(usageRecorder, observability))
                 .build();
     }
 }

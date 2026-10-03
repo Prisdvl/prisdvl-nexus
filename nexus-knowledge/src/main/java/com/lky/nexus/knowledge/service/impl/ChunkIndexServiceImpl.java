@@ -60,7 +60,7 @@ public class ChunkIndexServiceImpl implements ChunkIndexService {
     public IndexResult indexPendingChunks(Long userId, Long knowledgeBaseId, int batchLimit) {
         KnowledgeBasePO knowledgeBase = knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
         long start = System.currentTimeMillis();
-        chunkIndex.ensureIndex();
+        chunkIndex.ensureIndex(knowledgeBase.getId());
 
         int total = 0;
         int indexed = 0;
@@ -112,14 +112,28 @@ public class ChunkIndexServiceImpl implements ChunkIndexService {
         return new IndexResult(total, indexed, cost);
     }
 
+    /**
+     * 重建<b>本知识库</b>的索引。
+     *
+     * <p>两个顺序上的讲究：
+     * <ol>
+     *   <li><b>只重置本库切片</b>：别的知识库有自己的物理索引，重建本库碰不到它们。
+     *       早先这里配的是"全局唯一索引"，重建本库会把别人的 ES 文档一起清掉，
+     *       而别人的切片状态仍是 {@code DONE}、不会重新索引——BM25 就此静默失效；</li>
+     *   <li><b>先重置状态、再重建索引</b>：反过来的话，一旦重建过程中途失败，
+     *       切片已经被标成"重建过了"，而重建其实没走完，索引是空的——
+     *       又是一个"错了但看起来正常"。反过来，最坏情况只是切片多被标一次 {@code PENDING}：
+     *       建索引是按 chunkId 幂等 upsert 的，重跑一遍没有副作用。</li>
+     * </ol>
+     */
     @Override
     public void recreateIndex(Long userId, Long knowledgeBaseId) {
         knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
-        chunkIndex.recreateIndex();
-        // 重建后所有切片都需要重新写入
+        // 重建后本库所有切片都需要重新写入
         chunkMapper.update(null, Wrappers.<ChunkPO>lambdaUpdate()
                 .set(ChunkPO::getEsStatus, "PENDING")
                 .eq(ChunkPO::getKbId, knowledgeBaseId));
+        chunkIndex.recreateIndex(knowledgeBaseId);
         log.info("知识库 {} 索引已重建，切片状态重置为 PENDING", knowledgeBaseId);
     }
 

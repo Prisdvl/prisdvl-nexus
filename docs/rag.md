@@ -124,6 +124,14 @@ Obsidian Vault 即「ZIP 包中的一批 Markdown」，逐笔记由 `MarkdownDoc
 - 分词器：索引用 `ik_max_word`，查询用 `ik_smart` (`:62-63,280-302`)。
 - 字段权重：`title^3` / `heading_path^2` / `content^1` (`:159-160`)。
 - 元数据过滤子句在 `:200-227`（见 §4）。
+- **索引按知识库分片（5.9 四）**：别名是 `aliasFor(kbId)` = `<base-alias>_<kbId>`，
+  一个知识库一个别名、一个物理索引；物理索引名是 `<别名>_<yyyyMMddHHmmss>_<序号>`，
+  序号（`AtomicLong`）兜住"同一秒重建两次"的重名。
+  这条不是洁癖：在此之前**所有知识库共用一份全局索引**，`recreateIndex(A)` 会把
+  B/C 的文档一起删掉，而 B/C 的切片状态仍是 `DONE`、不会重新索引——
+  于是它们的 BM25 **永久静默失效**（向量那条腿照常召回，症状是"少了一路召回"而不是"搜不到"）。
+  只有 `deleteByDocumentIds` 仍走通配索引（调用方只拿得到文档 id，
+  而 `document_id` 在业务库里全局唯一，见 `LiveChunkIndexTest` 最后一条用例）。
 
 ### 2.3 pgvector 侧
 
@@ -142,7 +150,7 @@ Obsidian Vault 即「ZIP 包中的一批 Markdown」，逐笔记由 `MarkdownDoc
 
 ### 2.5 Rerank
 
-`nexus-ai/.../rag/LlmReranker.java`：
+`nexus-knowledge/.../rag/LlmReranker.java`：
 
 - **是 LLM**，不是本地模型：以 `CHAT_JUDGE` 角色调用 (`:96`)。
 - 开关 `nexus.rag.rerank-enabled`，默认 `true`；超时键 `nexus.rag.rerank-timeout-ms`。
@@ -158,7 +166,7 @@ Obsidian Vault 即「ZIP 包中的一批 Markdown」，逐笔记由 `MarkdownDoc
 
 ## 3. Multi-KB Retrieval（多知识库检索）
 
-`nexus-ai/.../rag/retriever/MultiKnowledgeRetriever.java`：
+`nexus-knowledge/.../rag/retriever/MultiKnowledgeRetriever.java`：
 
 | 场景 | 执行方式 | 证据 |
 | --- | --- | --- |
@@ -200,7 +208,7 @@ ES 侧过滤子句见 `ElasticsearchChunkIndex.java:200-227`。
 
 ### 4.2 tags / folder 的解析
 
-pgvector 表只有 `kb_id` / `document_id` 两列，因此 `tags` / `folder` 先在关系库中经 `nexus-ai/.../rag/retriever/RetrievalFilterResolver.java` 解析为 `document ids`（tags / folder / documentIds 取**交集**，`:63-86,128-146`），再以 `AND document_id IN (...)` 下推。
+pgvector 表只有 `kb_id` / `document_id` 两列，因此 `tags` / `folder` 先在关系库中经 `nexus-knowledge/.../rag/retriever/RetrievalFilterResolver.java` 解析为 `document ids`（tags / folder / documentIds 取**交集**，`:63-86,128-146`），再以 `AND document_id IN (...)` 下推。
 
 - 若解析结果为空 → `FilterPlan.nothing()` 显式短路为空，**不静默丢弃某个条件**（`:128-146`）。这一点是刻意的：丢条件会导致越权/错配。
 
@@ -236,20 +244,29 @@ RAG 路径短路时返回固定文案 `RagAnswerService.EMPTY_ANSWER`。
 
 ## 6. 引用（Citation）
 
-`nexus-ai/.../rag/Citations.java`：
+`nexus-knowledge/.../rag/Citations.java`：
 
 - 用正则识别正文中的 `[n]` 标记 (`:20`)。
-- `build` 生成 `RagCitation{chunkId, documentId, title, headingPath, snippet, score, referenced}`，并标记哪些编号真正被引用 (`:25-36`)。
-- 持久化到 `kb_qa_record.citations`（`V7__qa_record.sql:18`，`citations MEDIUMTEXT`）。写入发生在 `RagAnswerServiceImpl` 的 `finish` (`:410`)。
+- `build` 生成 `RagCitation{index, knowledgeBaseId, chunkId, documentId, title, headingPath, snippet, score, referenced}`，并标记哪些编号真正被引用。
+- **`merge`（Phase 5.9 五）**：把 Agent 模式下**多次**工具调用的召回合并成一条引用列表。
+  必须按**组**算 `referenced`——工具的 `[n]` 每次调用都从 1 开始，拉平之后再比对，
+  第二次调用的第 1 条会被拿去比对第一次的 `[1]`，结论正好反过来。合并时按 `chunkId` 去重、
+  最后统一重编号；同一段落在多个编号上时"是否被引用"取**并集**。
+- 持久化有两条路：
+  1. `kb_qa_record.citations`（`V7__qa_record.sql:18`，`citations MEDIUMTEXT`），
+     写于 `RagAnswerServiceImpl` 的 `finish`；
+  2. `chat_message.metadata.citations`（Phase 5.9 五）——会话流式（RAG 与 Agent 模式）的引用
+     **与工具痕迹共用 `metadata` 这一列**，回答结束时整体重写。刷新聊天页面后引用仍在。
+     共用一列是刻意的：两者都是"这条回答的附属事实"，分两列会让"只更新了一半"成为可能。
 
 ### 6.1 已知缺口（诚实记录）
 
 | 缺口 | 证据 |
 | --- | --- |
-| KB `ask` 路径：citations **完整持久化** | `RagAnswerServiceImpl.java:410` |
-| 多知识库 chat-stream 路径：**既不持久化 citations，也不发送最终 citation 列表** | `ChatStreamServiceImpl` 的 `persist` 只写内容 (`:490-513`) |
-| `ChatAnswerResponse` **没有** citations 字段 | `chat/model/dto/ChatAnswerResponse.java:9-18`（且 `:7` 的 javadoc 已过时） |
-| `citation` SSE 事件**未实现** | `chat/stream/SseEventNames.java:12,36`（已声明未使用）；`docs/api.md:480,512` 亦标注「Phase 3 预留，仍未实现」 |
+| KB `ask` 路径：citations **完整持久化** | `RagAnswerServiceImpl` 的 `finish` |
+| ~~多知识库 chat-stream 路径：既不持久化 citations，也不发送最终 citation 列表~~ | ✅ **5.9 五 已修**：引用随 `chat_message.metadata.citations` 落库，并随 `done.citations` 推给前端 |
+| `ChatAnswerResponse` **没有** citations 字段 | `chat/model/dto/ChatAnswerResponse.java:9-18`（非流式接口不返回引用；前端走流式） |
+| `citation` SSE 事件**未实现** | 引用随 `done` 的 `citations` 字段给出，不单开事件——`referenced` 要在完整正文里比对编号才算得出来，而回答结束时前端必然已收到全部正文 |
 
 ---
 
@@ -259,8 +276,8 @@ RAG 路径短路时返回固定文案 `RagAnswerService.EMPTY_ANSWER`。
 | --- | --- | --- | --- |
 | 1 | 导入后**不自动**向量化 / 建索引，需显式触发 | 设计现状 | `DocumentPersistServiceImpl.java:337-340,427-430`；无 post-import 钩子 |
 | 2 | `RerankedRetriever` 装饰器**休眠**，rerank 在 `RagAnswerServiceImpl` 直调 | 部分实现（端口未接线） | `RerankedRetriever.java:50`；`RagAnswerServiceImpl.java:142-145` |
-| 3 | chat-stream 多知识库路径**不持久化 / 不返回** citations | 尚未实现 | `ChatStreamServiceImpl.java:490-513`；`ChatAnswerResponse.java:9-18` |
-| 4 | `citation` SSE 事件**未实现** | 尚未实现 | `SseEventNames.java:12,36`；`docs/api.md:480,512` |
+| 3 | ~~chat-stream 多知识库路径不持久化 / 不返回 citations~~ → **5.9 五 已修**（落 `chat_message.metadata.citations`）；仍未持久化的是 `retrieval` 事件的**命中列表** | 部分关闭 | `ChatMessageServiceImpl`；`ChatStreamServiceImpl.persist` |
+| 4 | `citation` SSE 事件**未实现**（引用随 `done.citations` 给出） | 设计如此 | `SseEventNames.java:12,36`；`docs/api.md` §5.2 |
 | 5 | `answerPolicy` 仅在提示层生效，无代码级断言 | 设计如此 | `AgentPrompts.java:109-119` |
 | 6 | 归属校验失败 / 嵌入模型不一致**不隔离**，整批失败 | 设计如此 | `MultiKnowledgeRetriever.java:181-182,266-283` |
 | 7 | 扫描件 PDF 无 OCR，直接解析失败 | 设计现状 | `PdfDocumentParser.java:85-88` |
@@ -287,17 +304,17 @@ RAG 路径短路时返回固定文案 `RagAnswerService.EMPTY_ANSWER`。
 | `ChunkEmbeddingServiceImpl` | 向量化 | `nexus-knowledge/.../service/impl/ChunkEmbeddingServiceImpl.java` |
 | `ChunkIndexServiceImpl` | ES 建索引 | `nexus-knowledge/.../service/impl/ChunkIndexServiceImpl.java` |
 | `ChunkerFactory` | 分块策略选择 | `nexus-knowledge/.../chunk/ChunkerFactory.java` |
-| `MultiKnowledgeRetriever` | 多库扇出 / 隔离 | `nexus-ai/.../rag/retriever/MultiKnowledgeRetriever.java` |
-| `HybridRetriever` | 混合召回 + RRF | `nexus-ai/.../rag/retriever/HybridRetriever.java` |
-| `KeywordRetriever` | ES BM25 召回 | `nexus-ai/.../rag/retriever/KeywordRetriever.java` |
-| `VectorRetriever` | pgvector 召回 | `nexus-ai/.../rag/retriever/VectorRetriever.java` |
-| `RetrievalFilterResolver` | 元数据过滤解析 | `nexus-ai/.../rag/retriever/RetrievalFilterResolver.java` |
-| `RetrievalFailure` | 失败记录 | `nexus-ai/.../rag/retriever/RetrievalFailure.java` |
-| `RerankedRetriever` | Rerank 装饰器（休眠） | `nexus-ai/.../rag/retriever/RerankedRetriever.java` |
-| `LlmReranker` | LLM Rerank | `nexus-ai/.../rag/LlmReranker.java` |
-| `RagAnswerServiceImpl` | RAG 同步作答 | `nexus-ai/.../rag/RagAnswerServiceImpl.java` |
-| `RagStreamServiceImpl` | RAG 流式作答 | `nexus-ai/.../rag/RagStreamServiceImpl.java` |
-| `Citations` | `[n]` 引用解析 | `nexus-ai/.../rag/Citations.java` |
+| `MultiKnowledgeRetriever` | 多库扇出 / 隔离 | `nexus-knowledge/.../rag/retriever/MultiKnowledgeRetriever.java` |
+| `HybridRetriever` | 混合召回 + RRF | `nexus-knowledge/.../rag/retriever/HybridRetriever.java` |
+| `KeywordRetriever` | ES BM25 召回 | `nexus-knowledge/.../rag/retriever/KeywordRetriever.java` |
+| `VectorRetriever` | pgvector 召回 | `nexus-knowledge/.../rag/retriever/VectorRetriever.java` |
+| `RetrievalFilterResolver` | 元数据过滤解析 | `nexus-knowledge/.../rag/retriever/RetrievalFilterResolver.java` |
+| `RetrievalFailure` | 失败记录 | `nexus-knowledge/.../rag/retriever/RetrievalFailure.java` |
+| `RerankedRetriever` | Rerank 装饰器（休眠） | `nexus-knowledge/.../rag/retriever/RerankedRetriever.java` |
+| `LlmReranker` | LLM Rerank | `nexus-knowledge/.../rag/LlmReranker.java` |
+| `RagAnswerServiceImpl` | RAG 同步作答 | `nexus-knowledge/.../rag/RagAnswerServiceImpl.java` |
+| `RagStreamServiceImpl` | RAG 流式作答 | `nexus-app/.../knowledge/service/impl/RagStreamServiceImpl.java` |
+| `Citations` | `[n]` 引用解析 | `nexus-knowledge/.../rag/Citations.java` |
 | `RrfFusion` | RRF 融合 | `nexus-common/.../search/RrfFusion.java` |
 | `ElasticsearchChunkIndex` | ES 映射 / 检索 | `nexus-app/.../infra/search/ElasticsearchChunkIndex.java` |
 | `PgVectorStore` | pgvector 存储 / 检索 | `nexus-app/.../infra/vector/PgVectorStore.java` |

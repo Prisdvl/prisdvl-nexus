@@ -5,7 +5,7 @@
 
 一个以**个人知识库为核心数据源**、基于 **Spring AI** 构建的 AI 应用：文档解析 → 结构化 Chunk → Embedding → 混合检索 → RAG，让大模型真正"读懂"你自己的 Obsidian / Markdown 笔记，并给出**可点击、可追溯的知识来源**；再通过 Tool Calling → Agent，把 AI 从"回答问题"升级为"基于个人知识执行任务"。
 
-它不是一个聊天机器人 demo，而是一个**跑得起来的完整系统**：8 个容器、4 个 Maven 模块、567 个测试、12 个 E2E 脚本，以及在真实 ES / pgvector / MySQL 上验收过的行为。
+它不是一个聊天机器人 demo，而是一个**跑得起来的完整系统**：8 个容器、4 个 Maven 模块、598 个测试、12 个 E2E 脚本，以及在真实 ES / pgvector / MySQL 上验收过的行为。
 
 ---
 
@@ -178,7 +178,8 @@ Agent 配置 ──► Agent Runtime ──► Prompt 装配 ──► LLM
 
 - 工具注册表 + **用户启用集合 ∩ Agent 白名单**双层裁剪；单轮工具调用有数量上限。
 - 工具调用痕迹随消息落库（`chat_message.agent_id` 记录 Agent 出处），刷新后仍在。
-- 已知缺口：MCP 直连 `tools/call` 绕过用户启用/停用开关。
+- **MCP 直连同样遵守用户启停**（5.9 八）：`tools/list` 不再列出停用的工具，`tools/call` 拒绝
+  （JSON-RPC `-32003` + 业务码 `5004`）。此前这条路径一次权限判定都没有——开关看起来生效，实际只生效了一半。
 
 ### 4.6 Chat Streaming（SSE）
 
@@ -190,7 +191,10 @@ Agent 配置 ──► Agent Runtime ──► Prompt 装配 ──► LLM
 
 - 自建计数器（`ObservabilityRegistry`）+ 只读接口：`GET /api/observability/summary`、`GET /api/observability/agents`。
 - 覆盖 token / 延迟 / 检索数 / 工具调用 / 失败库计数（`retrieval.kb.failed`）。
-- **这是部分实现**：没有 Micrometer、没有 `/actuator/metrics`、没有 Prometheus，进程重启计数清零。
+- **同一批点也接上 Micrometer**（5.9 六）：`/actuator/metrics` 可读 `nexus.llm.calls|tokens|latency`、
+  `nexus.chat.requests|latency`、`nexus.retrieval.requests`、`nexus.agent.executions`、`nexus.errors`
+  以及全部降级计数。**只有一个上报口、两种读法**——刻意不写第二套采集。
+- **仍未做**：没有 Prometheus / Grafana，也没有时间序列；计数仍是进程内累计，重启清零。
 
 ---
 
@@ -410,10 +414,14 @@ npm run build      # vue-tsc 类型检查 + vite build
 
 | 口径 | 数字 |
 | --- | --- |
-| 单元 + 集成测试 | **567 / 0 失败 / 0 错误 / 18 跳过**（104 个测试类） |
-| 真机（容器化整栈） | 上面那 18 个 live 测试**全部真跑通过，0 跳过** |
+| 单元 + 集成测试 | **598 / 0 失败 / 0 错误 / 21 跳过**（111 个测试类） |
+| 真机（容器化整栈） | 上面那 21 个 live 测试**全部真跑通过，0 跳过** |
 
-那 18 个跳过项**不是被删掉的失败**：它们是需要真实 MySQL / ES / pgvector 的 live 测试，在无 Docker 的默认环境里被跳过，在整栈起来后全部执行并通过。
+那 21 个跳过项**不是被删掉的失败**：它们是需要真实 MySQL / ES / pgvector / 真模型的 live 测试，
+在无 Docker 的默认环境里被跳过，在整栈起来后全部执行并通过。其中两个检索类
+（`LiveChunkIndexTest` 8 条、`LiveVectorStoreTest` 4 条）自 5.9 起**自带容器**
+（Testcontainers，见第 10 节 `LiveInfrastructure`），因此它们的跳过与否只取决于环境变量，
+不再取决于"你本机那套业务容器此刻是什么状态"。
 
 ```bash
 JAVA_HOME=/d/develop/jdk-21 mvn -B clean test        # 全量
@@ -444,8 +452,9 @@ cd web && npm run build                              # 前端类型检查 + 构�
 | 平台化 5.5.1 | 多库检索并行化 + 逐库失败隔离 |
 | 平台化 5.7 | 部署产品化：容器化整栈 + 真机验收（18 个 live 测试全部真跑、11 个 E2E 经 nginx 全绿） |
 | 平台化 5.8 | 产品化收口与最终验收（本文档重写 + RAG/Agent/安全/架构/部署文档补齐 + 全链路冒烟） |
+| 平台化 5.9 | 最终完善：ES 索引按库隔离、引用落库、Micrometer 指标、Live 测试自带宽容器、MCP 工具权限、JWT `iss` 校验、过期注释 |
 
-**当前状态**：功能 Phase 1–5 与平台化轨均已完成到 5.8，可运行的是一条完整链路（导入 → 检索 → RAG → Agent → 工具 → 引用 → 可观测），而**不是**一堆独立的演示端点。
+**当前状态**：功能 Phase 1–5 与平台化轨均已完成到 5.9，可运行的是一条完整链路（导入 → 检索 → RAG → Agent → 工具 → 引用 → 可观测），而**不是**一堆独立的演示端点。
 
 ---
 
@@ -454,22 +463,23 @@ cd web && npm run build                              # 前端类型检查 + 构�
 诚实列出，不藏：
 
 **架构级**
-1. **Observability 是部分实现**——自建计数器，无 Micrometer / Prometheus，重启清零，无时间序列。
-2. **Citation 是部分实现**——知识库问答路径完整落库引用；**多库 chat-stream 路径既不持久化引用、也不发最终引用列表**。
-3. **没有 `citation` SSE 事件**（`docs/api.md` 里标注为"预留"，代码确认确未实现）。
+1. **Observability 无后端**——已接 Micrometer（`/actuator/metrics` 可读），但**没有 Prometheus / Grafana、没有时间序列**，计数仍是进程内累计、重启清零。
+2. ~~Citation 是部分实现~~ → **5.9 五 已补**：会话流式（RAG 与 Agent 模式）的引用随消息落库
+   （`chat_message.metadata.citations`，含 `knowledgeBaseId`），刷新聊天页面后仍在，多库下能标出来源库。
+3. **没有 `citation` SSE 事件**——引用随 `done` 的 `citations` 字段给出，不单开一个事件。
 4. **Agent 最大迭代没有显式旋钮**——终止条件由框架与工具数量上限决定。
 5. **`answerPolicy` 只在提示词层强制**，不是代码级断言。
 6. **`RerankedRetriever` 装饰器休眠**——重排在 `RagAnswerServiceImpl` 里直接调用，端口有了但没接线。
-7. **MCP 直连 `tools/call` 绕过用户启用/停用开关**。
+7. ~~MCP 直连 `tools/call` 绕过用户启停~~ → **5.9 八 已修**：`tools/list` 与 `tools/call` 同走 `ToolRegistry.enabledFor`。
 8. **流式取消注册表只在内存**，多实例 / 重启即失效。
-9. **JWT 的 `iss` 只写不校验**；无 refresh token，logout = 客户端丢弃 token。
+9. **无 refresh token，logout = 客户端丢弃 token**（`iss` 自 5.9 九 起**已校验**）。
 
 **工程级**
-10. **ES 索引 `recreateIndex()` 不是同秒幂等的**——索引名精确到秒，同秒重建会撞 `resource_already_exists_exception` 并返回 500，而此时切片已被标记为 INDEXED（已知缺陷，本期**刻意不修**）。
-11. **`LiveChunkIndexTest.recreateIndexSwitchesAlias` 会清空共享 ES 索引**（已知缺陷，本期刻意不修）。
-12. **检索事件未持久化**——"检索到 N 个片段"卡片刷新后消失（P2-4，本期范围外）。
+10. ~~ES 索引 `recreateIndex()` 不是同秒幂等的~~ → **5.9 四 已修**：物理索引名尾部加 `AtomicLong` 序号。
+11. ~~`LiveChunkIndexTest` 会清空共享 ES 索引~~ → **5.9 七 已修**：`Live*` 测试自带一次性容器（Testcontainers），碰不到开发栈的数据。
+12. **`retrieval` 事件的命中列表未持久化**——"检索到 N 个片段"卡片刷新后消失（引用列表已落库，见第 2 条；两者不是同一件事）。
 13. **无物理外键**，全部逻辑外键。
-14. **无 Testcontainers**，真机回归靠人工跑 E2E。
+14. **真机容器的 Live 测试仍由环境变量开关**（默认跳过）——`docker compose stop` 后 `mvn test` 才能全绿，CI 里可重复的一步尚未接。
 15. **配额与限流在 Redis 不可用时降级为进程内实现**，多实例下可绕过。
 16. **软删除 / 停用不会立即吊销已签发令牌**。
 17. **token 存在 localStorage**，有 XSS 暴露面。
@@ -482,11 +492,10 @@ cd web && npm run build                              # 前端类型检查 + 构�
 
 **下一步优先级**（依据 gap 分析，不是愿望清单）：
 
-1. **引用与检索事件的持久化**——把多库 chat-stream 的引用补上，让卡片刷新后还在。
-2. **Observability 接入 Micrometer**——替换自建计数器，接上 `/actuator/metrics`。
-3. **安全加固**——TLS 终结、安全响应头、logout 与 refresh token、把 token 从 localStorage 挪走。
-4. **Testcontainers**——把真机回归从"人工跑脚本"变成 CI 里可重复的一步。
-5. **Phase 6+ 的功能扩展**——Workflow / Evaluation / 更完整的 MCP（当前 MCP 只有 4 个方法）。
+1. **检索事件的持久化**——引用已落库（5.9 五），仍未落库的是 `retrieval` 的命中列表本身。
+2. **安全加固**——TLS 终结、安全响应头、logout 与 refresh token、把 token 从 localStorage 挪走。
+3. **CI 化**——把真机回归（Testcontainers + E2E 脚本）从"人工跑"变成流水线里可重复的一步。
+4. **Phase 6+ 的功能扩展**——Workflow / Evaluation / 更完整的 MCP（当前 MCP 只有 4 个方法）。
 
 > 长期阶段拆分（Phase 0–11）见 [docs/roadmap.md](docs/roadmap.md)。
 > ⚠️ **该文档的 Phase 编号与上文"平台化 5.x"不是同一套编号**，两者同名不同义，读的时候注意区分。

@@ -1,5 +1,7 @@
 package com.lky.nexus.app.chat.model.dto;
 
+import com.lky.nexus.knowledge.rag.RagAnswer;
+
 import java.util.List;
 
 /**
@@ -24,7 +26,11 @@ public record AssistantReplyDraft(
         String status,
         String errorMsg,
         // Agent 模式的工具调用痕迹（非工具场景为 null）：落进 chat_message.metadata
-        List<MessageToolCall> toolCalls) {
+        List<MessageToolCall> toolCalls,
+        // 引用的资料片段（无检索的对话为 null）：同样落进 chat_message.metadata。
+        // 用 RagAnswer.RagCitation 而不是另一个"聊天专用引用"类型——编号规则必须与
+        // 知识库问答那一侧完全一致（见 Citations 的类注释）
+        List<RagAnswer.RagCitation> citations) {
 
     /** 全部字段可空的构建器式工厂：先建骨架，边生成边补。 */
     public static AssistantReplyDraftBuilder builder() {
@@ -46,6 +52,7 @@ public record AssistantReplyDraft(
         private String status;
         private String errorMsg;
         private List<MessageToolCall> toolCalls;
+        private List<RagAnswer.RagCitation> citations;
 
         public AssistantReplyDraftBuilder content(String value) {
             this.content = value;
@@ -100,10 +107,15 @@ public record AssistantReplyDraft(
             return this;
         }
 
+        public AssistantReplyDraftBuilder citations(List<RagAnswer.RagCitation> value) {
+            this.citations = value;
+            return this;
+        }
+
         public AssistantReplyDraft build() {
             return new AssistantReplyDraft(content, model, provider, promptTokens, completionTokens,
                     totalTokens, latencyMs, firstTokenMs, finishReason, requestId, status, errorMsg,
-                    toolCalls);
+                    toolCalls, citations);
         }
     }
 }

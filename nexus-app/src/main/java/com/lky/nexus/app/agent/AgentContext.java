@@ -1,5 +1,6 @@
 package com.lky.nexus.app.agent;
 
+import com.lky.nexus.knowledge.service.ChunkSearchService;
 import org.springframework.ai.chat.model.ToolContext;
 
 import java.util.HashMap;
@@ -126,6 +127,26 @@ public final class AgentContext {
         }
     }
 
+    /**
+     * 工具检索到、并<b>实际交给模型</b>的资料片段，顺序即回答里的 {@code [1..n]} 编号。
+     *
+     * <p>与 {@link #record} 分开是因为它们回答的是两个不同的问题：
+     * 痕迹回答"这一步做了什么、命中几条"（给人看的过程），
+     * 这里回答"这一轮回答是照着哪几段资料说的"（可追溯到片段本身）。
+     * 只有后者能持久化成一列引用——痕迹里的"3 条结果"在刷新之后
+     * 无法还原出是哪三段、出自哪篇文档的哪一节。
+     *
+     * <p><b>必须由调用线程在扇出结束后调用</b>：它最终可能写 SSE 监听器（不是线程安全的），
+     * 规则与 {@link #record} 完全一致。
+     */
+    public static void retrieval(ToolContext toolContext, String tool,
+                                 List<ChunkSearchService.SearchHit> hits) {
+        ToolCallListener listener = listener(toolContext);
+        if (listener != null) {
+            listener.onRetrieval(tool, hits);
+        }
+    }
+
     /** 只收痕迹、不推事件的监听器（一次性调用用：把痕迹收进调用方自己的列表）。 */
     public static ToolCallListener collector(List<ToolCallRecord> sink) {
         return new ToolCallListener() {
@@ -158,5 +179,15 @@ public final class AgentContext {
 
         /** 工具执行结束，带结果摘要。 */
         void onResult(ToolCallRecord record);
+
+        /**
+         * 工具检索并交给模型的资料片段（顺序即 {@code [1..n]}）。
+         *
+         * <p>默认空实现：只关心过程痕迹的调用方（一次性调用的收集器、测试桩）
+         * 不该被强制实现一个它用不上的方法——强制实现的后果通常是写一个空方法，
+         * 那和默认空实现在行为上完全一样，只是多了一处噪声。
+         */
+        default void onRetrieval(String tool, List<ChunkSearchService.SearchHit> hits) {
+        }
     }
 }

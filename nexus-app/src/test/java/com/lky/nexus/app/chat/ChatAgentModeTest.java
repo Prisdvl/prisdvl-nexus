@@ -7,6 +7,7 @@ import com.lky.nexus.app.chat.model.dto.MessageToolCall;
 import com.lky.nexus.app.chat.model.entity.ChatMessagePO;
 import com.lky.nexus.app.chat.service.ChatMessageService;
 import com.lky.nexus.common.api.PageResult;
+import com.lky.nexus.knowledge.rag.RagAnswer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -129,8 +130,81 @@ class ChatAgentModeTest {
 
         PageResult<ChatMessageResponse> page =
                 chatMessageService.listMessages(userId, conversationId, 1, 20);
-        assertThat(page.list()).allSatisfy(message ->
-                assertThat(message.toolCalls()).as("无工具场景返回空列表").isEmpty());
+        assertThat(page.list()).allSatisfy(message -> {
+            assertThat(message.toolCalls()).as("无工具场景返回空列表").isEmpty();
+            assertThat(message.citations()).as("无检索场景返回空列表").isEmpty();
+        });
+    }
+
+    /**
+     * 引用随消息落库（update.txt §五）。
+     *
+     * <p>钉住三件事，缺一件这个功能就等于没做：
+     * <ol>
+     *   <li><b>引用读得回来</b>——检索事件只在流里发一次，不落库就"刷新即消失"；</li>
+     *   <li><b>与工具痕迹共存</b>——两者共用 {@code metadata} 一列，写其中一个时
+     *       把另一个抹掉，症状是"有引用了但过程看不见了"（或反过来），
+     *       而这两种表现都像是渲染问题，不会有人去怀疑序列化；</li>
+     *   <li><b>多库出处与"是否被引用"逐字段保真</b>——它们是多库检索下
+     *       "这段资料哪来的、模型到底用没用" 的唯一答案。</li>
+     * </ol>
+     */
+    @Test
+    @DisplayName("引用与工具痕迹共存在 metadata 里，并按 JSON 逐字段读回")
+    void citationsAndToolTraceShareMetadataWithoutClobberingEachOther() throws Exception {
+        String token = registerAndLogin("agent-citation");
+        Long userId = currentUserId(token);
+        Long conversationId = createConversation(token, "AGENT");
+
+        chatMessageService.appendUserMessage(userId, conversationId, "两个库里的缓存击穿都怎么说的？", "req-cite");
+        ChatMessagePO assistant = chatMessageService.appendAssistantMessage(userId, conversationId, null,
+                AssistantReplyDraft.builder()
+                        .content("两个库给了互补的做法[1]，另见[2]。")
+                        .status("DONE")
+                        .requestId("req-cite")
+                        .toolCalls(List.of(new MessageToolCall("knowledge_search", "缓存击穿", "2 条结果")))
+                        .citations(List.of(
+                                new RagAnswer.RagCitation(1, 1001L, 9001L, 501L, "Java 笔记", "缓存 › 击穿",
+                                        "用互斥锁重建，只让一个请求打到库上。", 0.91, true),
+                                new RagAnswer.RagCitation(2, 1002L, 9002L, 502L, "运维手册", "故障处置 › 缓存雪崩",
+                                        "雪崩与击穿的区别在于大量 key 同时失效。", 0.83, true)))
+                        .build());
+
+        PageResult<ChatMessageResponse> page =
+                chatMessageService.listMessages(userId, conversationId, 1, 20);
+        ChatMessageResponse readBack = page.list().stream()
+                .filter(message -> message.id().equals(assistant.getId()))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(readBack.citations())
+                .as("引用必须能读回，且编号、出处、正文、分数、被引用标记都不能丢")
+                .hasSize(2)
+                .extracting(RagAnswer.RagCitation::index, RagAnswer.RagCitation::knowledgeBaseId,
+                        RagAnswer.RagCitation::chunkId, RagAnswer.RagCitation::documentId,
+                        RagAnswer.RagCitation::documentTitle, RagAnswer.RagCitation::headingPath,
+                        RagAnswer.RagCitation::score, RagAnswer.RagCitation::referenced)
+                .containsExactly(
+                        tuple(1, 1001L, 9001L, 501L, "Java 笔记", "缓存 › 击穿", 0.91, true),
+                        tuple(2, 1002L, 9002L, 502L, "运维手册", "故障处置 › 缓存雪崩", 0.83, true));
+        assertThat(readBack.citations().get(0).snippet()).isEqualTo("用互斥锁重建，只让一个请求打到库上。");
+        assertThat(readBack.toolCalls())
+                .as("写引用不能把共用同一列的工具痕迹抹掉")
+                .hasSize(1)
+                .extracting(MessageToolCall::tool, MessageToolCall::resultSummary)
+                .containsExactly(tuple("knowledge_search", "2 条结果"));
+
+        // HTTP 层：前端拿到的形状（多库出处 knowledgeBaseId 必须出现在 JSON 里）
+        mockMvc.perform(get("/api/chat/messages/" + conversationId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.list[1].citations.length()").value(2))
+                .andExpect(jsonPath("$.data.list[1].citations[0].index").value(1))
+                .andExpect(jsonPath("$.data.list[1].citations[0].knowledgeBaseId").value(1001))
+                .andExpect(jsonPath("$.data.list[1].citations[1].documentTitle").value("运维手册"))
+                .andExpect(jsonPath("$.data.list[1].citations[1].referenced").value(true))
+                .andExpect(jsonPath("$.data.list[1].toolCalls.length()").value(1))
+                .andExpect(jsonPath("$.data.list[0].citations.length()").value(0));
     }
 
     private Long currentUserId(String token) throws Exception {

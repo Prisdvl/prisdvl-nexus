@@ -3,6 +3,7 @@ package com.lky.nexus.ai.config;
 import com.lky.nexus.ai.model.AiModelRegistry;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.ai.rag.retriever.RetrievalDefaults;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.ChatUsageRecorder;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -25,14 +26,22 @@ public class AiConfiguration {
     }
 
     /**
-     * token 记账端口是可选依赖：它的实现（含 Redis 配额）在 nexus-app 层装配，
+     * token 记账端口与观测注册表都是<b>可选</b>依赖：它们的装配在 nexus-app 层，
      * 而 nexus-ai 单独被引用时（纯 AI 层单测、Phase 7 的 mcp-server）不该被迫提供一个。
-     * 因此用 {@link ObjectProvider} 取，缺省退化为 {@link ChatUsageRecorder#NOOP}。
+     * 因此用 {@link ObjectProvider} 取，缺省退化为 {@link ChatUsageRecorder#NOOP}
+     * 与一个不带 Micrometer 的注册表（指标记录变成空操作）。
+     *
+     * <p>观测注册表由这里传给 {@code UsageMeteringAdvisor}，而 Advisor 挂在
+     * {@code ChatClientFactory} 造的每一个 client 上——于是"模型调用次数 / Token 量 / 耗时"
+     * 这三件事在六个调用点（Chat / ChatStream / Rag / RagStream / Agent / Reranker）
+     * 自动全覆盖，不需要各处各加一行。
      */
     @Bean
     public ChatClientFactory chatClientFactory(AiModelProperties properties, AiModelRegistry registry,
-                                               ObjectProvider<ChatUsageRecorder> usageRecorder) {
+                                               ObjectProvider<ChatUsageRecorder> usageRecorder,
+                                               ObjectProvider<ObservabilityRegistry> observability) {
         return new ChatClientFactory(properties, registry,
-                usageRecorder.getIfAvailable(() -> ChatUsageRecorder.NOOP));
+                usageRecorder.getIfAvailable(() -> ChatUsageRecorder.NOOP),
+                observability.getIfAvailable(ObservabilityRegistry::new));
     }
 }

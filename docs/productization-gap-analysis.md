@@ -116,7 +116,7 @@ update.txt 第 2 条要求"不要重复实现已经存在的功能"。以下是�
 | **User** | 只有 `GET /api/users/me` | 无资料编辑、无改密码、无账户注销 | P1 | `PUT /api/users/me`（昵称/邮箱）+ `PUT /api/users/me/password`（验旧密码 + BCrypt 重编码 + 撤销旧令牌） |
 | **Knowledge Base** | 创建/编辑/删除/禁用/检索参数/workspace，异步导入 + 重试，单文件上传，删单篇文档，失败原因可见 | ✅ **P1-1/P1-2/P1-3 三项均已修（5.3）**：`POST /knowledge-bases/{id}/documents`、`DELETE /knowledge-bases/{kbId}/documents/{documentId}`、`GET /import-tasks/{id}/items` + 面板渲染。删除的清理范围比审计写的宽（存量路径也在漏，见上文"5.3 修正的审计结论"） | ~~P1~~ → 已修 | 见 B.44 |
 | **Document** | 4 种解析器、状态机、增量同步、压缩包防御、逐文件失败明细 | ✅ **P1-4 已修（5.3）**：原方案（给 `DocumentSummary` 补 `errorMsg`）是**死字段**——`DocumentStatus.FAILED` 无写入路径。改为补 `kb_import_task_item` 的读接口；✅ 超 200MB 的失败落到兜底 500 **已修（5.2）** | ~~P1~~ → 已修 | 见 B.44 §1/§6 |
-| **RAG** | 混合检索+Rerank+引用+无命中不调模型 | ✅ **P1-6 已修（5.5）**：多库改为**逐库检索后跨库归并**（~~只取第一个~~ 的 `kbIds.get(0)` 已删），每库按**自己的** `retrieval_top_k` 召回、归并后按全局 `topK` 截断；✅ **逐库并行 + 失败隔离（5.5.1）**：单个库超时/不可用不再拖垮整次检索，失败明细进 `retrieval` 事件与提示词（~~"某个库静默地什么都没贡献"~~ 已消除）；✅ 同步路径把模型异常**当成正常回答**返回并落库**已修（5.2）**；"检索到 N 个片段"**仍**不落库 | P1 | ~~①多库改成合并检索~~（5.5 已修，且**不需要**下推多 `kb_id`——下推表达不了"每库各自的召回深度"）；~~②`generate()` 的 catch 改为抛业务异常~~（5.2 已修）；③`retrieval` 事件随消息落库（P2-4，5.5.1 之后**更要紧**了：并行下"这次少搜了谁"目前只活在一次流里）；④**多库并行的真机验证**（5.7 补） |
+| **RAG** | 混合检索+Rerank+引用+无命中不调模型 | ✅ **P1-6 已修（5.5）**：多库改为**逐库检索后跨库归并**（~~只取第一个~~ 的 `kbIds.get(0)` 已删），每库按**自己的** `retrieval_top_k` 召回、归并后按全局 `topK` 截断；✅ **逐库并行 + 失败隔离（5.5.1）**：单个库超时/不可用不再拖垮整次检索，失败明细进 `retrieval` 事件与提示词（~~"某个库静默地什么都没贡献"~~ 已消除）；✅ 同步路径把模型异常**当成正常回答**返回并落库**已修（5.2）**；✅ **引用已落库（5.9）**（会话流式的引用曾刷新即失，现随 `chat_message.metadata.citations` 持久化、多库下标得出来源库）；"检索到 N 个片段"那张卡片的**命中列表**仍不落库 | P1 | ~~①多库改成合并检索~~（5.5 已修，且**不需要**下推多 `kb_id`——下推表达不了"每库各自的召回深度"）；~~②`generate()` 的 catch 改为抛业务异常~~（5.2 已修）；③`retrieval` 事件随消息落库（P2-4，5.5.1 之后**更要紧**了：并行下"这次少搜了谁"目前只活在一次流里）；④**多库并行的真机验证**（5.7 补） |
 | **Agent** | Definition/Runtime 分离、状态机、白名单、复制、试跑 | ✅ **P1-8/P1-9 已修（5.4）**：`temperature` 可配（迁移 V16，NULL = 跟随全局、与 0 不同义；生效点在 `AgentRuntime.configure` 的请求级 options）；管理页可配 Tools（`toolCodes` 多选 + 卡片回显 + "空 = 全部工具"写明）。Agent 使用统计见 Trace 行 | ~~P1~~ → 已修 | 见 B.45 |
 | **Tool** | 注册表 + 用户启停 + 白名单交集 + 执行壳 + 痕迹 | **无 Tool 超时**；✅ **超循环上限没被识别已修（5.2）**（`ToolCallLimitExceededException` 现在 → `5002`，`5002` 不再是死码）；✅ 40/150 上限**已显式配置并真撞测过（5.2）**（但**不是**写 `spring.ai.tools.limits.*`——本项目手工建模型，那两个 key 无人读，见 B.43 §2）| P1 | ~~①显式配置 `spring.ai.tools.limits.*`~~（该方案是假旋钮，已否）；②映射 `ToolCallLimitExceededException` → `5002` + 如实文案；③工具加了超时字段，等第一个会阻塞的外部工具落地时一起实现 |
 | **Chat** | 会话 CRUD/重命名接口/流式四路终止/痕迹落库/多轮 | ✅ **P1-12 已修（5.4）**：侧栏会话项加重命名入口（接口从 Phase 1 就在，一直无人调用）；✅ 流式错误一律 `4001 模型调用失败`**已修（5.2）**（判定收敛到 `FailureClassifier`）；✅ **5.4 另修一处静默不一致**：非流式入口此前**完全不看会话模式**（AGENT 会话不用该 Agent 的提示词/工具、RAG 会话不查笔记，两者都不报错）→ 抽 `ConversationAgentResolver` 两条链路共用，RAG 非流式显式报 `8003` | ~~P1~~ → 已修 | 见 B.45 §1/§5；消息级清空仍列 P3 |
@@ -126,7 +126,7 @@ update.txt 第 2 条要求"不要重复实现已经存在的功能"。以下是�
 | **Error Handling** | 统一 `{code,message,data,requestId}`、8 域错误码、9 条 handler、前端透出后端原话 | ✅ **三处漏洞均已修（5.2）**：上传超限→413/3006；循环超限→5002；同步 RAG 异常→抛业务异常且不落档。真机验证又暴出两处审计没写到的：四个非流式 Agent 入口回 500/9999、`ChatServiceImpl` 把上游原文回显并落库（B.43 §4） | ~~P1~~ → 已修 | 集中在 `FailureClassifier`（判定唯一入口）+ `GlobalExceptionHandler` 补 handler；`error_msg` 改存给用户的话；新增"错误码↔HTTP"契约测试与真实 Tomcat 上传超限测试；**未做**：前端没有体积预检、`retryable` 前端还没消费 |
 | **Security** | JWT、BCrypt、越权 404、Zip Slip/zip bomb、DOMPurify、两条链路都有反注入规则、密钥走环境变量 | ✅ **S-1 已修（5.1）**：`/mcp` 改走 JWT，头自证身份已删除；无速率限制/配额（`7001/7002` 是死码）；令牌存 localStorage | ~~P0~~ → 已修 | S-1 已完成；限流与配额列 P1（配了真实 key 之后，一个用户就能把额度烧光） |
 | **Observability** | requestId、计数注册表、消息级指标、`/summary` | 无 Prometheus/actuator 指标端点；降级事件只在日志与内存计数里（重启即失） | P2 | 保留自建注册表（够用且零依赖），补 `/actuator/prometheus` 暴露；降级事件落库（P2） |
-| **Testing** | 审计当时 377 用例 / 71 类 / 0 失败，**5.6 后 541/101**，**5.8 后 567 用例 / 104 类 / 0 失败 / 18 跳过**；**12 个** E2E 脚本（5.8 补了全链路冒烟 `verify-full-product.mjs`，它是唯一覆盖 Observability 的）；真机栈补验 | 无 Testcontainers（真机回归靠手工）；缺测试：超循环上限、上传超限 ~~MCP 越权~~（5.1 已补）~~多库 RAG~~（5.5 已补）~~"全新用户走通全链路"~~（5.8 已补）；~~文档里测试数字过期（`deployment.md` 写 174）~~ **该处已于 5.7/5.8 更正** | P1 | 每修一处补一条回归测试（见 §4 每阶段）；Testcontainers 列 P2 |
+| **Testing** | 审计当时 377 用例 / 71 类 / 0 失败，**5.6 后 541/101**，**5.8 后 567 用例 / 104 类**，**5.9 后 598 用例 / 111 类 / 0 失败 / 21 跳过**；**12 个** E2E 脚本（5.8 补了全链路冒烟 `verify-full-product.mjs`，它是唯一覆盖 Observability 的）；真机栈补验 | ~~无 Testcontainers~~ → **5.9 已对 ES / pgvector / MySQL 落地**（`LiveInfrastructure`，随机端口、一次性容器）；**嵌入与模型的 9 条 live 测试仍连开发栈/外部网关**（Ollama 权重太大、模型要花钱），因此"Live 测试完全自包含"只对检索那两类成立。缺测试：~~超循环上限~~（5.2 已补）、~~上传超限~~（5.2 已补）~~MCP 越权~~（5.1 已补）~~多库 RAG~~（5.5 已补）~~"全新用户走通全链路"~~（5.8 已补）；~~文档里测试数字过期~~ **已于 5.7/5.8/5.9 更正** | P1 | 每修一处补一条回归测试（见 §4 每阶段）；CI 化仍列 P2 |
 | **Deployment** | `deploy/docker-compose.yml` 起 6 个基础设施服务 + healthcheck + `.env.example` | ✅ **P1-17 已修（5.7）**：补了 `deploy/backend/Dockerfile`、`web/Dockerfile` + `nginx.conf`、compose 加 `backend`/`frontend`，`docker compose up -d` 一条命令起 8 服务、浏览器开 `:8088`。**一处与当初计划的偏差**：后端镜像实际做成**单阶段**（`eclipse-temurin:21-jre-jammy`），因为镜像里只运行不构建——多阶段在这个项目里没有收益 | ~~P1~~ → 已修 | 上传目录已挂具名卷 `backend-data`；具名卷（非绑定挂载）让 `down` 后数据仍在（P2-11 关闭） |
 | **README / Docs** | README 有技术栈/两种跑法/脚本清单/开发约定；docs 有架构/数据库/API/决策/部署 | ✅ **P1-18 已修（5.8）**：README 重写为 15 节（技术栈表按 `pom.xml`/`package.json` 更正、进度表改为**按代码核对的能力清单**）；新建 `docs/rag.md`、`docs/agent.md`、`docs/security.md`；`architecture.md` 更正部署与阻塞项两节并补分层总览 | ~~P1~~ → 已修 | 仍缺：Screenshots 章节（截图目录在，但未在文档里成章）——列 P3 |
 
@@ -253,11 +253,28 @@ private Long resolveUser(String nexusUser) {
 
 | # | 审计写的 | 实际是 | 处置 |
 | --- | --- | --- | --- |
-| 1 | （未提及） | **一个 LIVE 测试会破坏开发数据**：`LiveChunkIndexTest.recreateIndexSwitchesAlias` 断言"重建后索引为空"——它是对的，但代价是**把共享的 ES 索引清空**。对着开发栈跑一次，BM25 那条腿静默失效；向量腿仍能召回，所以症状不是"搜不到"而是"少了一路召回" | **本期只记录，不改**（属测试卫生，超出 5.7 范围）。跑完用 `POST /{kb}/index/recreate` + `POST /{kb}/index` 恢复。已列入 Known Gaps |
-| 2 | （未提及） | **`recreateIndex()` 不是同一秒幂等的**：物理索引名是秒级 `yyyyMMddHHmmss`，同一秒内两次重建 → `resource_already_exists_exception` → 接口 500；更糟的是**切片此时已被标成 `INDEXED`**，而索引其实是空的（`/index` 报 `total: 0`）——又是一个"错了但看起来正常" | **本期只记录**。规避：两次重建之间间隔 ≥ 1 秒。已列入 Known Gaps（建议改成带随机后缀/纳秒，并把状态重置放在 wipe 之前或成功之后） |
+| 1 | （未提及） | **一个 LIVE 测试会破坏开发数据**：`LiveChunkIndexTest.recreateIndexSwitchesAlias` 断言"重建后索引为空"——它是对的，但代价是**把共享的 ES 索引清空**。对着开发栈跑一次，BM25 那条腿静默失效；向量腿仍能召回，所以症状不是"搜不到"而是"少了一路召回" | ✅ **5.9 七 已修**：`Live*` 测试改为自带一次性容器（Testcontainers），开发栈的数据碰不到了。**当时只记录不改是对的**——它属测试卫生，不在 5.7 范围内；但"恢复办法写在文档里"不是修复 |
+| 2 | （未提及） | **`recreateIndex()` 不是同一秒幂等的**：物理索引名是秒级 `yyyyMMddHHmmss`，同一秒内两次重建 → `resource_already_exists_exception` → 接口 500；更糟的是**切片此时已被标成 `INDEXED`**，而索引其实是空的（`/index` 报 `total: 0`）——又是一个"错了但看起来正常" | ✅ **5.9 四 已修**：物理索引名尾部加 `AtomicLong` 序号。**同一期还修了更重的那件**——索引从"全局一份"改成"**每知识库一份**"（别名 `<base-alias>_<kbId>`）：此前重建 KB-A 会把 KB-B/C 的文档一起删掉，而 B/C 的切片状态仍是 `DONE`，于是它们的 BM25 **永久静默失效**（与第 1 条同源，但那条是测试伤人、这条是**功能伤数据**） |
 | 3 | （未提及） | **E2E 脚本的环境约定不一致**：`verify-security.mjs` 的 `API_BASE` 要根地址、其余脚本要 `…/api`；默认 `WEB_BASE` 有的写 5173 有的写 8088。容器化后 backend 不发布端口，**11 个脚本全部秒挂在 `ERR_CONNECTION_REFUSED`**，看起来像"部署坏了" | **不改脚本**（§十二 要求），改成显式传 `WEB_BASE` / `API_BASE` 复跑。约定不统一**登记为待办**，不是本期缺陷 |
 | 4 | （未提及） | **`verify-retrieval-ui.mjs` 的失败根因在数据、不在代码**：演示账号累计 82 个 E2E 残留会话（`pageSize=50`），新会话 `last_message_at` 为 NULL，而 **MySQL 在 `DESC` 下把 NULL 排最后** → 会话落到第 2 页 → 消息列表接口没被调用 → 检索卡片没被清掉 | 清理残留会话（82 → 32）后 12 条腿全绿。**脚本与业务代码都没动**；"E2E 会自造数据且不自清"登记为待办 |
 | 5 | （未提及） | **一个前端竞态：经过 nginx 之后稳定复现**。"新对话"之前发出的 `listMessages` 响应晚几十毫秒回来，无条件写 `items`——界面上写着"新对话"、看到的却是上一条会话的消息，接着问的问题还会被算进新会话。`pickedByUser` 只挡"之后才开始"的自动选中，挡不住**已经在飞**的那次 | **本期修**（`AgentView.vue` 的 `messageLoadSeq`：给每次加载编号，只有最后一次允许写 `items`，「新对话」让在飞的那次作废）。这条**只有容器化后才稳定命中**：Vite 本地跑时窗口太窄，经过 nginx + 容器内 MySQL 每跳多几十毫秒就必现——**延迟变化会把潜伏的竞态从"偶发"变成"必现"**，这是容器化顺带挣到的一条 |
+
+#### 5.9 修正的审计结论（真机验证时发现的，审计当时没看到）
+
+5.9 跑完整栈回归（12 个 E2E 脚本 + §十一 A–G 逐项复核）后，又挖出两处——
+**都不是需求方要求的功能**，而是"已经声称成立、实际在某个入口不成立"的声明。
+详情与证据见 `decisions.md` B.51。
+
+| # | 审计写的 | 实际是 | 处置 |
+| --- | --- | --- | --- |
+| 1 | （未提及） | **`/index/recreate` 对"还没有索引的知识库"一律 500**：`currentIndexBehindAlias` 直接 `getAlias`，别名不存在时 ES 抛 `ElasticsearchException`（不继承 `IOException`）→ 绕过 `catch (IOException)` 冒成 9999，同时让"别名不存在就建别名"那个分支成为死代码。**全局别名时代到不了这条路径；改成每库一个别名后，"这个库还没有索引"成了常态**（新建空库 + 所有升级前的库） | ✅ **本期修**：先 `existsAlias` 再 `getAlias`。真机上两个演示库由 9999 → 200，重建后 `mode=bm25` 由 0 命中恢复到 1 / 3；新增联调用例 `LiveChunkIndexTest.recreateIndexWorksWhenNoIndexExistsYet`（去掉前置判断即复现真机那句 404） |
+| 2 | （未提及） | **`retrieval.requests` 漏掉整个知识库问答入口**：计数只在 `prepareRetrieved`，而同步问答 `ask()` 是自带检索的独立路径 → 那个页面发起的检索一次都不算。指标失效形态是"少了一部分数字"，**看起来像流量低，不报错** | ✅ **本期修**：`ask()` 也计数一次；新增 `RagAnswerServiceRetrievalMetricTest`(4) 钉住"补上而不是搬走"（去掉那行，两条同步问答用例变红，`prepare` 与空问题两条照旧绿） |
+
+**已知遗留（本期有意不做）**：`recreateIndex` 先建新索引、再切别名，切换阶段失败会留下一个
+**没有别名的空索引**（现场那一个已手工删除）。补它属于失败路径上的新行为，超出"修一个 500"的范围。
+
+**边界（不是遗漏）**：Agent 的检索不计入 `retrieval.requests`（它由 `agent.search.*` / `tool.call.*` 计数，
+合并会把"用户问一次"和"Agent 自己搜三次"混成一个数）；`/search` 调试端点同样不计。
 
 ---
 
@@ -270,13 +287,13 @@ private Long resolveUser(String nexusUser) {
 | P2-3 | Security | **令牌存 localStorage（XSS 可窃取）** | ⚠️ **5.6 只出了设计，风险仍在**：ADR-021 给了分阶段迁移路径（Cookie + CSRF + refresh），代码零改动——用户明确要求"不要直接大改"。今天的缓解只有 30 分钟 TTL，且**没有 refresh ⇒ 被盗后无法主动止损** |
 | P2-17 | Security | **配额可被绕过**：Redis 重启 / `allkeys-lru` 淘汰会丢当日计数；多实例下内存实现不共享（每实例各算一份，限流被放大 N 倍） | 5.6 新增。要真正可靠得把当日用量落到表（`sys_user_daily_usage`）或至少确保 Redis 不淘汰这些键；**多实例部署必须 `nexus.security.redis-enabled=true`**（已写进 `application.yml` 注释） |
 | P2-18 | Security | **账号 `status` 改动 / 软删除不会立即吊销已签发令牌** | 5.6 新增。`TokenVersionValidator` 只比对 `token_version`：软删除时 `selectById` 为 null 会被拒，但仅把 `status` 改成禁用，令牌会活到过期（≤30 分钟） |
-| P2-4 | RAG | 「检索到 N 个片段」（含 5.5.1 起的 `failedKnowledgeBases`）不落库，刷新即消失 | 已知缺口，B.37 记录在案。**5.5.1 之后更要紧**：并行扇出下"这次少搜了谁"目前只活在一次流里，刷新即无据可查。**5.7 按要求只记录、不实现**（update.txt §十九 明确把"Retrieval Event 持久化缺口"放进 Known Gaps） |
+| P2-4 | RAG | 「检索到 N 个片段」（含 5.5.1 起的 `failedKnowledgeBases`）不落库，刷新即消失 | **部分关闭（5.9 五）**：**引用**已随消息落库（`chat_message.metadata.citations`，含 `knowledgeBaseId`），刷新后仍在；仍未落库的是 `retrieval` 事件的**命中列表本身**。两者不是同一件事——引用回答"这条回答照着什么说的"，检索事件回答"这次搜到了什么"。**5.7 按要求只记录、不实现**（update.txt §十九 把"Retrieval Event 持久化缺口"放进 Known Gaps；5.9 补的是引用，不是它） |
 | P2-5 | RAG | 无真正的 query rewrite（只有指代拼接） | |
 | P2-6 | Tool | 无 Tool 超时 | 当前唯一工具是进程内调用；**第一个会阻塞的外部工具落地时必须一起补** |
 | P2-7 | Tool | `query` 空串未校验（只校验了 `topK` 边界） | |
 | P2-8 | Tool | 无权限分级 / 人工审批 | update.txt §十 未要求，项目自己标为后续 |
-| P2-9 | Observability | 无 Prometheus 端点；降级事件重启即失 | |
-| P2-10 | Testing | 无 Testcontainers；真机回归靠手工脚本 | |
+| P2-9 | Observability | 无 Prometheus 端点；降级事件重启即失 | **部分关闭（5.9 六）**：已接 Micrometer，`/actuator/metrics` 可读全部降级计数与运行指标（`nexus.llm.*` / `nexus.chat.*` / `nexus.retrieval.requests` / `nexus.agent.executions` / `nexus.errors`）。仍未做：Prometheus / Grafana 后端、时间序列。计数仍是进程内、重启清零 |
+| P2-10 | Testing | 无 Testcontainers；真机回归靠手工脚本 | **部分关闭（5.9 七）**：ES / pgvector / MySQL 已用 Testcontainers（`LiveInfrastructure`）。仍未做：嵌入与模型的 9 条 live 测试仍连开发栈/外部网关；**CI 化未做**——真机回归仍靠手工跑 |
 | P2-11 | Deployment | ~~上传文件落本地磁盘（容器化后需卷/MinIO）~~ | ✅ **5.7 已定为具名卷**：`nexus_backend-data → /app/data`（`NEXUS_STORAGE_ROOT`），`down`/`up -d` 后实测 696K 原文与 MySQL 记录一致存活。换 MinIO 仍属生产化（多机/对象存储）范围，本期不需要 |
 | P2-12 | Docs | 缺 Troubleshooting / Security / Roadmap / Screenshots 章节 | |
 | P2-13 | Chat | 长会话无"清空消息" | |
@@ -311,8 +328,8 @@ private Long resolveUser(String nexusUser) {
 | **Phase 5.6** ✅ 完成 2026-10-02 | 用户与安全：P1-15（改密码 + 资料编辑）、P1-16（限流 + 配额）。**动手时范围扩大**：审计只要求"三类入口加限流"，实际补了登录失败冻结与每日 token 记账；**顺带修掉一个没人报的静默不一致**（重复邮箱注册返回 500 而不是 409，见 §5.6 修正表）；**Redis 那部分照写实现 + 开关**，默认走进程内存（见 B.47） | ✅ **全部达成**。较 5.5 净增 79 条测试（逐类相加 78 + 收窄配额路径后补的反证测试 1）→ `mvn test` **541/0/0/18**；`mvn package` 与 `npm run build`（含 `vue-tsc`）成功。**真机验收已执行且全绿，且全程不使用 Docker**（见 B.47 末节）：`standalone` + 内存实现、`standalone` + **本机原生 Redis（非 Docker）**两条路径各跑一次 `verify-security.mjs`，**均退出 0**；`redis-cli` 直接看到 `nexus:auth:tv` = 1（改密后版本 +1）、`nexus:auth:lf` = 5 / `ll` = 1（连错 5 次后**正确密码也被 429 拦下**）、`nexus:rl:u` / `nexus:q:req` 计数与 TTL 全部符合设计；用户级限流实测第 21 次 `429 + Retry-After: 60`，每日配额压到 2 后第 3 次 `403/7002`（文案与"服务不可用"可区分）；**降级语义逐条实测**（Redis 停掉后：注册/登录/改密照常 200，模型入口 403/7002，旧令牌 401）。**逼出两个问题**（注册限流误伤开发环境、`repackage` 的 jar 占用报错），均见 §5.6 修正表与 B.47。⚠️ **8 个既有 `verify-*.mjs` 本轮未复跑**——它们依赖 Docker 基础设施栈（ES / pgvector / 真模型），留待 5.7 容器化后统一复跑 |
 | **Phase 5.5.1** ✅ 完成 2026-10-02 | 5.5 的收尾：多库检索**并行化 + 逐库失败隔离**（**不是** P1 清单里的新条目，是 P1-6 落地后暴露出的两个缺口）。**动手时范围也小于原估**：需求方提的 7 条要求里 **5 条在 5.5 就已经是真的**（含"要不要建 `agent_knowledge_base_relation`"——V12 就有这张表），所以本期没有再造一个平行的多库实现，只补"没有并行"与"`searchMany` 没有逐库隔离"（见 B.48 §0） | ✅ **全部达成，但**：较 5.6 净增 26 条测试 → `mvn test` **567/0/0/18**；`npm run build`（含 `vue-tsc`）成功；**零迁移**（database.md §6.0 说明了为什么不需要 V19）。**关键决定**：隔离**必须同时可见**（`PreparedAnswer.failures` → 提示词 → `retrieval` 事件 → 前端空结果措辞），否则"某个库静默地什么都没贡献"会变成用户/模型眼里一句斩钉截铁的假否定——那正是本项目一直在防的 bug。四组**证伪跑**（强制串行 / 失败位改成过滤 / 痕迹回放挪线程 / 中断改回"返回空列表"）分别让 8、1、1、1 条测试变红；其中最后一组是**复读 diff 时抓到的一个真缺陷**（中断被吞掉，会让调用方读成"每个库都没命中"），见 B.48 §5。**验到界面层**：`standalone`（H2，不依赖 Docker）+ `verify-retrieval-ui.mjs` 五条腿退出码 0（新增三条打新界面：失败标签与悬浮原因、空结果措辞随有无失败库改口）。⚠️ **但真机检索层未验**：桩帧证明界面渲染，不证明真 ES 下一个库真的挂掉时的观感；8 个 `verify-*.mjs` 也未复跑（依赖 ES / pgvector / 真模型）——已登记为 5.7 的必做项 |
 | **Phase 5.7** ✅ 完成 2026-10-02 | 部署产品化：P1-17（Dockerfile ×2 + nginx + compose 补 backend/frontend）。**动手时没有碰业务代码**——容器化只加了编排，`java -jar` 与 `mvn package` 的构建方式一字未改；secret 的 fail-closed 被**前移到编排层**（`${JWT_SECRET:?…}`）而不是靠应用侧兜底 | ✅ **全部达成**（证据见 [deployment.md](deployment.md) §8）：`mvn test` **567/0/0/18**、`mvn package`、`npm run build` 成功；`docker compose config` / `build` / `up -d` 真实执行，**8/8 服务 healthy**；**11 个 `verify-*.mjs` 经 nginx 全部 EXIT=0**；**此前 18 个 skipped 的 live 测试全部真跑并通过**（真 ES / 真 pgvector / 真 Ollama / 真模型，0 skipped）；`restart` → `down` → `up -d` 全周期后 **7 项数据逐项存活**（MySQL 行数、13 条向量、13 条 ES 文档、RabbitMQ durable 队列、bge-m3、`backend-data` 696K）。**5.5.1 的真机腿已补齐**：`verify-multi-kb-failure.mjs` 用**真实 ES 里一条真实的坏文档**让 KB-B 真失败，实测 A ✅ / B ❌ / C ✅、`retrieval.kb.failed` +1、界面出现「其中 1 个知识库检索失败」并悬浮点名库名与原因。**逼出四个问题**（见 §5.7 修正表），其中两个登记为 Known Gaps。**未做**：ES 安全模块 / TLS / 外置密钥（Phase 11 范围）、WebSocket（项目不用） |
-| **Phase 5.8** | README/docs 产品化：P1-18 + P2-12 | 按 update.txt §二十 的十节清单核对。**5.7 已顺带完成一部分**：README §6 进度表补到 5.7、§9 补整栈启动、`deployment.md` 重写为含 §2 容器化（12 个主题）与 §8 证据表 |
-| **Phase 5.9** | Final E2E + 全量验收 | `mvn test`、`mvn package`、`npm run build`、9 个 `verify-*.mjs` 全绿；update.txt §二十四 的验收矩阵逐项留证 |
+| **Phase 5.8** ✅ 完成 2026-10-02 | README/docs 产品化：P1-18 + P2-12 | ✅ 按 update.txt §二十 的十节清单核对：README 重写、`deployment.md` 含 §2 容器化（12 个主题）与 §8 证据表、`verify-full-product.mjs` 全链路冒烟一次通过；**12/12 `verify-*.mjs` 退出 0**（证据见 `deployment.md` §8 的 7b/7c 行） |
+| **Phase 5.9** ✅ 完成 2026-10-02 | Final 完善（update.txt 四～十）：①ES 索引**按知识库隔离**（重建 KB-A 曾会删掉 KB-B/C 的文档，而它们的切片状态仍是 `DONE` → BM25 **永久静默失效**）；②**引用落库**（会话流式的引用曾刷新即失）；③**Micrometer 指标**（`/actuator/metrics`）；④**Live 测试自带容器**；⑤**MCP 工具权限**（直调路径此前零判定）；⑥**JWT `iss` 校验**（此前只写不验）；⑦过期注释 | ✅ **代码/测试/构建**：`mvn test` **598/0/0/21**（111 个类）；`npm run build` exit 0。七件事里有**两件是同一形状**——"写着这个开关/声明，运行时却没有一处读它"（MCP 权限、JWT `iss`），见 B.50 §2。**零迁移**。⚠️ **E2E 未复跑**：12 个 `verify-*.mjs` 里依赖整栈的几条结论**停留在 5.8**，本轮改动只用 UNIT + INTEGRATION 层验过——如实记在 `deployment.md` §8.3，**不写成"全部验证通过"** |
 
 ---
 

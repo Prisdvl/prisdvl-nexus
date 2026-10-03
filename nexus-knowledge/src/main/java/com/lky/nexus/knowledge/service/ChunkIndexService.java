@@ -22,7 +22,12 @@ public interface ChunkIndexService {
      */
     IndexResult indexPendingChunks(Long userId, Long knowledgeBaseId, int batchLimit);
 
-    /** 重建索引（别名原子切换，检索不中断）。 */
+    /**
+     * 重建<b>该知识库</b>的索引（别名原子切换，检索不中断）。
+     *
+     * <p>作用域严格限定在这一个知识库：其它知识库的索引与切片状态都不受影响。
+     * 它们各自有独立的物理索引与别名，重建这一个碰不到它们。
+     */
     void recreateIndex(Long userId, Long knowledgeBaseId);
 
     /** 删除若干文档的索引（文档被删除/重新切分时调用）。 */

@@ -5,6 +5,7 @@ import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.agent.tool.AgentToolFactory;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.UserContextKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,13 +48,16 @@ public class AgentRuntime {
     private final ChatClientFactory chatClientFactory;
     private final AgentToolFactory toolFactory;
     private final AgentService agentService;
+    private final ObservabilityRegistry observabilityRegistry;
 
     public AgentRuntime(ChatClientFactory chatClientFactory,
                         AgentToolFactory toolFactory,
-                        AgentService agentService) {
+                        AgentService agentService,
+                        ObservabilityRegistry observabilityRegistry) {
         this.chatClientFactory = chatClientFactory;
         this.toolFactory = toolFactory;
         this.agentService = agentService;
+        this.observabilityRegistry = observabilityRegistry;
     }
 
     /**
@@ -102,6 +106,10 @@ public class AgentRuntime {
      */
     public AgentAnswer ask(Long userId, AgentDefinition definition, String question) {
         long start = System.currentTimeMillis();
+        // Agent 执行次数（5.9 六）：四个一次性入口（/api/agent/ask、Agent 试跑、评测、MCP）
+        // 全都汇到这里。计数点选在**这里而不是 configure**——configure 也被流式链路调用，
+        // 放在那里会把一次流式对话记成两次执行
+        observabilityRegistry.increment(ObservabilityRegistry.AGENT_EXECUTIONS);
         // 痕迹由监听器收进本次调用的私有列表：不共享状态，天然并发安全
         List<AgentContext.ToolCallRecord> trace = new ArrayList<>();
         String answer;

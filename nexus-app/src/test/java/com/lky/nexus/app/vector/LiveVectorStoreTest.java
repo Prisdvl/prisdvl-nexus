@@ -1,5 +1,6 @@
 package com.lky.nexus.app.vector;
 
+import com.lky.nexus.app.support.LiveInfrastructure;
 import com.lky.nexus.knowledge.vector.VectorRecord;
 import com.lky.nexus.knowledge.vector.VectorSearchHit;
 import com.lky.nexus.knowledge.vector.VectorStore;
@@ -11,6 +12,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
 import java.util.List;
 import java.util.Map;
@@ -18,19 +21,34 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * pgvector 适配器真实联调测试（需要 docker 里的 PostgreSQL + pgvector）。
+ * pgvector 适配器真实联调测试（自带 PostgreSQL + pgvector 容器，见 {@link LiveInfrastructure}）。
  *
- * <p>启用方式：{@code $env:AI_VECTOR_LIVE='true'; mvn -pl nexus-app test -Dtest=LiveVectorStoreTest}
+ * <p>启用方式：{@code $env:AI_VECTOR_LIVE='true'; mvn -pl nexus-app -am test -Dtest=LiveVectorStoreTest}
  *
  * <p>它刻意<b>用构造向量而不是真实模型</b>：这样验证的是"SQL 与索引是否正确"，
  * 与"模型能不能用"解耦——两者出问题时的排查方向完全不同，
  * 混在一个测试里会互相掩盖。用单位向量还能精确断言排序（相似度≈1/0），
  * 比"看起来结果还行"强得多。
+ *
+ * <p>数据库是本次测试自己拉起的容器：既不再依赖开发者那套 5433 上的 pgvector
+ * （里面可能有真实数据、也可能根本没起），也不必担心清理不干净——
+ * 容器随测试结束一起消失。
  */
 @SpringBootTest
 @ActiveProfiles("local")
 @EnabledIfEnvironmentVariable(named = "AI_VECTOR_LIVE", matches = "true")
 class LiveVectorStoreTest {
+
+    /**
+     * pgvector 用测试自己的容器；MySQL 仍然必需（{@code @SpringBootTest} 的上下文要连业务库跑迁移）。
+     * Redis / RabbitMQ 与向量读写无关，显式关掉（理由见 {@link LiveInfrastructure}）。
+     */
+    @DynamicPropertySource
+    static void liveInfrastructure(DynamicPropertyRegistry registry) {
+        LiveInfrastructure.registerMySql(registry);
+        LiveInfrastructure.registerPgVector(registry);
+        LiveInfrastructure.registerUnusedExternalDependencies(registry);
+    }
 
     /** 用一个大到不会与真实数据冲突的 kbId，并在用例结束后清理。 */
     private static final Long TEST_KB_ID = 999_000_001L;

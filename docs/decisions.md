@@ -4206,6 +4206,174 @@ Agent 复用已有字段（`agent_knowledge_base` 在 V12 就有）、单库/双
 
 ---
 
+### B.50 Phase 5.9 实现记录（最终完善：七个优先级，和两处"写了却从不生效"的声明）
+
+> 编号说明：同 B.42–B.49，属**产品化**这条线。对应需求方 `docs/update.txt` 的第四～十节。
+
+**0. 一句话**
+
+这一轮没有新功能，也没有新架构：七件事全是"补上已经声称存在、实际不成立的那一半"。
+其中最锋利的两件（MCP 工具权限、JWT `iss`）形状完全一样——
+**代码里写着这个开关/声明，运行时却没有任何一处真的读它**。
+
+**1. 七件事（按需求方给的优先级）**
+
+| # | 问题 | 修法 | 关键文件 |
+| --- | --- | --- | --- |
+| 四 | 重建 KB-A 的 ES 索引会把 KB-B/C 的文档一起删掉，而 B/C 的切片状态仍是 `DONE`，于是它们的 BM25 **永久静默失效** | 每个知识库一份物理索引 + 一个**自己的别名**（`<base-alias>_<kbId>`）；物理名尾部再加一个 `AtomicLong` 序号，兜住"同一秒重建两次"的重名 | `ElasticsearchChunkIndex` |
+| 五 | 会话流式（RAG 模式 / Agent 模式）的引用**不落库**，"刷新聊天页面引用就没了" | 复用现有 `RagCitation`，把 `Citations.build` 的结果写进 `chat_message.metadata.citations`；**不新建表、不新建引用系统** | `Citations` / `RagAnswer` / `ChatMessageServiceImpl` |
+| 六 | 只有"降级计数"，没有 LLM/对话/检索的运行指标 | `ObservabilityRegistry` 接上 Micrometer（**唯一上报口、两种读法**：同一批点既进 `/api/observability/summary` 也进 `/actuator/metrics`）；新增 `llm.calls` / `llm.tokens` / `llm.latency` / `chat.requests` / `chat.latency` / `retrieval.requests` / `agent.executions` / `errors` | `ObservabilityRegistry` / `UsageMeteringAdvisor` / `AppConfig` |
+| 七 | `Live*` 联调测试连的是开发者**此刻正在运行**的那套业务容器，最坏的一次把共用的 ES 索引清空了 | 引入 Testcontainers（`LiveInfrastructure`）：MySQL / ES / pgvector 各起各的一次性容器，随机端口，用完销毁；`mvn test` 的默认行为**不变**（仍由环境变量开关决定跑不跑） | `nexus-app/.../support/LiveInfrastructure` |
+| 八 | MCP 直调路径**完全没有**用户工具权限判定：界面上关掉的工具，`tools/list` 照旧列出、`tools/call` 照旧执行 | `tools/list` 与 `tools/call` 同走 `ToolRegistry.enabledFor`；被停用 → JSON-RPC `error`（自定义 `-32003` + 业务码 `5004`），**不是** `result.isError` | `McpEndpoint` / `ToolRegistry` |
+| 九 | JWT 的 `iss` **只写不验** | `JwtValidators.createDefaultWithIssuer(...)`，与 timestamp、令牌版本一起挂在同一个 `DelegatingOAuth2TokenValidator` 上 | `SecurityConfig` |
+| 十 | `CreateConversationRequest` 的 javadoc 还写着"检索侧只支持单库，绑多个会被拒绝" | 改成与 5.5 之后的实现一致（可绑多个、上限 10、逐个校验归属；建会话时允许为空、提问时不允许） | 同左 |
+
+**2. 本期真正的主题：两处"声明写了，没人读"**
+
+八和九是同一类问题的两个样本，值得单独记一笔：
+
+- **MCP 工具权限**：界面上那个开关**看起来生效了**——Agent 装配确实按它过滤，
+  关掉检索工具后 Agent 真的不再检索。但同名的工具仍然可以从 `/mcp` 调起来，
+  还照样读同一个用户的知识库。**没有报错、没有日志、没有任何一处会提示你**。
+  这就是本项目一路在防的"半个生效的开关"，它的杀伤力恰恰来自"另一条路径看起来是好的"。
+- **JWT `iss`**：不算可利用的漏洞（对称密钥已经决定了只有本应用签得出令牌），
+  但"写了一个声明却从不验证"会让后来的人**以为这条链路已经校验过它**。
+  将来出现第二个签发方、或别的组件共用同一个密钥时，这一条就是唯一能区分"谁签的"的东西；
+  而那时才发现它一直没生效，代价要大得多。
+
+两条的修法都不是"加功能"，而是**让已经有名字的东西真的成立**。
+
+**3. 两处刻意保持的"不同"（不是遗漏）**
+
+1. **`-32003` 与 `-32601` 不合并**。"名字写错了"（去查文档）和"你的开关生效了"（去界面打开）
+   是两件不同的事，合成一句话会把人引到错的地方。JSON-RPC 2.0 没有"无权限"这一档
+   （`-32000..-32099` 是实现自定义区间），所以自定义了 `-32003` 并同时给出业务码。
+2. **引用与工具痕迹共用 `chat_message.metadata` 一列**，不各占一列：它们都是"这条回答的附属事实"，
+   列数不该随附属事实的个数增长；而两列会让"只更新了一半"成为可能
+   （读到的痕迹是这一轮的、引用是上一轮的）。
+
+**4. Agent 多轮召回的引用：为什么必须"分组"算**
+
+Agent 模式下模型可能调多次 `knowledge_search`，而工具是无状态的——它**不知道自己是不是本轮第二次调用**，
+所以每次调用的 `[n]` 都从 1 开始。若把所有召回拉平后再去回答正文里比对编号，
+第二次调用的第 1 条会被拿去比对第一次调用的 `[1]`，结论正好反过来。
+因此 `Citations.merge` 按**组**计算引用、按 `chunkId` 去重、最后统一重编号；
+同一段出现在多个编号上时"是否被引用"取**并集**（宁可少标一次"未引用"，
+也不要指着一份确实摆在模型面前、且正文引用过的资料说它没被用上——后者是错的断言）。
+
+**5. 假完整盘点（对应 §十三）**
+
+全仓搜了 `TODO / FIXME / UnsupportedOperation / return null / mock / 暂不支持 / 未实现` 等标记，
+逐个判定后的结论是：**没有"其实没实现却看起来实现了"的残留**。剩下的分三类，全部如实留在
+`productization-gap-analysis.md`：①有意设计（如 `DisabledChunkIndex` / `DisabledVectorStore`
+在开关关闭时**明确抛错**而不是静默返回空）；②已知 limitation（如单实例无 TLS、无 refresh token）；
+③需求方明确要求**本期不做**的（如 Retrieval Event 持久化）。
+
+**6. 诚实边界**
+
+- **未做**（§十四 明确列出）：stream cancellation 跨实例、refresh token、HttpOnly Cookie、TLS、
+  Prometheus/Grafana、K8s、微服务、完整 MCP server。这一轮**一条都没有顺手做**。
+- **未验**：生产形态的运维属性（密钥外置管理、TLS、多实例）——属 Phase 11。
+- **`fanout-timeout` 仍未调**：没有性能证据支持改它，按要求不动。
+- 指标是**观察值**，不宣称任何性能指标。
+
+**7. 测试**
+
+新增 7 个测试类（共 27 条用例）+ 1 个测试基础设施类：
+`McpToolPermissionTest`(4)、`JwtIssuerValidationTest`(1)、`ActuatorMetricsTest`(3)、
+`CitationsTest`(8)、`ChunkIndexServiceRecreateTest`(3)、`ElasticsearchChunkIndexNamingTest`(3)、
+`ObservabilityRegistryTest`(5)、`LiveInfrastructure`（Testcontainers 装配）。
+
+其中两条的写法值得单独说：
+- `JwtIssuerValidationTest` 用**同一套声明签三支令牌、只有 `iss` 不同**（正确 / 错误 / 缺失）。
+  只测"错误 iss → 401"是不够的——那个 401 也可能出自手工令牌的别处（漏了 `ver`、`sub` 指向的用户不存在），
+  那样用例照样绿，却什么也没证明。**已实测**：去掉 `createDefaultWithIssuer` 后，
+  错误 `iss` 那一步确实从 401 变成 200（即用例真的在看着这件事）。
+- `McpToolPermissionTest` 成对断言"列不出来 **且** 调不动"，并在停用**之前**先断言它列得出来——
+  否则"看不到"可能只是因为一开始就没有。
+
+`JAVA_HOME=jdk-21 mvn -B test`：**343 条用例全绿**（21 条 Live 测试按环境变量跳过）。
+`web && npm run build` 退出码 0。
+
+---
+
+### B.51 Phase 5.9 真机验证：两处"只在某一个入口才不成立"的声明（2026-10-03）
+
+> 编号说明：同 B.37 / B.39 / B.40，属**真机验证**这条线——都是整栈起来、按真实用户链路走一遍才暴露出来的，
+> 与 B.50（按需求方清单实现）形成对照：这一节里的两件事，**没有任何一条是需求方要求的功能**。
+
+**0. 一句话**
+
+回归跑了全部 12 个 E2E 脚本并逐项复核 §十一 的 A–G，挖出两个缺陷。
+形状相同：**声明在大部分路径上成立，恰好在一个一等入口上不成立**——
+一处以 500 告终（响亮，但只有真的点过那个按钮才会响），一处是"少记了一部分数字"（完全静默）。
+
+**1. 缺陷一：`/index/recreate` 对"还没有索引的知识库"一律 500**
+
+| | |
+| --- | --- |
+| 症状 | `POST /api/knowledge-bases/{id}/index/recreate` → `9999 系统内部错误` |
+| 真机日志 | `ElasticsearchException: [es/indices.get_alias] failed: [http_status_404] alias [nexus_chunk_2105290932692271106] missing`，栈顶 `currentIndexBehindAlias(ElasticsearchChunkIndex.java:395)` ← `recreateIndex:132` |
+| 根因 | `currentIndexBehindAlias` 直接 `getAlias`，没有先 `existsAlias`。别名不存在时 ES 抛的是 `ElasticsearchException`——**既不是空响应，也不继承 `IOException`**，于是它绕过 `recreateIndex` 的 `catch (IOException)` 冒成 9999；同时让 `oldIndex == null`（"别名还不存在，直接建别名"）那个分支**成了死代码** |
+| 为什么现在才出现 | 全局唯一别名时代，别名只要被写过一次就一直在，而重建总发生在写过之后——这条路径根本到不了。5.9 改成每知识库一个别名以后，"某个库还没有索引"变成**常态**：新建的空库、以及升级前入库的所有知识库都是这个状态 |
+
+修法是三行：先 `existsAlias`，不存在返回 `null`——那半个分支本来就在等这个返回值。
+
+**证据（红 → 绿，两个层次都实测过）**
+
+1. **真机**：修复前两个演示知识库都返回 9999；修复后返回 `{"code":0}`，紧接着 `POST /index`
+   把 4 条 / 9 条切片灌回各自的按库索引，`mode=bm25` 从 **0 命中恢复到 1 / 3**
+   （升级前的切片只存在于旧的全局索引里，按库别名下一条都搜不到——这正是 5.9 要修的那个静默失效，
+   在两个演示库上**真的发生过**）。
+2. **联调用例**：新增 `LiveChunkIndexTest.recreateIndexWorksWhenNoIndexExistsYet`（自带 ES 容器）。
+   去掉 `existsAlias` 前置判断后它报错，报的**就是真机那一句**：
+   `[http_status_404] alias [nexus_chunk_999100001] missing` @ `currentIndexBehindAlias`；加回去变绿。
+   `LiveChunkIndexTest` 9/9 真跑通过。
+
+**为什么单测抓不到它**：`ChunkIndexServiceRecreateTest` 把 `ChunkIndex` 端口整个 mock 掉了——
+它验的是"作用域、状态重置顺序、归属拒绝"，而故障在**端口实现里**（ES 客户端的异常类型）。
+这也正是 B.50 第七件（联调测试自带容器）的价值：没有那一步，这条只能靠"读代码"发现。
+
+**遗留（有意不做）**：`recreateIndex` 先 `createIndex` 再切换别名，切换阶段失败会留下一个
+**没有别名的空索引**。这次把现场那一个（`..._20261003104647_13`）手工删了，但没加"失败即清理"的逻辑——
+那属于失败路径上的新行为，超出"修一个 500"的范围。记在这里，不假装它不存在。
+
+**2. 缺陷二：`retrieval.requests` 漏掉整个知识库问答入口**
+
+| | |
+| --- | --- |
+| 症状 | 问了两次，`nexus.llm.calls` 记到 4，而 `/actuator/metrics/nexus.retrieval.requests` **404——指标根本不存在**；`/api/observability/summary` 里也只有 `llm.calls` |
+| 根因 | `RETRIEVAL_REQUESTS` 只在 `RagAnswerServiceImpl.prepareRetrieved` 自增，而同步问答 `ask()` 是**自带检索的独立路径**（它不经过 `prepare` / `prepareMany`）——于是"从知识库问答页发起的检索**一次都不算**" |
+| 为什么危险 | 这个指标的失效形态是"少了一部分"，看起来像"流量低"：没有报错、没有日志，与"这个服务确实没流量"完全无法区分 |
+
+修法：`ask()` 在自己的检索调用前计数一次，判据与 `prepareRetrieved` 保持一致
+（空问题已在上面早退，走到那里就是"真的搜了"）。
+
+**证据（红 → 绿）**：新增 `RagAnswerServiceRetrievalMetricTest`（4 条）。
+去掉那一行自增后，两条同步问答用例变红（`expected: 1L`，实际 0），
+而"`prepare` 照旧计一次"与"空问题不计数"两条**照旧绿**——说明这是**补上**，不是把计数搬了个地方。
+
+**3. 这一轮刻意没改的东西（边界，不是遗漏）**
+
+- **Agent 的检索不计入 `retrieval.requests`**：Agent 走 `knowledge_search` 工具，
+  已经由 `agent.search.*`（命中 / 空 / 降级 / 不可用）与 `tool.call.*` 计数。
+  把它并进 RAG 的检索次数，会把"用户问了一次"和"Agent 自己搜了三次"混成同一个数。
+- **`/search` 调试端点不计**：它服务于"调参 / 对照"，与"有没有人为回答而检索"不是同一件事。
+
+**4. 这一轮的验证覆盖**
+
+- 12 个 E2E 脚本 **12/12 退出码 0**；
+- §11A（**真机上看 ES 索引与别名**）：重建 KB-A 后，KB-B 的别名、9 条文档、3 条 BM25 命中全程不变；
+- §11B：同步 RAG / 流式多库 / Agent + Tool Calling 三条链路的引用在**重载之后**仍在，
+  字段齐全（`knowledgeBaseId` / `documentId` / `chunkId` / `documentTitle` / `headingPath` / `snippet` / `score`）；
+- §11C：`nexus.llm.calls` / `nexus.llm.tokens` / `nexus.llm.latency` 有真实数值，且与 summary 的同一个数对得上；
+- §11D：`Live*` 测试跑在自己的容器里（日志里可见 `mysql:8.4.11` 与 `nexus-elasticsearch:9.4.5` 各自拉起、随机端口）；
+- §11E：停用工具后 `tools/list` 不再列出、`tools/call` 返回 JSON-RPC `-32003`（业务码 5004），
+  重新启用后同一个调用正常返回——拒绝确实来自那个开关；
+- §11F：同一套声明签三支令牌，只有 `iss` 不同：正确 → 200，错误 / 缺失 → 401。
+
+---
+
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
 
 | # | 决策项 | 结论 |

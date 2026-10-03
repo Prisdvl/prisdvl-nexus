@@ -22,6 +22,7 @@ import com.lky.nexus.app.chat.service.ConversationService;
 import com.lky.nexus.app.infra.web.RequestIdHolder;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.UserContextKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,25 +82,33 @@ public class ChatServiceImpl implements ChatService {
     private final ChatMemory chatMemory;
     private final AgentService agentService;
     private final AgentRuntime agentRuntime;
+    private final ObservabilityRegistry observabilityRegistry;
 
     public ChatServiceImpl(ConversationService conversationService,
                            ChatMessageService chatMessageService,
                            ChatClientFactory chatClientFactory,
                            ChatMemory chatMemory,
                            AgentService agentService,
-                           AgentRuntime agentRuntime) {
+                           AgentRuntime agentRuntime,
+                           ObservabilityRegistry observabilityRegistry) {
         this.conversationService = conversationService;
         this.chatMessageService = chatMessageService;
         this.chatClientFactory = chatClientFactory;
         this.chatMemory = chatMemory;
         this.agentService = agentService;
         this.agentRuntime = agentRuntime;
+        this.observabilityRegistry = observabilityRegistry;
     }
 
     @Override
     public ChatAnswerResponse ask(Long userId, Long conversationId, String content) {
         ChatConversationPO conversation = conversationService.requireOwned(userId, conversationId);
         ChatMode mode = ChatMode.parse(conversation.getMode());
+        // 请求次数与流式链路同一口径：过了归属校验才计（见 ChatStreamServiceImpl.stream）
+        observabilityRegistry.increment(ObservabilityRegistry.CHAT_REQUESTS);
+        if (mode == ChatMode.AGENT) {
+            observabilityRegistry.increment(ObservabilityRegistry.AGENT_EXECUTIONS);
+        }
         // RAG 在**任何副作用之前**就报错：不能先落一条用户消息再拒绝，
         // 否则用户看到的是"消息多了一条、却没有回答"，还得自己猜为什么
         requireModeServableHere(mode);
@@ -197,6 +206,10 @@ public class ChatServiceImpl implements ChatService {
                                 .toList())
                         .build());
 
+        // 端到端耗时（5.9 六）：与流式链路同一个指标名，两个入口的可比性才有意义。
+        // 这里只记成功这一条路（失败会在上面 catch 里抛出），而流式那边四条终止路径都记——
+        // 差别是刻意的：非流式的失败没有"半截回答"这回事，它压根没产生对话
+        observabilityRegistry.recordDuration(ObservabilityRegistry.CHAT_LATENCY, latencyMs);
         log.info("问答完成 conversationId={}, model={}, prompt={}, completion={}, latency={}ms{}",
                 conversationId, model, usage.getPromptTokens(), usage.getCompletionTokens(), latencyMs,
                 agentDefinition == null ? "" : ", agent=" + agentDefinition.describe());

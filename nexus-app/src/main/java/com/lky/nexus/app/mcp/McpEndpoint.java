@@ -4,8 +4,10 @@ import com.lky.nexus.app.agent.AgentContext;
 import com.lky.nexus.app.agent.AgentRuntime;
 import com.lky.nexus.app.agent.tool.ExecutingToolCallback;
 import com.lky.nexus.app.agent.tool.ToolCatalog;
+import com.lky.nexus.app.agent.tool.ToolRegistry;
 import com.lky.nexus.app.auth.security.CurrentUser;
 import com.lky.nexus.app.infra.web.RequestIdHolder;
+import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,16 +41,19 @@ import tools.jackson.databind.node.ObjectNode;
  * {@code knowledgeSearchTool.search(...)}——实现改了描述不改，模型/MCP 客户端看到的就是过期信息。
  * 现在名字、描述、schema 一律由 {@code @Tool} 方法反射而来，本类只负责搬运与协议外壳。
  *
+ * <p><b>工具权限（5.9 八）</b>：{@code tools/list} 与 {@code tools/call} 都走
+ * {@link ToolRegistry#enabledFor}——与 Agent 装配同一个判定，因此"列不出来的工具也调不动"。
+ * 用户停用某个工具后，{@code tools/list} 不再返回它，{@code tools/call} 回一个明确的拒绝
+ * （业务码 5004，见 {@link #permissionDenied}）。此前这条直调路径<b>完全没有</b>权限判定：
+ * 界面上关掉的开关只对 Agent 生效，对 MCP 直调不生效——那正是"开关看起来生效"的假象。
+ *
  * <p><b>两处如实说明（不假装）</b>：
  * <ol>
  *   <li>{@code qa_ask} <b>不在</b>注册表里——它不是 {@code @Tool} 方法，而是"跑一次默认 Agent"
- *       的入口（本机 MCP 客户端的一个便利工具），因此它的描述与 schema 仍写在这里；</li>
- *   <li>用户对工具的"启停"<b>不作用于</b>这条直调路径：启停生效的地方是 Agent 装配
- *       （见 {@code AgentToolFactory}）。要让"停用即拒"在这里也成立，就得连
- *       {@code tools/call} 的拒绝一起做——那属于 P1 的权限一档，不做半个
- *       （只在 tools/list 里藏起来而 call 仍然能调，是更坏的谎）。
- *       <b>注意这一条与身份是两件事</b>：身份已经修好（下面的 JWT），但"这个用户停用了某工具"
- *       在直调路径上仍然不生效——那需要权限档，继续保持如实说明；</li>
+ *       的入口（本机 MCP 客户端的一个便利工具），因此它的描述与 schema 仍写在这里。
+ *       它的<b>权限与 Agent 完全一致</b>：内部走 {@code AgentRuntime.askWithDefault}，
+ *       装配时同样按用户启停过滤，所以停用检索工具后 {@code qa_ask} 仍会回答、只是不再检索
+ *       （这一点由 {@code AGENT_TOOLS_EMPTY} 计数与 WARN 留痕，不静默）；</li>
  *   <li>工具返回值被框架 JSON 序列化过一次（{@code String} 也会带引号），发给 MCP 客户端前
  *       要拆回原文——见 {@link #unwrapQuotedJson(String)}，那里记着实测依据。</li>
  * </ol>
@@ -59,19 +64,26 @@ public class McpEndpoint {
     private static final Logger log = LoggerFactory.getLogger(McpEndpoint.class);
     private static final String PROTOCOL_VERSION = "2025-03-26";
 
+    /** 自定义 JSON-RPC 错误码：工具被该用户停用（理由见 {@link #permissionDenied}）。 */
+    private static final int PERMISSION_DENIED_CODE = -32003;
+
     /** 非 @Tool 的便利入口：跑一次用户的默认 Agent（见类注释第 1 条）。 */
     private static final String QA_ASK = "qa_ask";
 
     private final ToolCatalog toolCatalog;
+    /** 用户级权限（5.9 八）：与 Agent 装配共用同一个判定，工具调用的"能不能用"只有一个答案。 */
+    private final ToolRegistry toolRegistry;
     private final AgentRuntime agentRuntime;
     private final ObservabilityRegistry observability;
     private final JsonMapper jsonMapper;
 
     public McpEndpoint(ToolCatalog toolCatalog,
+                       ToolRegistry toolRegistry,
                        AgentRuntime agentRuntime,
                        ObservabilityRegistry observability,
                        JsonMapper jsonMapper) {
         this.toolCatalog = toolCatalog;
+        this.toolRegistry = toolRegistry;
         this.agentRuntime = agentRuntime;
         this.observability = observability;
         this.jsonMapper = jsonMapper;
@@ -92,7 +104,7 @@ public class McpEndpoint {
             return switch (method) {
                 case "initialize" -> result(id, initializeResult());
                 case "ping" -> result(id, jsonMapper.createObjectNode());
-                case "tools/list" -> result(id, toolsList());
+                case "tools/list" -> result(id, toolsList(userId));
                 case "tools/call" -> toolsCall(id, request.path("params"), userId);
                 default -> error(id, -32601, "Method not found: " + method);
             };
@@ -125,11 +137,14 @@ public class McpEndpoint {
                 .set("serverInfo", info);
     }
 
-    private ObjectNode toolsList() {
+    private ObjectNode toolsList(Long userId) {
         ObjectNode tools = jsonMapper.createObjectNode();
         ArrayNode array = tools.putArray("tools");
-        // 顺序 = 注册顺序（ToolCatalog 刻意保序）：MCP 客户端看到的能力清单与界面上一致
-        for (ToolCatalog.Registered tool : toolCatalog.all()) {
+        // 顺序 = 注册顺序（ToolCatalog 刻意保序）：MCP 客户端看到的能力清单与界面上一致。
+        // 只列**该用户启用中**的工具（5.9 八）：用户停用了 knowledge_search，就不能把它
+        // 当可用工具报给客户端——否则客户端会拿着一个"看起来能用"的名字去调，
+        // 然后拿到一句权限拒绝，那比一开始不列出来更让人费解
+        for (ToolCatalog.Registered tool : toolRegistry.enabledFor(userId)) {
             // schema 原样是反射出来的 JSON 字符串，这里只为套进 JSON-RPC 的树里而解析一次，
             // 不做任何改写——改一个字就成了第二份描述
             array.add(toolNode(tool.code(), tool.description(), jsonMapper.readTree(tool.jsonSchema())));
@@ -172,7 +187,16 @@ public class McpEndpoint {
         } else {
             ToolCatalog.Registered tool = toolCatalog.find(toolName).orElse(null);
             if (tool == null) {
+                // "压根没有这个工具"与"有但被你停用了"必须分开报：前者是客户端写错了名字，
+                // 后者是用户的开关生效了。合成一句话会让用户去查文档找不存在的工具名
                 return error(id, -32601, "Unknown tool: " + toolName);
+            }
+            // 用户停用 = 拒绝执行（5.9 八）。与 tools/list 同一份判定（ToolRegistry.enabledFor），
+            // 因此"列不出来"与"调不动"永远一致——只做一半（藏起来但照样能调）是更坏的谎
+            if (toolRegistry.enabledFor(userId).stream()
+                    .noneMatch(enabled -> enabled.code().equals(tool.code()))) {
+                log.info("MCP 工具调用被拒：userId={}，工具 {} 已被该用户停用", userId, tool.code());
+                return permissionDenied(id, tool.code());
             }
             // 参数原样交给工具：schema 是反射出来的，缺失/类型错的参数由实现自己报错，
             // 不再在这里手写一份"哪个参数必填"的判断（那也是第二份 schema）
@@ -230,6 +254,34 @@ public class McpEndpoint {
         ObjectNode err = jsonMapper.createObjectNode();
         err.put("code", code);
         err.put("message", message);
+        return jsonMapper.createObjectNode()
+                .put("jsonrpc", "2.0").set("id", id).set("error", err);
+    }
+
+    /**
+     * "这个工具被你停用了"的拒绝响应。
+     *
+     * <p>为什么是 JSON-RPC 的 {@code error} 而不是 {@code result.isError=true}：
+     * 本类里 {@code isError} 的含义是"工具真的跑了、但失败了"（{@code Outcome.failed()}），
+     * 而这里工具<b>一次都没跑</b>。把"没跑"混进"跑了但失败"，调用方就再也分不清
+     * 是自己的开关生效了，还是检索真的出错了。
+     *
+     * <p>为什么用 {@code -32003} 而不是某个标准码：JSON-RPC 2.0 只规定了"方法不存在
+     * （-32601）""参数不合法（-32602）"，<b>没有</b>"无权限"这一档
+     * （-32000..-32099 是留给实现自定义的区间）。硬套 -32601 会把"被停用"说成"没这个工具"，
+     * 让客户端去文档里找一个其实存在的名字。业务码 5004 同时放进 {@code data.businessCode}，
+     * 便于机器识别，不必去解析中文文案。
+     */
+    private ObjectNode permissionDenied(JsonNode id, String toolCode) {
+        ObjectNode err = jsonMapper.createObjectNode();
+        err.put("code", PERMISSION_DENIED_CODE);
+        err.put("message", "%s：%s 已被停用（业务码 %d）"
+                .formatted(ErrorCode.TOOL_PERMISSION_DENIED.getMessage(), toolCode,
+                        ErrorCode.TOOL_PERMISSION_DENIED.getCode()));
+        ObjectNode data = jsonMapper.createObjectNode();
+        data.put("businessCode", ErrorCode.TOOL_PERMISSION_DENIED.getCode());
+        data.put("tool", toolCode);
+        err.set("data", data);
         return jsonMapper.createObjectNode()
                 .put("jsonrpc", "2.0").set("id", id).set("error", err);
     }

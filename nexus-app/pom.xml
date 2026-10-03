@@ -183,6 +183,29 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Testcontainers（5.9 七）：让 Live* 联调测试自带 MySQL / ES / pgvector，
+             不再依赖开发者电脑上正在运行的那套业务容器。
+             版本由 spring-boot-dependencies 导入的 testcontainers-bom 统一管理（2.x），
+             因此这里不写版本号。注意 2.x 的模块名与包名都换了
+             （org.testcontainers:testcontainers-mysql → org.testcontainers.mysql.MySQLContainer），
+             与网上大量 1.x 时代的示例不一致。
+             作用域是 test：它不会被装进可执行 jar，产物体积不变。 -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-mysql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

@@ -4,6 +4,7 @@ import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.api.Result;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.observe.ObservabilityRegistry;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,12 +45,15 @@ public class GlobalExceptionHandler {
     /** 上传上限的配置原值（形如 {@code 200MB}），用于把"超限"说成一句带具体数字的话。 */
     private final String maxFileSize;
     private final String maxRequestSize;
+    private final ObservabilityRegistry observabilityRegistry;
 
     public GlobalExceptionHandler(
             @Value("${spring.servlet.multipart.max-file-size:200MB}") String maxFileSize,
-            @Value("${spring.servlet.multipart.max-request-size:220MB}") String maxRequestSize) {
+            @Value("${spring.servlet.multipart.max-request-size:220MB}") String maxRequestSize,
+            ObservabilityRegistry observabilityRegistry) {
         this.maxFileSize = maxFileSize;
         this.maxRequestSize = maxRequestSize;
+        this.observabilityRegistry = observabilityRegistry;
     }
 
     /** 业务异常：业务码与提示信息都由抛出方决定。 */
@@ -147,6 +151,7 @@ public class GlobalExceptionHandler {
         FailureClassifier.Failure failure = FailureClassifier.classify(ex);
         log.warn("工具调用超过轮数上限 requestId={}, tool={}, limit={}",
                 RequestIdHolder.current(), ex.getToolName(), ex.getLimit());
+        observabilityRegistry.increment(ObservabilityRegistry.ERRORS);
         return badRequest(failure.code(), failure.message());
     }
 
@@ -157,6 +162,7 @@ public class GlobalExceptionHandler {
         log.error("未预期异常 requestId={}", requestId, ex);
         String message = ErrorCode.INTERNAL_ERROR.getMessage()
                 + (requestId == null ? "" : "（requestId=" + requestId + "）");
+        observabilityRegistry.increment(ObservabilityRegistry.ERRORS);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Result.fail(ErrorCode.INTERNAL_ERROR, message));
     }

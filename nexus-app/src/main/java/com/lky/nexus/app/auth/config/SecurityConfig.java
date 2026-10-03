@@ -141,14 +141,25 @@ public class SecurityConfig {
 
     /**
      * 校验器：与签发器共用同一密钥，限定算法为 HS256（防止算法混淆攻击），
-     * 并追加令牌版本校验（5.6：改密码即刻作废旧令牌）。
+     * 校验签发者（iss），并追加令牌版本校验（5.6：改密码即刻作废旧令牌）。
      *
      * <p><b>为什么必须用 {@link DelegatingOAuth2TokenValidator} 包一层</b>：
      * {@code build()} 已经挂了 {@code JwtValidators.createDefault()}（含 exp / nbf），
      * 而 {@code setJwtValidator} 是<b>替换</b>语义、不是追加——直接换成版本校验器，
      * 过期校验就没了，30 分钟后本该过期的令牌会一直有效。
      * 这是个"看起来只是加一个校验"的改动，代价却是把过期机制整个拆掉，
-     * 所以这里显式把两者组合在一起（并有测试盯着"过期令牌仍然被拒"）。
+     * 所以这里显式把三者组合在一起（并有测试盯着"过期令牌仍然被拒"）。
+     *
+     * <p><b>iss 校验（第六优先级）</b>：此前 {@code iss} 只写不验——签发时写进声明，
+     * 校验侧却从没比对过。它单独并不构成可被利用的缺口（对称密钥已经决定了只有本应用
+     * 签得出令牌），但"写了一个声明却从不验证"是一类更坏的信号：它让后来的人以为
+     * 这条链路已经校验过 iss 了（比如将来换成多服务、或让别的组件共用同一个密钥时，
+     * 这一条就是唯一能区分"谁签的"的东西）。补上它，代价是一行，语义却从"看起来有"
+     * 变成"真的有"——这正是本项目对"假完整"的一贯口径。
+     *
+     * <p>用 {@code createDefaultWithIssuer} 而不是再 {@code new JwtIssuerValidator}：
+     * 后者要自己记得把 timestamp 一起带上，而这个方法名把"默认校验 + iss"写在了签名里。
+     * 它同时覆盖了"令牌压根没有 iss"的情形（{@code getIssuer()} 为 null，与期望值不等 → 拒绝）。
      */
     @Bean
     public JwtDecoder jwtDecoder(NexusJwtProperties properties, TokenVersionValidator tokenVersionValidator) {
@@ -156,7 +167,7 @@ public class SecurityConfig {
                 .macAlgorithm(MacAlgorithm.HS256)
                 .build();
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
-                JwtValidators.createDefault(), tokenVersionValidator));
+                JwtValidators.createDefaultWithIssuer(properties.getIssuer()), tokenVersionValidator));
         return decoder;
     }
 

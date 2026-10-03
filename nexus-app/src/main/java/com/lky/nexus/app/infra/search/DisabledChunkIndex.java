@@ -34,12 +34,12 @@ public class DisabledChunkIndex implements ChunkIndex {
     }
 
     @Override
-    public void ensureIndex() {
+    public void ensureIndex(Long knowledgeBaseId) {
         throw new BusinessException(ErrorCode.VECTOR_STORE_UNAVAILABLE, MESSAGE);
     }
 
     @Override
-    public void recreateIndex() {
+    public void recreateIndex(Long knowledgeBaseId) {
         throw new BusinessException(ErrorCode.VECTOR_STORE_UNAVAILABLE, MESSAGE);
     }
 

@@ -4,6 +4,7 @@ import com.lky.nexus.app.security.QuotaChatUsageRecorder;
 import com.lky.nexus.app.security.QuotaService;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.ChatUsageRecorder;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -16,9 +17,18 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class AppConfig {
 
+    /**
+     * 观测注册表：静默降级计数（{@code /api/observability/summary}）与运行指标
+     * （{@code /actuator/metrics}）的<b>同一个</b>上报口。
+     *
+     * <p>传入 {@link MeterRegistry} 之后，{@code increment} 等调用会同步转发给
+     * Micrometer，于是两个端点看到的是同一批事实。这里注入的是 Spring Boot 自动配置的
+     * 复合注册表，<b>不引入任何指标后端</b>：没有 Prometheus/Grafana 时它只是一个内存里的
+     * 注册表 + {@code /actuator/metrics} 的 JSON，这正是本阶段要的粒度。
+     */
     @Bean
-    public ObservabilityRegistry observabilityRegistry() {
-        return new ObservabilityRegistry();
+    public ObservabilityRegistry observabilityRegistry(MeterRegistry meterRegistry) {
+        return new ObservabilityRegistry(meterRegistry);
     }
 
     /**
