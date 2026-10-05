@@ -691,7 +691,7 @@ JSON-RPC 2.0 over HTTP（MCP Streamable HTTP 的最小子集）。
 
 ```bash
 TOKEN=$(curl -s -X POST localhost:8080/api/auth/login -H 'Content-Type: application/json' \
-  -d '{"username":"demo","password":"Passw0rd!23"}' | jq -r .data.accessToken)
+  -d '{"username":"demo","password":"Demo@12345"}' | jq -r .data.accessToken)
 
 curl -s -X POST localhost:8080/mcp \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \

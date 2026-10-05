@@ -455,11 +455,10 @@ tags: [Redis, 缓存]
 EOF
 cd /tmp/vault && zip -r ../vault.zip Vault
 
-# 注册登录 → 建库 → 导入（都是已封装的 REST 接口）
-curl -s -X POST localhost:8080/api/auth/register -H 'Content-Type: application/json' \
-  -d '{"username":"demo","password":"Passw0rd!23"}'
+# 登录 → 建库 → 导入（demo 账号由 scripts/seed-demo.mjs 种入，口令 Demo@12345；
+# 重复 register 会因"用户已存在"失败，这里直接用已有账号登录）
 TOKEN=$(curl -s -X POST localhost:8080/api/auth/login -H 'Content-Type: application/json' \
-  -d '{"username":"demo","password":"Passw0rd!23"}' | jq -r .data.accessToken)
+  -d '{"username":"demo","password":"Demo@12345"}' | jq -r .data.accessToken)
 KB=$(curl -s -X POST localhost:8080/api/knowledge-bases -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"name":"我的 Java 笔记"}' | jq -r .data.id)
 curl -s -X POST "localhost:8080/api/knowledge-bases/$KB/vault" -H "Authorization: Bearer $TOKEN" \
@@ -471,9 +470,9 @@ curl -s -X POST "localhost:8080/api/knowledge-bases/$KB/vault" -H "Authorization
 项目自带最小 MCP Server：`POST http://localhost:8080/mcp`。
 
 ```bash
-# 1) 先登录拿一个 JWT（身份就是它，没有别的来源）
+# 1) 先登录拿一个 JWT（身份就是它，没有别的来源；demo 口令 Demo@12345）
 TOKEN=$(curl -s -X POST localhost:8080/api/auth/login -H 'Content-Type: application/json' \
-  -d '{"username":"demo","password":"Passw0rd!23"}' | jq -r .data.accessToken)
+  -d '{"username":"demo","password":"Demo@12345"}' | jq -r .data.accessToken)
 
 # 2) 任意 MCP 客户端 / curl 都要带这个令牌：
 curl -s -X POST localhost:8080/mcp \
@@ -666,3 +665,357 @@ verify-multi-kb-failure 0   verify-agent-no-kb 0   verify-security 0   verify-fu
 - **观察值不作指标**：§2.13 的耗时/内存是单机观察值。
 - ~~**Known Gap · `recreateIndex()` 非同一秒幂等**~~ → **5.9 四 已修**（序号兜住秒级时间戳）。
 - ~~**Known Gap · `LiveChunkIndexTest` 会清空共享 ES 索引**~~ → **5.9 七 已修**（自带容器）。
+
+---
+
+## 9. 测试数据清理工具（Test Data Cleanup Utility）
+
+### 9.1 为什么需要它
+
+验收脚本每轮都会注册**一次性测试账号**（`ua-*` / `probe-*` / `smoke-*` / `fmt-*` …），
+而系统**没有删号接口**。凭证一丢，这些账号名下的知识库 / 会话 / Agent
+就再也删不动了——普通 API 需要 token，恰恰是它们没有的东西。
+
+于是残留只会累积。2026-10-03 实测存量：**78 个测试账号 / 10 个知识库 / 24 个会话 /
+13 个自建 Agent / 71 个工作区 / 49 条导入任务 / 7 条问答记录**。
+
+结论：**根因不是"脚本忘了清理"，而是"缺一条管理员级的清理通道"**。
+本工具就是这条通道。
+
+### 9.2 设计取舍
+
+| 决策 | 选择 | 理由 |
+| --- | --- | --- |
+| 形态 | **CLI（Spring profile 隔离）**，不是 HTTP 接口 | 清理对象没有 token，任何走 HTTP 的设计都用不上；且它不该成为产品的一部分 |
+| 归属 | `nexus-app` 的 `tools/cleanup` 包，`@Profile("cleanup")` | 级联逻辑（pgvector / ES / 磁盘）全在 `nexus-app` 的 infra 配置里，独立模块无法复用 |
+| 默认 | **dry-run**（只读不删） | 真删必须显式 `--nexus.cleanup.execute=true` |
+| 作用域 | **前缀白名单**（不是黑名单） | 清理工具的失败模式应当是"少删"，不是"多删" |
+| 保护 | `Prisdvl`（真实数据）/ `demo`（演示数据）硬编码保护 | 且若前缀把它们也命中 → **整体中止**（fail-closed），而不是静默跳过 |
+| 删除方式 | 复用 `KnowledgeBaseService.delete` / `ConversationService.delete` / `AgentService.delete` | 这几条级联已被单测覆盖；自己写 SQL 会留下"检索命中却翻不出文档"的孤儿向量 |
+
+### 9.3 用法
+
+```powershell
+# dry-run（默认，只打印将删清单，不写任何数据）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cleanup-test-data.ps1
+
+# 真正执行删除（不可逆）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cleanup-test-data.ps1 -Execute
+
+# 其它参数：-SkipBuild（jar 已最新）、-JavaHome <path>、-Profiles local,cleanup
+```
+
+也可直接调 jar（脚本做的就是这件事）：
+
+```bash
+java -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar \
+     --spring.profiles.active=local,cleanup \
+     --nexus.cleanup.execute=false
+```
+
+> ⚠️ 两个构建陷阱（都踩过，已写进脚本注释）：
+> ① 必须 `-am`，否则兄弟模块会从本地仓库取到旧产物，运行期 `NoClassDefFoundError`；
+> ② 必须 `clean`，否则 `spring-boot:repackage` 检测到目标 jar 已是 fat jar 会**直接跳过**，
+> 于是"改了代码但 fat jar 没变"。
+
+### 9.4 每个账号的清理动作（顺序即依赖顺序）
+
+1. **知识库** → `KnowledgeBaseService.delete`（级联：切片 / 关联边 / 标签 / **pgvector 向量** /
+   **ES 索引** / **磁盘原文**）
+2. **知识库附属数据** → `kb_import_task_item` → `kb_import_task` → `kb_qa_record`
+   （这三张表**不在**知识库删除的级联里，必须补，否则每次清理都留一批无主行）
+   ——⚠️ 明细表的关联键必须是 **`task_id`**。早先用的是
+   `kb_id IN (SELECT id FROM kb_import_task …)`，子查询取的是任务主键却拿去比 `kb_id` 列，
+   两个 id 空间不同、永远不相等，于是这一步从未生效（详见 §9.6 缺陷 B）
+3. **会话** → `ConversationService.delete` + **`SPRING_AI_CHAT_MEMORY`**（key = `conv:{id}`）
+   —— 会话记忆也不随会话删除清空，实测存量 394 行
+4. **Agent** → 自建走 `AgentService.delete`；**内置默认 Agent** 服务层拒绝删除，
+   按 `purge-builtin-agents`（默认 `true`）由管理员级旁路软删，并在日志显著标注
+5. **工作区** → `workspace` 表物理删除（该表未标 `@TableLogic`，纯附属数据无审计价值）
+6. **角色关联 + 账号** → `sys_user_role` 物理删；`sys_user` 逻辑删（`@TableLogic`，可回溯）
+
+### 9.5 实测结果（2026-10-03）
+
+**dry-run（已验）**：
+
+```text
+硬保护账号（永不匹配）：Prisdvl, demo
+候选账号 78 个
+合计将删除：账号 78；知识库 10；会话 24；自建Agent 13；工作区 71；导入任务 49；问答记录 7
+```
+
+`Prisdvl` 与 `demo` 均未被匹配 —— 保护生效。
+
+**fail-closed 守卫（已验）**：把前缀配置成 `Pris` 时，工具识别出保护账号 `Prisdvl` 被命中，
+**整体中止**（退出码 2），而不是跳过它继续删别人：
+
+```text
+清理过程异常终止：保护账号 [Prisdvl] 被清理前缀命中，配置有误，已中止。前缀=[Pris]
+```
+
+**单元测试**：`CleanupPropertiesTest`（6 项，纯逻辑、无需数据库）把三条不变量钉住——
+① 默认前缀必须覆盖 2026-10-03 实测的**全部 78 个残留账号**（名单逐字写进测试当回归数据，
+少覆盖一种命名约定立刻红）；② `Prisdvl` / `demo` 永不被匹配；③ 保护账号被命中即中止。
+另覆盖"空前缀被忽略"（空串会匹配一切，若生效等于把作用域放大到全库）。
+
+### 9.6 EXECUTE 实测（2026-10-03 全量执行）
+
+清理工具首次**真正执行**（`-Execute`）。真机跑出来的不只是"删干净了"，
+还**暴露了两个工具自身的缺陷** —— 这正是"dry-run 通过"与"真删一次"之间的差距。
+
+**执行过程（三次，逐次收口）**：
+
+| 次序 | 退出码 | 结果 | 说明 |
+| --- | --- | --- | --- |
+| ① | **1** | 77 / 78 个账号已清，`vault_48723` 失败（NPE） | 暴露缺陷 A |
+| ② | **0** | 补齐第 78 个账号 | — |
+| ③ | **0** | 最终一致性回收 69 行无主明细 | 暴露缺陷 B |
+
+**最终数据核对**（MySQL）：
+
+```text
+                 清理前   清理后   变化
+sys_user 活跃       80       2     -78
+知识库              13       3     -10
+文档                19       6     -13
+切片                25      11     -14
+会话                61      37     -24
+消息               126      76     -50
+Agent 活跃          53       3     -50
+工作区              73       2     -71
+导入任务           186     137     -49
+问答记录            35      28      -7
+会话记忆           394     350     -44
+```
+
+保护账号逐项**零变化**：`Prisdvl`（kb=1 / doc=0 / chunk=0 / conv=0 / agent=1 / ws=1）、
+`demo`（kb=2 / doc=6 / chunk=11 / conv=37 / msg=76 / agent=2 / ws=1 / task=137 / qa=28）
+—— 清理前后完全一致。9 类父子关系的孤儿扫描（切片 / 关联边 / 标签 / 消息 / 会话记忆 /
+Agent 绑定 ×2 / 文档 / 导入明细）**全部为 0**。
+
+#### 缺陷 A：既有 `KnowledgeBaseServiceImpl.delete` 的 NPE（产品级缺陷，非工具引入）
+
+`vault_48723` 的知识库含 3 篇 `source_type=OBSIDIAN` 的文档，`stored_path` 为 `NULL`。
+收集待删磁盘文件时只 `select` 了 `stored_path` **一列**，而 MyBatis 在
+"一行里被映射的列全为 `NULL`"时会把整行映射成 `null`（`returnInstanceForEmptyRow` 默认 `false`），
+于是 stream 里混进 `null` 元素，方法引用 `DocumentPO::getStoredPath` 的接收者为 `null` → NPE。
+
+- **症状**：任何含"Vault 导入（无落盘文件）文档"的知识库，**用户自己点删除也会 500**，
+  且报错点与 vault 导入毫无关系（排查方向完全跑偏）。
+- **修复**：取 getter 之前先滤掉 `null` 元素（`KnowledgeBaseServiceImpl` 一行防御性过滤）。
+- **回归测试**：`KnowledgeBaseDeletePurgeTest` 新增一例，复现该数据形态并断言删库 200。
+
+#### 缺陷 B：导入任务明细的关联键写错（工具自身缺陷）
+
+```sql
+-- 错：子查询取的是任务主键，却拿去比 kb_id 列 —— 两个 id 空间不同，永远不相等
+DELETE FROM kb_import_task_item WHERE kb_id IN (SELECT id FROM kb_import_task WHERE user_id = ?)
+```
+
+**"清理明细"这一步从未生效过**（日志里每次都打印"明细 0 条"，正是这个的痕迹）。
+真机实测：78 个账号清完后，`kb_import_task_item` 里留下 **69 行父任务已不存在的无主明细**。
+
+- **修复**：关联键改为 `task_id`。
+- **补一步最终一致性回收** `reclaimOrphanImportTaskItems()`：按账号枚举**永远找不到**这 69 行
+  （父行已经查不到了），只能靠"父行不存在"这个独立判据回收。
+- 只覆盖这一张表不是图省事：同一时刻的孤儿扫描显示其余 8 类父子关系**全部为 0**，
+  因为它们的删除与父行在同一路径内完成；导入明细是唯一由另一条 SQL 单独删的，也就唯一可能成为孤儿。
+- 回收步骤必须放在"候选账号为 0 就返回"**之前** —— 第一次修完重跑时候选账号正好为 0，
+  该步骤被提前返回跳过，69 行一行没动；真机第二次才把这个**顺序问题**也暴露出来。
+
+#### 清理工具测试（本轮补齐，共 12 项）
+
+| 测试类 | 数量 | 覆盖 |
+| --- | --- | --- |
+| `CleanupPropertiesTest` | 6 | 前缀白名单覆盖全部 78 个已知账号 / 保护账号永不被匹配 / fail-closed 中止 / 空前缀被忽略 / 非白名单一律不动 / 默认只读 |
+| `TestDataCleanupIntegrationTest` | **7** | dry-run 结构性只读 / **dry-run 账目完整（会删的内置 Agent 必须进计划）** / 正常清理 + 完整级联（十类资源逐层核查到磁盘原文）/ 幂等重复执行 / demo·Prisdvl·非测试账号完整保留 / 部分失败携带账号与原因且其余账号照常清理 / 无主明细回收 |
+
+集成测试跑在 `test` profile（H2 + MySQL 方言 Flyway 迁移，表结构与生产一致），
+**跟着 `mvn test` 常驻回归，不需要 Docker**。
+
+#### 磁盘原文与 ES 的两个口径（如实记录）
+
+- **磁盘原文**：78 个文件全部落在宿主 `./data/kb`，而 Docker 后端的 `nexus_backend-data` 卷是**空的**。
+  因此本轮清理**真正删到了磁盘**（10 个文件随 10 个库消失）。这同时暴露一个既存部署不一致：
+  **容器化部署读不到任何原始文件**（检索走 pgvector/ES 不受影响，"下载原文"会失败）。
+- **ES**：删除走的是 `aliasFor(kbId)` 的 delete-by-query，**不**回收物理索引与别名。
+  实测 47 个物理索引 / 46 个别名保留（其中只有 2 个别名指向活跃库）——
+  这是产品删除路径的既有行为、非本工具引入；本轮测试库的 ES 文档数本就为 0，
+  因此"ES 数据"层面确为 0，但**物理索引会随建库持续累积**。
+
+### 9.7 二次 EXECUTE 与"可重复运行"验证（2026-10-03 晚）
+
+第一轮 EXECUTE 之后再跑一轮**完整 E2E**（16 个 `verify-*.mjs`），然后再次 dry-run + EXECUTE，
+用来正面回答"测试系统能不能无限重复运行"。这一轮又暴露并修掉**两个缺陷**：
+
+#### 缺陷 C：E2E 往**受保护**账号 `demo` 里持续灌数据（P1）
+
+用 demo 令牌跑的脚本会在 **demo 名下**建数据，而 demo 是**禁止清理**的演示账号：
+`cleanup-test-data` 的保护规则把它挡在门外，于是漏下的数据**永远没有回收通道**。
+实测**一轮 E2E 让 demo 的会话从 37 涨到 45**（另累积 30 条 `kb_qa_record`，
+时间戳横跨 11:26–17:55），正好违反任务书 §十四「重复执行不会无限污染数据库」。
+
+| 脚本 | 每轮泄漏 | 方式 | 本轮处置 |
+| --- | --- | --- | --- |
+| `verify-agent-chat` | 2 个会话 | 界面驱动，`finally` 只关浏览器 | **已修** |
+| `verify-multi-kb-failure` | 5~6 个会话 | `ragAsk()` 每调一次建一个会话，从不删除 | **已修** |
+| `verify-stream` | 1 条 `kb_qa_record` | 走知识库「问答」页（不建会话），但写问答留档 | **未修**（见下） |
+
+- **会话泄漏的修复**：`web/scripts/lib/demo-session.mjs` 新增 `listConversationIds()` +
+  `deleteConversationsCreatedSince()`，采用**跑前快照 + 差集删除**——只删本轮新建的。
+  **绝不能用"清空本账号全部会话"收尾**：那会把 demo 的演示数据一起删掉，比残留更严重。
+  两个脚本接入后重跑：agent-chat 删 2 / multi-kb-failure 删 6，快照恒为 37，
+  demo 会话/消息数逐项回到基线（实测：第二轮完整 E2E 之后 demo 仍是 **37 会话 / 76 消息**）。
+- **`verify-stream` 的 `kb_qa_record` 泄漏未修，是有意留下的**：
+  全仓**不存在**删除问答留档的接口（`kb_qa_record` 既无 Controller 端点也无前端入口，
+  它只是"问了什么、答了什么、依据哪些资料"的服务端留档）。要清它只能
+  ①裸 SQL 删表——违反"复用既有级联"；②给 demo 开例外——违反 §三"保护账号任何情况下不得删除"。
+  残留量级：**1 行/轮，且用户完全不可见**（无任何页面对它计数或展示）。
+  正解见 `docs/future-improvements.md` 第 17 条：让 `verify-stream` 改用自建账号 + 自建知识库
+  （这也正好满足任务书 §十二「不依赖 demo 用户」），而不是给它加一条针对保护账号的特例。
+
+#### 缺陷 D：dry-run 账目对不上（`bAgt` 漏报）
+
+`AccountSnapshot` 只统计 `builtin = 0` 的自建 Agent，而 `purgeBuiltinAgents` **默认 true**
+—— 内置 Agent 会被真删。于是 dry-run 打印"自建Agent 1"，实际删掉 **4 个**（1 自建 + 3 内置）。
+"报什么删什么"当场不成立。
+
+- **修复**：快照新增 `builtinAgents` 字段、`CleanupPlan.totalBuiltinAgents()`、
+  summary 增"内置Agent"键、dry-run 表新增 `bAgt` 列并加口径说明；补回归测试
+  `planReportsBuiltinAgentsToo`。
+- 修后 dry-run 与 EXECUTE 的账目**逐项一致**（见下表）。
+
+#### 二次清理结果（EXECUTE 于 18:36 执行，退出码 0）
+
+```text
+候选账号 7 个 / 自建 Agent 1 / 内置 Agent 3 / 工作区 7 / 导入任务 8 / 问答记录 1
+→ 清理完成：账号 7 已软删；Agent 4（1 自建 + 3 内置）；工作区 7；导入任务 8；问答记录 1
+```
+
+清理后 `sys_user` 活跃账号 **2 个**（`demo` + `Prisdvl`，且 `demo` 与 `Prisdvl` 的
+知识库 / 文档 / 会话 / 消息 / Agent / 工作区 / 问答记录**逐项与基线一致**）。
+
+#### 值得单独记一笔：清理**没有**碰真实用户刚产生的数据
+
+二次 EXECUTE 于 **18:36:23** 执行。而 `Prisdvl` 名下有 2 个会话（标题「Java 里主要讲了什么？」，
+AGENT 模式）与 1 个已发布 Agent，创建时间是 **18:19–18:24**——即**真实用户在使用本系统**。
+它们**全部存活**。这比"与 17:43 的旧基线比对"更有说服力：它证明工具尊重**基线之后新增的**
+真实数据，而不只是"恰好没动到某个快照"。
+
+#### 孤儿与残留的量化口径（清理后实测）
+
+| 检查项 | 结果 |
+| --- | --- |
+| 10 类父子关系的**物理**孤儿（切片 / 文档 / 关联边 / 标签 / 消息 / 会话记忆 / Agent 绑定 ×2 / 导入明细 / 问答记录） | **全部 0** |
+| 已软删知识库名下的切片 | 0（切片是物理删除） |
+| 已软删知识库名下的**文档墓碑** | 137（`kb_document.deleted = 1`，软删设计使然，用户不可见） |
+| 已软删账号名下的**会话墓碑** | 42（`chat_conversation.deleted = 1`，同上） |
+| 已软删账号名下的工作区 | 0（工作区是物理删除） |
+| ES 物理索引 / 别名 | **61 / 60**，其中仅 3 个指向活跃知识库 |
+
+**软删墓碑与 ES 索引壳是"可重复运行"仅有的两个残留增长向量**：
+可见数据不增长（`deleted = 0` 的口径逐项归零），但墓碑行与空索引会单调累积
+（ES 约 **+12~14 个索引/轮完整 E2E**）。二者都不影响用户可见数据，
+也都不属于本工具的职责范围（前者是软删设计，后者是产品删除路径的既有行为）。
+
+### 9.8 会话记忆的回收口径与 UA-018 修复的运行实例取证（2026-10-03 深夜）
+
+#### 为什么单独记这一节
+
+`SPRING_AI_CHAT_MEMORY` 不是业务表，它由 Spring AI 的 `MessageWindowChatMemory` 维护，
+key = `conv:{conversationId}`（构造规则只在 `ChatMemoryKeys` 一处）。它有一个容易被忽略的性质：
+
+> **它是"这一轮发给模型多少历史"的唯一来源。** 一旦某个会话 id 被重新读到
+> （重建会话、同 id 复用），新会话就会**凭空记得**旧会话说过的话。
+
+所以"删会话"必须连带"清记忆"，否则残留的不只是几行无主数据，而是一条**跨会话的记忆泄漏路径**。
+
+#### UA-018：删除会话不清理会话记忆（P1，已修）
+
+修复点：`ConversationServiceImpl.delete()` 末尾增加
+`chatMemory.clear(ChatMemoryKeys.of(conversationId))`（走抽象层，不在 SQL 里重拼前缀）。
+回归测试：`ConversationDeleteClearsMemoryTest`（4 项，不需要模型 key，因此**永远会跑**）——
+分别覆盖"清空 / A·B 互不影响 / 无记忆时 no-op / 越权时记忆不被误清"。
+
+#### 运行实例取证（单元测试**不能**替代这一步）
+
+单元测试证明的是"代码里调了 `clear()`"；下面这个探针证明的是"**跑在容器里的那个 jar**，
+在我调删除接口之后，记忆行真的没了"。两者不互相覆盖：前者不覆盖部署漂移，后者不覆盖分支。
+
+探针（`probe-chatmemory.mjs`，只碰 `probe-*` 自建账号）：
+
+| 步骤 | 操作 | 实测 |
+| --- | --- | --- |
+| ① | 注册探针账号 + 建会话 | 会话 id 已拿到 |
+| ② | 在**该会话**下植入 1 行记忆（模拟真实模型调用后的表内容） | 该会话记忆行数 = **1** |
+| ③ | `DELETE /api/chat/conversations/{id}` | **HTTP 200 / code=0** |
+| ④ | 复查该会话记忆行数 | **0** ✓ 级联生效 |
+| ⑤ | 旁证：第二个会话同样植入后删除 | 记忆行数 = **0**（`clear` 的 `WHERE` 没有殃及范围问题） |
+
+#### 实测：挂在"已软删会话"下的记忆行不会被回收（工具级残留，已归档）
+
+清理工具**确实**清记忆（`PurgeResult.chatMemoryRows`，日志里的 `会话记忆 N 行`），
+但它的遍历条件是 **`deleted = 0`（仅活跃会话）**：
+
+```java
+List<Long> convIds = ids("SELECT id FROM chat_conversation WHERE user_id = ? AND deleted = 0", userId);
+for (Long convId : convIds) {
+    conversationService.delete(userId, convId);
+    result.chatMemoryRows += update("DELETE FROM SPRING_AI_CHAT_MEMORY WHERE conversation_id = ?",
+            ChatMemoryKeys.of(convId));
+}
+```
+
+于是"会话早已软删、记忆行还在"的那批行**谁也回收不到**。本次清理后的实测分布：
+
+| 记忆表的行归属 | 行数 |
+| --- | --- |
+| 挂在**活跃**会话下 | 74 |
+| 挂在**已软删**会话下 | **341** |
+| 父行已**物理**不存在（真孤儿） | 0 |
+| key 不符合 `conv:` 前缀 | 0 |
+
+定性（三点，缺一不可）：
+
+1. **用户不可见、无功能影响。** 记忆按 key 读取，软删会话永远不会再被读到。
+2. **不是增长向量。** UA-018 修复后，所有删除路径（API 删除 / 清理工具）都会连带清记忆，
+   因此这 341 行是**修复前的历史沉积，已冻结**——本次四轮完整 E2E + 清理之后总数仍是 415，
+   一行未增。
+3. **不会被本次清理回收，是工具遍历口径决定的**，不是遗漏。最小修法（**未做**，见
+   `docs/future-improvements.md` 第 20 条）：把记忆清理改为遍历"名下**全部**会话"，
+   key 仍走 `ChatMemoryKeys`——不在 SQL 里写 `CONCAT('conv:', id)`，
+   那样等于把 key 规则复制成两份（UA-018 的修复注释专门警告过这一点）。
+
+#### 第三次清理实测（EXECUTE 于 20:49 执行，退出码 0）
+
+这一次工具**在容器内运行**（`docker exec nexus-backend java -jar /app/app.jar
+--spring.profiles.active=local,cleanup`），因为运行实例的存储根是 `/app/data`（命名卷
+`backend-data`），宿主侧的 `D:\develop\Prisma\data` 是另一份——在宿主跑会"数据库级联成功、
+磁盘原文一个都没删"，而这属于**静默失败**（工具会打印警告，但退出码仍是 0）。
+在容器内跑则 `NEXUS_STORAGE_ROOT` 天然一致，DB 主机名 `mysql` 由容器网络解析。
+
+| 项 | dry-run 预告 | EXECUTE 实际 | 一致？ |
+| --- | --- | --- | --- |
+| 候选账号 | 34 | **34 已软删** | ✓ |
+| 知识库 | 0 | 0 | ✓ |
+| 会话 | 0 | 0 | ✓ |
+| 自建 Agent | 4 | 4 | ✓ |
+| 内置 Agent | 12 | 12 | ✓ |
+| 工作区 | 34 | 34 | ✓ |
+| 导入任务 | 37 | 37 | ✓ |
+| 问答记录 | 8 | 8 | ✓ |
+| 无主导入明细 | 0 | 0 | ✓ |
+
+> **"知识库 0 / 会话 0"本身是一条正面证据**：它说明每个 E2E 脚本的 `finally` 自清理
+> 都真的生效了——候选账号名下已经没有库和会话留给工具来清。
+
+清理后核验：
+
+| 检查项 | 结果 |
+| --- | --- |
+| 活跃账号 | **2 个**：`demo`、`Prisdvl` |
+| `demo`（演示数据，硬保护） | **37 会话 / 2 知识库 / 31 问答留档**——与既有基线逐项一致 |
+| `Prisdvl`（**真实用户数据**） | 2 会话 / 1 知识库，**全部存活** |
+| 13 类父子关系的物理孤儿 | **全部 0**（切片/文档/链接/标签/Agent 绑定 ×2/工具绑定/导入明细/问答记录/消息/记忆/工作区/角色） |
+| 活跃会话 / 活跃知识库 | 39 / 3 —— 恰好等于 `demo`(37/2) + `Prisdvl`(2/1) |
+| ES 物理索引 / 别名 | 116 / 115，其中仅 3 个指向活跃库（见 9.7 的增长向量说明） |

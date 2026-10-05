@@ -1,1200 +1,774 @@
-你现在继续负责完善当前项目：prisdvl-nexus。
+这份最新结果说明：**你真正要做的“完善项目”基本已经完成了。**
 
-## 一、项目最终目标
+现在已经不是“功能不完整”，而是进入**最终收口**阶段：
 
-不要把当前任务理解为“继续补几个功能”或者“让测试全部通过”。
+* 全项目 **603 tests / 0 failures / 0 errors / 22 skipped**
+* 真实用户验收链路全部通过
+* Docker 8 个服务 healthy
+* P0 = 0
+* 核心 P1 = 0
+* Citation、Observability、MCP、JWT issuer 都已经有对应证据
+* 当前唯一被认为真正影响后续持续开发的缺口，是**测试数据清理机制**。
 
-你的目标是：
+而且这次还有一个很重要的纠正：之前说的 344 tests 实际只是 `nexus-app` 单模块数量，全项目聚合测试是 **603**；E2E 实际是 **16 个脚本**。
 
-> 将当前 prisdvl-nexus 从一个已经跑通核心链路的 AI Agent + RAG Demo，继续完善成一个真正可以让普通用户使用的、具备完整产品闭环和工程质量的 AI 知识库 + Agent 平台。
+## 我建议你不要再继续做普通用户功能
 
-最终用户应该能够完成完整闭环：
+现在只处理最后这个问题：
 
-注册/登录
-→ 创建知识库
-→ 上传/导入文档
-→ 文档解析与切分
-→ Embedding
-→ 向量化存储
-→ 知识库检索
-→ 创建 Agent
-→ 配置 Agent
-→ 选择知识库
-→ 配置 Tool
-→ 测试 Agent
-→ 发布 Agent
-→ 在对话页面选择 Agent
-→ 多轮对话
-→ RAG / Tool Calling / Agent Loop
-→ 查看执行过程
-→ 管理历史会话
-→ 修改/停用 Agent
-→ 管理自己的知识库和数据
+```text
+测试脚本
+   ↓
+创建一次性账号
+   ↓
+创建 KB / Conversation / Agent
+   ↓
+测试结束
+   ↓
+账号没有删除接口
+   ↓
+凭证丢失
+   ↓
+数据无法通过 API 清理
+   ↓
+测试数据不断积累
+```
+
+现在已经积累了：
+
+```text
+78 个测试账号
+10 个知识库
+24 个会话
+14 个自建 Agent
+```
+
+而你的真实 `Prisdvl` 账号有 1 个真实知识库，必须永久排除。
+
+这个问题**值得解决**，但我不建议把它做成一个普通的 `/api/admin/...` HTTP 接口暴露出来。因为这是测试维护能力，不是产品功能。
+
+### 最合适的方案
+
+做一个：
+
+```text
+Test Data Cleanup Utility
+```
+
+只允许：
+
+```text
+test / maintenance profile
+```
+
+下运行。
+
+例如：
+
+```text
+scripts/cleanup-test-data
+```
+
+或者：
+
+```text
+mvn ... -Dspring.profiles.active=test-cleanup
+```
+
+流程：
+
+```text
+识别测试账号
+    ↓
+校验账号名前缀
+    ↓
+排除 demo
+    ↓
+排除 Prisdvl
+    ↓
+完整级联删除
+    ↓
+MySQL
+    ↓
+PostgreSQL / pgvector
+    ↓
+Elasticsearch
+    ↓
+Redis / RabbitMQ相关状态
+    ↓
+汇总结果
+```
+
+**不要直接 `DELETE FROM kb_knowledge_base`。**
+
+因为你自己前面的审计已经证明，知识库删除涉及 document、chunk、vector、ES 等级联资源，裸删会留下孤儿数据。
 
 ---
 
-# 二、工作原则
+# 直接给 Claude 的最终提示词
 
-你必须遵循以下原则。
+````text
+继续完善 prisdvl-nexus。
 
-### 1. 先理解现有项目，再修改
+现在项目已经达到 Final v1.0 判定条件。
 
-不要直接开始写代码。
+当前真实状态：
 
-首先完整检查当前代码库：
+- 603 tests
+- 0 failures
+- 0 errors
+- 22 skipped
+- 16 个 E2E 脚本全部通过
+- Docker 8 个服务 healthy
+- P0 = 0
+- 核心 P1 = 0
+- Citation 已验证
+- Observability 已验证
+- MCP 权限已验证
+- JWT issuer validation 已验证
+- Multi-KB / RAG / Agent / Tool Calling / Streaming / Stop 已有真实验收证据
 
-* README
-* docs
-* docs/decisions.md
-* pom.xml
-* Maven modules
-* Java package structure
-* web package structure
-* 数据库 schema / migration
-* Agent
-* RAG
-* Knowledge Base
-* Chat
-* Tool
-* Trace
-* API
-* 前端页面
-* E2E scripts
-* configuration
-* Docker / deployment files
+因此：
 
-重点理解当前已经实现的能力。
+# 不要再增加普通用户功能。
+# 不要创建新的 Phase 继续堆功能。
 
-不要重复实现已经存在的功能。
+当前唯一真正值得解决的问题：
 
----
+==================================================
+测试数据无法持续清理
+==================================================
 
-### 2. 不要为了“看起来完整”而重构
+现状：
 
-当前项目已经存在大量真实实现。
+过去的验收脚本创建了大量一次性测试账号：
+
+- 78 个测试账号
+- 10 个知识库
+- 24 个会话
+- 14 个自建 Agent
+
+原因：
+
+测试账号没有删除接口。
+
+账号凭证丢失后：
+
+测试数据无法通过普通 API 清理。
+
+同时：
+
+`Prisdvl` 用户有真实数据：
+
+- 真实账号
+- 真实知识库
+
+绝对禁止触碰。
+
+`demo` 用户及其演示数据也必须保留。
+
+
+==================================================
+目标
+==================================================
+
+实现：
+
+# Test Data Cleanup Utility
+
+它不是普通用户功能。
+
+不是公开 Admin API。
+
+不是给前端使用的功能。
+
+只用于：
+
+- 自动化测试
+- 本地验收
+- CI
+- 开发环境数据清理
+
+
+==================================================
+一、设计要求
+==================================================
+
+优先采用：
+
+```text
+独立 cleanup CLI / script
+````
+
+或者：
+
+```text
+maintenance / test-cleanup profile
+```
+
+不要增加：
+
+```text
+/api/admin/delete-user
+```
+
+这样的长期公开 HTTP 接口。
+
+如果认为必须使用 HTTP：
+
+必须满足：
+
+1. 默认 profile 不启用
+2. 默认 nginx 不暴露
+3. 必须额外 maintenance secret
+4. 只有 test/maintenance profile 才启用
+5. 明确记录安全边界
+
+优先使用更简单的：
+
+```text
+cleanup script
++
+已有 Service 层
+```
+
+==================================================
+二、清理对象
+======
+
+支持按照：
+
+```text
+test username prefix
+```
+
+识别测试账号。
+
+例如：
+
+```text
+ua-
+fmt-
+smoke-
+kbtest_
+vault_
+sync_
+sync2_
+async_
+mcp-live-
+err52-
+upload-limit-
+```
+
+但：
+
+# 不允许简单硬编码几个前缀然后声称“全部测试数据”。
+
+先检查当前仓库所有 E2E / verify 脚本实际使用的用户名规则。
+
+建立：
+
+```text
+TestAccountPolicy
+```
+
+或者等价配置。
+
+集中定义允许清理的测试账号规则。
+
+==================================================
+三、必须存在的保护机制
+===========
+
+任何情况下：
+
+```text
+Prisdvl
+```
+
+不得删除。
+
+任何情况下：
+
+```text
+demo
+```
+
+不得删除。
+
+任何不符合明确测试账号规则的账号：
+
+不得删除。
+
+如果匹配规则不明确：
+
+停止并输出待人工确认列表。
+
+不要猜。
+
+==================================================
+四、完整级联删除
+========
+
+绝对禁止：
+
+```sql
+DELETE FROM kb_knowledge_base ...
+```
+
+这种裸删。
+
+必须复用现有业务删除能力。
+
+先分析：
+
+```text
+KnowledgeBaseService
+DocumentService
+ChunkService
+ConversationService
+AgentService
+VectorStore
+ES Index
+```
+
+找到系统已有的：
+
+```text
+deleteKnowledgeBase(...)
+deleteDocument(...)
+deleteConversation(...)
+deleteAgent(...)
+```
+
+或者对应的完整级联逻辑。
 
 优先：
 
-> 增量完善
-
-而不是：
-
-> 推倒重写
-
-除非你能够证明当前设计存在无法通过增量方式解决的架构问题。
-
-如果准备进行较大的架构修改：
-
-1. 先分析问题
-2. 说明影响范围
-3. 给出迁移方案
-4. 再实施
-
----
-
-### 3. 不允许为了通过测试而修改测试掩盖 Bug
-
-测试必须验证真实业务行为。
-
-禁止：
-
-* sleep 代替正确等待条件
-* 修改 assertion 让错误变成成功
-* 删除失败测试
-* 降低测试要求
-* mock 掉真正应该验证的业务链路
-* 通过 hard-code 绕过问题
-
-如果发现测试错误：
-
-> 修复测试本身，并在 docs/decisions.md 中记录原因。
-
----
-
-# 三、第一阶段：建立当前项目基线
-
-首先执行完整项目审计。
-
-请检查：
-
-```bash
-git status
-git branch
-git log --oneline -10
-```
-
-然后检查项目结构。
-
-分析：
-
-### Backend
-
-* Spring Boot
-* Spring AI
-* Agent
-* RAG
-* Knowledge Base
-* Document
-* Chunk
-* Embedding
-* Vector Store
-* Tool
-* Chat
-* Trace
-* Authentication
-* Authorization
-* Persistence
-* Transaction
-* Exception Handling
-* Configuration
-
-### Frontend
-
-* 登录
-* Agent
-* Knowledge Base
-* Document
-* Chat
-* Agent Picker
-* Agent Builder
-* Trace
-* Error Handling
-* Loading State
-* Empty State
-* Responsive Layout
-
-### Infrastructure
-
-检查：
-
-* MySQL
-* Redis
-* Vector Database
-* Object Storage
-* LLM
-* Embedding
-* Docker
-* Docker Compose
-* Nginx
-* configuration
-* secrets
-
----
-
-# 四、输出项目 Gap Analysis
-
-完成审计后，不要立即修改代码。
-
-先生成一个完整的：
-
 ```text
-docs/productization-gap-analysis.md
+cleanup account
+ ↓
+delete agents
+ ↓
+delete conversations
+ ↓
+delete knowledge bases
+ ↓
+delete documents/chunks/vectors
+ ↓
+delete ES entries
+ ↓
+delete remaining account-scoped resources
 ```
 
-至少包含：
+具体顺序必须以现有代码的依赖关系为准。
 
-| 模块             | 当前状态 | 缺失问题 | 严重程度 | 建议方案 |
-| -------------- | ---- | ---- | ---- | ---- |
-| Auth           |      |      |      |      |
-| User           |      |      |      |      |
-| Knowledge Base |      |      |      |      |
-| Document       |      |      |      |      |
-| RAG            |      |      |      |      |
-| Agent          |      |      |      |      |
-| Tool           |      |      |      |      |
-| Chat           |      |      |      |      |
-| Trace          |      |      |      |      |
-| Permission     |      |      |      |      |
-| Data Isolation |      |      |      |      |
-| Error Handling |      |      |      |      |
-| Security       |      |      |      |      |
-| Observability  |      |      |      |      |
-| Testing        |      |      |      |      |
-| Deployment     |      |      |      |      |
+不要凭感觉设计删除顺序。
 
-同时把问题分成：
+==================================================
+五、事务边界
+======
 
-```text
-P0 = 不解决就不能称为可用产品
-P1 = 正式使用前应该解决
-P2 = 可以后续迭代
-P3 = Nice to have
-```
-
----
-
-# 五、重点完善方向
-
-## 1. 用户系统
-
-检查是否真正具备：
-
-* 注册
-* 登录
-* 登出
-* Session / JWT
-* 用户身份识别
-* 密码安全存储
-* 用户信息
-* 登录失败处理
-* Token 过期
-* 未登录访问保护
-
-如果当前已有实现，则检查是否存在安全漏洞和边界问题。
-
----
-
-# 六、最重要：多租户 / 数据隔离
-
-这是正式产品必须解决的问题。
-
-所有用户数据必须按照 user_id / tenant_id 正确隔离。
-
-例如：
-
-```text
-User A
- ├── KB A
- ├── Documents A
- ├── Agents A
- ├── Conversations A
- └── Tools A
-
-User B
- ├── KB B
- ├── Documents B
- ├── Agents B
- ├── Conversations B
- └── Tools B
-```
-
-必须验证：
-
-```text
-A 不能读取 B 的 KB
-A 不能读取 B 的 Document
-A 不能读取 B 的 Agent
-A 不能调用 B 的 Agent
-A 不能读取 B 的 Conversation
-A 不能修改 B 的资源
-```
-
-特别检查：
-
-* API 参数直接传 resourceId
-* 越权查询
-* 越权修改
-* 越权删除
-* Agent → Knowledge Base
-* Chat → Agent
-* RAG → Knowledge Base
-* Vector Search metadata filter
-
-不能只依赖前端隐藏按钮。
-
-必须在后端强制校验。
-
-增加对应 API / integration / E2E tests。
-
----
-
-# 七、Knowledge Base 产品化
-
-完善知识库完整生命周期：
-
-```text
-创建
- ↓
-编辑
- ↓
-上传文件
- ↓
-解析
- ↓
-切分
- ↓
-Embedding
- ↓
-向量存储
- ↓
-索引完成
- ↓
-检索测试
- ↓
-删除
-```
-
-至少考虑：
-
-* PDF
-* DOCX
-* TXT
-* Markdown
-* 文件大小限制
-* 文件类型限制
-* 重复文件
-* 空文件
-* 解析失败
-* Embedding 失败
-* 删除文件
-* 删除 KB
-* 异步处理
-* processing 状态
-* failed 状态
-* completed 状态
-* 重试机制
-
-用户必须能知道：
-
-```text
-文件正在处理
-文件处理成功
-文件处理失败
-失败原因
-```
-
----
-
-# 八、RAG 产品化
-
-不要只验证 RAG “能不能回答”。
-
-检查并完善：
-
-```text
-Query
- ↓
-Query Rewrite（如果需要）
- ↓
-Embedding
- ↓
-Vector Search
- ↓
-Metadata Filter
- ↓
-TopK
- ↓
-Similarity Threshold
- ↓
-Rerank（如果当前架构适合）
- ↓
-Context Construction
- ↓
-LLM
-```
-
-明确：
-
-* chunk size
-* overlap
-* topK
-* similarity threshold
-* metadata
-* source citation
-* 无相关文档时的行为
-* 多知识库检索
-* KB_ONLY 行为
-
-必须防止：
-
-```text
-没有相关文档
-↓
-强行返回一个看似确定的知识库答案
-```
-
-同时让用户知道答案来自哪里。
-
----
-
-# 九、Agent Builder
-
-完善 Agent 创建和配置。
-
-至少考虑：
-
-```text
-Agent
- ├── name
- ├── description
- ├── system prompt
- ├── model
- ├── temperature
- ├── knowledge bases
- ├── tools
- ├── mode
- └── status
-```
-
-状态至少保证：
-
-```text
-DRAFT
-PUBLISHED
-DISABLED
-```
-
-明确状态转换：
-
-```text
-DRAFT
- ↓
-PUBLISHED
- ↓
-DISABLED
-```
-
-必要时允许：
-
-```text
-DISABLED
- ↓
-PUBLISHED
-```
-
-检查非法状态转换。
-
----
-
-# 十、Agent Tool Calling
-
-检查当前 Tool 系统。
-
-目标结构：
-
-```text
-User
- ↓
-Agent
- ↓
-LLM
- ↓
-Tool Decision
- ↓
-Tool
- ↓
-Tool Result
- ↓
-LLM
- ↓
-Tool / Final Answer
-```
-
-必须有：
-
-* Tool 白名单
-* Tool 参数校验
-* Tool timeout
-* Tool exception handling
-* 最大 Agent Loop 次数
-* 防止无限循环
-* Tool execution trace
-* Tool result trace
-
-至少测试：
-
-```text
-正常 Tool
-Tool 参数错误
-Tool 超时
-Tool 抛异常
-Tool 返回空结果
-Agent 连续调用 Tool
-超过最大循环次数
-```
-
----
-
-# 十一、Chat 产品化
-
-完善：
-
-```text
-创建会话
- ↓
-选择 Agent
- ↓
-发送消息
- ↓
-Streaming Response
- ↓
-保存消息
- ↓
-保存 Agent Trace
- ↓
-重新打开会话
-```
-
-检查：
-
-* 多轮上下文
-* 历史消息
-* 会话列表
-* 删除会话
-* 重命名会话
-* Agent 切换规则
-* SSE / WebSocket
-* 网络断开
-* LLM 超时
-* LLM 错误
-* Tool 错误
-* RAG 错误
-
-确保流式输出中途异常时不会导致数据库产生明显脏数据。
-
----
-
-# 十二、Trace / Observability
-
-当前已经有 Trace，不要浪费这个基础。
-
-让 Trace 能够清楚展示：
-
-```text
-Request
- ↓
-Agent
- ↓
-LLM
- ↓
-Tool
- ↓
-RAG
- ↓
-Vector Search
- ↓
-Retrieved Chunks
- ↓
-Final Answer
-```
-
-至少记录：
-
-* traceId
-* conversationId
-* agentId
-* userId
-* model
-* token usage（如果模型提供）
-* latency
-* tool calls
-* RAG fragments
-* errors
-
-注意：
-
-不要把 API key、密码、Authorization header 等敏感数据写入日志。
-
----
-
-# 十三、前端产品化
-
-检查所有页面。
-
-不要只关注“功能能不能点击”。
-
-完善：
-
-### Loading
-
-```text
-加载中
-上传中
-解析中
-保存中
-发布中
-```
-
-### Empty State
-
-例如：
-
-```text
-还没有知识库
-还没有 Agent
-还没有会话
-还没有文档
-```
-
-### Error State
-
-不能只出现：
-
-```text
-500
-Request failed
-```
-
-应该提供用户能理解的信息。
-
-### Confirmation
-
-对于：
-
-```text
-删除
-停用
-清空
-```
-
-增加确认。
-
-### 表单
-
-检查：
-
-* 必填字段
-* 长度限制
-* 非法参数
-* 重复名称
-* 保存失败
-* 网络错误
-
----
-
-# 十四、安全
-
-重点检查：
-
-* SQL Injection
-* XSS
-* CSRF（根据架构）
-* IDOR / 越权
-* 文件上传
-* 路径穿越
-* SSRF
-* Prompt Injection
-* Tool Injection
-* API Key 泄露
-* 日志泄露
-* 敏感配置提交 Git
-
-尤其检查：
-
-```text
-用户上传文档
- ↓
-文档内容
- ↓
-RAG
- ↓
-LLM
- ↓
-Tool
-```
-
-不能默认相信知识库内容。
-
-考虑 Prompt Injection 风险。
-
----
-
-# 十五、异常处理
-
-统一后端异常。
-
-不要让 API 到处返回：
-
-```text
-500 Internal Server Error
-```
-
-建立统一错误结构，例如：
-
-```json
-{
-  "code": "AGENT_NOT_FOUND",
-  "message": "Agent 不存在",
-  "requestId": "..."
-}
-```
-
-至少区分：
-
-```text
-认证错误
-权限错误
-参数错误
-资源不存在
-业务状态错误
-LLM 错误
-RAG 错误
-Tool 错误
-系统错误
-```
-
----
-
-# 十六、数据库
-
-检查所有核心表。
-
-重点关注：
-
-* 主键
-* 外键
-* 索引
-* 唯一约束
-* user_id
-* tenant_id
-* created_at
-* updated_at
-* status
-
-检查是否存在：
-
-```text
-N+1 查询
-缺失索引
-重复数据
-删除后的孤儿数据
-事务边界错误
-```
-
----
-
-# 十七、测试体系
-
-最终至少形成：
-
-```text
-Unit Test
-Integration Test
-API Test
-E2E Test
-```
-
-重点业务链路：
-
-### 用户
-
-```text
-注册 → 登录 → 登出
-```
-
-### KB
-
-```text
-创建 KB
-→ 上传文件
-→ 处理
-→ 检索
-→ 删除
-```
-
-### Agent
-
-```text
-创建
-→ 配置
-→ 发布
-→ 对话
-→ 停用
-```
-
-### RAG
-
-```text
-问题
-→ Retrieval
-→ Context
-→ Answer
-```
-
-### Agent Tool
-
-```text
-Question
-→ Tool
-→ Tool Result
-→ Answer
-```
-
-### 无 KB
-
-```text
-0 KB
-→ Chat
-→ RAG 0 result
-→ 正确回答
-```
-
-### 权限
-
-```text
-User A
-→ 尝试访问 User B
-→ 必须失败
-```
-
----
-
-# 十八、不要为了覆盖率而测试垃圾代码
-
-测试应该优先覆盖：
-
-```text
-业务核心逻辑
-边界条件
-异常路径
-权限
-数据隔离
-状态转换
-```
-
-而不是为了数字而测试 getter/setter。
-
----
-
-# 十九、部署
-
-最终应该能够通过一个清晰的方式启动整个项目。
-
-优先考虑：
-
-```text
-docker compose up -d
-```
-
-启动：
+明确区分：
 
 ```text
 MySQL
+PostgreSQL
+Elasticsearch
 Redis
-Vector DB
-Nacos（如果仍然需要）
-MinIO / OSS
-Backend
-Frontend
-Nginx
+RabbitMQ
 ```
 
-如果某些服务不能容器化，也必须在 README 中明确说明。
+这些不一定属于同一个事务。
 
-提供：
+设计：
 
 ```text
-.env.example
-docker-compose.yml
-README.md
+业务主数据删除
+        ↓
+外部索引清理
+        ↓
+最终一致性检查
 ```
 
-绝对不要提交：
+如果某一步失败：
+
+必须记录：
 
 ```text
-API Key
-密码
-真实 Token
-生产配置
+账号
+资源
+阶段
+错误
 ```
 
----
-
-# 二十、README 产品化
-
-README 最终应该让一个第一次看到项目的人能够理解：
+最后输出：
 
 ```text
-prisdvl-nexus 是什么？
-解决什么问题？
-核心功能是什么？
-技术栈是什么？
-架构是什么？
-如何运行？
-如何配置？
-如何创建第一个 KB？
-如何创建第一个 Agent？
-如何进行第一次对话？
+成功删除
+部分失败
+未删除
 ```
 
-增加：
+不要吞异常。
+
+==================================================
+六、Dry Run
+=========
+
+必须支持：
 
 ```text
-Architecture
-Quick Start
-Configuration
-Features
-Screenshots
-API
-Testing
-Deployment
-Troubleshooting
-Security
-Roadmap
+--dry-run
 ```
 
----
-
-# 二十一、工程质量要求
-
-所有修改必须保持：
-
-```text
-Java
-Spring Boot
-Spring AI
-MySQL
-Redis
-Vector Store
-Vue
-TypeScript/JavaScript
-```
-
-现有技术栈优先。
-
-不要为了追求“新技术”随意增加依赖。
-
-每增加一个基础设施组件，都必须回答：
-
-1. 为什么需要？
-2. 当前技术栈为什么解决不了？
-3. 对部署有什么影响？
-4. 对学习价值有什么提升？
-
-如果 MySQL 当前能够满足要求，不要为了“看起来高级”强行替换数据库。
-
----
-
-# 二十二、执行方式
-
-采用：
-
-```text
-Audit
- ↓
-Gap Analysis
- ↓
-P0
- ↓
-Test
- ↓
-P1
- ↓
-Test
- ↓
-P2
- ↓
-Final E2E
- ↓
-Documentation
-```
-
-不要一次性修改整个项目。
-
-每完成一个完整阶段：
-
-1. 修改代码
-2. 运行相关测试
-3. 运行构建
-4. 检查 git diff
-5. 更新文档
-6. 总结结果
-7. 再进入下一阶段
-
----
-
-# 二十三、每一阶段必须向我报告
-
-使用以下格式：
-
-```text
-## Phase X
-
-### Goal
-本阶段目标
-
-### Changes
-修改了什么
-
-### Tests
-运行了什么测试
-
-### Result
-通过/失败
-
-### Issues
-发现的问题
-
-### Next
-下一阶段计划
-```
-
-如果测试失败：
-
-不要直接绕过。
-
-说明：
-
-```text
-Failure
-Root Cause
-Fix
-Regression Test
-```
-
----
-
-# 二十四、最终验收标准
-
-当你认为项目已经完成时，必须实际验证：
-
-### 用户
-
-```text
-注册
-登录
-登出
-```
-
-### Knowledge Base
-
-```text
-创建
-上传
-处理
-检索
-删除
-```
-
-### Agent
-
-```text
-创建
-配置
-绑定 KB
-配置 Tool
-发布
-停用
-```
-
-### Chat
-
-```text
-选择 Agent
-发送消息
-Streaming
-多轮对话
-历史记录
-```
-
-### RAG
-
-```text
-Query
-→ Retrieval
-→ Chunks
-→ Answer
-```
-
-### Agent
-
-```text
-LLM
-→ Tool
-→ Tool Result
-→ Final Answer
-```
-
-### No KB
-
-```text
-0 KB
-→ Chat
-→ 0 Retrieval
-→ 正确回答
-```
-
-### Permission
-
-```text
-User A
-→ User B Resource
-→ 403 / Not Found
-```
-
-### Failure
-
-验证：
-
-```text
-LLM failure
-RAG failure
-Tool failure
-Upload failure
-Invalid request
-Unauthorized
-Forbidden
-```
-
-### Build
-
-最终运行：
+例如：
 
 ```bash
-mvn test
-mvn package
+cleanup-test-data --dry-run
+```
+
+输出：
+
+```text
+Matched accounts:
+10
+
+Protected:
+demo
+Prisdvl
+
+Will delete:
+10 test accounts
+10 KB
+24 conversations
+14 agents
+```
+
+Dry run：
+
+# 绝对不删除数据。
+
+==================================================
+七、真正执行
+======
+
+例如：
+
+```bash
+cleanup-test-data
+```
+
+必须要求：
+
+```text
+明确的 cleanup/test 环境
+```
+
+防止误操作生产环境。
+
+最好增加：
+
+```text
+NEXUS_CLEANUP_CONFIRM=true
+```
+
+或者等价二次确认。
+
+没有明确确认：
+
+拒绝执行。
+
+==================================================
+八、执行后核验
+=======
+
+清理后必须重新查询数据库。
+
+检查：
+
+```text
+测试账号
+测试KB
+测试Conversation
+测试Agent
+测试Document
+测试Chunk
+Vector
+ES
+```
+
+确认：
+
+```text
+目标测试数据 = 0
+```
+
+同时确认：
+
+```text
+Prisdvl = 完整保留
+demo = 完整保留
+```
+
+特别需要验证：
+
+`Prisdvl` 的真实知识库：
+
+* 文档数量没有变化
+* chunk 数量没有变化
+* vector 没有变化
+* ES 数据没有变化
+* conversation 没有变化
+
+==================================================
+九、让 E2E 可以自动使用
+==============
+
+不要让测试跑完之后还需要人工清理。
+
+改造 E2E：
+
+```text
+create test account
+        ↓
+run test
+        ↓
+finally
+        ↓
+cleanup own data
+```
+
+已有脚本自清理的保持不变。
+
+对于无法自清理的历史测试数据：
+
+使用：
+
+```text
+cleanup-test-data
+```
+
+统一清理。
+
+==================================================
+十、测试
+====
+
+至少增加：
+
+1. Dry run 测试
+2. 正常 cleanup 测试
+3. demo 不删除
+4. Prisdvl 不删除
+5. 非测试账号不删除
+6. 完整级联
+7. cleanup 重复执行幂等
+8. 部分外部资源失败时有明确报告
+
+==================================================
+十一、不要做
+======
+
+不要：
+
+* 增加普通用户删账号功能
+* 增加普通用户 Admin 页面
+* 把 cleanup 暴露给公网
+* 修改真实用户权限模型
+* 修改 JWT 核心设计
+* 修改 RAG
+* 修改 Agent Loop
+* 修改数据库架构
+* 更换数据库
+* 增加新基础设施
+
+==================================================
+十二、顺带修复验收体系
+===========
+
+检查所有：
+
+```text
+verify-*.mjs
+```
+
+确保：
+
+1. 自动生成唯一测试账号
+2. 测试结束自动清理
+3. finally 一定执行
+4. token 失效时可以自动重新登录
+5. API_BASE 统一
+6. 不依赖 demo 用户
+7. 不依赖固定数据库状态
+8. 不依赖人工删除
+
+==================================================
+十三、最终真实验收
+=========
+
+执行：
+
+```text
+cleanup-test-data --dry-run
+```
+
+先报告。
+
+确认匹配范围。
+
+然后执行实际 cleanup。
+
+之后：
+
+```bash
+mvn -B clean test
+mvn -B package -DskipTests
 npm run build
 ```
 
-以及所有现有 E2E。
+然后启动 Docker。
 
----
-
-# 二十五、最重要的要求
-
-不要为了完成任务而告诉我：
-
-> “项目已经完善。”
-
-只有在实际检查和测试之后才能这样说。
-
-如果发现：
+重新运行：
 
 ```text
-架构问题
-安全问题
-数据隔离问题
-测试问题
-异常处理问题
-用户体验问题
-部署问题
+所有 verify-*.mjs
 ```
 
-必须主动指出并修复。
+确保：
 
-不要因为当前测试已经 green 就停止。
+```text
+测试通过
++
+测试结束后不留下有效测试数据
+```
 
-当前 green 只是：
+==================================================
+十四、最终状态
+=======
 
-> 已经实现的功能通过了现有测试。
+最终必须达到：
 
-不是：
+```text
+Prisdvl真实数据：
+保留
 
-> 整个项目已经达到生产可用。
+demo数据：
+保留
 
----
+测试数据：
+可自动清理
 
-# 二十六、现在开始
+E2E：
+可重复执行
 
-第一步不要修改业务代码。
+重复执行：
+不会无限污染数据库
+```
 
-先：
+==================================================
+十五、完成后停止
+========
 
-1. 检查当前 git 状态
-2. 检查项目目录
-3. 阅读 README
-4. 阅读 docs/decisions.md
-5. 阅读现有 E2E
-6. 检查后端核心模块
-7. 检查前端核心页面
-8. 检查数据库结构
-9. 检查 Docker / deployment
-10. 输出 `docs/productization-gap-analysis.md`
+一旦：
 
-然后根据 P0/P1/P2 排出实施顺序。
+```text
+测试数据可以安全自动清理
++
+真实用户数据完全隔离
++
+完整级联删除正确
++
+E2E 可重复执行
++
+所有现有测试通过
+```
 
-**先完成审计和 Gap Analysis，再开始编码。**
+就停止继续开发。
 
-最终目标不是“把代码写得更多”，而是：
+不要再寻找新的“高级功能”。
 
-> **把 prisdvl-nexus 做成一个真正完整、可运行、可验证、可维护、可扩展，并且普通用户能够实际使用的 AI 企业知识库 + Agent 平台。**
+把项目正式视为：
+
+# prisdvl-nexus v1.0
+
+然后只输出最终报告。
+
+==================================================
+十六、最终报告格式
+=========
+
+输出：
+
+```text
+Final v1.0 Cleanup Report
+
+1. Cleanup Utility
+2. 清理规则
+3. 保护规则
+4. Dry Run结果
+5. 实际清理结果
+6. 级联验证
+7. Prisdvl保护验证
+8. Demo保护验证
+9. E2E污染验证
+10. 测试结果
+11. Docker结果
+12. Git修改
+13. Remaining Known Gaps
+14. 是否达到 Final v1.0
+```
+
+最后必须明确：
+
+```text
+真实用户现在是否可以长期正常使用？
+测试系统现在是否可以无限重复运行而不持续污染数据？
+```
+
+````
+
+## 然后就真的该停了
+
+你这轮最重要的不是再做一个功能，而是把：
+
+> **“我每次测项目都会把数据库越弄越脏”**
+
+这个最后的工程闭环补上。
+
+完成以后，你的系统逻辑上就是：
+
+```text
+真实用户
+   ↓
+真实数据
+   ↓
+正常使用
+
+测试用户
+   ↓
+自动测试
+   ↓
+自动清理
+   ↓
+数据库恢复干净
+````
+
+而不是现在：
+
+```text
+测试
+ ↓
+产生 10 个 KB
+ ↓
+产生 24 个会话
+ ↓
+继续测试
+ ↓
+数据库越来越脏
+```
+
+这正是目前报告认定的最后一个真正影响项目可持续性的缺口。
+
+完成这个之后，我建议你**不要再让 Claude “继续完善项目”**。正式封 `v1.0`，把 Git 工作区收干净，然后开始真正学习这个项目的源码。因为到那时，继续写代码的收益已经明显低于把这 2 万多行代码变成你自己的能力。
