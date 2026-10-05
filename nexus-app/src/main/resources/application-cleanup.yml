@@ -1,0 +1,31 @@
+# ============================================================
+# cleanup —— 测试数据清理 CLI 专用 profile
+#
+# 与 local 叠加使用（--spring.profiles.active=local,cleanup）：
+#   local  提供真实基础设施连接（MySQL 3307 / PG 5433 / ES 9200 / Redis 6379）
+#   cleanup 提供"命令行工具"的运行姿态
+#
+# 这不是产品 profile：它不对外提供任何 HTTP 端点，
+# 清理逻辑本身也只在 cleanup profile 下装配（见 tools/cleanup 包的 @Profile）。
+# ============================================================
+spring:
+  main:
+    banner-mode: off
+    # 清理是命令行操作，不对外提供服务：直接不启动 Web 容器。
+    #
+    # 为什么不退而求其次用"随机端口"（server.port=0）：实测在 Windows 上会撞到系统保留
+    # 端口段（Port 60017 was already in use —— 那不是真被占用，而是被 netsh 的
+    # excluded port range 划走了），于是"根本不启服务"这个更彻底的做法反而更稳。
+    #
+    # 代价：SecurityConfig 声明了 SecurityFilterChain，它是 Web 组件，因此该类被
+    # 标注为 @ConditionalOnWebApplication(SERVLET)——在无 Web 容器时整体跳过。
+    # 清理 CLI 不经过 HTTP，本就不需要它。
+    web-application-type: none
+logging:
+  level:
+    root: WARN
+    com.lky.nexus: INFO
+nexus:
+  cleanup:
+    # 默认 dry-run。真要删数据时必须显式覆盖为 true（脚本 -Execute）。
+    execute: false
