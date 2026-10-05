@@ -21,7 +21,8 @@
     "verify:kb-ask": "node scripts/verify-kb-ask.mjs",
     "verify:doc-delete": "node scripts/verify-doc-delete.mjs",
     "verify:kb-binding": "node scripts/verify-kb-binding.mjs",
-    "verify:all": "npm run build && npm run verify:sse && npm run verify:layout && npm run verify:auth && npm run verify:kb && npm run verify:import && npm run verify:advanced && npm run verify:agent && npm run verify:account && npm run verify:kb-ask && npm run verify:doc-delete && npm run verify:kb-binding && npm run verify:chat"
+    "verify:links": "node scripts/verify-links.mjs",
+    "verify:all": "npm run build && npm run verify:sse && npm run verify:layout && npm run verify:auth && npm run verify:kb && npm run verify:import && npm run verify:advanced && npm run verify:agent && npm run verify:account && npm run verify:kb-ask && npm run verify:doc-delete && npm run verify:kb-binding && npm run verify:links && npm run verify:chat"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

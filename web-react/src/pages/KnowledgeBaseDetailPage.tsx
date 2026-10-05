@@ -6,6 +6,7 @@ import { StateError } from '@/components/common/StateError'
 import { StateLoading } from '@/components/common/StateLoading'
 import { AdvancedPanel } from '@/components/knowledge/AdvancedPanel'
 import { KbAskPanel } from '@/components/knowledge/KbAskPanel'
+import { DocumentLinksPanel } from '@/components/knowledge/DocumentLinksPanel'
 import { DocStatusBadge, formatSizeKb } from '@/components/knowledge/docStatus'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -295,6 +296,8 @@ export function KnowledgeBaseDetailPage(): ReactElement {
                   documents={docs.data?.list ?? []}
                   mode={searchMode}
                 />
+                {/* 关联与相关推荐：知识库的另一半价值在"笔记之间的连接" */}
+                <DocumentLinksPanel kbId={kbId} documents={docs.data?.list ?? []} />
               </div>
             ) : null}
           </>
