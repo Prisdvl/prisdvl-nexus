@@ -5,6 +5,7 @@ import { StateEmpty } from '@/components/common/StateEmpty'
 import { StateError } from '@/components/common/StateError'
 import { StateLoading } from '@/components/common/StateLoading'
 import { AdvancedPanel } from '@/components/knowledge/AdvancedPanel'
+import { KbAskPanel } from '@/components/knowledge/KbAskPanel'
 import { DocStatusBadge, formatSizeKb } from '@/components/knowledge/docStatus'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,7 +13,8 @@ import { Card } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
 import { Tabs } from '@/components/ui/tabs'
 import { Tooltip } from '@/components/ui/tooltip'
-import { listDocuments } from '@/api/knowledge'
+import { deleteDocument, listDocuments } from '@/api/knowledge'
+import type { DocumentSummary } from '@/api/types/knowledge'
 import { importItemLabel, isItemFailed, isImportFinished } from '@/api/types/knowledge'
 import { useAsyncState } from '@/hooks/useAsyncState'
 import { useImportTask } from '@/hooks/useImportTask'
@@ -50,6 +52,10 @@ export function KnowledgeBaseDetailPage(): ReactElement {
   // 高级区的检索模式：hybrid / vector / es 三选一，用来定位是哪一路失灵
   const [searchMode, setSearchMode] = useState<'hybrid' | 'vector' | 'es'>('hybrid')
   const [chosen, setChosen] = useState<File[]>([])
+  /** 待删除的文档（非空即弹出确认框）。用"待删对象"而不是布尔：
+   *  确认框里要显示**删的是哪一篇**，只有布尔就得再存一份 id，两处状态容易不同步。 */
+  const [pendingDelete, setPendingDelete] = useState<DocumentSummary | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const valid = /^\d+$/.test(kbId)
   const docs = useAsyncState((signal) => listDocuments(kbId, {}, signal), [kbId], {
@@ -98,11 +104,40 @@ export function KnowledgeBaseDetailPage(): ReactElement {
 
   const onImport = async () => {
     if (chosen.length === 0) return
+    /*
+     * 先关确认框再发起导入。
+     *
+     * 这里踩过一个真实的坑：确认框的 `open` 绑的是 `importOpen`，
+     * 而原来的实现只清了 `chosen`、**没有关 importOpen** ——
+     * 于是"开始导入"之后弹窗一直挂在页面上（遮罩挡住全部交互，
+     * 用户必须手动点「取消」才能继续），而导入本身其实已经在跑了。
+     * 教训：**把"数据"与"界面开关"当成同一个东西**（以为清空 chosen 就等于关窗）就会这样。
+     * 两件事就写两句。
+     */
+    setImportOpen(false)
     await importer.start(kbId, chosen)
     setChosen([])
   }
 
   const docCount = docs.data?.list.length ?? 0
+
+  /**
+   * 删除一篇文档。
+   *
+   * 删除后**重新拉列表**而不是本地 filter：服务端会级联清掉切片/向量/索引/磁盘原文，
+   * 本地移除只能改这一份列表——用户切走再回来会看到它"又出现了"（其实没删掉/删失败）。
+   */
+  const confirmDelete = async () => {
+    if (!pendingDelete) return
+    setDeleting(true)
+    try {
+      await deleteDocument(kbId, pendingDelete.id)
+      setPendingDelete(null)
+      await docs.retry()
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6" data-testid="kb-detail-page">
@@ -206,7 +241,22 @@ export function KnowledgeBaseDetailPage(): ReactElement {
                                 {d.version !== null && d.version > 1 ? ` · 第 ${d.version} 版` : ''}
                               </p>
                             </div>
-                            <DocStatusBadge status={d.status} />
+                            <div className="flex shrink-0 items-center gap-2">
+                              <DocStatusBadge status={d.status} />
+                              {/*
+                                删除是**危险操作**：必须经确认，且确认框要写清后果。
+                                删一篇文档会连带它的切片、向量、检索索引与磁盘原文——
+                                用户点之前有权知道"删的是这些"，而不是只看到一个"删除"按钮。
+                              */}
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                data-testid="kb-doc-delete"
+                                onClick={() => setPendingDelete(d)}
+                              >
+                                删除
+                              </Button>
+                            </div>
                           </div>
                         </Card>
                       </li>
@@ -216,7 +266,7 @@ export function KnowledgeBaseDetailPage(): ReactElement {
               </section>
             ) : null}
 
-            {v === 'qa' ? <Placeholder text="在这里基于你的资料提问。R8 实现。" /> : null}
+            {v === 'qa' ? <KbAskPanel kbId={kbId} /> : null}
             {v === 'advanced' ? (
               <div className="flex flex-col gap-3">
                 {/*
@@ -250,6 +300,41 @@ export function KnowledgeBaseDetailPage(): ReactElement {
           </>
         )}
       />
+
+      {/*
+        删除确认。写清**后果**（连带切片/向量/索引/磁盘原文），
+        而不是只问一句"确定删除吗"——用户有权知道这一下删掉了什么。
+      */}
+      <Dialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title="删除这篇资料？"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setPendingDelete(null)} data-testid="kb-doc-delete-cancel">
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              loading={deleting}
+              onClick={() => void confirmDelete()}
+              data-testid="kb-doc-delete-confirm"
+            >
+              删除
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2">
+          <p className="m-0 text-[var(--nx-text-sm)]" data-testid="kb-doc-delete-target">
+            {pendingDelete?.sourcePath || pendingDelete?.fileName}
+          </p>
+          <p className="m-0 text-[var(--nx-text-xs)] text-[var(--nx-color-text-muted)]">
+            它的 {pendingDelete?.chunkCount ?? 0} 个切片、对应的向量与检索索引会一并删除，
+            磁盘上的原始文件也会被清理。**此操作不可撤销**（同一个 Vault 可以重新导入恢复）。
+          </p>
+        </div>
+      </Dialog>
 
       {/* ---- 导入确认：让用户看清选了哪些文件再开始 ---- */}
       <Dialog
@@ -391,13 +476,5 @@ function ImportResult({
         </ul>
       ) : null}
     </Card>
-  )
-}
-
-function Placeholder({ text }: { text: string }): ReactElement {
-  return (
-    <p className="m-0 py-6 text-center text-[var(--nx-text-sm)] text-[var(--nx-color-text-muted)]">
-      {text}
-    </p>
   )
 }
