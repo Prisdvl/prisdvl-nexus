@@ -17,7 +17,8 @@
     "verify:chat": "node scripts/verify-chat.mjs",
     "verify:agent": "node scripts/verify-agent.mjs",
     "verify:advanced": "node scripts/verify-advanced.mjs",
-    "verify:all": "npm run build && npm run verify:sse && npm run verify:layout && npm run verify:auth && npm run verify:kb && npm run verify:import && npm run verify:advanced && npm run verify:agent && npm run verify:chat"
+    "verify:account": "node scripts/verify-account.mjs",
+    "verify:all": "npm run build && npm run verify:sse && npm run verify:layout && npm run verify:auth && npm run verify:kb && npm run verify:import && npm run verify:advanced && npm run verify:agent && npm run verify:account && npm run verify:chat"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

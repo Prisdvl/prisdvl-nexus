@@ -51,6 +51,8 @@ export function useAuth() {
 
   const login = useAuthStore((s) => s.login)
   const clearError = useAuthStore((s) => s.clearError)
+  // 改完个人资料后要同步 currentUser（它的唯一权威来源是 GET /users/me）
+  const refreshProfile = useAuthStore((s) => s.refreshProfile)
 
   return {
     token,
@@ -64,6 +66,7 @@ export function useAuth() {
     /** 是否已确认未登录（可以跳登录页）。`initializing` 期间为 false——这是防假跳转的关键。 */
     isGuest: status === 'guest',
     login,
-    clearError
+    clearError,
+    refreshProfile
   }
 }

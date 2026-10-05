@@ -61,6 +61,14 @@ interface AuthActions {
   initialize: () => Promise<void>;
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
+  /**
+   * 重新拉一次当前用户资料（改完昵称/邮箱后调用）。
+   *
+   * 为什么不直接把表单里的值塞进 `currentUser`：那会让"界面显示的值"与
+   * "服务端的真实值"失去一致性（半更新语义下，服务端可能补默认值/做校验裁剪）。
+   * 用户资料的唯一权威来源是 `GET /users/me`，改完就重新问一次。
+   */
+  refreshProfile: () => Promise<void>;
   /** 401 集中处理入口。由 client 通过 setUnauthorizedHandler 注入调用。 */
   handleUnauthorized: () => void;
   clearError: () => void;
@@ -182,6 +190,20 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
         loggingIn: false,
       });
       return false;
+    }
+  },
+
+  async refreshProfile() {
+    // 只在已登录时刷新：未登录状态下拉 profile 必然 401，
+    // 而那条 401 会触发全局登出跳转——把"还没登录"误当成"登录过期"。
+    if (!get().token) return
+    try {
+      const user = await fetchProfile()
+      set({ currentUser: user })
+    } catch (e) {
+      // 刷新失败不改变登录态：这只是一次"同步显示值"的尝试，
+      // 失败了界面显示旧值总好过把用户踢出去（真正失效时下一个请求会走 401 流程）。
+      set({ error: getErrorMessage(e) })
     }
   },
 

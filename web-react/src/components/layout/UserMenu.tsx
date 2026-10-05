@@ -5,6 +5,7 @@ import { Sheet } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
 import { performLogout } from '@/hooks/useLogout'
+import { ChangePasswordDialog, ProfileDialog } from '@/components/account/AccountDialogs'
 
 /**
  * 账号入口 —— 用户信息来自**真实的 `currentUser`**（R3 任务书 §19）。
@@ -45,6 +46,11 @@ export function UserMenu(): ReactElement {
   const { currentUser } = useAuth()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  // 账号菜单与两个对话框是**并列**的三层：关闭菜单再开对话框，
+  // 而不是把对话框嵌在 Sheet 里——嵌套会让"关闭下层"连带上层一起收，
+  // 用户点了「个人资料」会看到菜单和对话框一起消失。
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
 
   // 兜底：工作区是受保护路由，正常到这里一定有 user。
   // 但**不为空就不显示**会让菜单整个消失（用户找不到登出入口），所以给一个占位名。
@@ -144,18 +150,27 @@ export function UserMenu(): ReactElement {
           ) : null}
           <Row
             label="个人资料"
-            value="R5 实现"
+            value="修改昵称 / 邮箱"
             testId="user-menu-profile-edit"
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              setOpen(false)
+              setProfileOpen(true)
+            }}
           />
           <Row
             label="修改密码"
-            value="R5 实现"
+            value="修改后需重新登录"
             testId="user-menu-password"
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              setOpen(false)
+              setPasswordOpen(true)
+            }}
           />
         </div>
       </Sheet>
+
+      <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
+      <ChangePasswordDialog open={passwordOpen} onClose={() => setPasswordOpen(false)} />
     </>
   )
 }
