@@ -1,0 +1,44 @@
+{
+  "name": "web-react",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "verify:sse": "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/verify-sse.mjs",
+    "verify:auth": "node scripts/verify-auth.mjs",
+    "verify:layout": "node scripts/verify-layout.mjs",
+    "verify": "npm run build && npm run verify:sse",
+    "verify:kb": "node scripts/verify-kb.mjs",
+    "verify:import": "node scripts/verify-import.mjs",
+    "verify:chat": "node scripts/verify-chat.mjs",
+    "verify:agent": "node scripts/verify-agent.mjs",
+    "verify:advanced": "node scripts/verify-advanced.mjs",
+    "verify:all": "npm run build && npm run verify:sse && npm run verify:layout && npm run verify:auth && npm run verify:kb && npm run verify:import && npm run verify:advanced && npm run verify:agent && npm run verify:chat"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.51.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router": "^8.4.0",
+    "tailwind-merge": "^3.7.0",
+    "tailwindcss": "^4.3.3",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "oxlint": "^1.81.0",
+    "playwright-core": "^1.63.0",
+    "shadcn": "^4.21.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  }
+}

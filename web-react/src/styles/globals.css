@@ -1,0 +1,116 @@
+/*
+ * 全局样式入口（Tailwind CSS v4 + 设计令牌）
+ *
+ * ## 加载顺序
+ *
+ * ```text
+ * tailwindcss   Tailwind 的原子类与 @theme（必须最先）
+ *   ↓
+ * tokens.css    本项目设计令牌 + shadcn 接口名的桥接
+ *   ↓
+ * markdown.css  Markdown 正文排版（会引用 tokens 里的变量）
+ * ```
+ *
+ * 倒过来的话 markdown.css 里的 `var(--nx-color-text-secondary)` 解析不到值。
+ *
+ * ## Tailwind 4 是 CSS-first
+ *
+ * 不存在 `tailwind.config.js`（任务书 §5 明确不建）。Tailwind v4 用 `@theme`
+ * 在 CSS 里声明设计令牌，并由 `@tailwindcss/vite` 插件读取。
+ */
+
+@import "tailwindcss";
+
+@import "./tokens.css";
+@import "./markdown.css";
+
+/*
+ * 把 shadcn 的接口名接进 Tailwind 的工具类。
+ *
+ * `--color-*` 前缀让 `bg-background` / `text-muted-foreground` 这类类名可用——
+ * 它们是 shadcn 组件源码里直接写死的字符串，Tailwind 必须能从 CSS 变量
+ * 推出同名工具类，否则 registry 组件的类名全部落空（表现为"没有样式"，
+ * 不报错，非常难查）。
+ */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: var(--nx-radius-sm);
+  --radius-md: var(--nx-radius-md);
+  --radius-lg: var(--nx-radius-lg);
+  --radius-xl: var(--nx-radius-xl);
+
+  --font-sans: var(--nx-font-sans);
+  --font-mono: var(--nx-font-mono);
+}
+
+/* ---------- 基础重置 ---------- */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--nx-font-sans);
+  font-size: var(--nx-text-base);
+  line-height: var(--nx-leading-normal);
+  color: var(--nx-color-text);
+  background: var(--nx-color-background);
+  -webkit-font-smoothing: antialiased;
+  /* 中文界面里最容易被忽略的一条：标点挤压会让中文标点挤在一起 */
+  font-kerning: normal;
+  text-rendering: optimizeLegibility;
+}
+
+/*
+ * 键盘焦点统一。
+ *
+ * 只对**键盘**导航显示焦点环（:focus-visible），鼠标点击不显示——
+ * 两者都显示的话，鼠标用户每点一下就看到一圈光晕，很脏。
+ */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--nx-focus-ring);
+  border-radius: var(--nx-radius-sm);
+}
+
+/*
+ * 减少动效。
+ *
+ * 任务书 §53 要求动效节制，但更根本的是**用户可能已经在系统里关了动效**。
+ * 这条与 R1 之后引入的微交互直接相关。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

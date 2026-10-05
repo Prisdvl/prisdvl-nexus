@@ -1,0 +1,59 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    "types": ["vite/client"],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* 路径别名：与 vite.config.ts 的 alias 同一规则。
+       两处都要声明——tsconfig 的 paths 只管类型检查，Vite 只认自己的 alias。
+
+       刻意**不写 baseUrl**：TypeScript 6 已把它标为废弃（TS 7 将停止支持），
+       而 paths 现在可以直接用相对路径解析。shadcn CLI 有时会往这里加 baseUrl，
+       加回来时要删掉，否则 tsc 直接报 TS5101。 */
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+
+    /*
+     * 严格模式。
+     *
+     * Vite 8 的新模板**默认不带 strict**（实测三个 tsconfig 都没有），
+     * 而旧的 Vue 版是 `strict: true`。迁移项目不能在这上面退步：
+     * 全部源码要经 `tsc -b` 才进产物，一旦关掉严格模式，
+     * "类型检查"就退化为只挡语法错误，Phase B 定下的数据契约
+     * （SSE 事件的字段、store 的状态）就没人守了。
+     */
+    "strict": true,
+
+    /*
+     * 数组索引可能越界时返回 `T | undefined`。
+     *
+     * 这条与本项目特别相关：检索命中的 `hits[i]`、SSE 帧的 `citations[i]`
+     * 都是"服务端说有几条就取第几条"的地方。开了它，"按 count 取第 n 个"
+     * 会被类型系统挡住，而不是在边界情况下拿到 undefined 再渲染成 "undefined"。
+     */
+    "noUncheckedIndexedAccess": true,
+
+    /* 文件名大小写在不同系统上必须一致（Windows 开发 → 容器构建） */
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src"]
+}

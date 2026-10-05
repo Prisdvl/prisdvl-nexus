@@ -1,0 +1,61 @@
+/*
+ * Markdown 正文排版。
+ *
+ * 迁移说明（来自 Vue 版的实测结论，别重复踩）：
+ * Vue 侧这套规则在 `AgentView` 与 `KnowledgeBaseDetailView` 各存一份，
+ * 而且**已经分叉**——详情页的 `h1/h2/h3` 多了 `scroll-margin-top`（大纲跳转需要，
+ * 标题不能贴顶）、引用左边框色不同、还多了表格与图片的样式（Chat 的回答里没有表格）。
+ *
+ * 所以这里只放**两边共有**的部分，差异由详情页自己覆盖。
+ * 渲染侧必须配合：内容走 `dangerouslySetInnerHTML` 时，
+ * 这套样式是唯一的排版来源，所以它必须与 `renderMarkdown` 的输出结构对齐。
+ */
+.markdown {
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.markdown p {
+  margin: 0.7em 0;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.4em;
+  margin: 0.7em 0;
+}
+
+.markdown code {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.875em;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: var(--nx-color-surface-muted);
+}
+
+.markdown pre {
+  padding: var(--nx-space-4) var(--nx-space-6);
+  border-radius: var(--nx-radius-lg);
+  overflow: auto;
+  background: oklch(0.145 0 0);
+  color: oklch(0.985 0 0);
+}
+
+.markdown pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.markdown blockquote {
+  margin: 0.8em 0;
+  padding: 2px 0 2px var(--nx-space-4);
+  border-left: 2px solid var(--nx-color-border);
+  color: var(--nx-color-text-muted);
+}
+
+.markdown a {
+  color: var(--nx-color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
