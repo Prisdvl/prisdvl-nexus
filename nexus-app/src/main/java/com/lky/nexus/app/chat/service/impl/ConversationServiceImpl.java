@@ -12,6 +12,7 @@ import com.lky.nexus.app.chat.model.dto.CreateConversationRequest;
 import com.lky.nexus.app.chat.model.dto.UpdateConversationRequest;
 import com.lky.nexus.app.chat.model.entity.ChatConversationPO;
 import com.lky.nexus.app.chat.model.entity.ChatMessagePO;
+import com.lky.nexus.app.chat.service.ChatMemoryKeys;
 import com.lky.nexus.app.chat.service.ConversationKbIds;
 import com.lky.nexus.app.chat.service.ConversationService;
 import com.lky.nexus.common.api.ErrorCode;
@@ -21,6 +22,7 @@ import com.lky.nexus.common.exception.BusinessException;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -37,8 +39,10 @@ import java.util.List;
  *   <li><b>多租户隔离写在 SQL 条件里</b>（{@code user_id = ?}），而不是先查出来再在 Java 里比对。
  *       后者容易在新增查询时漏掉，前者泄漏可能性更低；</li>
  *   <li><b>访问别人的会话返回 404 而不是 403</b>：403 会告诉攻击者"这个 id 确实存在"；</li>
- *   <li><b>删除 = 软删会话 + 物理删消息</b>：会话要保留（用户可能只是清理列表），
- *       消息没有独立价值、且量大，物理删除避免无主数据膨胀。</li>
+ *   <li><b>删除 = 软删会话 + 物理删消息 + 清空会话记忆</b>：会话要保留（用户可能只是清理列表），
+ *       消息没有独立价值、且量大，物理删除避免无主数据膨胀；
+ *       而 {@code SPRING_AI_CHAT_MEMORY} 是"发给模型的有界窗口"，与会话同生命周期——
+ *       会话没了它就必须一起走，否则它作为无主数据堆积，还可能被后续同 id 的会话读到。</li>
  * </ol>
  */
 @Service
@@ -74,17 +78,20 @@ public class ConversationServiceImpl implements ConversationService {
     private final KnowledgeBaseService knowledgeBaseService;
     private final AgentService agentService;
     private final JsonMapper jsonMapper;
+    private final ChatMemory chatMemory;
 
     public ConversationServiceImpl(ChatConversationMapper conversationMapper,
                                    ChatMessageMapper messageMapper,
                                    KnowledgeBaseService knowledgeBaseService,
                                    AgentService agentService,
-                                   JsonMapper jsonMapper) {
+                                   JsonMapper jsonMapper,
+                                   ChatMemory chatMemory) {
         this.conversationMapper = conversationMapper;
         this.messageMapper = messageMapper;
         this.knowledgeBaseService = knowledgeBaseService;
         this.agentService = agentService;
         this.jsonMapper = jsonMapper;
+        this.chatMemory = chatMemory;
     }
 
     @Override
@@ -196,7 +203,14 @@ public class ConversationServiceImpl implements ConversationService {
         // 消息物理删除：否则消息表会随会话删除不断堆积无主数据
         int removedMessages = messageMapper.delete(Wrappers.<ChatMessagePO>lambdaQuery()
                 .eq(ChatMessagePO::getConversationId, conversationId));
-        log.info("删除会话 id={}, userId={}, 同时清理消息 {} 条", conversationId, userId, removedMessages);
+        // 会话记忆必须一起清（key = "conv:{id}"，见 ChatMemoryKeys）。
+        // 不清它不只是"多留几行无主数据"：记忆是"这次发给模型多少历史"的唯一来源，
+        // 一旦该 id 重新被读到（重建会话、同 id 复用），新会话就会凭空记得旧会话说过的话。
+        // 用抽象层 clear() 而不是裸 SQL —— key 的构造规则只在 ChatMemoryKeys 一处，
+        // 在这里重新拼一遍字符串等于把"key 长什么样"复制成两份，迟早分叉。
+        chatMemory.clear(ChatMemoryKeys.of(conversationId));
+        log.info("删除会话 id={}, userId={}：清理消息 {} 条、会话记忆已清空",
+                conversationId, userId, removedMessages);
     }
 
     @Override

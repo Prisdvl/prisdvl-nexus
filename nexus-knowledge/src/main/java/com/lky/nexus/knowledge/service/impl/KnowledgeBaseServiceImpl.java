@@ -230,6 +230,13 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         List<String> storedPaths = documentMapper.selectList(Wrappers.<DocumentPO>lambdaQuery()
                         .select(DocumentPO::getStoredPath)
                         .eq(DocumentPO::getKbId, knowledgeBaseId)).stream()
+                // 必须先滤掉 null 元素再取 getter：这一句只 select 了 stored_path 一列，
+                // 而 MyBatis 在"一行里被映射的列全为 NULL"时会把整行映射成 null
+                // （returnInstanceForEmptyRow 默认为 false），于是列表里会出现 null 元素，
+                // 方法引用 DocumentPO::getStoredPath 的接收者为 null 直接 NPE。
+                // 触发场景不是假设：OBSIDIAN vault 导入的文档没有落盘文件，stored_path 就是 NULL，
+                // 这类库在修好之前<b>根本删不掉</b>（用户点删除会 500）。
+                .filter(java.util.Objects::nonNull)
                 .map(DocumentPO::getStoredPath)
                 .filter(java.util.Objects::nonNull)
                 .toList();
