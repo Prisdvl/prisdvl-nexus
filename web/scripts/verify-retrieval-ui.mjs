@@ -20,10 +20,11 @@ import { chromium } from 'playwright-core'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { demoToken } from './lib/demo-session.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const token = readFileSync(resolve(here, '../.demo-token'), 'utf8').trim()
-const base = process.env.WEB_BASE ?? 'http://localhost:5173'
+const token = await demoToken()
+const base = process.env.WEB_BASE ?? 'http://localhost:8088'
 const outDir = resolve(here, '../../docs/screenshots')
 
 const sleep = (ms) => new Promise((resolve_) => setTimeout(resolve_, ms))
@@ -315,35 +316,35 @@ await page.route('**/api/chat/messages/**', async (route) => {
 
 /** 新建会话并选到 RAG 模式（真接口：顺带验证"建会话时带上了知识库"）。 */
 async function newRagConversation() {
-  await page.click('.rail .new-chat')
+  await page.click('[data-testid="chat-new"]')
   await page.waitForFunction(
-    () => document.querySelectorAll('.message').length === 0,
+    () => document.querySelectorAll('[data-testid="chat-message"]').length === 0,
     undefined,
     { timeout: 10000 }
   )
-  await page.click('.composer-options .el-radio-button:has-text("知识库问答")')
-  await page.waitForSelector('.composer-options .kb-select', { timeout: 15000 })
+  await page.click('[data-testid="chat-draft-mode-rag"]')
+  await page.waitForSelector('[data-testid="chat-draft-kb-select"]', { timeout: 15000 })
 }
 
 /** 检索卡片与回答都渲染完（生成结束、服务端校正还没落地的那一刻）。 */
 async function waitForCard() {
-  await page.waitForSelector('.message.from-agent .retrieval-count', { timeout: 30000 })
-  await page.waitForSelector('.message.from-agent .markdown:not(.stream-text)', { timeout: 30000 })
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .retrieval-count', { timeout: 30000 })
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)', { timeout: 30000 })
 }
 
 const answerText = () =>
-  page.locator('.message.from-agent .markdown:not(.stream-text)').last().innerText()
+  page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)').last().innerText()
 
 try {
   await page.goto(base, { waitUntil: 'networkidle' })
-  await page.click('.nav-item:has-text("对话")')
-  await page.waitForSelector('.composer textarea', { timeout: 15000 })
+  await page.click('[data-testid="nav-chat"]')
+  await page.waitForSelector('[data-testid="chat-input"]', { timeout: 15000 })
 
   // ---------- 腿一：命中两段 ----------
   await newRagConversation()
-  await page.fill('.composer textarea', '缓存击穿怎么解决？')
+  await page.fill('[data-testid="chat-input"]', '缓存击穿怎么解决？')
   holdReload = true
-  await page.click('.composer .send')
+  await page.click('[data-testid="chat-send"]')
   await waitForCard()
 
   const countText = (await page.locator('.retrieval-count').last().innerText()).trim()
@@ -352,7 +353,7 @@ try {
     failures.push(`检索卡片文案异常：${countText}`)
   }
 
-  const hits = await page.locator('.message.from-agent .retrieval-hits li').allInnerTexts()
+  const hits = await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .retrieval-hits li').allInnerTexts()
   console.log(`② 命中列表：${hits.map((text) => text.trim()).join(' | ') || '(空)'}`)
   if (hits.length !== 2) {
     failures.push(`命中列表条数应为 2，实际 ${hits.length}`)
@@ -360,14 +361,14 @@ try {
   if (!(hits[0] ?? '').includes('缓存击穿.md') || !(hits[0] ?? '').includes('Redis > 缓存 > 缓存击穿')) {
     failures.push(`命中列表没有带出文档名与标题路径：${hits[0]}`)
   }
-  if ((await page.locator('.retrieval .el-tag:has-text("已重排")').count()) !== 1) {
+  if ((await page.locator('[data-testid="chat-retrieval-reranked"]').count()) !== 1) {
     failures.push('reranked=true 时没有显示"已重排"标签')
   }
 
   // 顺序：卡片必须排在回答正文之前——retrieval 事件早于 delta 的界面表现。
   // 只断言"卡片存在"是不够的：晚一拍出现就是"回答已经蹦字，检索条数才冒出来"
   const ordered = await page.evaluate(() => {
-    const bubbles = Array.from(document.querySelectorAll('.message.from-agent .bubble'))
+    const bubbles = Array.from(document.querySelectorAll('[data-testid="chat-message"][data-role="ASSISTANT"] .bubble'))
     const last = bubbles[bubbles.length - 1]
     const card = last?.querySelector('.retrieval')
     const answer = last?.querySelector('.markdown')
@@ -393,7 +394,7 @@ try {
 
   // ⑤ 服务端校正落地后：答案还在（来自桩的落库消息），检索卡片消失——已知缺口，不是 bug
   await page.waitForFunction(
-    () => document.querySelectorAll('.message.from-agent .retrieval').length === 0,
+    () => document.querySelectorAll('[data-testid="chat-message"][data-role="ASSISTANT"] .retrieval').length === 0,
     undefined,
     { timeout: 20000 }
   )
@@ -406,9 +407,9 @@ try {
 
   // ---------- 腿二：一段都没命中（不调模型，但卡片与回答都要有） ----------
   await newRagConversation()
-  await page.fill('.composer textarea', '库里没有的问题')
+  await page.fill('[data-testid="chat-input"]', '库里没有的问题')
   holdReload = true
-  await page.click('.composer .send')
+  await page.click('[data-testid="chat-send"]')
   await waitForCard()
   holdReload = false
 
@@ -417,7 +418,7 @@ try {
   if (emptyCount !== '检索到 0 个片段') {
     failures.push(`零命中卡片文案异常：${emptyCount}`)
   }
-  if ((await page.locator('.retrieval .el-tag:has-text("知识库里没有命中")').count()) !== 1) {
+  if ((await page.locator('[data-testid="chat-retrieval-empty"][data-empty-variant="none"]').count()) !== 1) {
     failures.push('empty=true 时没有显示"知识库里没有命中"标签')
   }
   const emptyAnswer = (await answerText()).trim()
@@ -425,26 +426,26 @@ try {
   if (!emptyAnswer.includes('资料中没有相关内容')) {
     failures.push(`零命中回答不明确：${emptyAnswer}`)
   }
-  if ((await page.locator('.retrieval .el-tag:has-text("检索失败")').count()) !== 0) {
+  if ((await page.locator('[data-testid="chat-retrieval-failed"]').count()) !== 0) {
     failures.push('没有失败库时不该出现"检索失败"标签（有它就是凭空报故障）')
   }
 
   // ---------- 腿三：其中一个库检索失败（Phase 5.5.1 的核心界面） ----------
   await newRagConversation()
-  await page.fill('.composer textarea', '缓存击穿怎么解决？')
+  await page.fill('[data-testid="chat-input"]', '缓存击穿怎么解决？')
   holdReload = true
-  await page.click('.composer .send')
+  await page.click('[data-testid="chat-send"]')
   await waitForCard()
   // 注意：这一步**先别放行**服务端校正。校正一落地检索卡片就消失（命中片段未落库，已知缺口），
   // 断言做到一半元素被换掉就成了"时有时无"的假阴性——首轮实测就是这么挂在 hover 上的。
 
-  const partialTag = page.locator('.retrieval .el-tag:has-text("个知识库检索失败")')
+  const partialTag = page.locator('[data-testid="chat-retrieval-failed"]')
   const partialTagText = (await partialTag.last().innerText()).trim()
   console.log(`⑧ 部分失败卡片：${partialTagText}`)
   if (partialTagText !== '其中 1 个知识库检索失败') {
     failures.push(`部分失败标签文案异常：${partialTagText}`)
   }
-  if ((await page.locator('.retrieval .el-tag:has-text("知识库里没有命中")').count()) !== 0) {
+  if ((await page.locator('[data-testid="chat-retrieval-empty"][data-empty-variant="none"]').count()) !== 0) {
     failures.push('有命中时不该出现"知识库里没有命中"')
   }
   // 只说"1 个库失败"不够：用户还得知道是**哪个**、**为什么**，否则无从判断能不能重试。
@@ -453,9 +454,15 @@ try {
   // Vue 监听到 mouseenter → el-tooltip 渲染出内容。
   try {
     await partialTag.last().dispatchEvent('mouseenter')
-    await page.waitForSelector('[role="tooltip"]:has-text("内部 FAQ")', { timeout: 8000 })
-    const tip = (await page.locator('[role="tooltip"]').last().innerText()).trim()
+    // 只等"浮层出现"，不等它含某个库名：库名是**本脚本自建的夹具**，
+    // 拿它当选择器等于让断言依赖夹具（改个夹具名就静默失效）。
+    // "有没有指出是哪个库、有没有给原因"在下面显式断言——那才是这条腿要验的东西。
+    await page.waitForSelector('.el-popper[role="tooltip"]:visible', { timeout: 8000 })
+    const tip = (await page.locator('.el-popper[role="tooltip"]:visible').last().innerText()).trim()
     console.log(`⑨ 失败明细悬浮提示：${tip}`)
+    if (!tip.includes('内部 FAQ')) {
+      failures.push(`悬浮提示没有指出是哪个库失败：${tip}`)
+    }
     if (!tip.includes('ES 连接被拒绝')) {
       failures.push(`悬浮提示没有给出失败原因：${tip}`)
     }
@@ -471,26 +478,26 @@ try {
 
   // ---------- 腿四：全部库检索失败（空结果的措辞必须改口） ----------
   await newRagConversation()
-  await page.fill('.composer textarea', '两个库都挂了的问题')
+  await page.fill('[data-testid="chat-input"]', '两个库都挂了的问题')
   holdReload = true
-  await page.click('.composer .send')
+  await page.click('[data-testid="chat-send"]')
   await waitForCard()
 
   const allFailCount = (await page.locator('.retrieval-count').last().innerText()).trim()
-  const allFailTags = (await page.locator('.retrieval .el-tag').allInnerTexts())
+  const allFailTags = (await page.locator('[data-testid="chat-retrieval"] .el-tag').allInnerTexts())
     .map((text) => text.trim())
   console.log(`⑩ 全部失败卡片：${allFailCount} / 标签 ${JSON.stringify(allFailTags)}`)
   if (allFailCount !== '检索到 0 个片段') {
     failures.push(`全部失败卡片文案异常：${allFailCount}`)
   }
   // 断言用的是"哪个标签在"，不是"第几个标签说什么"——顺序一变就误报的断言没有价值
-  if ((await page.locator('.retrieval .el-tag:has-text("知识库本次都没有检索成功")').count()) !== 1) {
+  if ((await page.locator('[data-testid="chat-retrieval-empty"][data-empty-variant="all-failed"]').count()) !== 1) {
     failures.push(`有失败库时空结果标签必须改口，实际标签：${JSON.stringify(allFailTags)}`)
   }
-  if ((await page.locator('.retrieval .el-tag:has-text("知识库里没有命中")').count()) !== 0) {
+  if ((await page.locator('[data-testid="chat-retrieval-empty"][data-empty-variant="none"]').count()) !== 0) {
     failures.push('库都没搜成时说了"知识库里没有命中"——与腿二对照，这句措辞必须是条件式的')
   }
-  if ((await page.locator('.retrieval .el-tag:has-text("其中 2 个知识库检索失败")').count()) !== 1) {
+  if ((await page.locator('[data-testid="chat-retrieval-failed"]').count()) !== 1) {
     failures.push('两个库全失败时没有显示"其中 2 个知识库检索失败"')
   }
   const allFailAnswer = (await answerText()).trim()
@@ -502,17 +509,17 @@ try {
 
   // ---------- 腿五：一个库搜成了但没命中、另一个没搜成 ----------
   await newRagConversation()
-  await page.fill('.composer textarea', '一个库超时的问题')
+  await page.fill('[data-testid="chat-input"]', '一个库超时的问题')
   holdReload = true
-  await page.click('.composer .send')
+  await page.click('[data-testid="chat-send"]')
   await waitForCard()
 
-  const mixedTags = (await page.locator('.retrieval .el-tag').allInnerTexts()).map((t) => t.trim())
+  const mixedTags = (await page.locator('[data-testid="chat-retrieval"] .el-tag').allInnerTexts()).map((t) => t.trim())
   console.log(`⑫ 部分失败且零命中：${JSON.stringify(mixedTags)}`)
-  if ((await page.locator('.retrieval .el-tag:has-text("其余知识库没有命中")').count()) !== 1) {
+  if ((await page.locator('[data-testid="chat-retrieval-empty"][data-empty-variant="partial"]').count()) !== 1) {
     failures.push(`还有一个库正常搜过时应说"其余知识库没有命中"，实际：${JSON.stringify(mixedTags)}`)
   }
-  if ((await page.locator('.retrieval .el-tag:has-text("知识库里没有命中")').count()) !== 0) {
+  if ((await page.locator('[data-testid="chat-retrieval-empty"][data-empty-variant="none"]').count()) !== 0) {
     failures.push('有库没搜成时不能断言"知识库里没有命中"')
   }
   holdReload = false

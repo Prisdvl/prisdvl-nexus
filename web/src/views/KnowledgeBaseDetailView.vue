@@ -2,7 +2,10 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useCountUp } from '@/composables/useCountUp'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { useConfirm } from '@/components/common/useConfirm'
+
+const { confirm } = useConfirm()
 import { Delete, MagicStick, Refresh, Search, UploadFilled } from '@element-plus/icons-vue'
 import {
   askQuestion,
@@ -306,7 +309,10 @@ async function askStreaming(asked: string, history: Array<{ question: string; an
   let truncated = 0
   let reranked = false
 
-  await askQuestionStream(kbId, asked, undefined, history, {
+  // try/catch 包住整条流：拦截器已不再为业务错误弹提示（Phase C §十四），
+  // 不兜住的话提问失败会静默——用户只看到"没反应"
+  try {
+    await askQuestionStream(kbId, asked, undefined, history, {
     onRetrieval: (retrieval) => {
       // 检索事件必定早于第一个 delta：用户不必对着空白等生成，先看到"检索到几段"
       retrievedCount.value = retrieval.count
@@ -342,6 +348,14 @@ async function askStreaming(asked: string, history: Array<{ question: string; an
       }
     }
   })
+  } catch (e) {
+    // 兜住"连 SSE 都没建立起来"的失败（鉴权、额度、网络）。
+    // 注意与上面 onDone 里的 `done.error` 分工：那一个是**流已建立**后服务端报告的
+    // 生成失败，那条链路里拦截器收不到响应；这里是流根本没起来，错误由拦截器抛出。
+    // 两者都弹，但不会重复——它们是互斥的路径。
+    ElMessage.error('提问失败：' + (e instanceof Error ? e.message : String(e)))
+    return
+  }
 
   ragAnswer.value = {
     recordId,
@@ -389,8 +403,29 @@ function linkTypeLabel(type: string): string {
   return '链接'
 }
 
-/** 上传整个 Vault（ZIP）——全量同步语义：清单里没有的文档会被删除。 */
-function pickFile() {
+/**
+ * 上传整个 Vault（ZIP）。
+ *
+ * **全量同步语义：ZIP 清单里没有的文档会被删除**（连同切片与向量索引）。
+ *
+ * 这是一次危险操作，但在本次验收之前，界面上只有一个「上传 Vault」按钮，
+ * 用户无从知道它会删东西 —— 实测踩到过：把一个 ZIP 传进已有四个文档的库，
+ * 那四篇全没了，而界面上没有任何事前提示（只有导入结果里一行"删除 4"）。
+ * 按"危险操作必须二次确认并说明影响"（UA-015），这里补一道确认闸门。
+ */
+async function pickFile() {
+  const ok = await confirm({
+    title: '确认导入整个资料包？',
+    description:
+      '导入资料包是整包同步：包里没有的文档会从本知识库中删除（连同其切片与向量索引）。' +
+      '如果只想追加资料，请改用「导入文件」。',
+    confirmText: '继续导入',
+    danger: true,
+    customClass: 'nexus-confirm-vault-import'
+  })
+  if (!ok) {
+    return // 用户取消：什么都不做，也不打开文件选择器
+  }
   pickUpload('.zip', (file) => uploadVault(kbId, file))
 }
 
@@ -470,15 +505,14 @@ async function loadImportItems() {
  */
 async function removeDocument(doc: DocumentSummary) {
   const name = doc.title || doc.fileName || doc.sourcePath
-  try {
-    await ElMessageBox.confirm(
-      `将从本知识库移除「${name}」及其 ${doc.chunkCount} 个切片（向量与索引一并清除）。此操作不可撤销。`,
-      '确认删除文档？',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
-    )
-  } catch {
-    return // 用户取消：ElMessageBox 以 rejection 表达取消，这不是错误
-  }
+  const ok = await confirm({
+    title: '确认删除文档？',
+    description: `将从本知识库移除「${name}」及其 ${doc.chunkCount} 个切片（向量与索引一并清除）。此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+    customClass: 'nexus-confirm-doc-delete'
+  })
+  if (!ok) return
   busy.value = 'delete:' + doc.id
   try {
     await deleteDocument(kbId, doc.id)
@@ -593,7 +627,7 @@ watch(activeTab, () => {
   <div v-loading="loading" class="page">
     <header class="page-head">
       <div class="head-main">
-        <RouterLink to="/" class="back">← 知识库</RouterLink>
+        <RouterLink to="/" class="back" data-testid="kb-detail-back">← 知识库</RouterLink>
         <h1>{{ kb?.name || '知识库' }}</h1>
         <p class="sub">
           {{ kb?.embeddingModel }} · {{ kb?.embeddingDim }} 维 ·
@@ -602,11 +636,18 @@ watch(activeTab, () => {
         </p>
       </div>
       <div class="head-actions">
-        <el-button :icon="UploadFilled" @click="pickDocument">上传文件</el-button>
-        <el-button :icon="UploadFilled" @click="pickFile">上传 Vault</el-button>
-        <el-button :icon="MagicStick" :loading="busy === 'embed'" @click="runEmbed">向量化</el-button>
-        <el-button :loading="busy === 'index'" @click="runIndex">建索引</el-button>
-        <el-button :icon="Refresh" :loading="busy === 'recreate'" @click="runRecreate">重建索引</el-button>
+        <el-button :icon="UploadFilled" data-testid="kb-detail-import-file" @click="pickDocument">导入文件</el-button>
+        <el-button
+          :icon="UploadFilled"
+          data-testid="kb-detail-import-vault"
+          title="整包同步：资料包内没有的文档会从本知识库中删除"
+          @click="pickFile"
+        >
+          导入资料包
+        </el-button>
+        <el-button :icon="MagicStick" data-testid="kb-detail-embed" :loading="busy === 'embed'" @click="runEmbed">向量化</el-button>
+        <el-button data-testid="kb-detail-index" :loading="busy === 'index'" @click="runIndex">建索引</el-button>
+        <el-button :icon="Refresh" data-testid="kb-detail-recreate" :loading="busy === 'recreate'" @click="runRecreate">重建索引</el-button>
       </div>
     </header>
 
@@ -686,7 +727,7 @@ watch(activeTab, () => {
     <div class="workflow">
       <div class="workflow-head">
         <h3>知识工作流</h3>
-        <el-button size="small" :loading="workflowRunning" @click="runWorkflow">跑工作流</el-button>
+        <el-button size="small" data-testid="kb-detail-workflow-run" :loading="workflowRunning" @click="runWorkflow">跑工作流</el-button>
       </div>
       <ul v-if="workflowSteps.length">
         <li v-for="(step, index) in workflowSteps" :key="step.name + index">
@@ -706,12 +747,15 @@ watch(activeTab, () => {
           <h2>文档</h2>
           <span class="count">{{ filteredDocuments.length }}</span>
         </div>
-        <el-input v-model="docFilter" size="small" placeholder="按路径 / 标题 / 标签过滤" clearable />
+        <el-input v-model="docFilter" size="small" data-testid="kb-doc-filter" placeholder="按路径 / 标题 / 标签过滤" clearable />
         <ul class="docs">
           <li
             v-for="doc in filteredDocuments"
             :key="doc.id"
             :class="{ active: doc.id === selectedId }"
+            data-testid="kb-doc-item"
+            :data-doc-path="doc.sourcePath"
+            :data-doc-name="doc.title || doc.fileName || doc.sourcePath"
             @click="selectDocument(doc.id)"
           >
             <div class="doc-main">
@@ -723,6 +767,7 @@ watch(activeTab, () => {
                  否则点删除会先切换文档，右侧正文闪一下再报"加载失败"（文档已经没了） -->
             <el-button
               class="doc-del"
+              data-testid="kb-doc-delete"
               :icon="Delete"
               :loading="busy === 'delete:' + doc.id"
               text
@@ -737,9 +782,9 @@ watch(activeTab, () => {
 
       <!-- 右：正文 / 切片 / 检索 -->
       <section class="pane content">
-        <el-tabs v-model="activeTab">
+        <el-tabs v-model="activeTab" data-testid="kb-detail-tabs">
           <el-tab-pane label="正文" name="content">
-            <div v-loading="detailLoading" class="reader">
+            <div v-loading="detailLoading" class="reader" data-testid="kb-tab-content">
               <nav v-if="detail?.headings?.length" class="outline">
                 <div class="outline-head">大纲</div>
                 <ul>
@@ -774,7 +819,11 @@ watch(activeTab, () => {
                   <article v-else ref="articleRef" class="markdown" v-html="renderedHtml" />
 
                   <!-- 关联（Phase 4）：出链 / 反向链接 / 待创建清单 -->
-                  <section v-if="links && (links.outlinks.length || links.backlinks.length)" class="links">
+                  <section
+                    v-if="links && (links.outlinks.length || links.backlinks.length)"
+                    class="links"
+                    data-testid="kb-links"
+                  >
                     <div class="links-head">
                       <h3>关联</h3>
                       <span class="num">
@@ -823,7 +872,7 @@ watch(activeTab, () => {
                   </section>
 
                   <!-- 相关推荐（Phase 4.2）：共同标签 + 链接关系 -->
-                  <section v-if="related.length" class="links">
+                  <section v-if="related.length" class="links" data-testid="kb-related">
                     <div class="links-head">
                       <h3>相关推荐</h3>
                       <span class="num">{{ related.length }} 篇</span>
@@ -851,7 +900,7 @@ watch(activeTab, () => {
 
           <el-tab-pane :label="`切片 (${chunks.length})`" name="chunks">
             <div v-if="chunks.length === 0" class="empty">这篇文档还没有切片</div>
-            <div class="chunks">
+            <div class="chunks" data-testid="kb-tab-chunks">
               <article v-for="chunk in chunks" :key="chunk.id" class="chunk">
                 <header>
                   <span class="idx num">#{{ chunk.chunkIndex }}</span>
@@ -871,13 +920,13 @@ watch(activeTab, () => {
           </el-tab-pane>
 
           <el-tab-pane label="检索" name="search">
-            <div class="search-head">
-              <el-radio-group v-model="mode" size="small">
+            <div class="search-head" data-testid="kb-tab-search">
+              <el-radio-group v-model="mode" size="small" data-testid="kb-search-mode">
                 <el-radio-button value="hybrid">融合</el-radio-button>
                 <el-radio-button value="bm25">BM25</el-radio-button>
                 <el-radio-button value="vector">向量</el-radio-button>
               </el-radio-group>
-              <el-radio-group v-model="searchTopK" size="small">
+              <el-radio-group v-model="searchTopK" size="small" data-testid="kb-search-topk">
                 <el-radio-button :value="5">5</el-radio-button>
                 <el-radio-button :value="10">10</el-radio-button>
                 <el-radio-button :value="20">20</el-radio-button>
@@ -886,11 +935,18 @@ watch(activeTab, () => {
             <div class="search-box">
               <el-input
                 v-model="query"
-                placeholder="例如：缓存击穿怎么解决"
+                data-testid="kb-search-input"
+                placeholder="输入你资料里的关键词，例如某个术语或人名"
                 clearable
                 @keyup.enter="doSearch"
               />
-              <el-button type="primary" :icon="Search" :loading="searching" @click="doSearch">
+              <el-button
+                type="primary"
+                :icon="Search"
+                data-testid="kb-search-submit"
+                :loading="searching"
+                @click="doSearch"
+              >
                 检索
               </el-button>
             </div>
@@ -903,7 +959,7 @@ watch(activeTab, () => {
 
             <div v-if="searchedFor && hits.length === 0" class="empty">「{{ searchedFor }}」没有命中。</div>
 
-            <ol v-else class="hits">
+            <ol v-else class="hits" data-testid="kb-search-hits">
               <li v-for="hit in hits" :key="hit.chunkId" class="hit" @click="openHit(hit)">
                 <header>
                   <el-tag size="small" :type="sourceType(hit.source)" effect="plain">
@@ -924,17 +980,30 @@ watch(activeTab, () => {
             </ol>
           </el-tab-pane>
           <el-tab-pane label="问答" name="ask">
-            <div class="search-box">
+            <div class="search-box" data-testid="kb-tab-ask">
               <el-input
                 v-model="question"
-                placeholder="例如：缓存击穿有哪些解决方案？"
+                data-testid="kb-ask-input"
+                placeholder="针对你导入的资料提问，例如：这份资料里是怎么说的？"
                 clearable
                 @keyup.enter="doAsk"
               />
-              <el-button type="primary" :icon="MagicStick" :loading="asking" @click="doAsk">
+              <el-button
+                type="primary"
+                :icon="MagicStick"
+                data-testid="kb-ask-submit"
+                :loading="asking"
+                @click="doAsk"
+              >
                 提问
               </el-button>
-              <el-switch v-model="useStream" size="small" active-text="流式" inline-prompt />
+              <el-switch
+                v-model="useStream"
+                size="small"
+                data-testid="kb-ask-stream-switch"
+                active-text="流式"
+                inline-prompt
+              />
             </div>
             <p class="hint">
               链路：混合检索（RRF）→ LLM 重排 → 上下文组装（Token 预算 + 去重 + 编号）→ 生成。
@@ -965,7 +1034,7 @@ watch(activeTab, () => {
               <!-- eslint-disable-next-line vue/no-v-html -- 内容经 marked + DOMPurify 处理 -->
               <article v-else ref="answerRef" class="markdown answer" v-html="answerHtml" />
 
-              <div v-if="ragAnswer?.citations?.length" class="citations">
+              <div v-if="ragAnswer?.citations?.length" class="citations" data-testid="kb-ask-citations">
                 <div class="outline-head">引用</div>
                 <ol>
                   <li v-for="citation in ragAnswer.citations" :key="citation.chunkId" @click="openCitation(citation)">
@@ -989,7 +1058,7 @@ watch(activeTab, () => {
             </div>
 
             <!-- 留档历史：回看"当时依据了哪些资料" -->
-            <div v-if="qaHistory.length" class="qa-history">
+            <div v-if="qaHistory.length" class="qa-history" data-testid="kb-ask-history">
               <div class="outline-head">问答历史（已留档 {{ qaHistory.length }} 条）</div>
               <ul>
                 <li
@@ -1382,36 +1451,15 @@ watch(activeTab, () => {
   font-size: 15px;
 }
 
-.markdown :deep(p) {
-  margin: 0.7em 0;
-}
 
-.markdown :deep(ul),
-.markdown :deep(ol) {
-  padding-left: 1.4em;
-  margin: 0.7em 0;
-}
 
-.markdown :deep(code) {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  background: var(--surface-sunken);
-  border-radius: 6px;
-  padding: 2px 6px;
-}
 
-.markdown :deep(pre) {
-  background: var(--text-strong);
-  border-radius: var(--radius-card);
-  padding: var(--space-4) var(--space-5);
-  overflow: auto;
-}
 
-.markdown :deep(pre code) {
-  background: transparent;
-  color: #e8e6e3;
-  padding: 0;
-}
+
+
+
+
+
 
 .markdown :deep(blockquote) {
   margin: 0.8em 0;
@@ -1439,11 +1487,7 @@ watch(activeTab, () => {
   font-weight: 600;
 }
 
-.markdown :deep(a) {
-  color: var(--accent-600);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
+
 
 .markdown :deep(img) {
   max-width: 100%;

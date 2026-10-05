@@ -21,10 +21,11 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { demoToken } from './lib/demo-session.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const token = readFileSync(resolve(here, '../.demo-token'), 'utf8').trim()
-const base = process.env.WEB_BASE ?? 'http://localhost:5173'
+const token = await demoToken()
+const base = process.env.WEB_BASE ?? 'http://localhost:8088'
 const outDir = resolve(here, '../../docs/screenshots')
 
 // 待上传的文件写到系统临时目录：脚本自己造数据，不依赖演示 Vault 里恰好有什么
@@ -52,11 +53,17 @@ const api = { Authorization: `Bearer ${token}` }
 /** 本脚本自建的知识库，收尾时整库删掉（不留"验证用"的垃圾库堆在列表里） */
 let kbId = null
 
-/** 走按钮弹出系统文件选择器的那条真实路径（而不是直接调接口），否则测不到 pickDocument 的接线。 */
-async function uploadViaButton(buttonText, filePath) {
+/**
+ * 走按钮弹出系统文件选择器的那条真实路径（而不是直接调接口），否则测不到 pickDocument 的接线。
+ *
+ * 传的是 `data-testid` 而不是按钮文案：文案是产品的一部分（UA-005 就把「上传文件」
+ * 改成了「导入文件」），而"这个入口还能不能拉起文件选择器"是接线问题。
+ * 两者绑在一起时，改一个词就会让这条覆盖**静默失效**。
+ */
+async function uploadViaButton(buttonTestId, filePath) {
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser', { timeout: 15000 }),
-    page.click(`.head-actions button:has-text("${buttonText}")`)
+    page.click(`[data-testid="${buttonTestId}"]`)
   ])
   await chooser.setFiles(filePath)
 }
@@ -85,20 +92,20 @@ try {
   console.log(`· 已建知识库 ${kbId}（${kbName}）`)
 
   await page.goto(base, { waitUntil: 'networkidle' })
-  await page.waitForSelector('.card .name', { timeout: 15000 })
-  await page.click(`.card:has-text("${kbName}") .name`)
+  await page.waitForSelector('[data-testid="kb-card"]', { timeout: 15000 })
+  await page.click(`[data-testid="kb-card"][data-kb-name="${kbName}"] [data-testid="kb-open"]`)
   // 等工具栏而不是 `.docs`：新建的库一篇文档都没有，`ul.docs` 是空的、**不可见**，
   // 等它等于等一个永远不出现的东西（第一版就卡在这里）
-  await page.waitForSelector('.head-actions button:has-text("上传文件")', { timeout: 20000 })
+  await page.waitForSelector('[data-testid="kb-detail-import-file"]', { timeout: 20000 })
   await page.waitForSelector('.pane.doc-list', { timeout: 20000 })
 
   // ---------- ① 单文件上传（P1-1） ----------
-  await uploadViaButton('上传文件', goodPath)
+  await uploadViaButton('kb-detail-import-file', goodPath)
   await waitForImportDone()
-  await page.waitForSelector(`.docs li:has-text("${goodName}")`, { timeout: 20000 })
+  await page.waitForSelector(`[data-testid="kb-doc-item"][data-doc-path="${goodName}"]`, { timeout: 20000 })
   console.log(`① 上传成功：文档列表里出现了「${goodName}」`)
 
-  const docRow = page.locator(`.docs li:has-text("${goodName}")`)
+  const docRow = page.locator(`[data-testid="kb-doc-item"][data-doc-path="${goodName}"]`)
   const meta = (await docRow.locator('.doc-meta').innerText()).trim()
   console.log(`   行内元信息：${meta}`)
   if (!/切片/.test(meta)) failures.push(`文档行没有显示切片数：${meta}`)
@@ -111,7 +118,7 @@ try {
 
   // 点整行应当选中它（删除按钮是后来才加的，这条保证行点击没被破坏）
   await docRow.click()
-  await page.waitForSelector(`.doc-title:has-text("生命周期验证")`, { timeout: 15000 })
+  await page.waitForSelector('[data-testid="kb-tab-content"] .markdown', { timeout: 15000 })
   if ((await docRow.getAttribute('class') ?? '').includes('active')) {
     console.log('   点整行可以选中文档（行点击未被删除按钮破坏）')
   } else {
@@ -119,7 +126,7 @@ try {
   }
 
   // ---------- ② 失败原因可见（P1-3） ----------
-  await uploadViaButton('上传文件', badPath)
+  await uploadViaButton('kb-detail-import-file', badPath)
   await waitForImportDone()
   await page.waitForSelector('.import-result .ir-group', { timeout: 20000 })
 
@@ -141,10 +148,15 @@ try {
   console.log('✓ 已截图 docs/screenshots/kb-import-items.png')
 
   // ---------- ③ 删除文档（P1-2） ----------
-  const beforeCount = await page.locator('.docs li').count()
-  await docRow.locator('.doc-del').click()
-  await page.waitForSelector('.el-message-box', { timeout: 10000 })
-  const confirmText = (await page.locator('.el-message-box__message').innerText()).replace(/\s+/g, ' ').trim()
+  const beforeCount = await page.locator('[data-testid="kb-doc-item"]').count()
+  await docRow.locator('[data-testid="kb-doc-delete"]').click()
+  await page.waitForSelector('.nexus-confirm-doc-delete', { timeout: 10000 })
+  const confirmText = (await page
+      .locator('.nexus-confirm-doc-delete [data-testid="confirm-description"]')
+      .innerText()
+    )
+      .replace(/\s+/g, ' ')
+      .trim()
   console.log(`③ 二次确认：${confirmText}`)
   // 确认文案必须点明不可逆的部分，否则用户不知道自己在删什么
   if (!/不可撤销/.test(confirmText) || !/切片/.test(confirmText)) {
@@ -153,20 +165,20 @@ try {
   await page.screenshot({ path: `${outDir}/kb-doc-delete-confirm.png` })
   console.log('✓ 已截图 docs/screenshots/kb-doc-delete-confirm.png')
 
-  await page.click('.el-message-box__btns button:has-text("删除")')
+  await page.click('.nexus-confirm-doc-delete [data-testid="confirm-submit"]')
   await page.waitForFunction(
-    (name) => !Array.from(document.querySelectorAll('.docs li'))
+    (name) => !Array.from(document.querySelectorAll('[data-testid="kb-doc-item"]'))
       .some((li) => li.textContent.includes(name)),
     goodName,
     { timeout: 20000 }
   )
-  const afterCount = await page.locator('.docs li').count()
+  const afterCount = await page.locator('[data-testid="kb-doc-item"]').count()
   console.log(`   文档数 ${beforeCount} → ${afterCount}`)
   if (afterCount !== beforeCount - 1) {
     failures.push(`删除后文档数应为 ${beforeCount - 1}，实际 ${afterCount}`)
   }
   // 删的正好是打开着的那篇 → 右侧阅读区必须被清空，而不是继续显示已经不存在的内容
-  if (await page.locator('.markdown').count() > 0) {
+  if (await page.locator('[data-testid="kb-tab-content"] .markdown').count() > 0) {
     failures.push('删掉当前打开的文档后，右侧正文没有清空')
   }
 

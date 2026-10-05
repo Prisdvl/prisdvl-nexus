@@ -45,23 +45,6 @@ export interface MessageToolCall {
  * 字段与服务端 `RagAnswer.RagCitation` 一一对应（编号是**列表里的位置**，
  * 单库时与正文里的 `[n]` 严格对齐）。
  */
-export interface ChatCitation {
-  index: number
-  /**
-   * 这一片出自哪个知识库。多库检索下**没有它就无法回答"资料是哪来的"**——
-   * 而会话可能同时绑着"产品手册"和"内部 FAQ"，答案的可靠性取决于出处。
-   */
-  knowledgeBaseId: string | null
-  chunkId: string | null
-  documentId: string | null
-  documentTitle: string | null
-  headingPath: string | null
-  snippet: string | null
-  score: number
-  /** 正文里是否真的出现了 `[index]`；未引用也返回，便于核对模型有没有漏引。 */
-  referenced: boolean
-}
-
 export interface ChatMessage {
   id: string
   role: 'USER' | 'ASSISTANT' | 'SYSTEM' | 'TOOL'
@@ -151,97 +134,34 @@ export function listMessages(conversationId: string, pageSize = 100) {
   )
 }
 
-/** 一条检索命中（切片级：与回答里的 [n] 编号一一对应）。 */
-export interface StreamRetrievalHit {
-  chunkId: string
-  documentId: string
-  /**
-   * 这一片出自哪个知识库（Phase 5.5）。
-   *
-   * 会绑多个库之后，"检索到 5 个片段"不再能回答最要紧的那个问题——**资料是从哪来的**。
-   * 会话可能是"产品手册 + 内部 FAQ"两库，用户要靠这个字段才能判断答案的出处。
-   */
-  knowledgeBaseId: string | null
-  documentTitle: string | null
-  headingPath: string | null
-  score: number
-  /** bm25 / vector / hybrid */
-  source: string
-}
 
-/**
- * 本次没能参与检索的知识库（Phase 5.5.1）。
- *
- * 多库是**并行**检索、逐库失败隔离的：一个库超时或不可用不会让整次检索失败，
- * 但也不能就这样消失——只显示"检索到 5 个片段"的话，绑了 3 个库的用户无从知道
- * 有一个库根本没被搜过，而答案可能就差在那一库里。
- *
- * 名字由服务端一并给出（不是前端拿 id 去查表）：查不到时前端只能显示"知识库 1002"，
- * 对用户没有意义；而 id 也保留，用于和命中片段、库列表对齐。
+/*
+ * SSE 相关类型一律来自 `@/types/sse`（Phase C §十二 G）。
+ * 这里 re-export 是为了让既有 import（如 `AgentView.vue`）一行都不用改。
  */
-export interface StreamRetrievalFailure {
-  knowledgeBaseId: string
-  knowledgeBaseName: string
-  reason: string
-}
-
-/** retrieval 事件：检索完成、生成之前到达，供界面显示"检索到 N 个片段"。 */
-export interface StreamRetrieval {
-  /** 本次检索覆盖的知识库（会话绑了几个就是几个）；<b>含检索失败的那些</b>。 */
-  knowledgeBaseIds: string[]
-  count: number
-  hits: StreamRetrievalHit[]
-  contextTokens: number
-  truncated: number
-  reranked: boolean
-  empty: boolean
-  /**
-   * 本次检索失败、因此<b>没有贡献任何片段</b>的知识库；正常时为空数组（不是缺省）。
-   *
-   * 与 `count` 一起读才有意义：`count = 5, failedKnowledgeBases = [内部 FAQ]` 说的是
-   * "这 5 段只来自其余库"，而不是"内部 FAQ 里没有相关内容"。
-   */
-  failedKnowledgeBases: StreamRetrievalFailure[]
-}
-
-export interface StreamMeta {
-  requestId: string
-  conversationId: string
-  userMessageId: string
-  assistantMessageId: string
-  modelRole: string
-  mode: string
-}
-
-export interface StreamDone {
-  finishReason?: string
-  stopped?: boolean
-  /**
-   * 本轮引用（没有检索或没有命中时**不带这个字段**）。
-   *
-   * 跟着 `done` 走而不是单开一个事件：`referenced` 要在完整正文里比对编号才算得出来，
-   * 而回答结束时前端必然已经收到全部正文。这样实时视图与刷新后的历史视图
-   * 渲染的是同一份数据，不会出现"刷新一下引用才出来"。
-   */
-  citations?: ChatCitation[]
-}
-
-export interface StreamUsage {
-  promptTokens?: number
-  completionTokens?: number
-  totalTokens?: number
-  latencyMs?: number
-  firstTokenMs?: number
-}
+export type {
+  ChatCitation,
+  StreamRetrieval,
+  StreamRetrievalHit,
+  StreamRetrievalFailure,
+  StreamUsage
+} from '@/types/sse'
+import type {
+  ChatCitation,
+  ChatStreamDone,
+  ChatStreamMeta,
+  StreamRetrieval,
+  StreamUsage
+} from '@/types/sse'
 
 export interface AgentStreamHandlers {
-  onMeta?: (meta: StreamMeta) => void
+  onMeta?: (meta: ChatStreamMeta) => void
   onRetrieval?: (retrieval: StreamRetrieval) => void
   onDelta?: (text: string) => void
   onToolCall?: (call: { tool: string; input: string }) => void
   onToolResult?: (call: MessageToolCall) => void
   onUsage?: (usage: StreamUsage) => void
-  onDone?: (done: StreamDone) => void
+  onDone?: (done: ChatStreamDone) => void
 }
 
 /**

@@ -1,15 +1,25 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
 import { ChatDotRound, Collection, MagicStick, SwitchButton } from '@element-plus/icons-vue'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 import ProfileDialog from '@/components/ProfileDialog.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { useConfirm } from '@/components/common/useConfirm'
 import { getProfile } from '@/api/user'
 import { applyProfile, displayName, isLoggedIn, logout } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+
+/**
+ * 全站唯一的确认框（Phase C §六）。
+ *
+ * 8 处原本手写 `ElMessageBox.confirm`，文案与选项各不相同——
+ * 其中一处（资料弹窗点「修改密码」后两个弹窗在关闭动画期间同时可见）真的撞过一次车。
+ * 现在状态集中在这一个单例里，页面只 `useConfirm().confirm`。
+ */
+const { confirmState, confirm, settle } = useConfirm()
 
 const profileVisible = ref(false)
 const passwordVisible = ref(false)
@@ -64,21 +74,29 @@ const navItems = [
     to: '/',
     label: '知识库',
     icon: Collection,
-    match: ['knowledge-bases', 'knowledge-base-detail']
+    match: ['knowledge-bases', 'knowledge-base-detail'],
+    // 稳定定位用（Phase 0）：E2E 不再靠导航文案识别页面
+    testid: 'nav-knowledge'
   },
-  { to: '/agent', label: '对话', icon: ChatDotRound, match: ['agent'] },
-  { to: '/agents', label: 'Agent 管理', icon: MagicStick, match: ['agents'] }
+  { to: '/agent', label: '对话', icon: ChatDotRound, match: ['agent'], testid: 'nav-chat' },
+  { to: '/agents', label: 'Agent 管理', icon: MagicStick, match: ['agents'], testid: 'nav-agents' }
 ]
 
 /** 头像里的首字母：没有头像时比一个通用图标更能区分账号 */
 const initial = computed(() => (displayName() || '?').slice(0, 1).toUpperCase())
 
 async function handleLogout() {
-  await ElMessageBox.confirm('退出后需要重新登录。', '确认退出？', {
-    confirmButtonText: '退出',
-    cancelButtonText: '取消',
-    type: 'warning'
+  // customClass 是 Phase 0 留下的 E2E 定位钩子，不能改名：
+  // verify-real-user-flow.mjs 按 `.nexus-confirm-logout .el-button--primary` 点确认。
+  const ok = await confirm({
+    title: '确认退出？',
+    description: '退出后需要重新登录。',
+    confirmText: '退出',
+    cancelText: '取消',
+    danger: true,
+    customClass: 'nexus-confirm-logout'
   })
+  if (!ok) return
   logout()
   router.push({ name: 'login' })
 }
@@ -86,7 +104,7 @@ async function handleLogout() {
 
 <template>
   <div v-if="showShell" class="shell">
-    <aside class="sidebar">
+    <aside class="sidebar" data-testid="app-sidebar">
       <div class="brand">
         <span class="mark">N</span>
         <span class="brand-text">
@@ -95,12 +113,13 @@ async function handleLogout() {
         </span>
       </div>
 
-      <nav class="nav">
+      <nav class="nav" data-testid="app-nav">
         <RouterLink
           v-for="item in navItems"
           :key="item.to"
           :to="item.to"
           class="nav-item"
+          :data-testid="item.testid"
           :class="{ active: item.match.includes(String(route.name)) }"
         >
           <el-icon><component :is="item.icon" /></el-icon>
@@ -114,17 +133,19 @@ async function handleLogout() {
         <button
           type="button"
           class="who"
+          data-testid="account-entry"
           title="账号设置"
           aria-label="账号设置"
           @click="profileVisible = true"
         >
           <span class="avatar" aria-hidden="true">{{ initial }}</span>
-          <span class="truncate">{{ displayName() || '未登录' }}</span>
+          <span class="truncate" data-testid="account-name">{{ displayName() || '未登录' }}</span>
         </button>
         <el-button
           link
           size="small"
           class="logout"
+          data-testid="logout"
           :icon="SwitchButton"
           aria-label="退出登录"
           @click="handleLogout"
@@ -140,6 +161,23 @@ async function handleLogout() {
 
     <ProfileDialog v-model="profileVisible" @change-password="openChangePassword" />
     <ChangePasswordDialog v-model="passwordVisible" />
+
+    <!--
+      全站唯一的确认框。放在外壳里而不是 App 顶层：登录页没有任何确认需求，
+      而 7 处调用点全都在需要登录的页面里（第 8 处是重命名会话的 prompt，
+      它需要输入框，ConfirmDialog 不提供，刻意保留 ElMessageBox）。
+
+      刻意**不监听** `@update:visible`：ConfirmDialog 在点确定/取消/ESC/点遮罩时
+      都会先 emit 它，而它随后还会 emit confirm 或 cancel。
+      若这里也调 settle(false)，就会**抢先**把结果消费成"取消"——
+      于是点确认反而登出不了。confirm / cancel 两个事件已覆盖全部路径。
+    -->
+    <ConfirmDialog
+      :visible="confirmState.visible"
+      :options="confirmState.options"
+      @confirm="settle(true)"
+      @cancel="settle(false)"
+    />
   </div>
 
   <RouterView v-else />

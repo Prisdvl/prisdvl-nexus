@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { login, register } from '@/api/knowledge'
@@ -14,34 +14,69 @@ const formRef = ref<FormInstance>()
 
 const form = reactive({
   username: '',
-  password: ''
+  password: '',
+  confirmPassword: ''
 })
 
-const rules: FormRules = {
+/**
+ * 校验规则随模式变化：登录不需要"确认密码"，注册必须一致——
+ * 否则用户会把一个自己打错的密码当成登录密码记下来，下次直接登不进来。
+ * 后端会重新校验一遍（前端校验只是体验，不是安全边界）。
+ */
+const rules = computed<FormRules>(() => ({
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
+    { min: 3, max: 32, message: '用户名长度 3–32 个字符', trigger: 'blur' },
     // 与后端一致：只允许字母数字下划线连字符（后端 RegisterRequest 的正则）
     { pattern: /^[A-Za-z0-9_-]+$/, message: '只能包含字母、数字、下划线、连字符', trigger: 'blur' }
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
     { min: 8, message: '至少 8 位', trigger: 'blur' }
-  ]
+  ],
+  confirmPassword:
+    mode.value === 'register'
+      ? [
+          { required: true, message: '请再次输入密码', trigger: 'blur' },
+          {
+            validator: (_rule: unknown, value: string, callback: (error?: Error) => void) => {
+              if (value === form.password) callback()
+              else callback(new Error('两次输入的密码不一致'))
+            },
+            trigger: ['blur', 'change']
+          }
+        ]
+      : []
+}))
+
+/** 切模式时清掉残留输入与校验红字，避免"切回登录还红着一片" */
+function switchMode() {
+  mode.value = mode.value === 'login' ? 'register' : 'login'
+  form.password = ''
+  form.confirmPassword = ''
+  formRef.value?.clearValidate()
 }
 
 async function submit() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
 
+  // 首尾空格在提交前归一：后端也 trim，但前端先处理，
+  // 免得"空格 + 已存在用户名"这类输入在校验层通过、到服务端才碰撞
+  const username = form.username.trim()
   loading.value = true
   try {
     if (mode.value === 'register') {
-      await register(form.username, form.password)
+      await register(username, form.password)
       ElMessage.success('注册成功，正在登录…')
     }
-    const result = await login(form.username, form.password)
-    saveSession(result.accessToken, result.username)
-    ElMessage.success('欢迎回来，' + result.username)
+    const result = await login(username, form.password)
+    // 用户名从 user 里取（UA-002）：登录响应没有顶层 username，
+    // 早先这里拼出来的是"欢迎回来，undefined"。兜底用刚输入的用户名，
+    // 保证任何情况下都不会把 undefined 显示出来或写进 localStorage。
+    const name = result.user?.username ?? username
+    saveSession(result.accessToken, name)
+    ElMessage.success('欢迎回来，' + name)
     await router.push((route.query.redirect as string) || '/')
   } catch {
     // 错误提示已在 axios 拦截器里统一处理
@@ -71,27 +106,52 @@ async function submit() {
         @submit.prevent="submit"
       >
         <el-form-item label="用户名" prop="username">
-          <el-input v-model="form.username" placeholder="例如 lky" autocomplete="username" />
+          <el-input
+            v-model="form.username"
+            data-testid="auth-username"
+            placeholder="例如 lky"
+            autocomplete="username"
+          />
         </el-form-item>
         <el-form-item label="密码" prop="password">
           <el-input
             v-model="form.password"
+            data-testid="auth-password"
             type="password"
             show-password
             placeholder="至少 8 位"
-            autocomplete="current-password"
+            :autocomplete="mode === 'register' ? 'new-password' : 'current-password'"
+            @keyup.enter="submit"
+          />
+        </el-form-item>
+        <!-- 只有注册需要确认密码：登录少一个框，少一次无谓的输入 -->
+        <el-form-item v-if="mode === 'register'" label="确认密码" prop="confirmPassword">
+          <el-input
+            v-model="form.confirmPassword"
+            data-testid="auth-confirm-password"
+            type="password"
+            show-password
+            placeholder="再输入一次"
+            autocomplete="new-password"
             @keyup.enter="submit"
           />
         </el-form-item>
 
-        <el-button type="primary" size="large" class="submit" :loading="loading" @click="submit">
+        <el-button
+          type="primary"
+          size="large"
+          class="submit"
+          data-testid="auth-submit"
+          :loading="loading"
+          @click="submit"
+        >
           {{ mode === 'login' ? '登录' : '注册并登录' }}
         </el-button>
       </el-form>
 
       <div class="switch">
         <span>{{ mode === 'login' ? '还没有账号？' : '已经有账号？' }}</span>
-        <el-button link type="primary" @click="mode = mode === 'login' ? 'register' : 'login'">
+        <el-button link type="primary" data-testid="auth-switch-mode" @click="switchMode">
           {{ mode === 'login' ? '注册一个' : '去登录' }}
         </el-button>
       </div>

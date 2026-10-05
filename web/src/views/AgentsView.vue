@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { useConfirm } from '@/components/common/useConfirm'
+
+const { confirm } = useConfirm()
 import {
   Aim,
   CopyDocument,
+  DataAnalysis,
   Delete,
   Plus,
   Promotion,
@@ -24,6 +28,7 @@ import {
 } from '@/api/agents'
 import { listKnowledgeBases, type KnowledgeBase } from '@/api/knowledge'
 import { listTools, type ToolResource } from '@/api/tools'
+import { DEFAULT_EVAL_CASES, runEval, type EvalReport } from '@/api/agent'
 
 /**
  * Agent 管理页（Phase 4.2；5.4 补工具与温度）。
@@ -247,30 +252,55 @@ async function toggleStatus(agent: AgentResource) {
     ? (agent.status === 'DISABLED' ? '重新启用' : '发布')
     : '停用'
   if (next === 'DISABLED') {
-    await ElMessageBox.confirm(
-      `停用后，正在使用「${agent.name}」的会话会直接报错（不会悄悄换回内置 Agent）。`,
-      '确认停用？',
-      { confirmButtonText: '停用', cancelButtonText: '取消', type: 'warning' }
-    )
+    // 取消即中止：旧写法没有 catch，点取消会抛未处理 rejection
+    const ok = await confirm({
+      title: '确认停用？',
+      description: `停用后，正在使用「${agent.name}」的会话会直接报错（不会悄悄换回内置 Agent）。`,
+      confirmText: '停用',
+      danger: true,
+      customClass: 'nexus-confirm-agent-disable'
+    })
+    if (!ok) return
   }
-  await setAgentStatus(agent.id, next)
+  // catch 是必需的：拦截器已不再为业务错误弹提示（Phase C §十四），
+  // 没有它这里失败会**静默**——用户点了没反应也不知道成没成
+  try {
+    await setAgentStatus(agent.id, next)
+  } catch (e) {
+    ElMessage.error(`${label}失败：` + (e instanceof Error ? e.message : String(e)))
+    return
+  }
   ElMessage.success(next === 'PUBLISHED' ? `${label}成功，会话里可以选它了` : `${label}成功`)
   await load()
 }
 
 async function duplicate(agent: AgentResource) {
-  const copy = await duplicateAgent(agent.id)
+  let copy: AgentResource
+  try {
+    copy = await duplicateAgent(agent.id)
+  } catch (e) {
+    ElMessage.error('复制失败：' + (e instanceof Error ? e.message : String(e)))
+    return
+  }
   ElMessage.success(`已复制为「${copy.name}」（草稿，先试跑再发布）`)
   await load()
 }
 
 async function remove(agent: AgentResource) {
-  await ElMessageBox.confirm(
-    `将删除 Agent「${agent.name}」。使用它的会话不会被删除，但会失去这个 Agent。`,
-    '确认删除？',
-    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
-  )
-  await deleteAgent(agent.id)
+  const ok = await confirm({
+    title: '确认删除？',
+    description: `将删除 Agent「${agent.name}」。使用它的会话不会被删除，但会失去这个 Agent。`,
+    confirmText: '删除',
+    danger: true,
+    customClass: 'nexus-confirm-agent-delete'
+  })
+  if (!ok) return
+  try {
+    await deleteAgent(agent.id)
+  } catch (e) {
+    ElMessage.error('删除失败：' + (e instanceof Error ? e.message : String(e)))
+    return
+  }
   ElMessage.success('已删除')
   await load()
 }
@@ -316,9 +346,52 @@ async function runTest() {
  * 模型不检索是正确的行为，错的是样例本身。绑了库时范围已经确定，问得短一点即可。
  */
 function applyTestQuestion() {
-  testQuestion.value = testTarget.value?.kbIds?.length
-    ? '缓存击穿怎么解决？'
-    : '我的笔记里缓存击穿怎么解决？'
+  // 用**用户自己的知识库名**提问，而不是写死"缓存击穿"这类开发者笔记里的主题（UA-003 的同类问题）：
+  // 主题必须是用户资料里真实存在的，否则模型不会去检索，试跑会稳定误报"未使用工具"
+  const firstKbId = testTarget.value?.kbIds?.[0]
+  const firstKbName = firstKbId
+    ? knowledgeBases.value.find((kb) => kb.id === firstKbId)?.name
+    : undefined
+  testQuestion.value = firstKbName
+    ? `《${firstKbName}》里主要讲了什么？`
+    : '概括一下你检索到的资料'
+}
+
+// ---------- 评测集（从普通对话页移到这里） ----------
+// 评测是对「Agent 配置效果」的回归手段，不属于普通用户的聊天流程：它跑的是写死在
+// 代码里的演示用例（问题 + 预期要点），跟用户自己的资料关系不大。所以它不该出现在
+// 对话页上——那里应该只有"提问、看回答"。
+//
+// 后端 `/eval/kb/{kbId}` 一直是按**知识库**评测的，因此这里必须给出库的选择：
+// 原先对话页的写法是直接取 `kbs[0]`，用户根本不知道评的是哪个库。
+const evalVisible = ref(false)
+const evalRunning = ref(false)
+const evalReport = ref<EvalReport | null>(null)
+const evalKbId = ref('')
+
+const evalKbName = computed(
+  () => knowledgeBases.value.find((kb) => kb.id === evalKbId.value)?.name ?? ''
+)
+
+function openEval() {
+  evalKbId.value = knowledgeBases.value[0]?.id ?? ''
+  evalReport.value = null
+  evalVisible.value = true
+}
+
+async function runEvaluation() {
+  if (!evalKbId.value) {
+    ElMessage.warning('先选一个知识库再评测')
+    return
+  }
+  evalRunning.value = true
+  try {
+    evalReport.value = await runEval(evalKbId.value, DEFAULT_EVAL_CASES)
+  } catch (error) {
+    ElMessage.error('评测失败：' + (error instanceof Error ? error.message : String(error)))
+  } finally {
+    evalRunning.value = false
+  }
 }
 </script>
 
@@ -328,20 +401,33 @@ function applyTestQuestion() {
       <div>
         <h1>Agent</h1>
         <p class="sub">
-          每个 Agent 是一套"提示词 + 模型 + 能检索哪些知识库 + 能用哪些工具"的配置。
-          对话时选它，模型就按这套配置执行——改完提示词不必重建会话，下一轮就生效。
+          给不同的用途各配一个助手：各自有自己的说话方式、能查的资料范围、能用的工具。
+          在对话里选一个，它就一直按这个设定回答——改了设定也不必重开会话，下一轮就按新的来。
         </p>
       </div>
       <div class="actions">
-        <el-button type="primary" :icon="Plus" @click="createVisible = true">新建 Agent</el-button>
+        <el-button :icon="DataAnalysis" data-testid="agent-eval-open" @click="openEval">跑评测集</el-button>
+        <el-button type="primary" :icon="Plus" data-testid="agent-create-open" @click="createVisible = true">新建 Agent</el-button>
       </div>
     </header>
 
     <div v-loading="loading" class="content">
-      <el-empty v-if="!loading && !agents.length" description="还没有 Agent" />
+      <el-empty
+        v-if="!loading && !agents.length"
+        data-testid="agent-empty"
+        description="还没有 Agent"
+      />
 
       <div v-else class="grid">
-        <article v-for="(agent, index) in agents" :key="agent.id" class="card fade-up" :style="{ '--i': index }">
+        <article
+          v-for="(agent, index) in agents"
+          :key="agent.id"
+          class="card fade-up"
+          data-testid="agent-card"
+          :data-agent-code="agent.code"
+          :data-builtin="agent.builtin ? '1' : '0'"
+          :style="{ '--i': index }"
+        >
           <div class="card-head">
             <div class="title-row">
               <h2 class="name">{{ agent.name }}</h2>
@@ -384,17 +470,18 @@ function applyTestQuestion() {
           <p v-if="agent.systemPrompt" class="prompt">{{ agent.systemPrompt }}</p>
 
           <div class="card-actions">
-            <el-button size="small" :icon="Promotion" @click="openTest(agent)">试跑</el-button>
-            <el-button size="small" :icon="Aim" @click="openEdit(agent)">配置</el-button>
+            <el-button size="small" :icon="Promotion" data-testid="agent-card-test" @click="openTest(agent)">试跑</el-button>
+            <el-button size="small" :icon="Aim" data-testid="agent-card-config" @click="openEdit(agent)">配置</el-button>
             <el-button
               v-if="!agent.builtin"
               size="small"
               :icon="agent.status === 'PUBLISHED' ? RefreshLeft : Promotion"
+              data-testid="agent-card-toggle-status"
               @click="toggleStatus(agent)"
             >
               {{ agent.status === 'PUBLISHED' ? '停用' : (agent.status === 'DISABLED' ? '重新启用' : '发布') }}
             </el-button>
-            <el-button size="small" :icon="CopyDocument" @click="duplicate(agent)">复制</el-button>
+            <el-button size="small" :icon="CopyDocument" data-testid="agent-card-duplicate" @click="duplicate(agent)">复制</el-button>
             <el-button
               v-if="!agent.builtin"
               size="small"
@@ -402,6 +489,7 @@ function applyTestQuestion() {
               type="danger"
               class="danger"
               :icon="Delete"
+              data-testid="agent-card-delete"
               @click="remove(agent)"
             >
               删除
@@ -416,25 +504,41 @@ function applyTestQuestion() {
     </div>
 
     <p class="foot-note">
-      当前可用（已发布）的 Agent：{{ publishedCount }} 个 ·
-      只有"已发布"能被对话选用：草稿要先试跑通过再发布，停用后使用它的会话会明确报错
+      现在可以用的助手：{{ publishedCount }} 个 ·
+      想让某个助手出现在对话里，先试跑确认它答得对，再发布；停用之后，正在用它的会话会明确提示
     </p>
 
     <!-- 新建 -->
     <el-dialog v-model="createVisible" title="新建 Agent" width="520px">
-      <el-form label-position="top">
+      <el-form label-position="top" data-testid="agent-create-form">
         <el-form-item label="标识（code）" required>
-          <el-input v-model="createForm.code" placeholder="例如 note-helper" maxlength="64" />
+          <el-input
+            v-model="createForm.code"
+            data-testid="agent-create-code"
+            placeholder="例如 note-helper"
+            maxlength="64"
+          />
         </el-form-item>
         <p class="hint">
           稳定标识，只能用小写字母/数字/-/_/. ，创建后不可改：会话、工具、工作流引用的是它，
           不是显示名。
         </p>
         <el-form-item label="名称" required>
-          <el-input v-model="createForm.name" placeholder="例如 笔记助手" maxlength="64" />
+          <el-input
+            v-model="createForm.name"
+            data-testid="agent-create-name"
+            placeholder="例如 笔记助手"
+            maxlength="64"
+          />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="createForm.description" type="textarea" :rows="2" maxlength="512" />
+          <el-input
+            v-model="createForm.description"
+            type="textarea"
+            data-testid="agent-create-desc"
+            :rows="2"
+            maxlength="512"
+          />
         </el-form-item>
         <p class="hint">
           新建后是<b>草稿</b>：草稿不能被对话选用，但可以试跑——改完提示词、
@@ -442,24 +546,31 @@ function applyTestQuestion() {
         </p>
       </el-form>
       <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="submitCreate">创建</el-button>
+        <el-button data-testid="agent-create-cancel" @click="createVisible = false">取消</el-button>
+        <el-button type="primary" data-testid="agent-create-submit" :loading="creating" @click="submitCreate">创建</el-button>
       </template>
     </el-dialog>
 
     <!-- 配置 -->
     <el-dialog v-model="editVisible" :title="`配置「${editTarget?.name ?? ''}」`" width="640px">
-      <el-form label-position="top">
+      <el-form label-position="top" data-testid="agent-edit-form">
         <el-form-item label="名称">
-          <el-input v-model="editForm.name" maxlength="64" />
+          <el-input v-model="editForm.name" data-testid="agent-edit-name" maxlength="64" />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="editForm.description" type="textarea" :rows="2" maxlength="512" />
+          <el-input
+            v-model="editForm.description"
+            type="textarea"
+            data-testid="agent-edit-desc"
+            :rows="2"
+            maxlength="512"
+          />
         </el-form-item>
         <el-form-item label="系统提示词">
           <el-input
             v-model="editForm.systemPrompt"
             type="textarea"
+            data-testid="agent-edit-prompt"
             :rows="7"
             placeholder="留空 = 服务端的默认提示词"
           />
@@ -470,11 +581,11 @@ function applyTestQuestion() {
           两处都写会互相矛盾。
         </p>
         <el-form-item label="回答策略">
-          <el-radio-group v-model="editForm.answerPolicy">
-            <el-radio value="KB_PREFERRED">
+          <el-radio-group v-model="editForm.answerPolicy" data-testid="agent-edit-policy">
+            <el-radio value="KB_PREFERRED" data-testid="agent-edit-policy-kb-preferred">
               优先用笔记（笔记里没有时，可用自身知识回答，并注明不是来自笔记）
             </el-radio>
-            <el-radio value="KB_ONLY">
+            <el-radio value="KB_ONLY" data-testid="agent-edit-policy-kb-only">
               只依据笔记（没有找到就直说，不用自身知识）
             </el-radio>
           </el-radio-group>
@@ -490,6 +601,8 @@ function applyTestQuestion() {
             clearable
             placeholder="不选 = 全部知识库"
             class="kb-multi"
+            data-testid="agent-edit-kb-select"
+            popper-class="agent-edit-kb-select-popper"
           >
             <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
           </el-select>
@@ -508,6 +621,8 @@ function applyTestQuestion() {
             clearable
             placeholder="不选 = 全部工具"
             class="tool-multi"
+            data-testid="agent-edit-tool-select"
+            popper-class="agent-edit-tool-select-popper"
           >
             <el-option
               v-for="tool in tools"
@@ -526,6 +641,7 @@ function applyTestQuestion() {
         <el-form-item label="采样温度">
           <el-input-number
             v-model="editForm.temperature"
+            data-testid="agent-edit-temperature"
             :min="0"
             :max="2"
             :step="0.1"
@@ -547,8 +663,8 @@ function applyTestQuestion() {
         </p>
       </el-form>
       <template #footer>
-        <el-button @click="editVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitEdit">保存</el-button>
+        <el-button data-testid="agent-edit-cancel" @click="editVisible = false">取消</el-button>
+        <el-button type="primary" data-testid="agent-edit-submit" :loading="saving" @click="submitEdit">保存</el-button>
       </template>
     </el-dialog>
 
@@ -559,16 +675,17 @@ function applyTestQuestion() {
         它带 <b>{{ testScopeText }}</b> 的检索范围——
         与线上一致，否则"试跑正常、用到会话里搜不到"这种情况没法提前发现。
       </p>
-      <div class="test-question">
+      <div class="test-question" data-testid="agent-test-panel">
         <el-input
           v-model="testQuestion"
+          data-testid="agent-test-question"
           placeholder="问一个与它绑定的知识库相关的问题"
           @keydown.enter="runTest"
         />
-        <el-button link size="small" @click="applyTestQuestion">用示例问题</el-button>
+        <el-button link size="small" data-testid="agent-test-sample" @click="applyTestQuestion">用示例问题</el-button>
       </div>
       <div class="test-actions">
-        <el-button type="primary" :loading="testing" @click="runTest">开始试跑</el-button>
+        <el-button type="primary" data-testid="agent-test-run" :loading="testing" @click="runTest">开始试跑</el-button>
       </div>
 
       <div v-if="testError" class="test-error">
@@ -600,8 +717,69 @@ function applyTestQuestion() {
       </div>
 
       <template #footer>
-        <el-button @click="testVisible = false">关闭</el-button>
+        <el-button data-testid="agent-test-close" @click="testVisible = false">关闭</el-button>
       </template>
+    </el-dialog>
+
+    <!-- 评测集：从普通对话页移过来（那里只该有"提问、看回答"）。 -->
+    <el-dialog v-model="evalVisible" title="跑评测集" width="560px">
+      <p class="hint">
+        对一组固定的「问题 + 预期要点」跑一遍，看要点命中率与引用是否有效——
+        它验证的是<b>这条评测链路本身跑得通</b>，不是对你资料的评估。
+      </p>
+      <!-- 必须说清用例是写死在代码里的演示数据：不给这句话，用户会把这个命中率
+           当成对**自己知识库**的结论（UA-003 的同类问题） -->
+      <p class="hint">
+        用例写死在代码里（目前只有「缓存击穿怎么解决？」）。只有你的资料正好覆盖该主题时，
+        命中率才有意义；想评估自己的资料，请直接在对话里用它对应的问法提问。
+      </p>
+      <div class="eval-kb" data-testid="agent-eval-panel">
+        <span class="eval-label">用哪个知识库的资料评测</span>
+        <el-select
+          v-model="evalKbId"
+          data-testid="agent-eval-kb-select"
+          popper-class="agent-eval-kb-select-popper"
+          placeholder="请选择知识库"
+          style="width: 220px"
+        >
+          <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
+        </el-select>
+      </div>
+      <p v-if="!knowledgeBases.length" class="hint">
+        还没有知识库，先到「知识库」页导入资料，再回来评测。
+      </p>
+
+      <div class="eval-actions">
+        <el-button
+          type="primary"
+          data-testid="agent-eval-run"
+          :loading="evalRunning"
+          :disabled="!evalKbId"
+          @click="runEvaluation"
+        >
+          开始
+        </el-button>
+      </div>
+
+      <div v-if="evalReport" class="eval-report" data-testid="agent-eval-report">
+        <div class="eval-summary">
+          <span class="num">平均命中率 <b>{{ evalReport.avgPointRecall.toFixed(2) }}</b></span>
+          <span class="num">通过 <b>{{ evalReport.passed }}</b> / {{ evalReport.results.length }}</span>
+          <span v-if="evalKbName" class="num">知识库 <b>{{ evalKbName }}</b></span>
+        </div>
+        <ul>
+          <li v-for="(result, index) in evalReport.results" :key="index">
+            <span class="eval-q">{{ result.testCase.question }}</span>
+            <el-tag size="small" :type="result.pointRecall === 1 ? 'success' : 'warning'">
+              {{ result.pointRecall.toFixed(2) }}
+            </el-tag>
+            <el-tag v-if="result.citationsValid" size="small" effect="plain" type="success">有来源</el-tag>
+            <span v-if="result.missingPoints.length" class="eval-missing">
+              缺：{{ result.missingPoints.join('、') }}
+            </span>
+          </li>
+        </ul>
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -845,5 +1023,69 @@ function applyTestQuestion() {
   line-height: 1.8;
   color: var(--text);
   white-space: pre-wrap;
+}
+
+/* ---------- 评测集（从对话页搬来的样式） ---------- */
+
+.eval-kb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.eval-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.eval-actions {
+  margin-top: var(--space-4);
+}
+
+.eval-report {
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+}
+
+.eval-summary {
+  display: flex;
+  gap: var(--space-5);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.eval-summary b {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--text-strong);
+}
+
+.eval-report ul {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.eval-report li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+
+.eval-q {
+  color: var(--text);
+}
+
+.eval-missing {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 </style>

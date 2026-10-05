@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const token = readFileSync(resolve(here, '../.demo-token'), 'utf8').trim()
-const base = process.env.WEB_BASE ?? 'http://localhost:5173'
+const base = process.env.WEB_BASE ?? 'http://localhost:8088'
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 const context = await browser.newContext({ viewport: { width: 1440, height: 980 } })

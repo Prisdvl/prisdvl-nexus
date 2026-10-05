@@ -1,11 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useConfirm } from '@/components/common/useConfirm'
+
+// confirm() 取代手写的 ElMessageBox.confirm；
+// ElMessageBox 仍保留给 renameConversation 的**输入框**（prompt）——
+// ConfirmDialog 没有输入能力，那是有意的取舍，不是遗漏。
+const { confirm } = useConfirm()
 import {
   ChatDotRound,
-  DataAnalysis,
   Delete,
   EditPen,
+  Menu,
   Promotion,
   Plus,
   VideoPause
@@ -26,7 +33,6 @@ import {
   type MessageToolCall,
   type StreamRetrieval
 } from '@/api/chat'
-import { DEFAULT_EVAL_CASES, runEval, type EvalReport } from '@/api/agent'
 import {
   listAgents,
   type AgentResource,
@@ -211,6 +217,20 @@ function emptyLabel(retrieval: StreamRetrieval): string {
 }
 
 /**
+ * `emptyLabel()` 三句话的机器可读版本。
+ *
+ * 这三句是**三种不同的事实**，不是三种说法：全失败 / 部分失败其余没命中 / 全都命中过但没结果。
+ * 界面必须能区分，E2E 也必须能区分——原先脚本靠 `has-text('知识库里没有命中')` 匹配中文原文，
+ * 改一个字断言就静默失效（这正是本次去中文文案定位要根治的一类脆弱性）。
+ * 有了这个枚举，文案可以自由改，断言仍然钉在事实上。判定逻辑与 emptyLabel 同源，不会漂移。
+ */
+function emptyVariant(retrieval: StreamRetrieval): 'all-failed' | 'partial' | 'none' {
+  const usable = retrieval.knowledgeBaseIds.length - retrieval.failedKnowledgeBases.length
+  if (usable <= 0) return 'all-failed'
+  return usable < retrieval.knowledgeBaseIds.length ? 'partial' : 'none'
+}
+
+/**
  * AGENT 会话换 Agent（或回到内置默认）。
  *
  * 换的是"执行者"：提示词、模型角色、能检索哪些库都跟着变，模式不变，
@@ -289,8 +309,43 @@ function boundAgentLabel(agent: AgentResource): string {
   return `${agent.name}（${AGENT_STATE_TEXT[agent.status]}）`
 }
 
-/** 示例问题：直接点就能跑，省去"第一句该问什么"的犹豫 */
-const samples = ['我的笔记里缓存击穿怎么解决？', '线程池的核心参数有哪些坑？', 'G1 和 ZGC 该怎么选？']
+const router = useRouter()
+
+/**
+ * 欢迎区的示例问题。
+ *
+ * **踩过的坑（UA-003）**：这里曾经写死三个技术问题（"我的笔记里缓存击穿怎么解决？"等）。
+ * 对一个刚注册、**一个知识库都没有**的用户来说，那三个问题等于在暗示系统里已经有别人的笔记——
+ * 既不是他的资料，点下去也必然答不出来。那不是"示例"，是**伪造的已有内容**。
+ *
+ * 现在的规则：
+ * - 一个知识库都没有 → 不显示任何示例，改为引导"导入资料"（见模板）；
+ * - 有知识库 → 用**他自己的库名**生成示例，问下去确实能在他导入的资料里找到答案。
+ */
+const samples = computed<string[]>(() => {
+  const first = knowledgeBases.value[0]
+  if (!first) return []
+  return [`${first.name} 里主要讲了什么？`]
+})
+
+/** 新用户空态里的引导入口：知识库列表页就是"创建 / 导入"的地方 */
+function goCreateKnowledgeBase() {
+  router.push('/')
+}
+
+/**
+ * 会话侧栏是否收起（UA-007）。
+ *
+ * 用户收起它，是为了把横向空间让给回答——所以这里**只切一个 class**：
+ * 不重新拉会话、不重置 items、不动输入框，SSE 进行中也照样能收（不影响发送与流）。
+ * 另外必须**记住**选择：每次进页面都弹回来，等于没收。
+ */
+const railCollapsed = ref(localStorage.getItem('nexus.chatRailCollapsed') === '1')
+
+function toggleRail() {
+  railCollapsed.value = !railCollapsed.value
+  localStorage.setItem('nexus.chatRailCollapsed', railCollapsed.value ? '1' : '0')
+}
 
 // ---------- 当日额度（5.6） ----------
 
@@ -495,6 +550,7 @@ async function renameConversationItem(conversation: Conversation) {
     const result = await ElMessageBox.prompt('新的会话标题', '重命名会话', {
       confirmButtonText: '保存',
       cancelButtonText: '取消',
+      customClass: 'nexus-confirm-conv-rename',
       inputValue: conversation.title ?? '',
       // 空标题服务端会报 1001（标题不能为空字符串），这里先拦一道——
       // 让用户吃一条本可以避免的报错没有意义
@@ -512,12 +568,20 @@ async function renameConversationItem(conversation: Conversation) {
 }
 
 async function removeConversation(conversation: Conversation) {
-  await ElMessageBox.confirm(
-    `将删除会话「${conversation.title || '未命名'}」及其全部消息。`,
-    '确认删除会话？',
-    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
-  )
-  await deleteConversation(conversation.id)
+  const ok = await confirm({
+    title: '确认删除会话？',
+    description: `将删除会话「${conversation.title || '未命名'}」及其全部消息。`,
+    confirmText: '删除',
+    danger: true,
+    customClass: 'nexus-confirm-conv-delete'
+  })
+  if (!ok) return
+  try {
+    await deleteConversation(conversation.id)
+  } catch (e) {
+    ElMessage.error('删除会话失败：' + (e instanceof Error ? e.message : String(e)))
+    return
+  }
   ElMessage.success('已删除')
   if (activeId.value === conversation.id) {
     activeId.value = ''
@@ -541,11 +605,19 @@ async function send(preset?: string) {
         : '还没有知识库，先到"知识库"页导一份笔记')
       return
     }
-    const created = await createConversation(draftMode.value, {
-      kbIds: draftMode.value === 'RAG' ? draftKbIds.value : [],
-      // Agent 只在 AGENT 模式下有意义；空串 = 不传 = 用内置默认 Agent
-      agentId: draftMode.value === 'AGENT' && draftAgentId.value ? draftAgentId.value : null
-    })
+    let created: Conversation
+    try {
+      created = await createConversation(draftMode.value, {
+        kbIds: draftMode.value === 'RAG' ? draftKbIds.value : [],
+        // Agent 只在 AGENT 模式下有意义；空串 = 不传 = 用内置默认 Agent
+        agentId: draftMode.value === 'AGENT' && draftAgentId.value ? draftAgentId.value : null
+      })
+    } catch (e) {
+      // 建会话失败就退回草稿态：否则界面停在"看起来在生成"的状态，
+      // 而实际上什么都没开始
+      ElMessage.error('新建会话失败：' + (e instanceof Error ? e.message : String(e)))
+      return
+    }
     conversationId = created.id
     activeId.value = created.id
     conversations.value = [created, ...conversations.value]
@@ -560,7 +632,13 @@ async function send(preset?: string) {
     citations: [],
     streaming: false
   })
-  const answer: ChatItem = {
+  // 必须是 reactive 而不是普通对象字面量（UA-016，2026-10-03 实证）：
+  // ref 数组的 push 只追踪"数组结构"的变化，推入的**原始对象**后续被原地改写
+  // （answer.content += text）不会穿过 Proxy 的 set 陷阱，因而不触发重渲染——
+  // 表现为"整段回答憋到结束才一次性出现"（流式假死）。用 reactive 包一层，
+  // 之后所有 answer.* 的写入都会通知视图。RAG 页用 streamedText.value += text，
+  // 天然走代理，所以没有这个问题。
+  const answer = reactive<ChatItem>({
     id: `local-assistant-${Date.now()}`,
     role: 'ASSISTANT',
     content: '',
@@ -568,7 +646,7 @@ async function send(preset?: string) {
     retrieval: null,
     citations: [],
     streaming: true
-  }
+  })
   items.value.push(answer)
   streaming.value = true
   stickToBottom.value = true
@@ -729,28 +807,8 @@ function toolLabel(tool: string): string {
   return tool === 'knowledge_search' ? '检索知识库' : tool
 }
 
-// ---------- 评测（保留原有能力，收进弹窗，不占用对话区域） ----------
-const evalVisible = ref(false)
-const evalRunning = ref(false)
-const evalReport = ref<EvalReport | null>(null)
-const evalKbName = ref('')
-
-async function runEvaluation() {
-  evalRunning.value = true
-  try {
-    const kbs = (await listKnowledgeBases()).list
-    if (!kbs.length) {
-      ElMessage.warning('还没有知识库，先导一份笔记再评测')
-      return
-    }
-    evalKbName.value = kbs[0].name
-    evalReport.value = await runEval(kbs[0].id, DEFAULT_EVAL_CASES)
-  } catch (error) {
-    ElMessage.error('评测失败：' + (error instanceof Error ? error.message : String(error)))
-  } finally {
-    evalRunning.value = false
-  }
-}
+// 评测集入口不在这里：它是对 Agent 配置效果的回归手段，不属于普通用户聊天流程的一部分，
+// 已移到「Agent 管理」页（见 AgentsView）。后端 /eval/kb/{kbId} 与 api/agent.ts 原样保留。
 
 watch(activeId, () => {
   stickToBottom.value = true
@@ -758,10 +816,10 @@ watch(activeId, () => {
 </script>
 
 <template>
-  <div class="chat">
-    <!-- 左：会话列表 -->
-    <aside class="rail">
-      <el-button type="primary" class="new-chat" :icon="Plus" @click="newConversation">
+  <div class="chat" :class="{ collapsed: railCollapsed }">
+    <!-- 左：会话列表（可收起，见 toggleRail） -->
+    <aside v-show="!railCollapsed" class="rail" data-testid="chat-rail">
+      <el-button type="primary" class="new-chat" data-testid="chat-new" :icon="Plus" @click="newConversation">
         新对话
       </el-button>
 
@@ -774,6 +832,8 @@ watch(activeId, () => {
           :key="conversation.id"
           class="conversation"
           :class="{ active: conversation.id === activeId }"
+          data-testid="chat-conversation"
+          :data-conv-id="conversation.id"
           @click="pickConversation(conversation.id)"
         >
           <span class="conversation-title">{{ conversation.title || '新对话' }}</span>
@@ -786,6 +846,7 @@ watch(activeId, () => {
             role="button"
             aria-label="重命名会话"
             title="重命名"
+            data-testid="chat-conversation-rename"
             @click.stop="renameConversationItem(conversation)"
           >
             <el-icon><EditPen /></el-icon>
@@ -794,6 +855,7 @@ watch(activeId, () => {
             class="conversation-delete"
             role="button"
             aria-label="删除会话"
+            data-testid="chat-conversation-delete"
             @click.stop="removeConversation(conversation)"
           >
             <el-icon><Delete /></el-icon>
@@ -814,13 +876,22 @@ watch(activeId, () => {
           今日 {{ usedRequests }}/{{ quota.requestLimit }} 次 ·
           {{ shortNumber(usedTokens) }}/{{ shortNumber(quota.tokenLimit) }} tokens
         </p>
-        <el-button link size="small" :icon="DataAnalysis" @click="evalVisible = true">跑评测集</el-button>
       </div>
     </aside>
 
     <!-- 右：对话区 -->
     <section class="thread">
       <header class="thread-head">
+        <!-- ☰ 收起/展开会话列表：只切一个 class，不重新拉数据、不打断流式生成 -->
+        <el-button
+          class="rail-toggle"
+          data-testid="chat-rail-toggle"
+          :icon="Menu"
+          text
+          :title="railCollapsed ? '展开会话列表' : '收起会话列表'"
+          :aria-label="railCollapsed ? '展开会话列表' : '收起会话列表'"
+          @click="toggleRail"
+        />
         <div class="thread-title">
           <h1>{{ activeConversation?.title || '对话' }}</h1>
           <p class="sub">
@@ -845,6 +916,8 @@ watch(activeId, () => {
             size="small"
             placeholder="未绑定知识库"
             class="kb-select"
+            data-testid="chat-kb-select"
+            popper-class="chat-kb-select-popper"
             @change="changeBoundKnowledgeBase"
           >
             <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
@@ -857,6 +930,8 @@ watch(activeId, () => {
             size="small"
             :model-value="activeConversation.agentId ?? ''"
             placeholder="内置默认 Agent"
+            data-testid="chat-agent-select"
+            popper-class="chat-agent-select-popper"
             @change="changeBoundAgent"
           >
             <el-option label="内置默认 Agent" value="" />
@@ -867,29 +942,51 @@ watch(activeId, () => {
               :value="agent.id"
             />
           </el-select>
-          <span v-if="activeConversation?.mode === 'AGENT'" class="agent-hint">
+          <span v-if="activeConversation?.mode === 'AGENT'" class="agent-hint" data-testid="chat-agent-hint">
             {{ activeAgentName }}
           </span>
         </div>
       </header>
 
-      <div ref="scroller" v-loading="loadingMessages" class="messages" @scroll="onScroll">
+      <div ref="scroller" v-loading="loadingMessages" class="messages" data-testid="chat-messages" @scroll="onScroll">
         <div v-if="!items.length" class="welcome">
           <div class="welcome-mark">
             <el-icon :size="26"><ChatDotRound /></el-icon>
           </div>
-          <h2>问点什么？</h2>
-          <p>涉及你笔记的问题，模型会先检索知识库再回答，并把检索过程显示在这里。</p>
-          <div class="samples">
-            <button
-              v-for="sample in samples"
-              :key="sample"
-              class="sample"
-              @click="send(sample)"
-            >
-              {{ sample }}
-            </button>
-          </div>
+
+          <!-- 新用户（0 知识库）：不显示任何示例问题，直接说清下一步做什么（UA-003）。
+               写死几个技术问题只会让他以为系统里已经有别人的笔记。 -->
+          <template v-if="!knowledgeBases.length">
+            <h2>还没有知识库</h2>
+            <p>先导入你的资料，系统会基于你的资料回答问题。</p>
+            <div class="samples">
+              <el-button
+                type="primary"
+                :icon="Plus"
+                data-testid="chat-welcome-import"
+                @click="goCreateKnowledgeBase"
+              >
+                导入资料
+              </el-button>
+            </div>
+          </template>
+
+          <!-- 已经有资料：示例来自他自己的知识库，而不是写死的技术问题 -->
+          <template v-else>
+            <h2>问点什么？</h2>
+            <p>涉及你笔记的问题，模型会先检索知识库再回答，并把检索过程显示在这里。</p>
+            <div class="samples">
+              <button
+                v-for="sample in samples"
+                :key="sample"
+                class="sample"
+                data-testid="chat-sample"
+                @click="send(sample)"
+              >
+                {{ sample }}
+              </button>
+            </div>
+          </template>
         </div>
 
         <article
@@ -897,10 +994,12 @@ watch(activeId, () => {
           :key="message.id"
           class="message"
           :class="message.role === 'USER' ? 'from-user' : 'from-agent'"
+          data-testid="chat-message"
+          :data-role="message.role"
         >
           <div class="bubble">
             <!-- RAG 的检索结果：先于回答出现，用户不必对着空白等生成 -->
-            <div v-if="message.retrieval" class="retrieval">
+            <div v-if="message.retrieval" class="retrieval" data-testid="chat-retrieval">
               <span class="retrieval-count">检索到 {{ message.retrieval.count }} 个片段</span>
               <!-- 多库时才说"来自 N 个知识库"：单库下这是废话，只是占地方 -->
               <el-tag
@@ -908,6 +1007,7 @@ watch(activeId, () => {
                 size="small"
                 effect="plain"
                 type="info"
+                data-testid="chat-retrieval-multi-kb"
               >
                 {{ message.retrieval.knowledgeBaseIds.length }} 个知识库
               </el-tag>
@@ -931,14 +1031,27 @@ watch(activeId, () => {
                     }}
                   </div>
                 </template>
-                <el-tag size="small" effect="plain" type="danger">
+                <el-tag size="small" effect="plain" type="danger" data-testid="chat-retrieval-failed">
                   其中 {{ message.retrieval.failedKnowledgeBases.length }} 个知识库检索失败
                 </el-tag>
               </el-tooltip>
-              <el-tag v-if="message.retrieval.empty" size="small" effect="plain" type="warning">
+              <el-tag
+                v-if="message.retrieval.empty"
+                size="small"
+                effect="plain"
+                type="warning"
+                data-testid="chat-retrieval-empty"
+                :data-empty-variant="emptyVariant(message.retrieval)"
+              >
                 {{ emptyLabel(message.retrieval) }}
               </el-tag>
-              <el-tag v-if="message.retrieval.reranked" size="small" effect="plain" type="success">
+              <el-tag
+                v-if="message.retrieval.reranked"
+                size="small"
+                effect="plain"
+                type="success"
+                data-testid="chat-retrieval-reranked"
+              >
                 已重排
               </el-tag>
               <el-tag
@@ -946,10 +1059,11 @@ watch(activeId, () => {
                 size="small"
                 effect="plain"
                 type="info"
+                data-testid="chat-retrieval-truncated"
               >
                 预算截断 {{ message.retrieval.truncated }} 段
               </el-tag>
-              <ul v-if="message.retrieval.hits.length" class="retrieval-hits">
+              <ul v-if="message.retrieval.hits.length" class="retrieval-hits" data-testid="chat-retrieval-hits">
                 <li v-for="hit in message.retrieval.hits.slice(0, 5)" :key="hit.chunkId">
                   <!-- 每段的出处（多库时才有意义）：没有它，用户无法判断答案是哪个库给的 -->
                   <span
@@ -964,7 +1078,7 @@ watch(activeId, () => {
             </div>
 
             <!-- 工具痕迹：过程可见。检索中与已完成用两种状态区分 -->
-            <ol v-if="message.toolCalls.length" class="trace">
+            <ol v-if="message.toolCalls.length" class="trace" data-testid="chat-trace">
               <li v-for="(call, index) in message.toolCalls" :key="index">
                 <!-- 标签只说"这一步做完了"，不说"找到了"：未命中时摘要写的是
                      「0 条结果（无匹配）」，绿色对勾式的"已检索"会被读成"检索到了" -->
@@ -992,6 +1106,7 @@ watch(activeId, () => {
             <div
               v-if="message.role === 'ASSISTANT' && message.citations?.length && !message.retrieval"
               class="citations"
+              data-testid="chat-citations"
             >
               <div class="citations-title">参考 {{ message.citations.length }} 段资料</div>
               <ul class="citation-list">
@@ -1024,10 +1139,10 @@ watch(activeId, () => {
       <!-- 新建会话时的三个选择：模式决定走哪条链路，知识库决定 RAG 检索哪里，
            Agent 决定 AGENT 模式用哪套提示词/模型/检索范围。
            已有会话时不再显示——模式是会话属性，中途改等于换了一种问答（服务端也拒绝）。 -->
-      <div v-if="!activeId" class="composer-options">
-        <el-radio-group v-model="draftMode" size="small">
-          <el-radio-button value="AGENT">Agent（自己决定检索）</el-radio-button>
-          <el-radio-button value="RAG">知识库问答（先检索再答）</el-radio-button>
+      <div v-if="!activeId" class="composer-options" data-testid="chat-composer-options">
+        <el-radio-group v-model="draftMode" size="small" data-testid="chat-draft-mode">
+          <el-radio-button value="AGENT" data-testid="chat-draft-mode-agent">Agent（自己决定检索）</el-radio-button>
+          <el-radio-button value="RAG" data-testid="chat-draft-mode-rag">知识库问答（先检索再答）</el-radio-button>
         </el-radio-group>
         <!-- 可多选：一次提问同时检索这几个库，回答里每一段引用都会标明出自哪个库 -->
         <el-select
@@ -1040,6 +1155,8 @@ watch(activeId, () => {
           size="small"
           placeholder="选择知识库（可多选）"
           class="kb-select"
+          data-testid="chat-draft-kb-select"
+          popper-class="chat-draft-kb-select-popper"
         >
           <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
         </el-select>
@@ -1049,6 +1166,8 @@ watch(activeId, () => {
           size="small"
           placeholder="选择 Agent"
           class="kb-select"
+          data-testid="chat-draft-agent-select"
+          popper-class="chat-draft-agent-select-popper"
         >
           <el-option label="内置默认 Agent" value="" />
           <el-option
@@ -1076,10 +1195,11 @@ watch(activeId, () => {
         </template>
       </p>
 
-      <footer class="composer">
+      <footer class="composer" data-testid="chat-composer">
         <el-input
           v-model="input"
           type="textarea"
+          data-testid="chat-input"
           :rows="1"
           :autosize="{ minRows: 1, maxRows: 6 }"
           resize="none"
@@ -1087,11 +1207,12 @@ watch(activeId, () => {
           :disabled="streaming"
           @keydown.enter="onEnter"
         />
-        <el-button v-if="streaming" class="send" :icon="VideoPause" @click="stop">停止</el-button>
+        <el-button v-if="streaming" class="send" data-testid="chat-stop" :icon="VideoPause" @click="stop">停止</el-button>
         <el-button
           v-else
           type="primary"
           class="send"
+          data-testid="chat-send"
           :icon="Promotion"
           :disabled="!input.trim()"
           @click="send()"
@@ -1100,36 +1221,6 @@ watch(activeId, () => {
         </el-button>
       </footer>
     </section>
-
-    <!-- 评测弹窗 -->
-    <el-dialog v-model="evalVisible" title="评测集" width="560px">
-      <p class="hint">
-        对「问题 + 预期要点」跑一遍 Agent，报告要点命中率与引用有效性
-        <template v-if="evalKbName">（知识库：{{ evalKbName }}）</template>
-      </p>
-      <div class="eval-actions">
-        <el-button type="primary" :loading="evalRunning" @click="runEvaluation">开始</el-button>
-      </div>
-
-      <div v-if="evalReport" class="eval-report">
-        <div class="eval-summary">
-          <span class="num">平均命中率 <b>{{ evalReport.avgPointRecall.toFixed(2) }}</b></span>
-          <span class="num">通过 <b>{{ evalReport.passed }}</b> / {{ evalReport.results.length }}</span>
-        </div>
-        <ul>
-          <li v-for="(result, index) in evalReport.results" :key="index">
-            <span class="eval-q">{{ result.testCase.question }}</span>
-            <el-tag size="small" :type="result.pointRecall === 1 ? 'success' : 'warning'">
-              {{ result.pointRecall.toFixed(2) }}
-            </el-tag>
-            <el-tag v-if="result.citationsValid" size="small" effect="plain" type="success">有来源</el-tag>
-            <span v-if="result.missingPoints.length" class="eval-missing">
-              缺：{{ result.missingPoints.join('、') }}
-            </span>
-          </li>
-        </ul>
-      </div>
-    </el-dialog>
   </div>
 </template>
 
@@ -1141,6 +1232,17 @@ watch(activeId, () => {
   gap: var(--space-4);
   height: 100%;
   padding: var(--space-2) 0 var(--space-4);
+}
+
+/* 会话列表收起后，轨道宽度归零，对话区自然铺满（UA-007） */
+.chat.collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.rail-toggle {
+  flex: none;
+  margin-right: calc(-1 * var(--space-2));
+  color: var(--text-muted);
 }
 
 @media (max-width: 900px) {
@@ -1277,9 +1379,10 @@ watch(activeId, () => {
   border-top: 1px solid var(--border-soft);
 }
 
-/* 额度那一行：与"跑评测集"同处左栏底部，两者都是账号级而非会话级的动作/信息 */
+/* 额度那一行：它是**账号级**的数，与当前选中哪个会话无关，
+   所以挂在会话列表底部而不是对话标题旁边（那样会被读成"这个会话用掉的"） */
 .quota {
-  margin: 0 0 var(--space-2);
+  margin: 0;
   padding: 0 var(--space-1);
   color: var(--text-faint);
   font-size: 11.5px;
@@ -1488,36 +1591,15 @@ watch(activeId, () => {
   font-size: 14.5px;
 }
 
-.markdown :deep(p) {
-  margin: 0.7em 0;
-}
 
-.markdown :deep(ul),
-.markdown :deep(ol) {
-  padding-left: 1.4em;
-  margin: 0.7em 0;
-}
 
-.markdown :deep(code) {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  background: var(--surface-sunken);
-  border-radius: 6px;
-  padding: 2px 6px;
-}
 
-.markdown :deep(pre) {
-  background: var(--text-strong);
-  border-radius: var(--radius-card);
-  padding: var(--space-4) var(--space-5);
-  overflow: auto;
-}
 
-.markdown :deep(pre code) {
-  background: transparent;
-  color: #e8e6e3;
-  padding: 0;
-}
+
+
+
+
+
 
 .markdown :deep(blockquote) {
   margin: 0.8em 0;
@@ -1526,11 +1608,7 @@ watch(activeId, () => {
   color: var(--text-muted);
 }
 
-.markdown :deep(a) {
-  color: var(--accent-600);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
+
 
 /* ---------- 新建会话的模式/知识库选择 ---------- */
 .composer-options {
@@ -1661,53 +1739,4 @@ watch(activeId, () => {
   line-height: 1.7;
 }
 
-.eval-actions {
-  margin-top: var(--space-4);
-}
-
-.eval-report {
-  margin-top: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface-sunken);
-  border-radius: var(--radius-sm);
-}
-
-.eval-summary {
-  display: flex;
-  gap: var(--space-5);
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.eval-summary b {
-  font-family: var(--font-mono);
-  font-size: 15px;
-  color: var(--text-strong);
-}
-
-.eval-report ul {
-  list-style: none;
-  margin: var(--space-3) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.eval-report li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  font-size: 12.5px;
-}
-
-.eval-q {
-  color: var(--text);
-}
-
-.eval-missing {
-  color: var(--text-muted);
-  font-size: 12px;
-}
 </style>

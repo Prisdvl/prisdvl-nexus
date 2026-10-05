@@ -15,16 +15,31 @@
  * 接口没被调用、status 500、甚至服务端把标题归一化成了别的样子，界面上看着都一样。
  * 刷新会把这些全部打回原形，只有真的存下来了名字才留得住。
  *
+ * 2026-10-03 增补第五条腿（更新任务点名的那条："引用 / 历史刷新后不失效"）：
+ * RAG 回答结束后刷新页面，引用块必须**冒出来且条数正确**。
+ * 注意流内视图里引用块是**故意不显示**的（由检索卡片替代，避免同一份资料说两遍），
+ * 所以"刷新前 0 条"是设计值，真正的判据是刷新后它还在——此前没有任何脚本断言过这一条。
+ *
  * 退出码：0 = 全部通过；1 = 有真实失败；2 = 有跳过（环境缺少检索能力，见下）。
  */
 import { chromium } from 'playwright-core'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { demoToken, listConversationIds, deleteConversationsCreatedSince } from './lib/demo-session.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const token = readFileSync(resolve(here, '../.demo-token'), 'utf8').trim()
-const base = process.env.WEB_BASE ?? 'http://localhost:5173'
+const token = await demoToken()
+/**
+ * 跑测试**之前**的会话快照（demo 账号）。
+ *
+ * <p>本脚本两条腿都在 demo 名下新建会话（AGENT 腿 1 个 + RAG 腿 1 个），而 demo 是
+ * **受保护的演示账号**——它名下漏下的会话没有任何清理通道能回收（`cleanup-test-data`
+ * 的保护规则会把 demo 挡在门外）。所以收尾只能由脚本自己负责，且**只能删本轮新增的**：
+ * 先拍快照，跑完做差集（见 finally）。
+ */
+const conversationsBefore = await listConversationIds(token)
+const base = process.env.WEB_BASE ?? 'http://localhost:8088'
 const outDir = resolve(here, '../../docs/screenshots')
 const question = process.env.AGENT_QUESTION ?? '我的笔记里缓存击穿怎么解决？'
 const ragQuestion = process.env.RAG_QUESTION ?? '缓存击穿怎么解决？'
@@ -67,29 +82,29 @@ page.on('response', async (response) => {
 
 /** RAG 腿（mode=RAG）："检索到 N 个片段"必须出现，且排在回答之前。 */
 async function verifyRagLeg() {
-  await page.click('.rail .new-chat')
+  await page.click('[data-testid="chat-new"]')
   await page.waitForFunction(
-    () => document.querySelectorAll('.message').length === 0,
+    () => document.querySelectorAll('[data-testid="chat-message"]').length === 0,
     undefined,
     { timeout: 10000 }
   )
-  await page.waitForSelector('.composer-options', { timeout: 15000 })
-  await page.click('.composer-options .el-radio-button:has-text("知识库问答")')
+  await page.waitForSelector('[data-testid="chat-composer-options"]', { timeout: 15000 })
+  await page.click('[data-testid="chat-draft-mode-rag"]')
   // 知识库下拉默认选中第一个库（AgentView.loadKnowledgeBases），没库说明 seed-demo 没跑
-  await page.waitForSelector('.composer-options .kb-select', { timeout: 15000 })
+  await page.waitForSelector('[data-testid="chat-draft-kb-select"]', { timeout: 15000 })
   // el-select 的选中项画在 .el-select__selected-item 里，内部 input 是搜索框（恒为空），
   // 所以这里读整个下拉的可见文本；等于 placeholder 就说明一个库都没带上
-  const kbPicked = (await page.locator('.composer-options .kb-select').innerText()).trim()
+  const kbPicked = (await page.locator('[data-testid="chat-draft-kb-select"]').innerText()).trim()
   console.log(`② RAG 会话绑定知识库：${kbPicked || '(空)'}`)
   if (!kbPicked || kbPicked === '选择知识库') {
     failures.push('RAG 模式没有选中任何知识库（演示数据缺失？）')
   }
 
-  await page.fill('.composer textarea', ragQuestion)
-  await page.click('.composer .send')
+  await page.fill('[data-testid="chat-input"]', ragQuestion)
+  await page.click('[data-testid="chat-send"]')
 
   // 检索卡片是"后端发了 retrieval 事件、前端也渲染了"的界面证据
-  await page.waitForSelector('.message.from-agent .retrieval-count', { timeout: 180000 })
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .retrieval-count', { timeout: 180000 })
   const retrievalText = (await page.locator('.retrieval-count').last().innerText()).trim()
   console.log(`③ 检索卡片：${retrievalText}`)
   if (!/检索到 [0-9]+ 个片段/.test(retrievalText)) {
@@ -99,7 +114,7 @@ async function verifyRagLeg() {
   // 顺序断言：卡片排在回答正文之前（即 retrieval 事件早于 delta）。
   // 只断言"卡片存在"不够——晚一拍出现就是"回答已经蹦字，检索条数才冒出来"
   const orderedBeforeAnswer = await page.evaluate(() => {
-    const bubbles = Array.from(document.querySelectorAll('.message.from-agent .bubble'))
+    const bubbles = Array.from(document.querySelectorAll('[data-testid="chat-message"][data-role="ASSISTANT"] .bubble'))
     const last = bubbles[bubbles.length - 1]
     if (!last) return false
     const card = last.querySelector('.retrieval')
@@ -111,19 +126,42 @@ async function verifyRagLeg() {
     failures.push('检索卡片没有排在回答之前（retrieval 事件晚于 delta？）')
   }
 
-  await page.waitForSelector('.message.from-agent .markdown:not(.stream-text)', { timeout: 180000 })
-  const ragAnswer = (await page.locator('.message.from-agent .markdown:not(.stream-text)').last().innerText()).trim()
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)', { timeout: 180000 })
+  const ragAnswer = (await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)').last().innerText()).trim()
   console.log(`④ RAG 回答渲染完成，${ragAnswer.length} 字`)
   if (ragAnswer.length < 5) {
     failures.push('RAG 回答内容过少')
   }
   await page.screenshot({ path: `${outDir}/agent-chat-rag.png` })
   console.log('✓ 已截图 docs/screenshots/agent-chat-rag.png')
+
+  /*
+   * ⑤ 引用必须活过刷新（更新任务里点名的那条："引用 / 历史刷新后不失效"）。
+   *
+   * 为什么判点必须放在**刷新之后**：Agent 页的引用来自 `chat_message.metadata.citations`
+   * （回答结束时落库的那一份），而流里的 `retrieval` 事件只活这一次连接。
+   * 更关键的是——**流内视图里引用块是故意不显示的**（`v-if` 里有 `!message.retrieval`）：
+   * 同一份资料已经在检索卡片里列过，再列一遍是同一件事说两遍。
+   * 所以"刷新前引用条数"本来就该是 0，真正要证明的是刷新后它**冒出来且条数正确**。
+   * 缺失的后果很具体：刷新一下引用就没了 = 用户再也没法回答"这条答案是照着什么说的"。
+   */
+  const citationsLive = await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .citations li').count()
+  console.log(`⑤ 流内引用块条数 = ${citationsLive}（设计上应为 0：此处由检索卡片替代）`)
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.waitForSelector('[data-testid="chat-conversation"]', { timeout: 30000 })
+  // 刚跑完的这轮会话必然排在侧栏最前（列表按更新时间倒序），直接点第一条
+  await page.locator('[data-testid="chat-conversation"]').first().click()
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown', { timeout: 30000 })
+  const citationsAfterReload = await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .citations li').count()
+  console.log(`⑤ 刷新后引用 ${citationsAfterReload} 条`)
+  if (citationsAfterReload === 0) {
+    failures.push('刷新后引用整块消失（citations 没落库，或历史回放没渲染）')
+  }
 }
 
 /** 侧栏所有会话的标题（正序即界面顺序）。 */
 async function conversationTitles() {
-  return (await page.locator('.rail .conversation .conversation-title').allInnerTexts())
+  return (await page.locator('[data-testid="chat-conversation"] .conversation-title').allInnerTexts())
     .map((text) => text.trim())
 }
 
@@ -136,7 +174,7 @@ async function conversationTitles() {
  */
 async function verifyRenameLeg() {
   const renamedTitle = `重命名验证 ${Date.now().toString(36)}`
-  const item = page.locator('.rail .conversation.active')
+  const item = page.locator('[data-testid="chat-conversation"].active')
   const oldTitle = (await item.locator('.conversation-title').innerText()).trim()
 
   /*
@@ -150,12 +188,12 @@ async function verifyRenameLeg() {
 
   // 重命名入口平时是透明的（hover 才显形），先 hover 再点，避免在"看不见的按钮"上做动作
   await item.hover()
-  await item.locator('.conversation-rename').click()
-  await page.locator('.el-message-box__input input').fill(renamedTitle)
-  await page.click('.el-message-box__btns .el-button--primary')
+  await item.locator('[data-testid="chat-conversation-rename"]').click()
+  await page.locator('.nexus-confirm-conv-rename input').fill(renamedTitle)
+  await page.click('.nexus-confirm-conv-rename .el-button--primary')
   await page.waitForFunction(
     (title) =>
-      Array.from(document.querySelectorAll('.rail .conversation-title')).some(
+      Array.from(document.querySelectorAll('[data-testid="chat-conversation"] .conversation-title')).some(
         (node) => node.textContent.trim() === title
       ),
     renamedTitle,
@@ -164,7 +202,7 @@ async function verifyRenameLeg() {
   console.log(`⑥ 已重命名为「${renamedTitle}」（原名「${oldTitle}」）`)
 
   await page.reload({ waitUntil: 'networkidle' })
-  await page.waitForSelector('.rail .conversation', { timeout: 30000 })
+  await page.waitForSelector('[data-testid="chat-conversation"]', { timeout: 30000 })
   const titles = await conversationTitles()
   if (!titles.includes(renamedTitle)) {
     failures.push(`刷新后重命名的会话不见了（侧栏：${titles.join(' / ') || '(空)'}）——只改了前端状态？`)
@@ -179,40 +217,40 @@ async function verifyRenameLeg() {
     )
   }
   // 改过名的会话仍要能正常打开（重命名不该把列表项点坏）
-  await page.locator('.rail .conversation').filter({ hasText: renamedTitle }).first().click()
-  await page.waitForSelector('.message.from-agent .markdown', { timeout: 30000 })
+  await page.locator('[data-testid="chat-conversation"]').filter({ hasText: renamedTitle }).first().click()
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown', { timeout: 30000 })
   console.log('⑦ 刷新后名字仍在，且该会话仍可正常打开')
 }
 
 try {
   await page.goto(base, { waitUntil: 'networkidle' })
   // ① 从侧边栏进对话页
-  await page.click('.nav-item:has-text("对话")')
-  await page.waitForSelector('.chat', { timeout: 15000 })
+  await page.click('[data-testid="nav-chat"]')
+  await page.waitForSelector('[data-testid="chat-messages"]', { timeout: 15000 })
 
   // ② 新建会话后提问（不依赖已有会话，保证可重复运行）。
   //    默认模式必须是 Agent：默认值若被改成 RAG，这条腿就在悄悄验证另一条链路了
-  await page.click('.rail .new-chat')
-  await page.waitForSelector('.composer textarea', { timeout: 15000 })
+  await page.click('[data-testid="chat-new"]')
+  await page.waitForSelector('[data-testid="chat-input"]', { timeout: 15000 })
   // 新对话必须是空白的。这一条不是形式主义：页面挂载时"自动选中最近会话"要跨两个 RPC，
   // 若它回来后无条件覆盖，就会把用户（或本脚本）刚点的"新对话"抢回去——
   // 屏幕上留着上一条会话的消息，后面的断言全被旧 DOM 满足，跑出一个假的通过。
   await page.waitForFunction(
-    () => document.querySelectorAll('.message').length === 0,
+    () => document.querySelectorAll('[data-testid="chat-message"]').length === 0,
     undefined,
     { timeout: 10000 }
   )
-  const defaultMode = (await page.locator('.composer-options .is-active').first().innerText()).trim()
+  const defaultMode = (await page.locator('[data-testid="chat-draft-mode"] .is-active').first().innerText()).trim()
   console.log(`① 新建会话的默认模式：${defaultMode}`)
   if (!defaultMode.startsWith('Agent')) {
     failures.push(`新建会话的默认模式不是 Agent：${defaultMode}`)
   }
-  await page.fill('.composer textarea', question)
-  await page.click('.composer .send')
+  await page.fill('[data-testid="chat-input"]', question)
+  await page.click('[data-testid="chat-send"]')
 
   // ③ 工具卡片必须出现——这是"模型真的检索了知识库"的界面证据。
   //    等待给足：检索本身要几秒，工具事件在回答之前到达。
-  await page.waitForSelector('.message.from-agent .trace li', { timeout: 120000 })
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .trace li', { timeout: 120000 })
   const toolName = (await page.locator('.trace-tool').first().innerText()).trim()
   const toolInput = (await page.locator('.trace-input').first().innerText()).trim()
   console.log(`② 工具卡片出现：${toolName}（输入「${toolInput}」）`)
@@ -233,8 +271,8 @@ try {
   console.log(`③ 检索完成：${resultSummary}`)
 
   // ⑤ 回答逐字出现，最后渲染成 Markdown（.stream-text 被替换掉）
-  await page.waitForSelector('.message.from-agent .markdown:not(.stream-text)', { timeout: 180000 })
-  const answer = (await page.locator('.message.from-agent .markdown:not(.stream-text)').last().innerText()).trim()
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)', { timeout: 180000 })
+  const answer = (await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)').last().innerText()).trim()
   console.log(`④ 回答渲染完成，${answer.length} 字`)
   if (answer.length < 10) {
     failures.push('回答内容过少')
@@ -248,10 +286,10 @@ try {
   console.log('✓ 已截图 docs/screenshots/agent-chat.png')
 
   // ⑥ 刷新后痕迹仍在（工具痕迹随消息落库，而不是只活在这次会话的内存里）
-  const beforeReload = await page.locator('.message.from-agent .trace li').count()
+  const beforeReload = await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .trace li').count()
   await page.reload({ waitUntil: 'networkidle' })
-  await page.waitForSelector('.message.from-agent .markdown', { timeout: 30000 })
-  const afterReload = await page.locator('.message.from-agent .trace li').count()
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown', { timeout: 30000 })
+  const afterReload = await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .trace li').count()
   console.log(`⑤ 刷新前痕迹 ${beforeReload} 条，刷新后 ${afterReload} 条`)
   if (afterReload < beforeReload) {
     failures.push('刷新后工具痕迹丢失（未落库）')
@@ -284,6 +322,9 @@ try {
   await page.screenshot({ path: `${outDir}/agent-chat-failure.png` })
 } finally {
   await browser.close()
+  // 收尾：删掉本轮在 demo 名下新建的会话（差集，demo 原有会话一条不动）。
+  // 放在关浏览器之后、断言统计之前：收尾失败不改结论，但必须看得见。
+  await deleteConversationsCreatedSince(token, conversationsBefore)
 }
 
 if (failures.length > 0) {
@@ -296,5 +337,5 @@ if (skipped.length > 0) {
   process.exit(2)
 }
 console.log(
-  '\n对话页界面验证通过：Agent（工具痕迹可回看）+ 会话重命名（刷新后仍在）+ RAG（检索到 N 个片段且先于回答）。'
+  '\n对话页界面验证通过：Agent（工具痕迹可回看）+ 会话重命名（刷新后仍在）+ RAG（检索到 N 个片段且先于回答）+ 引用（刷新后仍在）。'
 )

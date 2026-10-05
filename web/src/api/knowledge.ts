@@ -126,19 +126,6 @@ export interface SearchHit {
 
 export type SearchMode = 'hybrid' | 'bm25' | 'vector'
 
-export interface RagCitation {
-  /** 资料块编号，与回答里的 [n] 对应 */
-  index: number
-  chunkId: string
-  documentId: string
-  documentTitle: string | null
-  headingPath: string | null
-  snippet: string
-  score: number
-  /** 回答是否真的引用了它（未引用也返回，便于核对模型有没有漏引） */
-  referenced: boolean
-}
-
 export interface RagAnswer {
   /** 留档记录 id（用于问答历史；旧记录可能为空） */
   recordId: string | null
@@ -156,11 +143,31 @@ export function register(username: string, password: string) {
   return client.post<never, void>('/auth/register', { username, password })
 }
 
+/**
+ * 登录响应。
+ *
+ * **踩过的坑（UA-002）**：这里曾经声明成扁平的 `username: string`，但服务端的
+ * `AuthTokenResponse` 是 `{ accessToken, tokenType, expiresIn, user: {...} }`——
+ * 用户名在 `user` 里面，**没有顶层 `username`**。TypeScript 的 interface 只活在编译期、
+ * 运行时不做校验，于是 `result.username` 取到 `undefined`，产生两个后果：
+ *   1. 提示语变成"欢迎回来，undefined"；
+ *   2. 更糟——`saveSession` 把字符串 "undefined" 写进了 localStorage。
+ * 形状必须与服务端 DTO 对齐，别再让它漂移。
+ */
 export interface LoginResponse {
   accessToken: string
   tokenType: string
   expiresIn: number
+  user: UserInfo
+}
+
+/** 服务端 `UserInfoResponse`：登录响应里内嵌的那一份用户信息 */
+export interface UserInfo {
+  id: string
   username: string
+  nickname: string | null
+  email: string | null
+  roles: string[]
 }
 
 export function login(username: string, password: string) {
@@ -373,59 +380,26 @@ export function askQuestion(
 export function getQaHistory(id: string, limit = 10) {
   return client.get<never, RagAnswer[]>(`/knowledge-bases/${id}/qa-history`, { params: { limit } })
 }
-
-export interface StreamMeta {
-  citations: Array<{
-    chunkId: string
-    documentId: string
-    documentTitle: string | null
-    headingPath: string | null
-  }>
-  contextTokens: number
-  truncated: number
-  reranked: boolean
-  empty: boolean
-}
-
-export interface StreamDone {
-  finishReason?: string
-  recordId?: string
-  citations?: RagCitation[]
-  error?: string
-}
-
-/**
- * retrieval 事件：检索完成、生成之前到达（"检索到 N 个片段"就来自这里）。
+/*
+ * SSE 相关类型一律来自 `@/types/sse`（Phase C §十二 G）。
  *
- * 形状与会话流式（`api/chat.ts` 的 `StreamRetrieval`）**必须保持一致**：
- * 服务端两条链路共用同一个构造器（`RetrievalEvent`），前端却有两份类型声明。
- * 这是历史遗留——将来若合并成一个共享类型，这两处可以删掉一份。
+ * 注意 `StreamRetrieval` 此前**漏了 `failedKnowledgeBases`**：
+ * 后端 `RetrievalEvent` 两条链路都发这个字段，缺它会让本页面在
+ * "某个库检索失败"时无法显示"这次少搜了谁"——界面会假装全都搜过了。
  */
-export interface StreamRetrieval {
-  /** 本次检索覆盖的知识库。这条链路固定单库（路径里的 {id}），列表长度为 1。 */
-  knowledgeBaseIds: string[]
-  count: number
-  hits: Array<{
-    chunkId: string
-    documentId: string
-    /** 这一片出自哪个知识库（单库链路下恒等于路径里的那个库）。 */
-    knowledgeBaseId: string | null
-    documentTitle: string | null
-    headingPath: string | null
-    score: number
-    source: string
-  }>
-  contextTokens: number
-  truncated: number
-  reranked: boolean
-  empty: boolean
-}
+export type { RagCitation, StreamRetrieval } from '@/types/sse'
+import type {
+  RagCitation,
+  RagStreamDone,
+  RagStreamMeta,
+  StreamRetrieval
+} from '@/types/sse'
 
 export interface StreamHandlers {
-  onMeta?: (meta: StreamMeta) => void
+  onMeta?: (meta: RagStreamMeta) => void
   onRetrieval?: (retrieval: StreamRetrieval) => void
   onDelta?: (text: string) => void
-  onDone?: (done: StreamDone) => void
+  onDone?: (done: RagStreamDone) => void
 }
 
 /**
@@ -451,10 +425,10 @@ export async function askQuestionStream(
       signal,
       onFrame: ({ event, data }) => {
         const payload = data as never
-        if (event === 'meta') handlers.onMeta?.(payload as StreamMeta)
+        if (event === 'meta') handlers.onMeta?.(payload as RagStreamMeta)
         else if (event === 'retrieval') handlers.onRetrieval?.(payload as StreamRetrieval)
         else if (event === 'delta') handlers.onDelta?.((payload as { text: string }).text ?? '')
-        else if (event === 'done') handlers.onDone?.(payload as StreamDone)
+        else if (event === 'done') handlers.onDone?.(payload as RagStreamDone)
       }
     }
   )

@@ -2,7 +2,7 @@
 import { reactive, ref, watch } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { getProfile, updateProfile, type UserProfile } from '@/api/user'
-import { applyProfile, session } from '@/stores/auth'
+import { applyProfile, useAuthStore } from '@/stores/auth'
 
 /**
  * 个人资料（5.6 · P1-15）。
@@ -27,6 +27,14 @@ const formRef = ref<FormInstance>()
 const loading = ref(false)
 const saving = ref(false)
 const profile = ref<UserProfile | null>(null)
+
+/**
+ * 当前账号（Phase C §八 E 起自 Pinia）。
+ *
+ * 这里的用户名是**只读展示**，所以直接读 store 而不建本地副本——
+ * 建副本就又变成"同一份数据两处维护"，改了昵称不同步。
+ */
+const auth = useAuthStore()
 
 const form = reactive({
   nickname: '',
@@ -90,10 +98,10 @@ async function submit() {
   <el-dialog v-model="visible" title="账号设置" width="440px">
     <div v-loading="loading" class="body">
       <div class="who">
-        <span class="avatar" aria-hidden="true">{{ (form.nickname || session.username || '?').slice(0, 1).toUpperCase() }}</span>
+        <span class="avatar" aria-hidden="true">{{ (form.nickname || auth.user.username || '?').slice(0, 1).toUpperCase() }}</span>
         <span class="names">
-          <b>{{ form.nickname || session.username }}</b>
-          <small class="num">@{{ session.username }}</small>
+          <b>{{ form.nickname || auth.user.username }}</b>
+          <small class="num">@{{ auth.user.username }}</small>
         </span>
       </div>
 
@@ -101,21 +109,32 @@ async function submit() {
         ref="formRef"
         :model="form"
         :rules="rules"
+        data-testid="profile-form"
         label-position="top"
         @submit.prevent="submit"
       >
         <el-form-item label="用户名">
           <!-- 只读展示：用户名是登录凭证，服务端也不接受修改。
                用 disabled 而不是纯文本，是为了让"这里改不了"看起来是设计而不是缺漏 -->
-          <el-input :model-value="session.username" disabled />
+          <el-input :model-value="auth.user.username" disabled />
         </el-form-item>
 
         <el-form-item label="昵称" prop="nickname">
-          <el-input v-model="form.nickname" placeholder="留空则显示用户名" maxlength="64" />
+          <el-input
+            v-model="form.nickname"
+            data-testid="profile-nickname"
+            placeholder="留空则显示用户名"
+            maxlength="64"
+          />
         </el-form-item>
 
         <el-form-item label="邮箱" prop="email">
-          <el-input v-model="form.email" placeholder="用于通知，可留空" maxlength="128" />
+          <el-input
+            v-model="form.email"
+            data-testid="profile-email"
+            placeholder="用于通知，可留空"
+            maxlength="128"
+          />
         </el-form-item>
       </el-form>
 
@@ -129,11 +148,19 @@ async function submit() {
     </div>
 
     <template #footer>
-      <el-button link type="primary" class="password-entry" @click="emit('changePassword')">
+      <el-button
+        link
+        type="primary"
+        class="password-entry"
+        data-testid="profile-change-password"
+        @click="emit('changePassword')"
+      >
         修改密码
       </el-button>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
+      <el-button data-testid="profile-cancel" @click="visible = false">取消</el-button>
+      <el-button type="primary" data-testid="profile-save" :loading="saving" @click="submit">
+        保存
+      </el-button>
     </template>
   </el-dialog>
 </template>

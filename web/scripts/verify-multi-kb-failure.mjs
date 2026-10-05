@@ -29,6 +29,7 @@
 import { chromium } from 'playwright-core'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { listConversationIds, deleteConversationsCreatedSince } from './lib/demo-session.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const base = process.env.WEB_BASE ?? 'http://localhost:8088'
@@ -73,6 +74,16 @@ if (!login?.data?.accessToken) {
   throw new Error(`登录失败：${JSON.stringify(login)}`)
 }
 const token = login.data.accessToken
+/**
+ * 跑测试**之前**的会话快照（demo 账号）。
+ *
+ * <p>本脚本的 `ragAsk()` 每调一次就在 demo 名下建一个会话（5 个问题 → 5~6 个），
+ * 而 demo 是**受保护的演示账号**：漏下的会话没有任何清理通道能回收
+ * （`cleanup-test-data` 的保护规则会把 demo 挡在门外），于是"每跑一轮就胖一圈"，
+ * 正好违反任务书 §十四「重复执行不会无限污染数据库」。
+ * 收尾只能脚本自己负责，且只能删本轮新增的 —— 先拍快照，跑完做差集（见 finally）。
+ */
+const conversationsBefore = await listConversationIds(token)
 
 async function api(method, path, body) {
   const headers = { Authorization: `Bearer ${token}` }
@@ -403,23 +414,23 @@ try {
   })
 
   await page.goto(base, { waitUntil: 'networkidle' })
-  await page.click('.nav-item:has-text("对话")')
-  await page.waitForSelector('.composer textarea', { timeout: 15000 })
-  await page.click('.rail .new-chat')
-  await page.click('.composer-options .el-radio-button:has-text("知识库问答")')
-  await page.waitForSelector('.composer-options .kb-select', { timeout: 15000 })
-  await page.hover('.composer-options .kb-select')
-  const clearButton = page.locator('.composer-options .kb-select .el-select__clear')
+  await page.click('[data-testid="nav-chat"]')
+  await page.waitForSelector('[data-testid="chat-input"]', { timeout: 15000 })
+  await page.click('[data-testid="chat-new"]')
+  await page.click('[data-testid="chat-draft-mode-rag"]')
+  await page.waitForSelector('[data-testid="chat-draft-kb-select"]', { timeout: 15000 })
+  await page.hover('[data-testid="chat-draft-kb-select"]')
+  const clearButton = page.locator('[data-testid="chat-draft-kb-select"] .el-select__clear')
   if (await clearButton.count()) {
     await clearButton.first().click()
   }
-  await page.click('.composer-options .kb-select')
+  await page.click('[data-testid="chat-draft-kb-select"]')
   for (const name of [A.name, B.name, C.name]) {
-    await page.locator('.el-select-dropdown__item', { hasText: name }).last().click()
+    await page.locator('.chat-draft-kb-select-popper .el-select-dropdown__item', { hasText: name }).last().click()
   }
   await page.keyboard.press('Escape')
   // 多选控件默认 collapse-tags：3 个库只显示 1 个名字 + "+ 2"。所以总数要加起来算
-  const tagTexts = (await page.locator('.composer-options .kb-select .el-tag').allInnerTexts())
+  const tagTexts = (await page.locator('[data-testid="chat-draft-kb-select"] .el-tag').allInnerTexts())
     .map((text) => text.trim())
   const collapsed = tagTexts
     .filter((text) => /^\+\s*\d+$/.test(text))
@@ -427,9 +438,9 @@ try {
   const pickedCount = tagTexts.length - (collapsed > 0 ? 1 : 0) + collapsed
   check(pickedCount === 3, `界面：多选框里一共选中 3 个库（标签显示 ${JSON.stringify(tagTexts)}）`)
 
-  await page.fill('.composer textarea', question5)
-  await page.click('.composer .send')
-  await page.waitForSelector('.message.from-agent .retrieval', { timeout: 90000 })
+  await page.fill('[data-testid="chat-input"]', question5)
+  await page.click('[data-testid="chat-send"]')
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] [data-testid="chat-retrieval"]', { timeout: 90000 })
 
   const sent = createConversationBody ?? {}
   const sentKbIds = (sent.kbIds ?? []).map(String)
@@ -438,7 +449,7 @@ try {
     `界面：建会话时真的带上了 A/B/C 三个库（实际 ${JSON.stringify(sentKbIds)}）`
   )
 
-  const dangerTag = page.locator('.message.from-agent .retrieval .el-tag--danger')
+  const dangerTag = page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] [data-testid="chat-retrieval-failed"]')
   await dangerTag.first().waitFor({ timeout: 30000 })
   const tagText = (await dangerTag.first().innerText()).trim()
   console.log(`   检索卡片上的失败标签：${tagText}`)
@@ -456,19 +467,21 @@ try {
   await page.screenshot({ path: resolve(outDir, 'multi-kb-partial-failure.png') })
   console.log(`   截图：docs/screenshots/multi-kb-partial-failure.png`)
 
-  const cardText = (await page.locator('.message.from-agent .retrieval').last().innerText()).replace(/\s+/g, ' ')
+  const cardText = (await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] [data-testid="chat-retrieval"]').last().innerText()).replace(/\s+/g, ' ')
   check(/3 个知识库/.test(cardText), '界面：卡片同时说明本次覆盖 3 个库（不是只字不提）')
 } catch (error) {
   failures.push(`异常中断：${error.message}`)
   console.log(`\n!! ${error.stack ?? error.message}`)
 } finally {
-  // ---------- 清理：坏文档与三个库都要删掉，不留痕迹 ----------
+  // ---------- 清理：坏文档、本轮会话、三个库都要删掉，不留痕迹 ----------
   if (corruptDocId) {
     await fetch(`${es}/${kbAlias(kbB)}/_doc/${encodeURIComponent(corruptDocId)}?refresh=true`, { method: 'DELETE' })
       .then((r) => console.log(`清理坏文档：HTTP ${r.status}`))
       .catch((error) => console.log(`清理坏文档失败：${error.message}`))
   }
   if (browser) await browser.close()
+  // 会话先删、库后删：会话绑着 kbIds，让"消费者"先走，避免删库瞬间留下指向已删库的会话。
+  await deleteConversationsCreatedSince(token, conversationsBefore)
   for (const kbId of [kbA, kbB, kbC]) {
     if (kbId) {
       const removed = await api('DELETE', `/api/knowledge-bases/${kbId}`)

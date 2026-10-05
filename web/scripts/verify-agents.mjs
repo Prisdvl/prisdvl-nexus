@@ -15,10 +15,11 @@ import { chromium } from 'playwright-core'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { demoToken } from './lib/demo-session.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const token = readFileSync(resolve(here, '../.demo-token'), 'utf8').trim()
-const base = process.env.WEB_BASE ?? 'http://localhost:5173'
+const token = await demoToken()
+const base = process.env.WEB_BASE ?? 'http://localhost:8088'
 const outDir = resolve(here, '../../docs/screenshots')
 /** 演示知识库名（scripts/seed-demo.mjs 建的那个） */
 const demoKb = process.env.DEMO_KB ?? '我的笔记'
@@ -35,9 +36,7 @@ const skipped = []
 
 /** 该 Agent 的卡片（按 code 精确定位：`x` 与 `x-copy` 不能互相匹配） */
 function cardByCode(code) {
-  return page.locator('.grid .card').filter({
-    has: page.locator('.code').getByText(code, { exact: true })
-  })
+  return page.locator(`[data-testid="agent-card"][data-agent-code="${code}"]`)
 }
 
 /**
@@ -50,14 +49,22 @@ async function factValue(card, label) {
   return (await card.locator('dl.facts > div').filter({ hasText: label }).locator('dd').innerText()).trim()
 }
 
-/** 当前可见的弹窗（页面上同时存在多个 el-dialog，必须只挑可见的那个） */
-function dialog(title) {
-  return page.locator('.el-dialog:visible').filter({ hasText: title })
+/**
+ * 当前可见的弹窗（页面上同时存在多个 el-dialog，必须只挑可见的那个）。
+ *
+ * 用弹窗内部某个稳定锚点（data-testid）来挑，而不是它的标题文案：标题是产品文案，
+ * 锚点是结构。绑在一起时，改个标题就会让脚本报"找不到弹窗"——一个完全指向不了
+ * 真实原因的失败。
+ */
+function dialogByTestId(anchor) {
+  return page.locator('.el-dialog:visible').filter({ has: page.locator(`[data-testid="${anchor}"]`) })
 }
 
 /** 点确认框里的主按钮（Element Plus 的 MessageBox 是独立挂载的） */
 async function confirmBox() {
-  await page.click('.el-message-box__btns .el-button--primary')
+  // AgentsView 的确认框已迁移到 ConfirmDialog（Phase C），
+  // 弹窗不再由 ElMessageBox 承载，按钮定位改用组件自己的 testid
+  await page.click('[data-testid="confirm-submit"]')
 }
 
 async function deleteAgentCard(code) {
@@ -82,12 +89,12 @@ async function openAgentPicker() {
     (response) => response.url().includes('/api/agents?') && response.status() === 200,
     { timeout: 15000 }
   )
-  await page.click('.nav-item:has-text("对话")')
-  await page.click('.rail .new-chat')
-  await page.waitForSelector('.composer-options', { timeout: 15000 })
+  await page.click('[data-testid="nav-chat"]')
+  await page.click('[data-testid="chat-new"]')
+  await page.waitForSelector('[data-testid="chat-composer-options"]', { timeout: 15000 })
   const listed = (await (await responsePromise).json()).data.list
-  await page.click('.composer-options .kb-select')
-  const options = page.locator('.el-select-dropdown:visible .el-select-dropdown__item')
+  await page.click('[data-testid="chat-draft-agent-select"]')
+  const options = page.locator('.chat-draft-agent-select-popper .el-select-dropdown__item')
   await options.first().waitFor({ timeout: 15000 })
   return { options, listed }
 }
@@ -104,9 +111,9 @@ const page = await context.newPage()
 try {
   // ---------- ① 管理页：内置默认 Agent 必须看得见 ----------
   await page.goto(base, { waitUntil: 'networkidle' })
-  await page.click('.nav-item:has-text("Agent 管理")')
-  await page.waitForSelector('.grid .card', { timeout: 15000 })
-  const builtinCard = page.locator('.grid .card').filter({ hasText: '内置' }).first()
+  await page.click('[data-testid="nav-agents"]')
+  await page.waitForSelector('[data-testid="agent-card"]', { timeout: 15000 })
+  const builtinCard = page.locator('[data-testid="agent-card"][data-builtin="1"]').first()
   const builtinText = await builtinCard.innerText()
   console.log(`① 管理页打开，内置项：${builtinText.split('\n').filter(Boolean).slice(0, 3).join(' / ')}`)
   if (!builtinText.includes('内置默认 Agent')) {
@@ -119,11 +126,11 @@ try {
   }
 
   // ---------- ② 新建：落在草稿 ----------
-  await page.click('.page-head .el-button--primary')
-  const createDialog = dialog('新建 Agent')
-  await createDialog.locator('input[placeholder="例如 note-helper"]').fill(agentCode)
-  await createDialog.locator('input[placeholder="例如 笔记助手"]').fill(agentName)
-  await createDialog.locator('.el-dialog__footer .el-button--primary').click()
+  await page.click('[data-testid="agent-create-open"]')
+  const createDialog = dialogByTestId('agent-create-form')
+  await createDialog.locator('[data-testid="agent-create-code"]').fill(agentCode)
+  await createDialog.locator('[data-testid="agent-create-name"]').fill(agentName)
+  await createDialog.locator('[data-testid="agent-create-submit"]').click()
 
   const card = cardByCode(agentCode)
   await card.waitFor({ timeout: 15000 })
@@ -134,10 +141,14 @@ try {
   }
   // 草稿的操作按钮必须是"发布"，不能是"停用"：草稿本来就没启用，
   // 给它一个停用按钮说明状态机的按钮映射错了（用户会以为它已经生效）
-  const publishable = await card.locator('.el-button:has-text("发布")').count()
-  const stoppable = await card.locator('.el-button:has-text("停用")').count()
-  if (publishable !== 1 || stoppable !== 0) {
-    failures.push(`草稿的按钮映射不正确（发布 ×${publishable}、停用 ×${stoppable}）`)
+  // 状态按钮只有一个锚点，直接读它的文案——比"数两个 has-text 计数"更难被
+  // "两个按钮都不在"这种退化情况骗过（那样 publishable=0、stoppable=0，旧写法会报错但说不清）
+  const statusButton = card.locator('[data-testid="agent-card-toggle-status"]')
+  const statusButtonText = (await statusButton.count()) === 1
+    ? (await statusButton.innerText()).trim()
+    : '(按钮不在)'
+  if (statusButtonText !== '发布') {
+    failures.push(`草稿的状态按钮应当是「发布」，实际「${statusButtonText}」`)
   }
   // 两项"没配"各有各的说法，都必须在这里是它本来的样子：
   // 工具空 = 全部工具（与知识库同一套语义），温度空 = 服务端默认（与填 0 不是一回事，
@@ -154,26 +165,29 @@ try {
   console.log('✓ 已截图 docs/screenshots/agents-list.png')
 
   // ---------- ③ 配置：提示词 + 绑定知识库 ----------
-  await card.locator('.el-button:has-text("配置")').click()
-  const editDialog = dialog('配置「')
-  await editDialog.locator('.el-textarea__inner').first().fill(prompt)
+  await card.locator('[data-testid="agent-card-config"]').click()
+  const editDialog = dialogByTestId('agent-edit-form')
+  await editDialog.locator('[data-testid="agent-edit-prompt"]').fill(prompt)
   // 回答策略（4.4）：选 KB_ONLY 并读回。上面那句用户提示词写的是"不要用你自己的知识补充"，
   // 与 KB_ONLY 一致；若留在默认的 KB_PREFERRED，两者会互相矛盾（策略块里有让位条款兜着，
   // 但那是给存量 Agent 的，新配置不该这么搭）。这一步同时钉住"选择器不是假旋钮"。
-  await editDialog.locator('.el-radio:has-text("只依据笔记")').click()
-  // 绑一个库：多选下拉的选项挂在 body 上的 popper 里，不在弹窗 DOM 内
-  await editDialog.locator('.kb-multi').click()
-  const option = page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: demoKb }).first()
+  await editDialog.locator('[data-testid="agent-edit-policy-kb-only"]').click()
+  // 绑一个库：多选下拉的选项挂在 body 上的 popper 里，不在弹窗 DOM 内。
+  // popper-class 必须是**这个选择器自己的**（agent-edit-kb-select-popper）——
+  // 页面上同时存在多个 select 的 popper，用错会点到别的下拉里那一项，
+  // 而且症状是"选项没出现"，完全指向不了真因
+  await editDialog.locator('[data-testid="agent-edit-kb-select"]').click()
+  const option = page.locator('.agent-edit-kb-select-popper .el-select-dropdown__item').filter({ hasText: demoKb }).first()
   await option.waitFor({ timeout: 15000 })
   await option.click()
   await page.keyboard.press('Escape')
   // 工具白名单（5.4 / P1-9，后端从 4.3 起就支持 toolCodes，缺的一直只有这一页）。
   // 两个内置工具都勾上：只勾「计算器」的话，下面试跑那条腿会因为它搜不了笔记而
   // 报"未使用工具"——那是一条真失败，但它的原因跟本步要验的东西无关
-  await editDialog.locator('.tool-multi').click()
+  await editDialog.locator('[data-testid="agent-edit-tool-select"]').click()
   for (const toolName of ['知识库检索', '计算器']) {
     const toolOption = page
-      .locator('.el-select-dropdown:visible .el-select-dropdown__item')
+      .locator('.agent-edit-tool-select-popper .el-select-dropdown__item')
       .filter({ hasText: toolName })
       .first()
     await toolOption.waitFor({ timeout: 15000 })
@@ -182,8 +196,8 @@ try {
   await page.keyboard.press('Escape')
   // 采样温度（5.4 / P1-8）：填一个既不是 0 也不是默认 0.7 的值，卡片回显才能区分
   // "真的存了"和"只是恰好显示了默认值"
-  await editDialog.locator('.el-input-number input').fill('0.2')
-  await editDialog.locator('.el-dialog__footer .el-button--primary').click()
+  await editDialog.locator('[data-testid="agent-edit-temperature"] input').fill('0.2')
+  await editDialog.locator('[data-testid="agent-edit-submit"]').click()
   await page.waitForSelector('.el-dialog:visible', { state: 'detached', timeout: 15000 })
 
   const configuredText = await cardByCode(agentCode).innerText()
@@ -216,7 +230,7 @@ try {
   }
 
   // ---------- ④ 复制：副本必须是草稿 ----------
-  await cardByCode(agentCode).locator('.el-button:has-text("复制")').click()
+  await cardByCode(agentCode).locator('[data-testid="agent-card-duplicate"]').click()
   await cardByCode(copyCode).waitFor({ timeout: 15000 })
   const copyText = await cardByCode(copyCode).innerText()
   console.log('④ 已复制出副本')
@@ -225,10 +239,10 @@ try {
   }
 
   // ---------- ⑤ 发布：状态可变，且"未发布的不能选用"要在对话页说清楚 ----------
-  await cardByCode(agentCode).locator('.el-button:has-text("发布")').click()
+  await cardByCode(agentCode).locator('[data-testid="agent-card-toggle-status"]').click()
   await page.waitForFunction(
     (code) => {
-      const cards = Array.from(document.querySelectorAll('.grid .card'))
+      const cards = Array.from(document.querySelectorAll('[data-testid="agent-card"]'))
       const target = cards.find((c) => c.querySelector('.code')?.textContent.trim() === code)
       return target?.textContent.includes('已发布') ?? false
     },
@@ -277,11 +291,11 @@ try {
   }
 
   // ---------- ⑥ 试跑：草稿/已发布都能跑，失败要看得见原因 ----------
-  await page.click('.nav-item:has-text("Agent 管理")')
-  await cardByCode(agentCode).locator('.el-button:has-text("试跑")').click()
-  const testDialog = dialog('试跑「')
-  await testDialog.locator('.el-button:has-text("用示例问题")').click()
-  await testDialog.locator('.el-button:has-text("开始试跑")').click()
+  await page.click('[data-testid="nav-agents"]')
+  await cardByCode(agentCode).locator('[data-testid="agent-card-test"]').click()
+  const testDialog = dialogByTestId('agent-test-panel')
+  await testDialog.locator('[data-testid="agent-test-sample"]').click()
+  await testDialog.locator('[data-testid="agent-test-run"]').click()
   await page.waitForSelector('.test-result, .test-error', { timeout: 180000 })
   if (await page.locator('.test-error').count()) {
     // 只取第一行（后端原话）：下面那段"怎样解读这个错误"的提示不必进日志
@@ -309,15 +323,15 @@ try {
     await page.screenshot({ path: `${outDir}/agents-test.png` })
     console.log('✓ 已截图 docs/screenshots/agents-test.png')
   }
-  await testDialog.locator('.el-dialog__footer .el-button, .el-dialog__headerbtn').first().click().catch(() => {})
+  await testDialog.locator('[data-testid="agent-test-close"]').click().catch(() => {})
   await page.keyboard.press('Escape')
 
   // ---------- ⑦ 停用：使用它的会话必须明确失败，而不是悄悄换回默认 ----------
-  await cardByCode(agentCode).locator('.el-button:has-text("停用")').click()
+  await cardByCode(agentCode).locator('[data-testid="agent-card-toggle-status"]').click()
   await confirmBox()
   await page.waitForFunction(
     (code) => {
-      const cards = Array.from(document.querySelectorAll('.grid .card'))
+      const cards = Array.from(document.querySelectorAll('[data-testid="agent-card"]'))
       const target = cards.find((c) => c.querySelector('.code')?.textContent.trim() === code)
       return target?.textContent.includes('已停用') ?? false
     },
@@ -348,7 +362,7 @@ try {
   await page.keyboard.press('Escape')
 
   // ---------- ⑧ 清理：删掉本轮造的 Agent（界面删除本身也是一条断言） ----------
-  await page.click('.nav-item:has-text("Agent 管理")')
+  await page.click('[data-testid="nav-agents"]')
   await deleteAgentCard(copyCode)
   await deleteAgentCard(agentCode)
   console.log('⑪ 已清理本轮创建的 Agent（删除后卡片消失）')

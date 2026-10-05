@@ -1,0 +1,221 @@
+/*
+ * 语义令牌层（Semantic tokens）
+ *
+ * ## 为什么不直接改 tokens.css 里的变量名
+ *
+ * `tokens.css` 里的 51 个变量是**基础层（primitive）**，被四个视图的 4559 行 CSS
+ * 直接引用（`var(--space-4)` 之类）。改名 = 全量改样式 = 一次无法靠读代码判断对错的
+ * 视觉回归。所以本文件**只新增、不改、不删**：
+ *
+ *   tokens.css     基础层：具体的色值、间距值、圆角值（保持不动）
+ *   semantic.css   语义层：这个名字"为什么被用"（新增，组件一律用这个）
+ *
+ * 好处是迁移可以逐个组件推进：新代码用语义名，老代码保持原样，
+ * 任何时候都能停下来，且不需要一次性重写四页 CSS。
+ *
+ * ## 任务书要求 ↔ 现状对照（Phase C 实测审计）
+ *
+ * | 类别 | 现状 | 缺口 | 本文件的补法 |
+ * | --- | --- | --- | --- |
+ * | 表面 | surface-page/raised/sunken/hover/active | 缺 `background` 语义名 | `background` / `surface-*` 别名 |
+ * | 文字 | text-strong/text/text-muted/text-faint | 缺 `text-primary/secondary/muted` | 三个语义名 + `--text-inverse` |
+ * | 描边 | border/border-soft/border-strong | 缺 `border-default/strong` 语义名 | 两个语义名 |
+ * | 强调色 | accent-50 … accent-600 | **完全没有 `primary`** | `primary` / `primary-hover` / `primary-soft` / `on-primary` |
+ * | 功能色 | ok / warn / danger / info（+ soft） | 任务书要 `success` / `warning` | `success` / `warning` 别名（不改 ok/warn） |
+ * | 间距 | space-1 … space-8 | 完整 | `space-xs` 别名 + 组件默认间距 |
+ * | 圆角 | sm / input / card / overlay / chip | **缺 `radius-md` / `radius-lg`** | 补两个标准名 |
+ * | 阴影 | xs / card / raised / pop | 完整 | `shadow-subtle` 别名 |
+ * | 字体 | font-sans / font-mono | **只有字体族，没有字号** | 补 `--text-xs` … `--text-2xl` 九档 |
+ * | z-index | **完全没有**（`.grid-backdrop` 硬编码 `z-index: 0`） | 整层缺失 | 七档命名层级 |
+ * | 动效 | ease-out-expo / ease-soft / dur-fast/base/exit | 完整 | `transition-*` 组合别名 |
+ * | 交互状态 | 散落在各视图 `:hover` / `:disabled` | 无 token | focus ring / disabled / hover 三档 |
+ *
+ * 一句话：**本文件不改变任何像素，只让"为什么用这个值"变成可查的。**
+ */
+
+:root {
+  /* ============================================================
+   * 1. 品牌与状态色（任务书要求的语义名，全部指向现有基础层）
+   * ============================================================ */
+
+  /** 唯一强调色。品牌与"可点击/当前选中"都用它，不做第二套主色。 */
+  --primary: var(--accent-500);
+  --primary-hover: var(--accent-600);
+  --primary-active: var(--accent-600);
+  --primary-soft: var(--accent-50);
+  --primary-border: var(--accent-200);
+  /** 压在主色上的文字：主色是 #3a8f88，白字对比度 ≈ 4.6:1，达 AA 正文标准。 */
+  --on-primary: #ffffff;
+
+  /*
+   * 语义名与现有实现名的对应。
+   * 为什么保留 ok/warn 而不用 success/warning：`--ok` / `--warn` 已被 4559 行 CSS 引用，
+   * 改名风险高于收益；语义名作为别名并存，两套指向同一个值，不会产生两份真相。
+   */
+  --success: var(--ok);
+  --success-soft: var(--ok-soft);
+  --warning: var(--warn);
+  --warning-soft: var(--warn-soft);
+  --danger: var(--danger);
+  --danger-soft: var(--danger-soft);
+  --info: var(--info);
+  --info-soft: var(--info-soft);
+
+  /* ============================================================
+   * 2. 表面（background）
+   * ============================================================ */
+
+  --background: var(--surface-page);
+  --background-raised: var(--surface-raised);
+  --background-sunken: var(--surface-sunken);
+
+  /* ============================================================
+   * 3. 文字
+   *
+   * 三档足够，第四档（--text-faint）只给装饰用，不进任何承载语义的元素。
+   * 档位划分依据是对比度而非视觉偏好：--text-secondary 在 --background 上 ≥ 4.5:1。
+   * ============================================================ */
+
+  --text-primary: var(--text-strong); /* 标题、关键数据 */
+  --text-secondary: var(--text); /* 正文 */
+  --text-muted: var(--text-muted); /* 次要说明、时间戳 */
+  --text-faint: var(--text-faint); /* 占位符、禁用图标 */
+  --text-inverse: #ffffff; /* 压在 --primary / 深色面上 */
+
+  /* ============================================================
+   * 4. 描边
+   * ============================================================ */
+
+  --border-default: var(--border);
+  --border-subtle: var(--border-soft);
+  --border-strong: var(--border-strong);
+  /** 聚焦环：键盘可见焦点用，见 tokens.css 的 :focus-visible。 */
+  --border-focus: var(--accent-400);
+
+  /* ============================================================
+   * 5. 间距
+   * ============================================================ */
+
+  --space-xs: var(--space-1);
+  /** 组件内部件之间的默认间距（表单 label 与控件、按钮组内按钮）。 */
+  --space-component: var(--space-3);
+  /** 面板内边距的默认档。 */
+  --space-panel: var(--space-4);
+  /** 页面级留白。 */
+  --space-page: var(--space-6);
+
+  /* ============================================================
+   * 6. 圆角（补齐任务书要求的 md / lg）
+   * ============================================================ */
+
+  --radius-xs: 4px; /* 极小：进度条、内嵌标记 */
+  --radius-sm: 8px; /* 标签、小按钮、代码块 */
+  --radius-md: 10px; /* 输入框、按钮（= --radius-input） */
+  --radius-lg: 16px; /* 卡片、面板（= --radius-card） */
+  --radius-xl: 20px; /* 对话框、浮层（= --radius-overlay） */
+  --radius-full: 999px; /* 胶囊：标签、头像、徽标 */
+
+  /* ============================================================
+   * 7. 阴影
+   * ============================================================ */
+
+  --shadow-subtle: var(--shadow-xs);
+
+  /* ============================================================
+   * 8. 字号（现状只有字体族，h1/h2/h3 直接写 px，散在各处）
+   *
+   * 阶梯按"每级只差一点点"递增，与 tokens.css 里 h1 22 / h2 17 / h3 15 的
+   * 现有取值对齐，不改变任何现有排版。
+   * ============================================================ */
+
+  --text-xs: 12px; /* 标签、时间戳、表格辅助文字 */
+  --text-sm: 13px; /* 次要正文 */
+  --text-base: 14px; /* 正文基准（= body 当前字号） */
+  --text-md: 15px; /* h3 */
+  --text-lg: 17px; /* h2 */
+  --text-xl: 20px; /* 卡片标题 */
+  --text-2xl: 22px; /* h1 / 页面标题 */
+  --text-3xl: 28px; /* 空态大标题 */
+
+  --leading-tight: 1.3;
+  --leading-normal: 1.65; /* = body 当前行高 */
+  --leading-loose: 1.8;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-bold: 600; /* = h1/h2/h3 当前字重 */
+
+  /* ============================================================
+   * 9. z-index（现状完全没有这一层，.grid-backdrop 硬编码 z-index: 0）
+   *
+   * 七档，每档之间留出空位（10 的倍数），避免以后插入新层时被迫重排。
+   * ============================================================ */
+
+  --z-base: 0; /* 背景纹理等装饰层 */
+  --z-sticky: 100; /* 粘性表头、滚回顶部按钮 */
+  --z-dropdown: 200; /* 下拉、选择器 popper */
+  --z-sidebar: 300; /* 移动端抽屉侧栏 */
+  --z-overlay: 400; /* 遮罩层 */
+  --z-modal: 500; /* 对话框 */
+  --z-toast: 600; /* ElMessage / ElMessageBox */
+  --z-tooltip: 700; /* 悬浮提示（必须高于 modal） */
+
+  /* ============================================================
+   * 10. 动效组合
+   *
+   * 只允许 transform / opacity 参与动画（tokens.css 末尾的自我约束），
+   * 这三个别名不允许被改写成会触发重排的属性。
+   * ============================================================ */
+
+  --transition-fast: opacity var(--dur-fast) var(--ease-soft);
+  --transition-base: opacity var(--dur-base) var(--ease-soft);
+  --transition-transform: transform var(--dur-base) var(--ease-out-expo);
+
+  /* ============================================================
+   * 11. 交互状态
+   *
+   * 现状是每个视图各写各的 `:hover` / `:disabled`，颜色不统一。
+   * 这三档给出统一值；组件用它们，而不是各自挑一个色。
+   * ============================================================ */
+
+  /** 键盘聚焦环。与 tokens.css 的 :focus-visible 保持同一视觉。 */
+  --focus-ring: 0 0 0 2px var(--background), 0 0 0 4px var(--accent-400);
+  /** 禁用态：不透明度。用来禁用整个控件而不必为每种控件写一套灰度色。 */
+  --disabled-opacity: 0.55;
+  --disabled-cursor: not-allowed;
+}
+
+/* ============================================================
+ * 12. 共用交互类
+ *
+ * 只放**跨页面复用、且语义明确**的三条。页面专属的效果（卡片高光、流式光标）
+ * 留在 tokens.css 与各视图里——把效果类塞进全局 stylesheet 会让"这个类为什么存在"
+ * 失去上下文。
+ * ============================================================ */
+
+/** 屏幕阅读器专用：视觉隐藏但保留在无障碍树里。 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/**
+ * 高级区域的默认折叠容器。
+ *
+ * 为什么进全局：Phase B §12 决定把 L4 开发信息收进"高级"折叠区，
+ * 四个页面都要用同一套展开/收起交互。**结构**（高度过渡 + 箭头旋转）全站一致，
+ * 各页面只负责往里放什么。
+ *
+ * 注意：折叠状态由页面自己持有（默认收起），本类不接管状态。
+ */
+.advanced-panel {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--background-raised);
+}

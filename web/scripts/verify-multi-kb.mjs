@@ -26,10 +26,11 @@ import { chromium } from 'playwright-core'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { demoToken } from './lib/demo-session.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const token = readFileSync(resolve(here, '../.demo-token'), 'utf8').trim()
-const base = process.env.WEB_BASE ?? 'http://localhost:5173'
+const token = await demoToken()
+const base = process.env.WEB_BASE ?? 'http://localhost:8088'
 const outDir = resolve(here, '../../docs/screenshots')
 
 const sleep = (ms) => new Promise((resolve_) => setTimeout(resolve_, ms))
@@ -173,36 +174,36 @@ try {
 
   // ---------- ② 界面上新建 RAG 会话并选中两个库 ----------
   await page.goto(base, { waitUntil: 'networkidle' })
-  await page.click('.nav-item:has-text("对话")')
-  await page.waitForSelector('.composer textarea', { timeout: 15000 })
-  await page.click('.rail .new-chat')
-  await page.click('.composer-options .el-radio-button:has-text("知识库问答")')
-  await page.waitForSelector('.composer-options .kb-select', { timeout: 15000 })
+  await page.click('[data-testid="nav-chat"]')
+  await page.waitForSelector('[data-testid="chat-input"]', { timeout: 15000 })
+  await page.click('[data-testid="chat-new"]')
+  await page.click('[data-testid="chat-draft-mode-rag"]')
+  await page.waitForSelector('[data-testid="chat-draft-kb-select"]', { timeout: 15000 })
 
   // 新建时默认选中列表里的第一个库；先清掉它，否则会变成"3 个库"，
   // 而这条腿要验的恰好是"我选的这两个"
-  await page.hover('.composer-options .kb-select')
-  const clearButton = page.locator('.composer-options .kb-select .el-select__clear')
+  await page.hover('[data-testid="chat-draft-kb-select"]')
+  const clearButton = page.locator('[data-testid="chat-draft-kb-select"] .el-select__clear')
   if (await clearButton.count()) {
     await clearButton.first().click()
   }
 
-  await page.click('.composer-options .kb-select')
+  await page.click('[data-testid="chat-draft-kb-select"]')
   for (const name of [kbAName, kbBName]) {
-    await page.locator('.el-select-dropdown__item', { hasText: name }).last().click()
+    await page.locator('.chat-draft-kb-select-popper .el-select-dropdown__item', { hasText: name }).last().click()
   }
   await page.keyboard.press('Escape')
 
-  const picked = await page.locator('.composer-options .kb-select .el-tag').allInnerTexts()
+  const picked = await page.locator('[data-testid="chat-draft-kb-select"] .el-tag').allInnerTexts()
   console.log(`② 界面上选中的知识库：${picked.map((text) => text.trim()).join(' | ')}`)
   if (picked.length !== 2) {
     failures.push(`多选控件里应有 2 个库，实际 ${picked.length}：${JSON.stringify(picked)}`)
   }
 
   // ---------- ③ 提问：只有第二个库能回答的问题 ----------
-  await page.fill('.composer textarea', '缓存击穿的内部代号是什么？回源超时设为多少？')
-  await page.click('.composer .send')
-  await page.waitForSelector('.message.from-agent .retrieval-count', { timeout: 60000 })
+  await page.fill('[data-testid="chat-input"]', '缓存击穿的内部代号是什么？回源超时设为多少？')
+  await page.click('[data-testid="chat-send"]')
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .retrieval-count', { timeout: 60000 })
 
   const sent = createConversationBody ?? {}
   console.log(`③ 建会话请求体：${JSON.stringify(sent.kbIds ?? null)}`)
@@ -214,12 +215,12 @@ try {
   conversationId = createdConversationId
 
   // 检索卡片：多库的标签 + 每条的来源库名
-  const cardText = (await page.locator('.retrieval').last().innerText()).replace(/\s+/g, ' ').trim()
+  const cardText = (await page.locator('[data-testid="chat-retrieval"]').last().innerText()).replace(/\s+/g, ' ').trim()
   console.log(`   检索卡片：${cardText}`)
   if (!/检索到 [0-9]+ 个片段/.test(cardText)) {
     failures.push(`检索卡片文案异常：${cardText}`)
   }
-  if ((await page.locator('.retrieval .el-tag:has-text("2 个知识库")').count()) !== 1) {
+  if ((await page.locator('[data-testid="chat-retrieval-multi-kb"]').count()) !== 1) {
     failures.push('绑了两个库，但卡片上没有"2 个知识库"的标签（knowledgeBaseIds 没带上？）')
   }
   const hitKbTags = (await page.locator('.retrieval-hits .hit-kb').allInnerTexts())
@@ -230,16 +231,16 @@ try {
   }
 
   // 回答必须用上第二个库的独有事实——这是"多库真的生效"的最终证据
-  await page.waitForSelector('.message.from-agent .markdown:not(.stream-text)', { timeout: 120000 })
+  await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)', { timeout: 120000 })
   await page.waitForFunction(
     () => {
-      const items = document.querySelectorAll('.message.from-agent .markdown:not(.stream-text)')
+      const items = document.querySelectorAll('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)')
       return items.length > 0 && items[items.length - 1].textContent.length > 0
     },
     undefined,
     { timeout: 120000 }
   )
-  const answer = (await page.locator('.message.from-agent .markdown:not(.stream-text)').last().innerText())
+  const answer = (await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)').last().innerText())
     .replace(/\s+/g, ' ')
     .trim()
   console.log(`   回答：${answer.slice(0, 200)}`)

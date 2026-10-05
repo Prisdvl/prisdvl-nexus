@@ -17,15 +17,17 @@
  * 退出码：0 = 全部通过；1 = 有真实失败；2 = 有跳过（本机没有可用模型，提问那条腿跑不了）。
  *
  * 成本（如实写明）：没有删号接口，所以每次运行会留下一个 `probe-nokb-*` 账号。
- * 这不是残留 bug——是这条腿必须用"零库的新账号"才能跑所付的代价。会话留在那个账号名下，
- * 不与 demo 账号的数据混在一起（demo 的截图与断言不受影响）。
+ * 这不是残留 bug——是这条腿必须用"零库的新账号"才能跑所付的代价。
+ * 但**会话不再留下**：finally 里会删掉本脚本在该账号下建的全部会话（见 cleanupOwnConversations），
+ * 账号本身则交给 `scripts/cleanup-test-data.ps1` 按 `probe` 前缀统一回收。
+ * 账号级的残留始终与 demo 账号的数据隔离（demo 的截图与断言不受影响）。
  */
 import { chromium } from 'playwright-core'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const api = process.env.API_BASE ?? 'http://localhost:8080/api'
-const base = process.env.WEB_BASE ?? 'http://localhost:5173'
+const api = process.env.API_BASE ?? 'http://localhost:8088'
+const base = process.env.WEB_BASE ?? 'http://localhost:8088'
 const here = dirname(fileURLToPath(import.meta.url))
 /**
  * 截图目录按**脚本自己的位置**解析，不按 cwd——本脚本第一版写成相对路径 `docs/screenshots`，
@@ -44,7 +46,7 @@ const failures = []
 const skipped = []
 
 async function post(path, body, token) {
-  const response = await fetch(`${api}${path}`, {
+  const response = await fetch(`${api}/api${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -69,7 +71,7 @@ try {
 
   // 前置条件：这个账号的知识库数必须是 0。这一条不是形式主义——若因为别的原因
   // （例如知识库接口报错、或账号其实继承了数据）导致界面显示提示，后面的断言全都会被满足
-  const kbs = await fetch(`${api}/knowledge-bases?pageNum=1&pageSize=50`, {
+  const kbs = await fetch(`${api}/api/knowledge-bases?pageNum=1&pageSize=50`, {
     headers: { Authorization: `Bearer ${token}` }
   }).then((response) => response.json())
   const kbCount = (kbs.data?.list ?? []).length
@@ -96,7 +98,7 @@ try {
   if (!kbOnlyAgentId) {
     failures.push(`建 KB_ONLY Agent 失败：${created.code} ${created.message}`)
   } else {
-    const published = await fetch(`${api}/agents/${kbOnlyAgentId}`, {
+    const published = await fetch(`${api}/api/agents/${kbOnlyAgentId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ status: 'PUBLISHED' })
@@ -138,10 +140,10 @@ try {
   })
 
   await page.goto(base, { waitUntil: 'networkidle' })
-  await page.click('.nav-item:has-text("对话")')
-  await page.waitForSelector('.composer-options', { timeout: 15000 })
-  await page.click('.rail .new-chat')
-  await page.waitForFunction(() => document.querySelectorAll('.message').length === 0, undefined, {
+  await page.click('[data-testid="nav-chat"]')
+  await page.waitForSelector('[data-testid="chat-composer-options"]', { timeout: 15000 })
+  await page.click('[data-testid="chat-new"]')
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="chat-message"]').length === 0, undefined, {
     timeout: 10000
   })
 
@@ -162,10 +164,10 @@ try {
   console.log('✓ 已截图 docs/screenshots/agent-no-kb-hint.png')
 
   // ---------- ③ 提问：用户报的那一幕 ----------
-  await page.fill('.composer textarea', question)
-  await page.click('.composer .send')
+  await page.fill('[data-testid="chat-input"]', question)
+  await page.click('[data-testid="chat-send"]')
   const answered = await page
-    .waitForSelector('.message.from-agent .markdown:not(.stream-text)', { timeout: 180000 })
+    .waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)', { timeout: 180000 })
     .then(() => true)
     .catch(() => false)
   if (!answered) {
@@ -177,11 +179,11 @@ try {
     }
   } else {
     await page.waitForTimeout(800)
-    const traces = (await page.locator('.message.from-agent .trace li').allInnerTexts()).map((text) =>
+    const traces = (await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .trace li').allInnerTexts()).map((text) =>
       text.replace(/\s+/g, ' ').trim()
     )
     const answer = (await page
-      .locator('.message.from-agent .markdown:not(.stream-text)')
+      .locator('[data-testid="chat-message"][data-role="ASSISTANT"] .markdown:not(.stream-text)')
       .last()
       .innerText()).replace(/\s+/g, ' ').trim()
     console.log(`③ 工具痕迹 ${traces.length} 条：`)
@@ -210,8 +212,8 @@ try {
 
     // ---------- ④ 刷新后痕迹还在 ----------
     await page.reload({ waitUntil: 'networkidle' })
-    await page.waitForSelector('.message.from-agent .trace-result', { timeout: 30000 })
-    const afterReload = (await page.locator('.message.from-agent .trace-result').allInnerTexts()).map(
+    await page.waitForSelector('[data-testid="chat-message"][data-role="ASSISTANT"] .trace-result', { timeout: 30000 })
+    const afterReload = (await page.locator('[data-testid="chat-message"][data-role="ASSISTANT"] .trace-result').allInnerTexts()).map(
       (text) => text.replace(/\s+/g, ' ').trim()
     )
     console.log(`④ 刷新后痕迹摘要：${JSON.stringify(afterReload)}`)
@@ -224,11 +226,11 @@ try {
     // 写在同一个 v-if 分支里，跑了其中一支不等于另一支也跑过。
     // 那个 Agent 是在**进页面之前**就建好的（见准备阶段）：页内新建的 Agent 不在已拉取的列表里
     if (kbOnlyName) {
-      await page.click('.rail .new-chat')
-      await page.waitForSelector('.composer-options .kb-select', { timeout: 15000 })
-      await page.click('.composer-options .kb-select')
+      await page.click('[data-testid="chat-new"]')
+      await page.waitForSelector('[data-testid="chat-draft-agent-select"]', { timeout: 15000 })
+      await page.click('[data-testid="chat-draft-agent-select"]')
       const agentOption = page
-        .locator('.el-select-dropdown:visible .el-select-dropdown__item')
+        .locator('.chat-draft-agent-select-popper .el-select-dropdown__item')
         .filter({ hasText: kbOnlyName })
         .first()
       await agentOption.waitFor({ timeout: 15000 })
@@ -255,6 +257,42 @@ try {
   await page?.screenshot({ path: `${outDir}/agent-no-kb-failure.png` }).catch(() => {})
 } finally {
   await browser.close()
+  await cleanupOwnConversations()
+}
+
+/**
+ * 收尾：删掉本脚本在这个一次性账号下建的会话。
+ *
+ * 此前这里只有 `browser.close()`，会话就留在了 `probe-nokb-*` 账号名下（脚本头部原话是
+ * "这是这条腿必须付的代价"）。实际上**会话是能自清的**——真正删不掉的是账号本身
+ * （系统没有删号接口），那部分由 `scripts/cleanup-test-data.ps1` 按 `probe` 前缀统一回收。
+ *
+ * 分页响应的字段名这里取了多种可能：宁可多写一行判断，也不要因为后端换了个包装键
+ * 就让收尾静默失效——"看起来清理了、实际没清"比不清理更难发现。
+ */
+async function cleanupOwnConversations() {
+  if (!token) {
+    return
+  }
+  try {
+    const response = await fetch(`${api}/api/chat/conversations?pageNum=1&pageSize=100`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const body = await response.json().catch(() => null)
+    const records = body?.data?.records ?? body?.data?.list ?? body?.data?.items ?? []
+    if (!Array.isArray(records) || records.length === 0) {
+      return
+    }
+    for (const conversation of records) {
+      await fetch(`${api}/api/chat/conversations/${conversation.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {})
+    }
+    console.log(`[cleanup] 已删除本脚本在该账号下建的 ${records.length} 个会话；账号残留交给 cleanup-test-data`)
+  } catch (error) {
+    console.warn('[cleanup] 会话收尾失败（不影响本次结论）：', error.message)
+  }
 }
 
 if (failures.length > 0) {

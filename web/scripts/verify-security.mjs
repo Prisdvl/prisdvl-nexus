@@ -31,8 +31,8 @@ import { chromium } from 'playwright-core'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const base = process.env.WEB_BASE ?? 'http://localhost:5173'
-const apiBase = process.env.API_BASE ?? 'http://localhost:8080'
+const base = process.env.WEB_BASE ?? 'http://localhost:8088'
+const apiBase = process.env.API_BASE ?? 'http://localhost:8088'
 
 /** 截图目录按**脚本自己的位置**解析，不按 cwd（否则从 `web/` 运行会写进 `web/docs/screenshots/`） */
 const here = dirname(fileURLToPath(import.meta.url))
@@ -50,15 +50,17 @@ const failures = []
 /**
  * 弹窗有多个同时存在，只挑可见的那个（与 verify-agents.mjs 同一手法）。
  *
- * ⚠️ 但**只按整窗文本筛会撞车**（2026-10-02 实测）：资料弹窗的页脚有一个「修改密码」按钮，
- * 点它之后资料弹窗开始关闭动画，**在动画结束前仍然是 `:visible`**——于是
- * `.el-dialog:visible` + `hasText('修改密码')` 同时命中资料弹窗与改密弹窗，
- * Playwright 以 strict mode violation 直接失败。改成**只匹配标题栏**：
- * 资料弹窗的标题是「账号设置」、改密弹窗的是「修改密码」，两者互斥。
+ * 判据是**弹窗内部的稳定锚点**（data-testid），不是它的标题文案：
+ *  - 标题是产品文案。改一次字，脚本就报"找不到弹窗"——一个完全指向不了真实原因的失败；
+ *  - 按整窗文本筛还会撞车（2026-10-02 实测）：资料弹窗的页脚有一个「修改密码」按钮，
+ *    点它之后资料弹窗开始关闭动画、**在动画结束前仍然是 `:visible`**，于是
+ *    `.el-dialog:visible` + 文本匹配会同时命中资料弹窗与改密弹窗，
+ *    Playwright 以 strict mode violation 直接失败。
+ * 锚点是结构：`profile-form` / `password-form` 各自只出现在自己的弹窗里，两个问题一起消掉。
  */
-function dialog(title) {
+function dialogByTestId(anchor) {
   return page.locator('.el-dialog:visible').filter({
-    has: page.locator('.el-dialog__header', { hasText: title })
+    has: page.locator(`[data-testid="${anchor}"]`)
   })
 }
 
@@ -78,10 +80,10 @@ try {
   console.log(`① 临时账号已注册：${username}`)
 
   await page.goto(base, { waitUntil: 'networkidle' })
-  await page.waitForSelector('input[autocomplete="username"]', { timeout: 15000 })
-  await page.fill('input[autocomplete="username"]', username)
-  await page.fill('input[type="password"]', OLD_PASSWORD)
-  await page.click('button:has-text("登录")')
+  await page.waitForSelector('[data-testid="auth-username"]', { timeout: 15000 })
+  await page.fill('[data-testid="auth-username"]', username)
+  await page.fill('[data-testid="auth-password"]', OLD_PASSWORD)
+  await page.click('[data-testid="auth-submit"]')
   await page.waitForFunction(() => !location.hash.startsWith('#/login'), { timeout: 15000 })
   console.log('② 登录成功，已进入控制台')
 
@@ -91,7 +93,7 @@ try {
   }
 
   // ---------- ② 额度那一行 ----------
-  await page.click('.nav-item:has-text("对话")')
+  await page.click('[data-testid="nav-chat"]')
   await page.waitForSelector('.quota', { timeout: 15000 })
   const quotaText = (await page.locator('.quota').innerText()).replace(/\s+/g, ' ').trim()
   // 不断死具体数字：新账号是 0，但"上限是多少"随 profile 变化（测试 profile 与 standalone 就不同）
@@ -101,35 +103,35 @@ try {
   console.log(`③ 对话页可见当日额度：${quotaText}`)
 
   // ---------- ③ 改资料 ----------
-  await page.click('.sidebar-foot .who')
-  const profileDialog = dialog('账号设置')
+  await page.click('[data-testid="account-entry"]')
+  const profileDialog = dialogByTestId('profile-form')
   await profileDialog.waitFor({ timeout: 15000 })
-  await profileDialog.locator('.el-form-item:has-text("昵称") input').fill(NICKNAME)
-  await profileDialog.locator('button:has-text("保存")').click()
+  await profileDialog.locator('[data-testid="profile-nickname"]').fill(NICKNAME)
+  await profileDialog.locator('[data-testid="profile-save"]').click()
   await profileDialog.waitFor({ state: 'hidden', timeout: 15000 })
 
-  const sidebarName = (await page.locator('.sidebar-foot .who .truncate').innerText()).trim()
+  const sidebarName = (await page.locator('[data-testid="account-name"]').innerText()).trim()
   if (sidebarName !== NICKNAME) {
     throw new Error(`侧栏没有跟着改成昵称：期望「${NICKNAME}」，实际「${sidebarName}」`)
   }
   console.log(`④ 昵称已保存，侧栏立即显示「${sidebarName}」`)
 
   // ---------- ④ 原密码填错：必须是参数错误，不能把人踢下线 ----------
-  await page.click('.sidebar-foot .who')
+  await page.click('[data-testid="account-entry"]')
   await profileDialog.waitFor({ timeout: 15000 })
-  await profileDialog.locator('button:has-text("修改密码")').click()
+  await profileDialog.locator('[data-testid="profile-change-password"]').click()
   // 等资料弹窗真的关掉再操作改密弹窗：它的遮罩在关闭动画期间仍盖在页面上，
   // 与其和动画抢时间，不如等它消失（这也让上面那条"两个弹窗都命中"的歧义彻底消失）
   await profileDialog.waitFor({ state: 'hidden', timeout: 15000 })
-  const pwdDialog = dialog('修改密码')
+  const pwdDialog = dialogByTestId('password-form')
   await pwdDialog.waitFor({ timeout: 15000 })
 
-  // 三个输入框按 DOM 顺序就是 原密码 / 新密码 / 确认新密码（标签里"新密码"是"确认新密码"的子串，
-  // 按标签选会同时命中两个，所以用顺序定位而不是文本）
-  const pwdInputs = pwdDialog.locator('input[type="password"]')
-  await pwdInputs.nth(0).fill('WrongOldPwd!1')
-  await pwdInputs.nth(1).fill(NEW_PASSWORD)
-  await pwdInputs.nth(2).fill(NEW_PASSWORD)
+  // 三个框各挂 data-testid。原先按 DOM 顺序取 nth(0/1/2)：标签里"新密码"是"确认新密码"的
+  // 子串、按标签选会同时命中两个，于是退而求其次用了顺序——但一旦插入或重排字段，
+  // 顺序定位会**静默错位**（把新密码填进确认框，却仍然"看起来填了三格"）。
+  await pwdDialog.locator('[data-testid="password-old"]').fill('WrongOldPwd!1')
+  await pwdDialog.locator('[data-testid="password-new"]').fill(NEW_PASSWORD)
+  await pwdDialog.locator('[data-testid="password-confirm"]').fill(NEW_PASSWORD)
 
   // 先等上一步"资料已保存"那条 toast 自己消失，否则下面会读到它（而不是这次的报错），
   // 断言就变成了在验上一句提示语——一条看起来通过、其实什么都没验的断言
@@ -137,7 +139,7 @@ try {
     timeout: 15000
   })
 
-  await pwdDialog.locator('button:has-text("确认修改")').click()
+  await pwdDialog.locator('[data-testid="password-submit"]').click()
 
   // 后端原话会以 toast 出现；这里要断言的是**没有发生的事**：既没跳登录页，弹窗也还开着
   await page.waitForSelector('.el-message', { timeout: 15000 })
@@ -151,10 +153,12 @@ try {
   console.log(`⑤ 原密码填错 → 参数错误、留在原地（提示：「${wrongOldMessage}」）`)
 
   // ---------- ⑤ 改密成功：主动下线 + 旧 token 真的失效 ----------
-  await pwdInputs.nth(0).fill(OLD_PASSWORD)
-  await pwdInputs.nth(1).fill(NEW_PASSWORD)
-  await pwdInputs.nth(2).fill(NEW_PASSWORD)
-  await pwdDialog.locator('button:has-text("确认修改")').click()
+  // 同样按锚点填，不按 DOM 顺序：第二次填错框（把旧密码填进确认框）会得到一个
+  // 语义完全错误的结果——"改密成功"但新密码没生效
+  await pwdDialog.locator('[data-testid="password-old"]').fill(OLD_PASSWORD)
+  await pwdDialog.locator('[data-testid="password-new"]').fill(NEW_PASSWORD)
+  await pwdDialog.locator('[data-testid="password-confirm"]').fill(NEW_PASSWORD)
+  await pwdDialog.locator('[data-testid="password-submit"]').click()
 
   await page.waitForFunction(() => location.hash.startsWith('#/login'), { timeout: 15000 })
   console.log('⑥ 改密成功 → 已回到登录页（提示语说明"请用新密码重新登录"）')
@@ -170,14 +174,14 @@ try {
   console.log('⑦ 用改密前的旧 token 打接口 → 401（令牌吊销真的生效了）')
 
   // ---------- ⑥ 新密码登录 ----------
-  await page.fill('input[autocomplete="username"]', username)
-  await page.fill('input[type="password"]', NEW_PASSWORD)
-  await page.click('button:has-text("登录")')
+  await page.fill('[data-testid="auth-username"]', username)
+  await page.fill('[data-testid="auth-password"]', NEW_PASSWORD)
+  await page.click('[data-testid="auth-submit"]')
   await page.waitForFunction(() => !location.hash.startsWith('#/login'), { timeout: 15000 })
 
   // 昵称是服务端的资料，换个会话也应当还在（它不是本地缓存）
-  await page.waitForSelector('.sidebar-foot .who .truncate', { timeout: 15000 })
-  const nameAfterRelogin = (await page.locator('.sidebar-foot .who .truncate').innerText()).trim()
+  await page.waitForSelector('[data-testid="account-name"]', { timeout: 15000 })
+  const nameAfterRelogin = (await page.locator('[data-testid="account-name"]').innerText()).trim()
   if (nameAfterRelogin !== NICKNAME) {
     throw new Error(`重新登录后昵称丢了：期望「${NICKNAME}」，实际「${nameAfterRelogin}」`)
   }

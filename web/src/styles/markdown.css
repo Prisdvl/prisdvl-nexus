@@ -1,0 +1,60 @@
+/*
+ * Markdown 正文排版（Phase C §十六）。
+ *
+ * ## 为什么有这一个文件
+ *
+ * 改造前这套规则在 `AgentView.vue` 与 `KnowledgeBaseDetailView.vue` 各存一份。
+ * **但它们不是复制粘贴的重复，而是同源且已分叉**：
+ *
+ * | 规则 | Chat 页 | 详情页 | 为什么不同 |
+ * | --- | --- | --- | --- |
+ * | `h1/h2/h3` | `margin: 1.4em 0 0.5em` | `1.6em 0 0.5em` + `scroll-margin-top: 16px` | 详情页支持大纲跳转，标题不能贴顶 |
+ * | `blockquote` 左边框 | `--accent-300` | `--accent-400` | 视觉微调 |
+ * | `table` / `th` / `td` / `img` | 无 | 有 | Chat 的回答里没有表格与图片 |
+ *
+ * 所以这里只放**两边逐字相同**的那几条；分叉的部分留在各视图的 scoped 里。
+ * 把两边强行按成一样会毁掉大纲跳转——那不是统一，是丢功能。
+ *
+ * ## 为什么原来写的是 `:deep(X)`
+ *
+ * 内容来自 `v-html`，生成的元素不在组件模板里。而 `:deep()` 只在 `<style scoped>` 内有效，
+ * 抽到全局后必须写成普通后代选择器，否则 `:deep` 会被当成无效选择器——
+ * **不报错，但一个元素都匹配不上**，排版会整体失效。
+ */
+
+.markdown a {
+  color: var(--accent-600);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--surface-sunken);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.markdown p {
+  margin: 0.7em 0;
+}
+
+.markdown pre {
+  background: var(--text-strong);
+  border-radius: var(--radius-card);
+  padding: var(--space-4) var(--space-5);
+  overflow: auto;
+}
+
+.markdown pre code {
+  background: transparent;
+  color: #e8e6e3;
+  padding: 0;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.4em;
+  margin: 0.7em 0;
+}

@@ -98,12 +98,14 @@ async function submit() {
       ref="formRef"
       :model="form"
       :rules="rules"
+      data-testid="password-form"
       label-position="top"
       @submit.prevent="submit"
     >
       <el-form-item label="原密码" prop="oldPassword">
         <el-input
           v-model="form.oldPassword"
+          data-testid="password-old"
           type="password"
           show-password
           autocomplete="current-password"
@@ -112,6 +114,7 @@ async function submit() {
       <el-form-item label="新密码" prop="newPassword">
         <el-input
           v-model="form.newPassword"
+          data-testid="password-new"
           type="password"
           show-password
           placeholder="8–64 位"
@@ -121,6 +124,7 @@ async function submit() {
       <el-form-item label="确认新密码" prop="confirmPassword">
         <el-input
           v-model="form.confirmPassword"
+          data-testid="password-confirm"
           type="password"
           show-password
           autocomplete="new-password"
@@ -130,8 +134,15 @@ async function submit() {
     </el-form>
 
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="submitting" @click="submit">确认修改</el-button>
+      <el-button data-testid="password-cancel" @click="visible = false">取消</el-button>
+      <el-button
+        type="primary"
+        data-testid="password-submit"
+        :loading="submitting"
+        @click="submit"
+      >
+        确认修改
+      </el-button>
     </template>
   </el-dialog>
 </template>

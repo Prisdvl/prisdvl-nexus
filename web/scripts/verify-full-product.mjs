@@ -24,8 +24,8 @@
  *
  * ## 环境
  *   默认打**整栈容器化**的入口（`http://localhost:8088`），因为那才是部署形态：
- *     API_BASE=http://localhost:8088/api          （直接打后端需要单独设，容器里后端不发布端口）
- *     WEB_BASE=http://localhost:8088
+ *     `API_BASE` / `WEB_BASE` 统一指向**网关根**（默认 http://localhost:8088），
+ *     路径里的 `/api` 由脚本自己拼。本地 vite 开发时用 API_BASE=http://localhost:8080 覆盖。
  *   需要 ES + pgvector + 一个可用的模型（最后两条腿要用模型）。模型不可用时**跳过**而非失败，
  *   退出码 2——与其它脚本一致：**跳过不等于通过**。
  *
@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const outDir = resolve(here, '../../docs/screenshots')
 
-const API_BASE = process.env.API_BASE ?? 'http://localhost:8088/api'
+const API_BASE = process.env.API_BASE ?? 'http://localhost:8088'
 const WEB_BASE = process.env.WEB_BASE ?? 'http://localhost:8088'
 
 const sleep = (ms) => new Promise((resolve_) => setTimeout(resolve_, ms))
@@ -92,7 +92,7 @@ async function api(method, path, body, token, extraHeaders = {}) {
     headers['Content-Type'] = 'application/json'
     payload = JSON.stringify(body)
   }
-  const response = await fetch(`${API_BASE}${path}`, { method, headers, body: payload })
+  const response = await fetch(`${API_BASE}/api${path}`, { method, headers, body: payload })
   const text = await response.text()
   let json = null
   try {
@@ -428,7 +428,7 @@ async function streamChat(token_, conversationId_, content) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 180000)
   try {
-    const response = await fetch(`${API_BASE}/chat/stream`, {
+    const response = await fetch(`${API_BASE}/api/chat/stream`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token_}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ conversationId: conversationId_, content }),
@@ -491,15 +491,15 @@ async function uiLeg(token_) {
     await page.goto(WEB_BASE, { waitUntil: 'networkidle' })
 
     // 真走一遍登录表单——不是塞 localStorage。这一步才能验"登录页 + 路由守卫"是通的
-    const onLogin = await page.locator('input[type="password"]').count()
+    const onLogin = await page.locator('[data-testid="auth-password"]').count()
     if (!onLogin) {
       fail('13 界面', `打开 ${WEB_BASE} 没有落到登录页（找不到密码框）——SPA 路由或静态资源有问题`)
       return
     }
-    await page.fill('input:not([type="password"]):visible', username)
-    await page.fill('input[type="password"]', password)
-    await page.click('button:has-text("登录")')
-    await page.waitForSelector('.nav-item', { timeout: 20000 })
+    await page.fill('[data-testid="auth-username"]', username)
+    await page.fill('[data-testid="auth-password"]', password)
+    await page.click('[data-testid="auth-submit"]')
+    await page.waitForSelector('[data-testid="app-nav"]', { timeout: 20000 })
 
     const body = (await page.locator('body').innerText()).replace(/\s+/g, ' ')
     if (!body.includes(kbAName) || !body.includes(kbBName)) {

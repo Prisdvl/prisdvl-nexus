@@ -18,7 +18,7 @@ mkdirSync(outDir, { recursive: true })
 
 const tokenFile = process.argv[2] ?? resolve(here, '../.demo-token')
 const token = readFileSync(tokenFile, 'utf8').trim()
-const base = process.env.WEB_BASE ?? 'http://localhost:5173'
+const base = process.env.WEB_BASE ?? 'http://localhost:8088'
 
 /** 依次尝试系统浏览器；任一可用即可。 */
 async function launch() {
