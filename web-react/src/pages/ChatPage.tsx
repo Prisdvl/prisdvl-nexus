@@ -4,6 +4,7 @@ import { StateError } from '@/components/common/StateError'
 import { StateLoading } from '@/components/common/StateLoading'
 import { CitationList } from '@/components/chat/CitationList'
 import { MessageBubble } from '@/components/chat/MessageBubble'
+import { KbBindingBar } from '@/components/chat/KbBindingBar'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/form'
 import {
@@ -264,6 +265,8 @@ export function ChatPage(): ReactElement {
 
   const list = convos.data?.list ?? []
   const messages = msgs.data?.list ?? []
+  /** 当前会话对象（绑定条要读它的 kbIds/mode；会话列表是唯一权威来源，不另存一份） */
+  const activeConvo = list.find((c) => c.id === activeId) ?? null
   // 只有"乐观消息所属会话 == 当前会话"时才显示（见状态声明处的说明）
   const visiblePending =
     pendingUserMsg && pendingUserMsg.forId === activeId ? pendingUserMsg.msg : null
@@ -331,6 +334,19 @@ export function ChatPage(): ReactElement {
 
       {/* ---- 消息流 ---- */}
       <div className="flex min-w-0 flex-1 flex-col">
+        {/*
+          知识库绑定条：RAG 会话的**数据来源**在这里可改。
+          为什么要露在消息流上方而不是塞进设置弹窗：
+          "这次检索了哪些库"直接决定回答的依据范围，用户问出不满意的答案时，
+          第一反应就是"我是不是绑错库了"——那就得一眼能看见、一下就改掉。
+        */}
+        <KbBindingBar
+          conversation={activeConvo}
+          onChanged={() => {
+            void convos.retry()
+          }}
+        />
+
         <div className="min-h-0 flex-1 overflow-y-auto p-4" data-testid="chat-messages">
           {msgs.state === 'error' ? (
             <StateError

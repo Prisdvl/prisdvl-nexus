@@ -64,6 +64,24 @@ export function renameConversation(
   })
 }
 
+/**
+ * 改绑知识库（RAG 会话）。
+ *
+ * 后端语义（`UpdateConversationRequest`）：
+ * ```text
+ * kbIds = []   → 解绑全部
+ * kbIds = [...]→ 换成这些（最多 10 个，归属校验在服务端）
+ * 不传 kbIds   → 不动这一项
+ * ```
+ * 注意 `mode` **改不了**（后端刻意不允许）：知识库是"数据来源"，换掉只影响后续轮次检索到什么；
+ * 而 mode 决定"要不要检索、要不要引用"，改它会让同一段历史里的回答失去可比性。
+ */
+export function updateConversationKbs(id: string, kbIds: string[], signal?: AbortSignal) {
+  return api.put<Conversation>(`/chat/conversations/${id}`, { kbIds }, {
+    ...(signal ? { signal } : {})
+  })
+}
+
 export function deleteConversation(id: string, signal?: AbortSignal) {
   return api.delete<void>(`/chat/conversations/${id}`, {
     ...(signal ? { signal } : {})
