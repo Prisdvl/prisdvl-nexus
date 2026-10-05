@@ -173,22 +173,25 @@ try {
 
   console.log('⑦ 删除（含危险确认 + 取消不误删）')
   /*
-   * 选择器用 `.first()`：复制出来的副本 code 是 `${CODE}-copy`，
-   * `:has-text(CODE)` 会**同时匹配原版与副本**两张卡 →
-   * Playwright strict mode 直接报错。第一版没加限定就撞上了。
+   * 精确定位"原版"那张卡：用 [data-testid="agent-card-code"] 的**文本完全相等**来选。
+   *
+   * 这里踩过两次：
+   *  1. `:has-text(CODE)` 会同时匹配原版与副本（副本 code = `${CODE}-copy`）→ strict mode 报错；
+   *  2. 改成 `.first()` 后不报错了，但 `.first()` 取到哪张取决于渲染顺序，
+   *     于是"删原版还是删副本"变得不确定，末条断言随之随机失败。
+   * 教训：**用模糊文本匹配去指代一个 id，本质上是不确定的**；应当按业务标识精确相等来选。
    */
-  // 同样从卡片层级定位（按钮里没有 code 文本）
-  const delBtn = page
-    .locator(`[data-testid="agent-card"]:has-text("${CODE}")`)
-    .first()
-    .locator('[data-testid="agent-delete"]')
+  const cardOf = (code) =>
+    page.locator(
+      `[data-testid="agent-card"]:has([data-testid="agent-card-code"]:text-is("${code}"))`
+    )
+  const delBtn = cardOf(CODE).locator('[data-testid="agent-delete"]')
   await delBtn.click()
   await page.waitForSelector('[data-testid="confirm-body"]', { timeout: 8000 })
   // 先取消
   await page.click('[data-testid="confirm-cancel"]')
   await page.waitForTimeout(800)
-  const stillThere =
-    (await page.locator(`[data-testid="agent-card"]:has-text("${CODE}")`).count()) >= 1
+  const stillThere = (await cardOf(CODE).count()) >= 1
   check(stillThere, '取消后 Agent 仍在（没有误删）')
   // 再真删
   await delBtn.click()
@@ -197,10 +200,8 @@ try {
   check(/不可撤销/.test(desc), '确认框写明不可撤销', desc.trim().slice(0, 36))
   await page.click('[data-testid="confirm-submit"]')
   await page.waitForTimeout(2500)
-  // 副本的 code 是 `${CODE}-copy`，它也含 CODE，所以**不能**判 == 0；
-  // 正确判据是「原版（精确等于 CODE）的那张卡没了」。
-  const exact = page.locator(`[data-testid="agent-card"]:has-text("${CODE}"):not(:has-text("-copy"))`)
-  const gone = (await exact.count()) === 0
+  // 判据：原版那张卡（code 精确相等）消失；副本(code-copy)不受影响
+  const gone = (await cardOf(CODE).count()) === 0
   check(gone, '确认后从列表消失')
 
   console.log('⑧ 错误检查')

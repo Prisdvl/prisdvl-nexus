@@ -277,17 +277,36 @@ export type AnyStreamEvent =
  * ================================================================== */
 
 /**
- * `done` 是 `stopped` 还是 `stop` —— **这是判定链路的可靠依据**。
+ * `done` 是 Chat 还是 RAG —— 用判别字段，但要**容忍字段缺失**。
  *
- * 比看 URL 可靠：两条链路的 URL 在不同环境下可能变（网关前缀、版本），
- * 而 payload 字段是后端契约的一部分。
+ * ## 为什么这里从"严格判定"改成"宽容判定"（真机实测纠正）
+ *
+ * 原实现是 `'stopped' in data` / `'stop' in data`，注释还写着"这是判定链路的可靠依据"。
+ * 实测抓到的 **正常完成** 的 done 帧只有两个字段：
+ *
+ * ```json
+ * {"citations":[...4 条...],"finishReason":"stop"}
+ * ```
+ *
+ * 因为后端只在**用户主动停止**时才补 `stopped`（停止分支），正常完成走 `donePayload(finishReason)`。
+ * 于是两个守卫**同时为 false**，`useChatStream` 里 `if (isChatDone(d))` 整段被跳过，
+ * `setCitations` 永不执行 —— 症状就是**流式回答的引用面板永远不出现**，
+ * 而检索到的资料其实早就随 done 帧送到前端了。
+ *
+ * 教训：**判别字段若只在部分分支出现，它就不能当类型判别子。**
+ * 取舍：宁可判错链路（两者字段高度重合、消费方都只读 citations），
+ * 也不能因为判不出来就**丢掉数据**。
  */
 export function isChatDone(data: ChatStreamDone | RagStreamDone): data is ChatStreamDone {
-  return 'stopped' in data
+  if ('stopped' in data) return true
+  if ('stop' in data) return false
+  // 两个判别字段都没有 = 正常完成的 done。再用"哪边特有"的字段判一次；
+  // 都没有就归为 Chat（RAG 特有的 recordId 缺失时，归 Chat 最安全）。
+  return !('recordId' in data)
 }
 
 export function isRagDone(data: ChatStreamDone | RagStreamDone): data is RagStreamDone {
-  return 'stop' in data
+  return !isChatDone(data)
 }
 
 /** 错误事件同理。 */

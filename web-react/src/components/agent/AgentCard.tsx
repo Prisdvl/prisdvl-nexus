@@ -58,7 +58,10 @@ export function AgentCard({
               {agent.name}
             </h2>
             {/* code 是业务标识（后端主键是 id）——L2，属于"这是哪个 Agent" */}
-            <p className="m-0 mt-0.5 font-mono text-[var(--nx-text-xs)] text-[var(--nx-color-text-muted)]">
+            <p
+              className="m-0 mt-0.5 font-mono text-[var(--nx-text-xs)] text-[var(--nx-color-text-muted)]"
+              data-testid="agent-card-code"
+            >
               {agent.code}
             </p>
           </div>

@@ -1,0 +1,52 @@
+fix(web-react): 修复流式回答引用面板永不显示（真实契约缺陷）+ E2E 断言纠正
+
+## 真实产品缺陷（本轮唯一一个）
+
+症状：**流式回答的引用面板永远不出现**。
+
+根因（SSE 抓帧取证）：后端**正常完成**的 done 帧只有两个字段
+
+    {"citations":[...4 条...],"finishReason":"stop"}
+
+因为后端只在**用户主动停止**时才补 `stopped`（ChatStreamServiceImpl 停止分支），
+正常完成走 `donePayload(finishReason)`。而前端守卫是
+
+    isChatDone = 'stopped' in data      // → false
+    isRagDone  = 'stop'    in data      // → false
+
+两个同时为 false → useChatStream 里 `if (isChatDone(d))` 整段跳过 → setCitations 永不执行。
+结果：检索到的 4 条引用早就随 done 帧送到前端，却被守卫丢掉，
+用户看到"这次没有引用"，而实际上检索是有结果的。
+
+修法：守卫改为**容忍字段缺失**（判别字段只在部分分支出现，就不能当判别子）。
+取舍：宁可判错链路（两者 citations 结构一致、消费方不读链路），也不能判不出来就丢数据。
+
+验证：verify:chat 从 15/3（文档记录）→ 19/0，且断言里"引用面板存在 — 面板 1"为实测。
+
+## E2E 断言与选择器纠正（3 项，均非产品缺陷）
+
+1. verify-agent 删除断言：`:has-text(CODE)` 会同时匹配原版与 `${CODE}-copy`，
+   原先靠 `.first()` 兜住不报错，但"删的是哪张"取决于渲染顺序 → 断言随机失败。
+   改法：AgentCard 给 code 元素加 `data-testid="agent-card-code"`，
+   脚本用 `:text-is("code")` 精确相等定位。
+   （教训：用模糊文本匹配去指代一个 id，本质上就是不确定的。）
+
+2. verify-chat「0 命中提示」：原断言假设"问知识库里没有的东西 ⇒ 必定 0 命中"。
+   实测证伪——同一个无关问题「香蕉和股票的关系」：
+     阈值 0.25 的库 → 命中 4 条（提示不出现）；阈值 0.60 的库 → 命中 0 条（提示出现）。
+   即「0 命中」是**知识库配置**的函数，不是提问的函数；写死等于把测试绑死在某个库上。
+   改法：验证互斥关系（命中 0 → 显示提示；命中>0 → 面板存在且有内容或核对开关），
+   并等 done 帧到达后再判引用（引用是在 done 里下发的）。
+
+3. verify-chat「生成中显示停止按钮」：固定 waitForTimeout(3000) 的时序竞态，
+   生成快时抓不到。改为 waitForSelector 等中间态。
+
+## 清理
+
+- 删除诊断脚本（diag-delete-agent.mjs / diag-chat-sse.mjs）——一次性排查用，不入库
+- 清理宿主机 9 个 JVM 崩溃日志（hs_err_pid*.log）：根因是可用内存仅 0.5GB 时硬起 JVM
+
+## 基线
+
+verify:all 九阶段全绿：sse 27/0、layout ✓、auth 25/0、kb 17/0、import 19/0、
+advanced 19/0、agent 24/0、chat 19/0（合计 150 项断言，FAIL 0）。
