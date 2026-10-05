@@ -5,7 +5,7 @@
 
 一个以**个人知识库为核心数据源**、基于 **Spring AI** 构建的 AI 应用：文档解析 → 结构化 Chunk → Embedding → 混合检索 → RAG，让大模型真正"读懂"你自己的 Obsidian / Markdown 笔记，并给出**可点击、可追溯的知识来源**；再通过 Tool Calling → Agent，把 AI 从"回答问题"升级为"基于个人知识执行任务"。
 
-它不是一个聊天机器人 demo，而是一个**跑得起来的完整系统**：8 个容器、4 个 Maven 模块、598 个测试、12 个 E2E 脚本，以及在真实 ES / pgvector / MySQL 上验收过的行为。
+它不是一个聊天机器人 demo，而是一个**跑得起来的完整系统**：8 个容器、4 个 Maven 模块、621 个测试、17 个 E2E 脚本，以及在真实 ES / pgvector / MySQL 上验收过的行为。
 
 ---
 
@@ -234,7 +234,7 @@ prisdvl-nexus/                      (root pom, packaging=pom)
 │                                   tool · observability · mcp
 ├── web/                            Vue 3 + TS 前端（独立 npm 工程，不是 Maven 模块）
 │   ├── src/                        views / api / components
-│   ├── scripts/                    E2E 与截图脚本（12 个 verify-*.mjs）
+│   ├── scripts/                    E2E 与截图脚本（17 个 verify-*.mjs）
 │   ├── nginx.conf                  生产入口配置
 │   └── Dockerfile                  node 构建 → nginx 运行
 ├── deploy/
@@ -383,28 +383,47 @@ npm run build      # vue-tsc 类型检查 + vite build
 
 ## 11. E2E 验证
 
-12 个脚本（`web/scripts/`），复用系统 Edge/Chrome，不下载浏览器：
+17 个脚本（`web/scripts/`），复用系统 Edge/Chrome，不下载浏览器。
+地址口径与令牌工具收在 `web/scripts/lib/`（`e2e-config.mjs` 定义 `API_BASE`/`WEB_BASE`，
+永远指向网关根、默认 `http://localhost:8088`；`demo-session.mjs` 提供现登录换令牌与会话差集清理）：
 
 | 脚本 | 验证内容 |
 | --- | --- |
 | `verify-full-product.mjs` | **全链路冒烟**：注册 → 登录 → 建两个库 → 上传 → **等异步导入到终态** → 向量化 + 建索引 → RAG（断言引用） → 建 Agent + 绑两库 → 发布 → Agent Chat → **Tool Calling** → SSE 流式 → **Observability** → 越权隔离 → 真登录表单进界面。自建账号、自清理，不依赖 seed-demo |
+| `verify-real-user-flow.mjs` | **按"一个全新用户"的顺序走一遍**：注册（含确认密码与强度校验）→ 登录 → 空态首页 → 建库 → 导入 → **取消一次文件选择后不卡 loading** → 导入后独有事实可检索 → 提问 → 引用（17 条腿） |
 | `verify-login.mjs` | 真实走登录表单，确认跳转与刷新后仍保持登录 |
 | `verify-frontend.mjs` | 知识库列表 → 正文（Markdown / 大纲 / 关联面板）→ 切片 |
-| `verify-doc-lifecycle.mjs` | 单文件上传 → 逐文件失败原因 → 删除文档 |
-| `verify-stream.mjs` | 知识库问答流式：逐字增长 + 引用 + 生成期间的"检索到 N 个片段" |
+| `verify-doc-lifecycle.mjs` | 导入文件 → 逐文件失败原因 → 删除文档 |
+| `verify-import-formats.mjs` | **五格式真跑**：TXT / MD / PDF / DOCX / ZIP 各上传含**独有事实**的文件 → 导入 `DONE` → 建索引 → 用该事实检索命中；PDF 与 DOCX **在脚本内手工构造**，不往仓库塞二进制样本 |
+| `verify-stream.mjs` | 知识库问答流式：逐字增长 + 引用 + 生成期间的"检索到 N 个片段" + **回答里出现该库独有事实**。**自建账号 + 自建库 + 自埋事实**，不碰演示账号 |
 | `verify-retrieval-ui.mjs` | 检索卡片渲染契约：**桩 SSE 帧**，五条腿（命中 / 零命中 / 一个库失败 / 全部失败 / 部分命中部分失败） |
 | `verify-multi-kb.mjs` | 多知识库 RAG：自建两库导不同内容 → 多选绑定 → 只能由第二个库回答的问题 → 越权绑定被拒 |
 | `verify-multi-kb-failure.mjs` | **需整栈 + 真 ES**：三库逐级覆盖 → 往真实 ES 写坏文档让 B **真失败** → 验 A✅/B❌/C✅、计数自增、界面点名 |
 | `verify-agents.mjs` | Agent 管理页全生命周期（新建 → 配置 → 发布 → 选用 → 停用 → 删除，11 条腿） |
-| `verify-agent-chat.mjs` | 对话页三条腿：Agent 工具卡片 + 重命名会话 + RAG 检索卡片 |
+| `verify-agent-chat.mjs` | 对话页三条腿：Agent 工具卡片 + 重命名会话 + RAG 检索卡片（含**引用刷新后仍在**） |
 | `verify-agent-no-kb.mjs` | 零知识库新用户提问：提示 → 检索如实报空 → 回答注明不是来自笔记 |
+| `verify-stop.mjs` | **停止生成**：请求刚发出即停 / 生成到一半停，两场景共用同一组后置断言（按钮回归、服务端 `STOPPED`、刷新后内容仍在） |
 | `verify-security.mjs` | 改资料 → 错原密码不踢下线（400 而非 401）→ 改密码后旧 token 401 → 新密码登录 |
+| `verify-responsive.mjs` | 1920×1080 与 1366×768 × 三个主页面：区分"**设计如此**（link 按钮本来就矮）"与"真被挤坏" |
+| `verify-testid-dom.mjs` | **data-testid 契约守卫**：逐页断言关键锚点真的进了 DOM（含 `el-radio-button` 可点、`el-tabs` 的 `#tab-*` id）。条件渲染的锚点如实标记"未取证"并指明由谁覆盖，不假装通过 |
+
+**选择器口径（Phase 0 起）**：脚本**定位元素**一律用 `data-testid` / `role` / 结构 id，
+不再用中文文案（`has-text`）——产品措辞会变（UA-005 就把「上传文件」改成「导入文件」），
+而绑在措辞上的定位会**静默失效**。但**断言**文案是允许的：它验的就是那句话本身。
+少数按**测试自建数据**（知识库名 / Agent 名 / 文件名）筛选的选项属于数据而非产品文案，
+一律加 `popper-class` 或 `:visible` 收窄作用域。
+`verify-testid-dom.mjs` 是这份契约的可执行版本。
 
 **退出码语义（重要）**：`0` 全部通过 / `1` 真实失败 / **`2` 有跳过**。
 跳过只在**环境能力缺失**时发生（例如 `standalone` 没有 ES），脚本会打印 `⚠ SKIPPED` 与原因——**跳过不等于通过**。
 
-脚本自带清理（自建的知识库、文档、账号在结束时删除），不依赖 `seed-demo` 的固定数据库状态；`verify-agent-no-kb.mjs` 与 `verify-security.mjs` **故意不用演示账号**，每次运行自建 `probe-*` / `sec-check-*`。
-**代价**：没有删号接口，因此每跑一次会留下一个这类账号——写在这里，免得以后当成残留 bug 去查。
+脚本自带清理（自建的知识库、文档在结束时删除），不依赖 `seed-demo` 的固定数据库状态。
+**17 个脚本里没有一条依赖演示账号的数据**：`verify-agent-no-kb.mjs` / `verify-security.mjs` /
+`verify-stream.mjs` 等每次运行自建 `probe-*` / `sec-check-*` 账号；少数确实要用演示数据的
+（`verify-agent-chat.mjs` / `verify-multi-kb-failure.mjs`）则用**跑前快照 + 差集删除**
+只回收本轮新建的会话，演示数据一条不动。
+**代价**：没有删号接口，因此每跑一次会留下一个 `probe-*` 这类账号——写在这里，免得以后当成残留 bug 去查；
+它们统一由 `cleanup-test-data`（前缀白名单）回收。
 
 > 另有 `screenshot.mjs` 生成文档截图；`debug-click.mjs` 是一个**遗留的调试脚本**，保留但不在验证流程内。
 
@@ -414,14 +433,17 @@ npm run build      # vue-tsc 类型检查 + vite build
 
 | 口径 | 数字 |
 | --- | --- |
-| 单元 + 集成测试 | **598 / 0 失败 / 0 错误 / 21 跳过**（111 个测试类） |
-| 真机（容器化整栈） | 上面那 21 个 live 测试**全部真跑通过，0 跳过** |
+| 单元 + 集成测试 | **621 / 0 失败 / 0 错误 / 22 跳过**（119 个测试类） |
+| 真机（容器化整栈） | 上面那 22 个 live 测试**全部真跑通过，0 跳过** |
 
-那 21 个跳过项**不是被删掉的失败**：它们是需要真实 MySQL / ES / pgvector / 真模型的 live 测试，
-在无 Docker 的默认环境里被跳过，在整栈起来后全部执行并通过。其中两个检索类
-（`LiveChunkIndexTest` 8 条、`LiveVectorStoreTest` 4 条）自 5.9 起**自带容器**
-（Testcontainers，见第 10 节 `LiveInfrastructure`），因此它们的跳过与否只取决于环境变量，
-不再取决于"你本机那套业务容器此刻是什么状态"。
+那 22 个跳过项**不是被删掉的失败**：它们是需要真实 MySQL / ES / pgvector / 真模型的 live 测试，
+在无 Docker 的默认环境里被跳过，在整栈起来后全部执行并通过。构成（实测 surefire）：
+`LiveChunkIndexTest` 9 / `LiveVectorStoreTest` 4 / `ChatStreamLiveTest` 3 /
+`LiveEmbeddingTest` 2 / `LiveModelCallTest` 2 / `AgentLoopTest` 1 / `MultiTurnMemoryTest` 1。
+其中两个检索类自 5.9 起**自带容器**（Testcontainers，见第 10 节 `LiveInfrastructure`），
+因此它们的跳过与否只取决于环境变量，不再取决于"你本机那套业务容器此刻是什么状态"。
+
+按模块：`nexus-common` 19 / `nexus-ai` 66 / `nexus-knowledge` 174 / `nexus-app` 362。
 
 ```bash
 JAVA_HOME=/d/develop/jdk-21 mvn -B clean test        # 全量
@@ -455,6 +477,12 @@ cd web && npm run build                              # 前端类型检查 + 构�
 | 平台化 5.9 | 最终完善：ES 索引按库隔离、引用落库、Micrometer 指标、Live 测试自带宽容器、MCP 工具权限、JWT `iss` 校验、过期注释 |
 
 **当前状态**：功能 Phase 1–5 与平台化轨均已完成到 5.9，可运行的是一条完整链路（导入 → 检索 → RAG → Agent → 工具 → 引用 → 可观测），而**不是**一堆独立的演示端点。
+
+在这之后又做了一轮**产品化收口**（不新增 Phase，只修"真实用户长期使用"会踩到的问题）：
+会话删除补齐 `SPRING_AI_CHAT_MEMORY` 级联、评测集入口从普通对话页移到 Agent 管理页、
+Agent 页去掉实现叙述、知识库详情页统一为「导入」词汇，以及 E2E 全面脱离演示账号
+（`API_BASE` 口径收进 `web/scripts/lib/e2e-config.mjs`）。
+逐项见 [docs/user-acceptance-issues.md](docs/user-acceptance-issues.md) 的 UA-018 ~ UA-021。
 
 ---
 

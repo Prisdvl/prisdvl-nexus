@@ -55,6 +55,11 @@ application-prod.yaml
 /tmp/
 *.log
 
+# ---------- 助手工作区记忆（本机痕迹，不入库）----------
+# .workbuddy/ 存的是会话记忆与临时状态：既不是源码也不是项目配置。
+# 提交它只会让仓库多出一堆与项目无关的 diff，还会把本机路径带进去。
+.workbuddy/
+
 # ---------- 前端（Vue 3 + Vite）----------
 node_modules/
 dist/

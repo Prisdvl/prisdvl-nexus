@@ -149,6 +149,32 @@ class KnowledgeBaseDeletePurgeTest {
     }
 
     @Test
+    @DisplayName("删库：库内存在 stored_path 为 NULL 的文档（vault 导入）时不再 NPE，库照样删干净")
+    void deletingKnowledgeBaseWithNullStoredPathSucceeds() throws Exception {
+        String token = registerAndLogin("kb-purge-null-path");
+        Long kbId = createKnowledgeBase(token, "含无落盘文件的库");
+
+        upload(token, kbId, "note.md", "# 笔记\n\n正文。".getBytes(StandardCharsets.UTF_8));
+
+        // 复现真实生产数据形态：OBSIDIAN vault 导入的文档没有落盘文件，stored_path 就是 NULL。
+        // 触发点很隐蔽——收集"待删磁盘文件"时只 select 了 stored_path 一列，而 MyBatis 在
+        // "一行里被映射的列全为 NULL"时会把整行映射成 null（returnInstanceForEmptyRow 默认 false），
+        // 于是 stream 里混进 null 元素，方法引用 DocumentPO::getStoredPath 的接收者为 null 直接 NPE。
+        // 症状是"这个库根本删不掉"：用户点删除拿 500，而且报错点和 vault 导入毫无关系。
+        Long documentId = documentIdOf(kbId, "note.md");
+        documentMapper.update(null, Wrappers.<DocumentPO>lambdaUpdate()
+                .eq(DocumentPO::getId, documentId)
+                .set(DocumentPO::getStoredPath, null));
+
+        mockMvc.perform(delete("/api/knowledge-bases/" + kbId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk());
+
+        assertThat(documentMapper.selectCount(Wrappers.<DocumentPO>lambdaQuery()
+                .eq(DocumentPO::getKbId, kbId))).isZero();
+    }
+
+    @Test
     @DisplayName("删库不影响别的库：另一个库的切片与文档原封不动")
     void deletingOneKnowledgeBaseLeavesOthersIntact() throws Exception {
         String token = registerAndLogin("kb-purge-isolated");
