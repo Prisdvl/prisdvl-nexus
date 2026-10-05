@@ -64,6 +64,7 @@ public class CleanupRunner implements ApplicationRunner {
     private int dryRun() {
         TestDataCleanupService.CleanupPlan plan = cleanupService.plan();
         header("DRY-RUN（只读，未删除任何数据）");
+        printStorageRootCheck();
         printPlan(plan);
         System.out.println("无主导入任务明细：" + cleanupService.countOrphanImportTaskItems()
                 + " 行（父任务已不存在，实际执行时会一并回收）");
@@ -73,9 +74,34 @@ public class CleanupRunner implements ApplicationRunner {
         return 0;
     }
 
+    /**
+     * 存储根前置校验：不可用就明确告知"磁盘原文本次不会被删除"。
+     *
+     * <p>这一步存在的意义：容器化部署下后端写的是容器内路径（如 /app/data，挂在 Docker 卷上），
+     * 而本工具默认在宿主机用 ./data——两者不同目录时，磁盘删除会静默失效。
+     * 与其等跑完再看警告，不如开工前就把话说清楚。
+     */
+    private void printStorageRootCheck() {
+        TestDataCleanupService.StorageRootCheck check = cleanupService.checkStorageRoot();
+        System.out.println("存储根自检：" + (check.usable() ? "可用 ✓" : "不可用 ✗"));
+        System.out.println("  存储根目录：" + check.storageRoot());
+        System.out.println("  抽样核对：库中 " + check.sampledPaths() + " 条 stored_path，"
+                + "在存储根下找到 " + check.foundPaths() + " 条");
+        if (!check.usable()) {
+            for (String reason : check.reasons()) {
+                System.out.println("  ! " + reason);
+            }
+            System.out.println("  → 本次将只清理数据库（切片/向量/ES/文档行），磁盘原文不会被删除。");
+            System.out.println("  → 若要一并删除磁盘原文：用 -StorageRoot 指向写入方的存储根目录，"
+                    + "例如容器部署下 Docker 卷 backend-data 的宿主机挂载点。");
+        }
+        System.out.println();
+    }
+
     private int execute() {
         TestDataCleanupService.CleanupPlan plan = cleanupService.plan();
         header("EXECUTE（将真实删除下列数据，不可逆）");
+        printStorageRootCheck();
         printPlan(plan);
         System.out.println();
 
@@ -128,8 +154,8 @@ public class CleanupRunner implements ApplicationRunner {
                     + "一个都没找到。");
             System.out.println("   本进程存储根目录：" + cleanupService.storageRoot());
             System.out.println("   这意味着磁盘原文本次没有被删除（该步失败是被静默吞掉的）。");
-            System.out.println("   若服务跑在容器里，请让本工具也在容器内运行，"
-                    + "或用 NEXUS_STORAGE_ROOT 指向写入方使用的同一个存储根目录。");
+            System.out.println("   若服务跑在容器里，请用 -StorageRoot 指定写入方的存储根，"
+                    + "或用 NEXUS_STORAGE_ROOT 指向它（例如容器部署下为 Docker 卷 backend-data 的挂载点）。");
         }
         footer();
         return 0;

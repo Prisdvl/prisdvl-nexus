@@ -25,6 +25,7 @@
 #   -SkipBuild        跳过 Maven 打包（jar 已是最新时）
 #   -JavaHome <path>  指定 JDK 21 目录（默认自动探测 D:\develop\jdk-21）
 #   -Profiles <p>     Spring profile，默认 local,cleanup
+#   -StorageRoot <p>  写入方使用的存储根目录（容器部署必传，否则磁盘原文不会被删除）
 #
 # 前置：基础设施需在运行中（deploy/docker-compose.yml 的 mysql/postgres/es/redis）。
 #       standalone（H2 内存库）不适用——那里重启即清空，本就没有残留问题。
@@ -34,7 +35,11 @@ param(
     [switch]$Execute,
     [switch]$SkipBuild,
     [string]$JavaHome,
-    [string]$Profiles = 'local,cleanup'
+    [string]$Profiles = 'local,cleanup',
+    # 存储根目录：必须与写入方一致，否则磁盘原文不会被删除（工具会在开工前自检并告知）。
+    # 容器部署下后端用 NEXUS_STORAGE_ROOT=/app/data（Docker 卷 backend-data），
+    # 此时传入该卷在宿主机上的对应目录即可。
+    [string]$StorageRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,6 +81,13 @@ if (-not (Test-Path $jar)) {
 
 # 强制 UTF-8 输出，保证中文清单在控制台不乱码
 $executeFlag = if ($Execute) { 'true' } else { 'false' }
+
+if ($StorageRoot) {
+    # nexus.storage.root 与后端 LocalDocumentStorage 用的是同一个属性
+    $env:NEXUS_STORAGE_ROOT = $StorageRoot
+    Write-Host "存储根目录：$StorageRoot（由 -StorageRoot 指定）" -ForegroundColor Cyan
+}
+
 $javaArgs = @(
     '-Dstdout.encoding=UTF-8',
     '-Dfile.encoding=UTF-8',

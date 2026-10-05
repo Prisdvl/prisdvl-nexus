@@ -204,6 +204,68 @@ public class TestDataCleanupService {
         return reclaimed;
     }
 
+    /**
+     * 存储根目录自检（前置校验）。
+     *
+     * <p>为什么必须在<b>开始清理之前</b>做：磁盘原文的删除依赖存储根与写入方一致。
+     * 曾经的做法是"跑完再看命中数"，结果在容器化部署下（后端 NEXUS_STORAGE_ROOT=/app/data
+     * 而清理工具在宿主机用 ./data）会出现"数据库清干净了、磁盘原文一个没删"，
+     * 而且那一步的失败是<b>静默的</b>——只在最后打一条警告，容易被忽略。
+     * 现在改成开工前就判定：根目录不存在、或库里有原文记录但根目录下没有任何 kb/ 子目录，
+     * 都直接判定为"存储根不可用"，让调用方决定是中止还是明确接受"只清数据库"。
+     *
+     * @return 自检结果（是否可用 + 人类可读的原因）
+     */
+    public StorageRootCheck checkStorageRoot() {
+        List<String> reasons = new ArrayList<>();
+        boolean rootExists = Files.isDirectory(storageRoot);
+        if (!rootExists) {
+            reasons.add("存储根目录不存在：" + storageRoot);
+        }
+
+        // 抽样实测：拿库里真实的 stored_path 去根目录下找。
+        // 为什么不能只看"有没有 kb/ 子目录"：宿主机上可能残留一个同名的旧 data 目录，
+        // 于是"目录存在"为真、但**没有一个文件能对上**——间接判据会被骗过（已踩）。
+        // 直接证据是"抽样的 stored_path 里有多少能在根下找到文件"。
+        List<String> samples = jdbcTemplate.queryForList(
+                "SELECT stored_path FROM kb_document WHERE deleted = 0 AND stored_path IS NOT NULL "
+                        + "ORDER BY id DESC LIMIT 20", String.class);
+        int sampled = 0;
+        int found = 0;
+        if (rootExists) {
+            for (String storedPath : samples) {
+                if (storedPath == null || storedPath.isBlank()) {
+                    continue;
+                }
+                sampled++;
+                try {
+                    if (Files.exists(storageRoot.resolve(storedPath))) {
+                        found++;
+                    }
+                } catch (RuntimeException e) {
+                    // 含 Windows 非法字符的历史脏数据，跳过
+                    log.debug("stored_path 无法解析为本地路径，跳过抽样：{}", storedPath);
+                }
+            }
+        }
+        boolean usable = rootExists && (sampled == 0 || found > 0);
+        if (rootExists && sampled > 0 && found == 0) {
+            reasons.add("抽样核对 " + sampled + " 条 stored_path，在存储根下一个都没找到"
+                    + "（本进程的存储根与写入方不是同一个目录）");
+        }
+        return new StorageRootCheck(usable, storageRoot, sampled, found, List.copyOf(reasons));
+    }
+
+    /**
+     * 存储根自检结果。
+     *
+     * @param sampledPaths  抽样的 stored_path 条数
+     * @param foundPaths    其中在存储根下真实存在的条数
+     */
+    public record StorageRootCheck(boolean usable, Path storageRoot, int sampledPaths, int foundPaths,
+                                   List<String> reasons) {
+    }
+
     private PurgeResult purgeAccount(AccountSnapshot target) {
         Long userId = target.userId();
         String username = target.username();
