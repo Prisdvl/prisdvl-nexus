@@ -4374,6 +4374,49 @@ Agent 模式下模型可能调多次 `knowledge_search`，而工具是无状态�
 
 ---
 
+### B.52 清理工具补课：@TableLogic 让「软删账号行」对清理工具不可见（2026-10-05 实测）
+
+**0. 一句话**
+
+`schema` 维护时把账号删除定成软删（`deleted=1`），但 `MyBatis-Plus` 的 `@TableLogic`
+会让 `selectList(null)` **自动加 `deleted = 0`**——于是 cleanup 工具的 `plan()`
+永远看不到软删行。而"每跑一轮 E2E 就软删一个账号"的测试账号正好全躺在那里：
+`sys_user` 实测累积到 **141 条** 怎么清都清不掉（数量只增不减），排查真实用户时非常干扰。
+
+**2. 为什么之前没发现**
+
+| | |
+| --- | --- |
+| 症状 | `sys_user` 有 141 行 `deleted=1`，dry-run 计划里却永远只有 2 个活跃测试账号 |
+| 根因 | `SysUserPO` 标了 `@TableLogic`，`selectList(null)` / `deleteById` 都被自动改写：查询加 `deleted=0`、删除变 `UPDATE deleted=1`。清理逻辑「看不到软删行」，等于对这部分数据失明 |
+| 为什么危险 | 软删行不影响功能（登录查不到、`(username, deleted)` 让出唯一键），所以**没有报错**，属于「数据膨胀但无感知」——直到排查真实用户问题时才觉得表很脏 |
+
+**3. 修法（`nexus-app/.../tools/cleanup/`）**
+
+- `CleanupProperties.purgeAccountRows`（默认 `false`）：账号走**物理删除**而非软删。
+  做成显式开关而不是直接改行为——软删可回溯，是「审计留痕 vs 表干净」的取舍，不该替用户拍板。
+- `plan()` 用裸 SQL 单独扫出 `deleted=1` 的行，作为 `CleanupPlan.alreadyDeleted` 列进计划，
+  dry-run 时就能看见，不再「眼不见为净」。
+- 物理删除必须绕开 `@TableLogic`：MyBatis-Plus 的 `deleteById` 对逻辑删实体只会改写成软删，
+  所以用裸 `DELETE FROM sys_user` / `sys_user_role` 真删。
+- `scripts/cleanup-test-data.ps1` 加 `-PurgeAccountRows` 透传。
+
+**4. 实测证据（2026-10-05）**
+
+- 执行：`137 个历史残留软删账号被物理删除`；另手动清掉 4 个更早的 `canary-*` 探测账号。
+- 结果：`sys_user` 141 条软删 → **0**，全表只剩 `demo`、`Prisdvl` 两个真实账号；
+  `sys_user_role` 无孤儿行；知识库 3 / 文档 6 未受影响。
+- 编译验证：`mvn -pl nexus-app -am compile` 通过。
+
+**5. 边界与取舍**
+
+- 物理删除只针对**测试账号**（前缀规则 + 受保护名单双重过滤，`demo`/`Prisdvl` 硬保护）。
+- 软删行名下的资源在软删那一刻已级联清干净，所以 `alreadyDeleted` 只剩账号行与角色关联，
+  没有资源可误删——这也是它敢默认不提示主危险的原因。
+- 仍保留软删默认路径：生产语义下「账号被删」是可追溯事件，物理删除仅用于测试数据兜底。
+---
+
+
 ## Appendix C. 已确认的选型（用户拍板，2026-09-24）
 
 | # | 决策项 | 结论 |
