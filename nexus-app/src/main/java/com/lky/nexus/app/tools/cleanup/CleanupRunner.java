@@ -70,6 +70,10 @@ public class CleanupRunner implements ApplicationRunner {
                 + " 行（父任务已不存在，实际执行时会一并回收）");
         System.out.println();
         System.out.println("本次为 dry-run。要真正执行删除，追加参数：--nexus.cleanup.execute=true");
+        System.out.println("账号处理方式："
+                + (cleanupService.purgeAccountRows()
+                    ? "**物理删除** sys_user 行（不可恢复）"
+                    : "软删（deleted=1，可回溯）；要物理删除加 --nexus.cleanup.purge-account-rows=true"));
         footer();
         return 0;
     }
@@ -111,8 +115,21 @@ public class CleanupRunner implements ApplicationRunner {
         // 而库里正躺着 69 行无主明细）。
         int orphansReclaimed = cleanupService.reclaimOrphanImportTaskItems();
 
+        // 历史残留的软删账号：**独立于活跃候选**处理。
+        // 它们没有资源可清（软删那一刻已经清过），但如果 purgeAccountRows 开着，
+        // 就应该把行也删掉——否则"清一次少一批"永远追不上 E2E 的新增。
+        int purgedHistory = 0;
+        if (!plan.alreadyDeleted().isEmpty() && cleanupService.purgeAccountRows()) {
+            purgedHistory = cleanupService.purgeAlreadyDeletedRows(plan.alreadyDeleted());
+            System.out.printf("历史残留软删账号：物理删除 %d 个账号（%d 行）%n",
+                    plan.alreadyDeleted().size(), purgedHistory);
+        } else if (!plan.alreadyDeleted().isEmpty()) {
+            System.out.printf("历史残留软删账号 %d 个（未物理删除；加 --nexus.cleanup.purge-account-rows=true 可清）%n",
+                    plan.alreadyDeleted().size());
+        }
+
         if (plan.targets().isEmpty()) {
-            System.out.println("候选账号为 0，无需清理。");
+            System.out.println("活跃候选账号为 0，无需级联清理。");
             System.out.printf("  最终一致性回收：无主导入任务明细 %d 行%n", orphansReclaimed);
             footer();
             return 0;
@@ -135,7 +152,11 @@ public class CleanupRunner implements ApplicationRunner {
                 .mapToInt(TestDataCleanupService.PurgeResult::storedFilesUnreadable).sum();
 
         System.out.println();
-        System.out.println("清理完成：账号 " + results.size() + " 个已软删");
+        int purgedUsers = results.stream().mapToInt(TestDataCleanupService.PurgeResult::purgedUsers).sum();
+        System.out.println("清理完成：账号 " + results.size() + " 个"
+                + (purgedUsers > 0
+                    ? "（**物理删除** " + purgedUsers + " 行）"
+                    : "（软删 deleted=1；如需物理删除请加 --nexus.cleanup.purge-account-rows=true）"));
         System.out.printf("  知识库 %d（含切片/关联边/标签/向量/ES索引/磁盘原文级联）%n", kbs);
         System.out.printf("  会话 %d；会话记忆 %d 行%n", convs, memory);
         System.out.printf("  自建 Agent %d；内置 Agent %d%n", agents, builtin);
@@ -168,6 +189,10 @@ public class CleanupRunner implements ApplicationRunner {
                 + "（必须与写入方一致，否则磁盘原文不会被真正删除）");
         System.out.println();
         System.out.println("候选账号 " + plan.targets().size() + " 个：");
+        if (!plan.alreadyDeleted().isEmpty()) {
+            System.out.println("历史残留（已软删）" + plan.alreadyDeleted().size() + " 个："
+                    + (cleanupService.purgeAccountRows() ? "将被物理删除" : "保持软删"));
+        }
         System.out.printf("  %-32s %6s %6s %6s %6s %6s %6s %6s%n",
                 "username", "kb", "conv", "agent", "bAgt", "ws", "task", "qa");
         System.out.println("  （agent = 自建 Agent；bAgt = 内置 Agent，默认一并清理，"

@@ -26,6 +26,7 @@
 #   -JavaHome <path>  指定 JDK 21 目录（默认自动探测 D:\develop\jdk-21）
 #   -Profiles <p>     Spring profile，默认 local,cleanup
 #   -StorageRoot <p>  写入方使用的存储根目录（容器部署必传，否则磁盘原文不会被删除）
+#   -PurgeAccountRows 物理删除账号行（默认只软删 deleted=1，可回溯）
 #
 # 前置：基础设施需在运行中（deploy/docker-compose.yml 的 mysql/postgres/es/redis）。
 #       standalone（H2 内存库）不适用——那里重启即清空，本就没有残留问题。
@@ -39,7 +40,11 @@ param(
     # 存储根目录：必须与写入方一致，否则磁盘原文不会被删除（工具会在开工前自检并告知）。
     # 容器部署下后端用 NEXUS_STORAGE_ROOT=/app/data（Docker 卷 backend-data），
     # 此时传入该卷在宿主机上的对应目录即可。
-    [string]$StorageRoot
+    [string]$StorageRoot,
+    # 把账号行**物理删除**（默认只软删 deleted=1）。
+    # 软删行会永久累积：实测 141 条，虽不影响功能，但会让 sys_user
+    # 混着大量一次性账号、干扰排查真实用户问题。
+    [switch]$PurgeAccountRows
 )
 
 $ErrorActionPreference = 'Stop'
@@ -95,6 +100,10 @@ $javaArgs = @(
     "--spring.profiles.active=$Profiles",
     "--nexus.cleanup.execute=$executeFlag"
 )
+if ($PurgeAccountRows) {
+    # 与 CleanupProperties.purgeAccountRows 对应
+    $javaArgs += '--nexus.cleanup.purge-account-rows=true'
+}
 
 if ($Execute) {
     Write-Host ''

@@ -117,7 +117,29 @@ public class TestDataCleanupService {
             }
             targets.add(snapshot(user.getId(), username));
         }
+        /*
+         * 历史残留：**已被软删**的测试账号。
+         *
+         * `sysUserMapper.selectList(null)` 会被 @TableLogic 自动加上 `deleted = 0`，
+         * 所以上面那圈**永远看不到软删行** —— 而"跑一轮 E2E 就软删一次"的账号正好都在那里，
+         * 实测累积到 140+ 条却一直清不掉（这也是"账号行只会膨胀"的直接原因）。
+         *
+         * 这里用裸 SQL 把它们单独查出来：dry-run 时列进计划让人看见，
+         * 执行时按 purgeAccountRows 决定物理删除。
+         */
+        List<AccountSnapshot> alreadyDeleted = new ArrayList<>();
+        for (String username : strings(
+                "SELECT username FROM sys_user WHERE deleted = 1 ORDER BY id")) {
+            if (properties.getProtectedUsernames().contains(username) || !properties.matches(username)) {
+                continue;
+            }
+            Long id = id("SELECT id FROM sys_user WHERE username = ? AND deleted = 1", username);
+            if (id != null) {
+                alreadyDeleted.add(new AccountSnapshot(id, username, 0, 0, 0, 0, 0, 0, 0));
+            }
+        }
         return new CleanupPlan(List.copyOf(targets),
+                List.copyOf(alreadyDeleted),
                 List.copyOf(properties.getProtectedUsernames()),
                 List.copyOf(properties.getUsernamePrefixes()));
     }
@@ -375,12 +397,25 @@ public class TestDataCleanupService {
             result.workspaces++;
         }
 
-        // ⑥ 角色关联 + 账号本身（账号走逻辑删除：SysUserPO 标了 @TableLogic，
-        //    deleteById 会自动改写为 UPDATE deleted=1，与产品软删约定一致、可回溯）
+        // ⑥ 角色关联 + 账号本身
+        //    默认走逻辑删除（SysUserPO 标了 @TableLogic，deleteById 会改写成 UPDATE deleted=1）。
+        //    purgeAccountRows=true 时改为**物理删除**：软删行会永久累积（实测 140+ 条），
+        //    虽然不影响功能，但会让 sys_user 混着大量一次性账号、干扰排查真实用户问题。
+        //    两条路径都在这里，由配置决定用哪条——而不是改一处忘一处。
         int roles = sysUserRoleMapper.delete(
                 Wrappers.<SysUserRolePO>lambdaQuery().eq(SysUserRolePO::getUserId, userId));
-        sysUserMapper.deleteById(userId);
-        log.info("    └─ 工作区 {} 个；角色关联 {} 条；账号已软删", result.workspaces, roles);
+        if (properties.isPurgeAccountRows()) {
+            // 裸 SQL 物理删：MyBatis-Plus 的 deleteById 对 @TableLogic 实体会自动改写为软删，
+            // 拿不到"真删"的效果，所以这里必须绕开它。
+            update("DELETE FROM sys_user_role WHERE user_id = ?", userId);
+            int removed = update("DELETE FROM sys_user WHERE id = ?", userId);
+            result.purgedUsers = removed;
+            log.info("    └─ 工作区 {} 个；角色关联 {} 条；账号已**物理删除**（{} 行）",
+                    result.workspaces, roles, removed);
+        } else {
+            sysUserMapper.deleteById(userId);
+            log.info("    └─ 工作区 {} 个；角色关联 {} 条；账号已软删（deleted=1）", result.workspaces, roles);
+        }
 
         return result;
     }
@@ -420,9 +455,37 @@ public class TestDataCleanupService {
         return result;
     }
 
+    /** 取单个 Long（查不到返回 null）。 */
+    private Long id(String sql, Object... args) {
+        List<Long> list = ids(sql, args);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
     /** 原始文件存储根目录（绝对路径），供 CLI 打印与核对。 */
     public Path storageRoot() {
         return storageRoot;
+    }
+
+    /** 账号是否走物理删除（供 Runner 打印当前模式）。 */
+    public boolean purgeAccountRows() {
+        return properties.isPurgeAccountRows();
+    }
+
+    /**
+     * 物理删除**历史遗留的软删账号行**（{@code deleted=1}）。
+     *
+     * <p>它们名下的资源早就被级联清干净了（软删那一刻就清了），
+     * 所以这里只剩账号行与角色关联——但必须清：软删行会永久累积。
+     *
+     * @return 实际删除的行数
+     */
+    public int purgeAlreadyDeletedRows(List<AccountSnapshot> alreadyDeleted) {
+        int removed = 0;
+        for (AccountSnapshot account : alreadyDeleted) {
+            removed += update("DELETE FROM sys_user_role WHERE user_id = ?", account.userId());
+            removed += update("DELETE FROM sys_user WHERE id = ?", account.userId());
+        }
+        return removed;
     }
 
     private static boolean isTruthy(Object value) {
@@ -451,8 +514,14 @@ public class TestDataCleanupService {
                                   int qaRecords) {
     }
 
-    /** 清理计划（${@link #plan()} 的产物，只读）。 */
+    /**
+     * 清理计划（{@link #plan()} 的产物，只读）。
+     *
+     * @param targets          活跃的测试账号（{@code deleted=0}），会被级联清理
+     * @param alreadyDeleted   历史残留：**已被软删**的测试账号行，仅做物理删除（无资源可清）
+     */
     public record CleanupPlan(List<AccountSnapshot> targets,
+                              List<AccountSnapshot> alreadyDeleted,
                               List<String> protectedUsernames,
                               List<String> prefixes) {
 
@@ -517,9 +586,15 @@ public class TestDataCleanupService {
         private int storedFilesFound;
         /** stored_path 含非法字符、连解析都失败的条数（脏数据，不影响级联执行）。 */
         private int storedFilesUnreadable;
+        /** 被**物理删除**的账号行数（1 = 这个账号真删了；0 = 走的是软删）。 */
+        private int purgedUsers;
 
         PurgeResult(String username) {
             this.username = username;
+        }
+
+        public int purgedUsers() {
+            return purgedUsers;
         }
 
         public int storedFiles() {
