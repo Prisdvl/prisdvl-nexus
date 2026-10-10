@@ -286,7 +286,12 @@ export const api = {
       http.put<Result<BackendAgent>>(`/agents/`, body).then((r) => r.data.data),
     remove: (id: string) => http.delete<Result<null>>(`/agents/`).then((r) => r.data.data),
   },
-  knowledge: {
+  stream: {
+    /** 停止生成。幂等：流已结束时后端返回 cancelled=false，不算错误。 */
+    stop: (requestId: string) =>
+      http.post<Result<{ requestId: string; cancelled: boolean }>>(`/chat/stream/${requestId}/stop`)
+        .then((r) => r.data.data),
+  },  knowledge: {
     list: (pageNum = 1, pageSize = 100) =>
       http.get<Result<PageResult<KnowledgeBase>>>('/knowledge-bases', { params: { pageNum, pageSize } })
         .then((r) => r.data.data),

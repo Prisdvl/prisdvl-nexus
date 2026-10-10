@@ -750,6 +750,13 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
    */
   const stopRun = () => {
     runSeq.current += 1
+    /* 服务端也要停：否则后端会继续生成并落库，前端只是"不看了" */
+    const rid = requestIdRef.current
+    if (!USE_MOCK && rid) {
+      requestIdRef.current = null
+      api.stream.stop(rid).catch(() => { /* 流可能已自然结束；失败不打扰用户 */ })
+    }
+    abortRef.current?.abort()
     const sessionId = active.id
     const lastBot = [...active.messages].reverse().find((m) => m.role === 'bot' && m.calls?.length)
     if (lastBot) {
