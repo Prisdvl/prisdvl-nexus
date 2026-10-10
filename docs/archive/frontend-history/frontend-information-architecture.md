@@ -1,7 +1,15 @@
 # 前端信息架构设计（Phase B）
+> 状态：**历史（Vue 3 时代 Phase B 信息架构）**。
+
+> ⚠️ **历史文档（Vue 时代，已归档）**：本文描述的是**已被取代的 Vue 3 前端**（原 `web/`，
+> 现归档在 `docs/archive/web-vue/`）。当前产品前端是 React 19 工程 `frontend/`：
+> 设计令牌 `frontend/src/styles/tokens.css`、通用组件 `frontend/src/components/`、
+> 动效积木 `frontend/src/bits/`、页面 `frontend/src/pages/`、后端契约层 `frontend/src/lib/api.ts`。
+> 本文里的 `web/src/...` 路径、Element Plus 选择器、`AgentView` / `KnowledgeBaseDetailView` 等
+> 组件名**只对归档副本有效**，不能当作当前实现的规范。
 
 > 阶段：**纯设计**。本文件不修改任何 Vue / TS / CSS / API / 后端 / Store / 组件 / E2E，不安装任何包。
-> 事实基础：`docs/frontend-architecture-audit.md`（Phase A）、`web/src/router/index.ts`、
+> 事实基础：`docs/archive/reports/frontend-architecture-audit.md`（Phase A）、`web/src/router/index.ts`、
 > `web/src/App.vue`、四个视图的实测结构。本文件里每一条"现状"都有出处，推断与实测分开标注。
 > 上游：Phase A 审计 → Phase 0（data-testid + E2E 稳定）→ **Phase B（本文件）**。
 

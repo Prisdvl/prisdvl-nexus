@@ -1,0 +1,743 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-palette="terracotta">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prisdvl Nexus · 登录/注册 四配色对照 v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================
+ * 设计系统（原型 v2，四配色对照板）
+ * ------------------------------------------------------------
+ * 方向：沉浸式大背景 + 居中卡片；背景动画为 React Bits 风格粒子
+ *       （各配色一套专属语义：dust / bubbles / stars / lattice）
+ * 配色：陶土橘 / 松石青 / 梅子 / 酸性青柠 —— 明暗统一重做
+ * 用色：醒目但克制（中间档）
+ * 字体：Space Grotesk（拉丁/数字）+ 系统中文
+ * 其余规则沿用 v1（分档圆角、双层阴影、150-300ms 动效、
+ *       prefers-reduced-motion 降级、无 emoji、无紫蓝常见渐变）
+ * ============================================================ */
+
+html {
+  color-scheme: light;
+  --font-display: "Space Grotesk", "PingFang SC", "Microsoft YaHei", "MiSans", "Segoe UI", system-ui, sans-serif;
+  /* 结构层（各配色共享的灰度，随主题变） */
+  --surface: oklch(0.965 0.006 75);
+  --surface-muted: oklch(0.95 0.008 75);
+  --border: oklch(0.9 0.008 75);
+  --border-strong: oklch(0.84 0.01 75);
+  --text: oklch(0.26 0.02 55);
+  --text-2: oklch(0.44 0.02 55);
+  --text-3: oklch(0.58 0.015 55);
+  --input-bg: oklch(0.995 0.004 75);
+  --card-bg: oklch(0.99 0.006 75 / 0.86);
+  --danger: oklch(0.52 0.2 25);
+  --danger-container: oklch(0.95 0.03 25);
+  --ring-a: 0.35;
+  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.05), 0 24px 64px oklch(0.35 0.05 45 / 0.12);
+  --shadow-pop: 0 2px 6px oklch(0 0 0 / 0.06), 0 16px 40px oklch(0.35 0.05 45 / 0.14);
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: oklch(0.22 0.02 55);
+  --surface-muted: oklch(0.26 0.022 55);
+  --border: oklch(0.3 0.02 55);
+  --border-strong: oklch(0.38 0.02 55);
+  --text: oklch(0.93 0.008 60);
+  --text-2: oklch(0.72 0.012 60);
+  --text-3: oklch(0.56 0.014 60);
+  --input-bg: oklch(0.17 0.018 55);
+  --card-bg: oklch(0.2 0.02 55 / 0.9);
+  --danger: oklch(0.68 0.13 25);
+  --danger-container: oklch(0.3 0.05 25);
+  --ring-a: 0.4;
+  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.5), 0 24px 64px oklch(0 0 0 / 0.55);
+  --shadow-pop: 0 2px 6px oklch(0 0 0 / 0.5), 0 16px 40px oklch(0 0 0 / 0.5);
+}
+
+/* ============ 四套配色（明暗都在这套变量里） ============ */
+
+/* —— 陶土橘 Terracotta —— */
+html[data-palette="terracotta"] {
+  --bg-grad: linear-gradient(160deg, oklch(0.97 0.014 70), oklch(0.945 0.02 48));
+  --bg-bloom-1: radial-gradient(60% 55% at 24% 18%, oklch(0.9 0.05 55 / 0.55), transparent 70%);
+  --bg-bloom-2: radial-gradient(55% 50% at 82% 82%, oklch(0.88 0.045 35 / 0.5), transparent 70%);
+  --primary: oklch(0.62 0.16 42);
+  --primary-hover: oklch(0.56 0.165 42);
+  --primary-container: oklch(0.93 0.035 42);
+  --on-primary: oklch(0.985 0.004 60);
+  --bg-text-hint: oklch(0.5 0.06 42);
+  --particle-light: oklch(0.6 0.14 45);
+  --particle-dark: oklch(0.78 0.12 50);
+}
+html[data-palette="terracotta"][data-theme="dark"] {
+  --bg-grad: linear-gradient(160deg, oklch(0.2 0.025 40), oklch(0.16 0.02 55));
+  --bg-bloom-1: radial-gradient(60% 55% at 24% 18%, oklch(0.45 0.1 45 / 0.4), transparent 70%);
+  --bg-bloom-2: radial-gradient(55% 50% at 82% 82%, oklch(0.4 0.09 30 / 0.35), transparent 70%);
+  --primary: oklch(0.72 0.14 45);
+  --primary-hover: oklch(0.77 0.13 45);
+  --primary-container: oklch(0.3 0.05 42);
+  --on-primary: oklch(0.18 0.02 50);
+}
+
+/* —— 松石青 Turquoise —— */
+html[data-palette="turquoise"] {
+  --bg-grad: linear-gradient(168deg, oklch(0.985 0.016 190), oklch(0.94 0.035 200));
+  --bg-bloom-1: radial-gradient(58% 56% at 78% 20%, oklch(0.82 0.09 195 / 0.5), transparent 70%);
+  --bg-bloom-2: radial-gradient(52% 48% at 18% 84%, oklch(0.85 0.08 185 / 0.45), transparent 70%);
+  --primary: oklch(0.55 0.13 202);
+  --primary-hover: oklch(0.49 0.135 202);
+  --primary-container: oklch(0.93 0.04 198);
+  --on-primary: oklch(0.985 0.004 190);
+  --bg-text-hint: oklch(0.5 0.07 200);
+  --particle-light: oklch(0.5 0.11 195);
+  --particle-dark: oklch(0.75 0.1 190);
+}
+html[data-palette="turquoise"][data-theme="dark"] {
+  --bg-grad: linear-gradient(168deg, oklch(0.2 0.028 205), oklch(0.155 0.02 215));
+  --bg-bloom-1: radial-gradient(58% 56% at 78% 20%, oklch(0.4 0.07 200 / 0.4), transparent 70%);
+  --bg-bloom-2: radial-gradient(52% 48% at 18% 84%, oklch(0.38 0.06 190 / 0.35), transparent 70%);
+  --primary: oklch(0.72 0.1 195);
+  --primary-hover: oklch(0.78 0.09 195);
+  --primary-container: oklch(0.28 0.04 200);
+  --on-primary: oklch(0.17 0.02 205);
+}
+
+/* —— 梅子 Plum —— */
+html[data-palette="plum"] {
+  --bg-grad: linear-gradient(165deg, oklch(0.975 0.012 10), oklch(0.945 0.022 355));
+  --bg-bloom-1: radial-gradient(60% 54% at 22% 22%, oklch(0.86 0.06 355 / 0.5), transparent 70%);
+  --bg-bloom-2: radial-gradient(54% 50% at 80% 84%, oklch(0.87 0.07 5 / 0.45), transparent 70%);
+  --primary: oklch(0.52 0.18 5);
+  --primary-hover: oklch(0.46 0.19 5);
+  --primary-container: oklch(0.94 0.025 5);
+  --on-primary: oklch(0.985 0.004 10);
+  --bg-text-hint: oklch(0.45 0.1 5);
+  --particle-light: oklch(0.5 0.15 5);
+  --particle-dark: oklch(0.78 0.12 10);
+}
+html[data-palette="plum"][data-theme="dark"] {
+  --bg-grad: linear-gradient(165deg, oklch(0.21 0.03 355), oklch(0.16 0.022 5));
+  --bg-bloom-1: radial-gradient(60% 54% at 22% 22%, oklch(0.42 0.1 355 / 0.42), transparent 70%);
+  --bg-bloom-2: radial-gradient(54% 50% at 80% 84%, oklch(0.42 0.09 10 / 0.36), transparent 70%);
+  --primary: oklch(0.72 0.13 8);
+  --primary-hover: oklch(0.78 0.12 8);
+  --primary-container: oklch(0.3 0.05 5);
+  --on-primary: oklch(0.17 0.02 10);
+}
+
+/* —— 酸性青柠 Acid Lime —— */
+html[data-palette="lime"] {
+  --bg-grad: linear-gradient(170deg, oklch(0.985 0.02 120), oklch(0.955 0.05 130));
+  --bg-bloom-1: radial-gradient(58% 54% at 76% 18%, oklch(0.85 0.15 130 / 0.5), transparent 70%);
+  --bg-bloom-2: radial-gradient(52% 50% at 20% 86%, oklch(0.9 0.08 140 / 0.4), transparent 70%);
+  --primary: oklch(0.68 0.22 130);
+  --primary-hover: oklch(0.61 0.21 130);
+  --primary-container: oklch(0.93 0.05 130);
+  --on-primary: oklch(0.18 0.02 130);
+  --bg-text-hint: oklch(0.45 0.14 130);
+  --particle-light: oklch(0.52 0.2 130);
+  --particle-dark: oklch(0.85 0.2 130);
+}
+html[data-palette="lime"][data-theme="dark"] {
+  --bg-grad: linear-gradient(170deg, oklch(0.2 0.04 128), oklch(0.15 0.02 120));
+  --bg-bloom-1: radial-gradient(58% 54% at 76% 18%, oklch(0.45 0.16 130 / 0.4), transparent 70%);
+  --bg-bloom-2: radial-gradient(52% 50% at 20% 86%, oklch(0.4 0.1 140 / 0.32), transparent 70%);
+  --primary: oklch(0.82 0.19 130);
+  --primary-hover: oklch(0.88 0.17 130);
+  --primary-container: oklch(0.3 0.08 130);
+  --on-primary: oklch(0.16 0.02 130);
+}
+
+/* ============ 基础 ============ */
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.stage {
+  position: relative;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 52px 20px;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--bg-grad);
+  transition: background 300ms ease-out;
+}
+.bg { position: absolute; inset: 0; z-index: -1; }
+.bg::before, .bg::after {
+  content: "";
+  position: absolute; border-radius: 50%;
+  filter: blur(70px);
+  pointer-events: none;
+}
+.bg::before { background: var(--bg-bloom-1); inset: 0; }
+.bg::after  { background: var(--bg-bloom-2); inset: 0; }
+#bg-particles { position: absolute; inset: 0; }
+
+/* ============ 预览工具 ============ */
+.preview-tools {
+  position: fixed;
+  top: 20px; right: 20px;
+  z-index: 40;
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card-bg);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-pop);
+}
+.tool-group { display: flex; align-items: center; gap: 2px; }
+.tool-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+.tool-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 11px;
+  border: 0; border-radius: 8px;
+  background: transparent; color: var(--text-2);
+  font: inherit; font-size: 12.5px; cursor: pointer;
+  transition: background 150ms ease-out, color 150ms ease-out;
+}
+.tool-btn:hover { background: var(--surface-muted); color: var(--text); }
+.tool-btn[aria-pressed="true"] { background: var(--primary-container); color: var(--primary); font-weight: 500; }
+.tool-btn .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: currentColor; opacity: 0.85;
+}
+.tool-btn svg { width: 14px; height: 14px; }
+
+/* ============ 卡片（跨配色同构，色随变量） ============ */
+.card {
+  position: relative;
+  width: min(400px, 100%);
+  padding: 34px 34px 28px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--card-bg);
+  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-card);
+  animation: enter 0.45s cubic-bezier(0.2, 0.8, 0.25, 1) both;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 300ms ease-out, background 300ms ease-out;
+}
+@keyframes enter {
+  from { opacity: 0; transform: translateY(14px) scale(0.995); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.brand { text-align: center; margin-bottom: 24px; }
+.brand .mark { display: inline-flex; margin-bottom: 14px; }
+.brand h1 {
+  margin: 0;
+  font-size: 20px; font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.brand .tagline {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.brand .palette-name {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--primary);
+  background: var(--primary-container);
+}
+
+.tabs {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 3px; padding: 3px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  margin-bottom: 20px;
+}
+.tab {
+  height: 34px;
+  border: 0; border-radius: 8px;
+  background: transparent; color: var(--text-2);
+  font: inherit; font-size: 13.5px; font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms ease-out, color 150ms ease-out;
+}
+.tab:hover { color: var(--text); }
+.tab[aria-selected="true"] {
+  background: var(--surface); color: var(--text);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.06);
+}
+
+.form { display: none; }
+.form.active { display: block; }
+
+.field { margin-bottom: 14px; }
+.field label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--text-2); }
+.field .hint { margin-top: 5px; font-size: 12px; color: var(--text-3); }
+
+.input-wrap { position: relative; }
+.input-wrap .vis-toggle {
+  position: absolute; right: 4px; top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px;
+  border: 0; border-radius: 7px;
+  background: transparent; color: var(--text-3);
+  cursor: pointer;
+  transition: color 150ms ease-out, background 150ms ease-out;
+}
+.input-wrap .vis-toggle:hover { color: var(--text-2); background: var(--surface-muted); }
+.input-wrap .vis-toggle svg { width: 16px; height: 16px; }
+
+input[type="text"], input[type="password"], input[type="email"] {
+  width: 100%; height: 44px;
+  padding: 0 40px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit; font-size: 14.5px;
+  outline: none;
+  transition: border-color 150ms ease-out, box-shadow 150ms ease-out, background 150ms ease-out;
+}
+input:not([type="password"]) { padding-right: 12px; }
+input::placeholder { color: var(--text-3); }
+input:hover { border-color: var(--border-strong); }
+input:focus-visible {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px oklch(from var(--primary) l c h / var(--ring-a));
+}
+
+.err-text { display: none; margin-top: 5px; font-size: 12px; color: var(--danger); }
+.field.has-error .err-text { display: block; }
+.field.has-error input { border-color: var(--danger); }
+.field.shake { animation: shake 0.3s ease-out; }
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  30% { transform: translateX(-4px); }
+  60% { transform: translateX(4px); }
+}
+
+.form-error {
+  display: none; padding: 9px 12px; margin-bottom: 14px;
+  border-radius: 8px;
+  background: var(--danger-container); color: var(--danger);
+  font-size: 12.5px;
+}
+.form-error.active { display: block; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; height: 44px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit; font-size: 14px; font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms ease-out, border-color 150ms ease-out, transform 80ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:active { transform: translateY(0.5px); }
+.btn:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(from var(--primary) l c h / var(--ring-a)); }
+
+.btn-primary { background: var(--primary); color: var(--on-primary); }
+.btn-primary:hover { background: var(--primary-hover); }
+
+.btn-ghost {
+  margin-top: 10px;
+  border-color: var(--border);
+  background: transparent; color: var(--text-2);
+  font-weight: 400;
+}
+.btn-ghost:hover { background: var(--surface-muted); color: var(--text); }
+.btn-ghost kbd {
+  margin-left: 2px; padding: 1px 6px;
+  border: 1px solid var(--border-strong); border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface);
+  font-family: inherit; font-size: 11.5px; color: var(--text-3);
+}
+
+.switch-line { margin: 18px 0 0; text-align: center; font-size: 13px; color: var(--text-3); }
+.switch-line button {
+  border: 0; background: none; padding: 0;
+  font: inherit; font-size: 13px; font-weight: 500;
+  color: var(--primary); cursor: pointer;
+}
+.switch-line button:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+.foot-note { margin: 16px 0 0; text-align: center; font-size: 11.5px; color: var(--text-3); }
+
+@media (prefers-reduced-motion: reduce) {
+  .card { animation: none; opacity: 1; transform: none; }
+  * { transition-duration: 0.01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<main class="stage" id="stage">
+  <div class="bg" aria-hidden="true">
+    <canvas id="bg-particles" aria-hidden="true"></canvas>
+  </div>
+
+  <!-- 预览工具：配色 1-4 + 明暗 -->
+  <div class="preview-tools" role="group" aria-label="预览工具">
+    <div class="tool-group" id="paletteGroup">
+      <button class="tool-btn" data-palette="terracotta" aria-pressed="true"><span class="dot"></span>陶土橘</button>
+      <button class="tool-btn" data-palette="turquoise" aria-pressed="false"><span class="dot"></span>松石青</button>
+      <button class="tool-btn" data-palette="plum" aria-pressed="false"><span class="dot"></span>梅子</button>
+      <button class="tool-btn" data-palette="lime" aria-pressed="false"><span class="dot"></span>青柠</button>
+    </div>
+    <div class="tool-sep"></div>
+    <div class="tool-group">
+      <button class="tool-btn" id="themeBtn" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <span id="themeLabel">主题</span>
+      </button>
+    </div>
+  </div>
+
+  <section class="card" aria-label="账号登录注册">
+    <header class="brand">
+      <span class="mark" aria-hidden="true">
+        <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+          <rect x="1" y="1" width="32" height="32" rx="9" fill="var(--primary)"/>
+          <path d="M17 8.4l2 4.9 4.9 2-4.9 2-2 4.9-2-4.9-4.9-2 4.9-2z" fill="var(--on-primary)"/>
+          <circle cx="24.2" cy="10.6" r="1.6" fill="var(--on-primary)" opacity="0.85"/>
+        </svg>
+      </span>
+      <h1>Prisdvl Nexus</h1>
+      <p class="tagline">个人知识库 · AI 对话 · 自定义 Agent</p>
+      <span class="palette-name" id="paletteName">配色 · 陶土橘</span>
+    </header>
+
+    <div class="tabs" role="tablist" aria-label="登录或注册">
+      <button class="tab" id="tabLogin" role="tab" aria-selected="true" aria-controls="panelLogin" type="button">登录</button>
+      <button class="tab" id="tabRegister" role="tab" aria-selected="false" aria-controls="panelRegister" type="button">注册</button>
+    </div>
+
+    <form class="form active" id="panelLogin" novalidate>
+      <div class="form-error" id="loginFormError" role="alert"></div>
+      <div class="field" id="fLoginUsername">
+        <label for="loginUsername">用户名</label>
+        <input id="loginUsername" name="username" type="text" placeholder="请输入用户名" autocomplete="username" />
+        <p class="err-text">请输入用户名</p>
+      </div>
+      <div class="field" id="fLoginPassword">
+        <label for="loginPassword">密码</label>
+        <div class="input-wrap">
+          <input id="loginPassword" name="password" type="password" placeholder="请输入密码" autocomplete="current-password" />
+          <button class="vis-toggle" type="button" aria-label="显示或隐藏密码" data-for="loginPassword" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
+          </button>
+        </div>
+        <p class="err-text">请输入密码</p>
+      </div>
+      <button class="btn btn-primary" type="submit" id="loginSubmit">登录</button>
+      <button class="btn btn-ghost" type="button" id="demoFill">一键使用演示账号<kbd>demo</kbd></button>
+      <p class="switch-line">还没有账号？<button type="button" data-tab="register">创建账号</button></p>
+    </form>
+
+    <form class="form" id="panelRegister" novalidate>
+      <div class="form-error" id="regFormError" role="alert"></div>
+      <div class="field" id="fRegUsername">
+        <label for="regUsername">用户名</label>
+        <input id="regUsername" name="username" type="text" placeholder="3–32 位字母、数字、下划线或连字符" autocomplete="username" />
+        <p class="err-text">用户名为 3–32 位字母、数字、下划线或连字符</p>
+      </div>
+      <div class="field" id="fRegPassword">
+        <label for="regPassword">密码</label>
+        <div class="input-wrap">
+          <input id="regPassword" name="password" type="password" placeholder="8–64 位" autocomplete="new-password" />
+          <button class="vis-toggle" type="button" aria-label="显示或隐藏密码" data-for="regPassword" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
+          </button>
+        </div>
+        <p class="err-text">密码长度需在 8–64 位之间</p>
+      </div>
+      <div class="field" id="fRegPassword2">
+        <label for="regPassword2">确认密码</label>
+        <div class="input-wrap">
+          <input id="regPassword2" name="password2" type="password" placeholder="再次输入密码" autocomplete="new-password" />
+          <button class="vis-toggle" type="button" aria-label="显示或隐藏密码" data-for="regPassword2" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
+          </button>
+        </div>
+        <p class="err-text">两次输入的密码不一致</p>
+      </div>
+      <div class="field" id="fRegNickname">
+        <label for="regNickname">昵称 <span style="color:var(--text-3);font-weight:400">（可选）</span></label>
+        <input id="regNickname" name="nickname" type="text" placeholder="展示名称，不超过 64 位" />
+      </div>
+      <div class="field" id="fRegEmail">
+        <label for="regEmail">邮箱 <span style="color:var(--text-3);font-weight:400">（可选）</span></label>
+        <input id="regEmail" name="email" type="email" placeholder="用于找回密码等，暂无强制" />
+        <p class="err-text">邮箱格式不正确</p>
+      </div>
+      <button class="btn btn-primary" type="submit" id="regSubmit">创建账号</button>
+      <p class="switch-line">已有账号？<button type="button" data-tab="login">去登录</button></p>
+    </form>
+
+    <p class="foot-note">原型 v2 · 四配色 × 明暗 × 专属背景动画 · 仅演示界面</p>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* URL 深链：?p=terracotta|turquoise|plum|lime&theme=light|dark&tab=login|register */
+  var q = new URLSearchParams(location.search);
+  var INIT = {
+    palette: ["terracotta", "turquoise", "plum", "lime"].includes(q.get("p")) ? q.get("p") :
+             localStorage.getItem("nx-authp2-palette") || "terracotta",
+    theme: q.get("theme") === "light" || q.get("theme") === "dark" ? q.get("theme") :
+           localStorage.getItem("nx-authp2-theme") ||
+           (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
+    tab: q.get("tab") === "login" || q.get("tab") === "register" ? q.get("tab") : "login"
+  };
+
+  var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var stage = document.getElementById("stage");
+  var html = document.documentElement;
+
+  var PALETTES = {
+    terracotta: { label: "陶土橘", kind: "dust" },
+    turquoise:  { label: "松石青", kind: "bubbles" },
+    plum:       { label: "梅子",   kind: "stars" },
+    lime:       { label: "青柠",   kind: "lattice" }
+  };
+
+  /* ================= 配色切换 ================= */
+  function applyPalette(p) {
+    html.dataset.palette = p;
+    localStorage.setItem("nx-authp2-palette", p);
+    document.querySelectorAll("#paletteGroup .tool-btn").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.dataset.palette === p));
+      // 圆点显示该配色当前主题下的强调色
+      if (b.dataset.palette === p) {
+        var col = getComputedStyle(html).getPropertyValue("--primary").trim();
+        b.querySelector(".dot").style.background = col;
+      }
+    });
+    document.getElementById("paletteName").textContent = "配色 · " + PALETTES[p].label;
+    startParticles();
+  }
+
+  /* ================= 主题切换 ================= */
+  function applyTheme(t) {
+    html.dataset.theme = t;
+    localStorage.setItem("nx-authp2-theme", t);
+    document.getElementById("themeLabel").textContent = t === "dark" ? "亮色" : "暗色";
+    if (INIT.palette) refreshDotColors();
+    startParticles();
+  }
+  function refreshDotColors() {
+    var p = html.dataset.palette;
+    document.querySelectorAll("#paletteGroup .tool-btn").forEach(function (b) {
+      b.querySelector(".dot").style.background =
+        getComputedStyle(html).getPropertyValue("--primary").trim();
+    });
+    void p;
+  }
+  document.getElementById("themeBtn").addEventListener("click", function () {
+    applyTheme(html.dataset.theme === "dark" ? "light" : "dark");
+  });
+  document.querySelectorAll("#paletteGroup .tool-btn").forEach(function (b) {
+    b.addEventListener("click", function () { applyPalette(b.dataset.palette); });
+  });
+
+  /* ================= 粒子引擎（每配色一套语义） ================= */
+  var canvas = document.getElementById("bg-particles");
+  var ctx = canvas.getContext("2d");
+  var pts = [];
+  var raf = 0;
+  var running = false;
+
+  function isDark() { return html.dataset.theme === "dark"; }
+  function particleColor() {
+    var v = getComputedStyle(html).getPropertyValue(isDark() ? "--particle-dark" : "--particle-light").trim();
+    return v;
+  }
+
+  function makePoints() {
+    var w = canvas.width, h = canvas.height;
+    var kind = PALETTES[html.dataset.palette].kind;
+    var count = kind === "lattice" ? Math.round(w / 26) * Math.round(h / 26) : Math.min(110, Math.max(48, Math.round(w / 13)));
+    pts = [];
+    if (kind === "lattice") {
+      var cols = Math.round(w / 26), rows = Math.round(h / 26);
+      for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
+        pts.push({
+          kind: "lattice",
+          x: c * 26 + 13, y: r * 26 + 13,
+          r: 0.9, phase: r * 0.4 + c * 0.25,
+          speed: 0.006 + Math.random() * 0.004,
+          bright: Math.random() > 0.9
+        });
+      }
+    } else {
+      for (var i = 0; i < count; i++) {
+        var speed = kind === "bubbles" ? { vx: (Math.random() - 0.5) * 0.12, vy: -0.06 - Math.random() * 0.22 }
+                   : kind === "stars"  ? { vx: (Math.random() - 0.5) * 0.06, vy: (Math.random() - 0.5) * 0.05 }
+                   :                     { vx: (Math.random() - 0.5) * 0.22, vy: (Math.random() - 0.5) * 0.1 };
+        pts.push({
+          kind: kind,
+          x: Math.random() * w, y: Math.random() * h,
+          r: kind === "dust" ? (0.8 + Math.random() * 1.8) : (0.8 + Math.random() * 1.4),
+          vx: speed.vx, vy: speed.vy,
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.004 + Math.random() * 0.008,
+          bright: Math.random() > 0.84
+        });
+      }
+    }
+  }
+
+  function paint() {
+    var w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    var col = particleColor();
+    var now = Date.now();
+    for (var i = 0; i < pts.length; i++) {
+      var p = pts[i];
+      var alpha = 0.14 + 0.2 * (0.5 + 0.5 * Math.sin(now * p.speed * 3 + p.phase));
+      if (p.bright) alpha += 0.2;
+      if (p.kind === "lattice") alpha *= 0.75;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = "oklch(" + col + " / " + alpha.toFixed(3) + ")";
+      ctx.fill();
+    }
+  }
+
+  function tick() {
+    var w = canvas.width, h = canvas.height;
+    for (var i = 0; i < pts.length; i++) {
+      var p = pts[i];
+      if (p.kind === "bubbles") {
+        p.x += p.vx + Math.sin(Date.now() * 0.0006 + p.phase) * 0.14;
+        p.y += p.vy;
+        if (p.y < -6) { p.y = h + 6; p.x = Math.random() * w; }
+      } else if (p.kind === "lattice") {
+        /* 静止点阵 + 呼吸，不移动 */
+      } else {
+        p.x += p.vx; p.y += p.vy;
+        if (p.y < -6) { p.y = h + 6; p.x = Math.random() * w; }
+        if (p.x < -6) p.x = w + 6;
+        if (p.x > w + 6) p.x = -6;
+      }
+    }
+    paint();
+    raf = requestAnimationFrame(tick);
+  }
+
+  function fit() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(stage.clientWidth * dpr);
+    canvas.height = Math.round(stage.clientHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    makePoints();
+    if (reduced) paint();
+  }
+
+  function startParticles() {
+    if (!running) { running = true; fit(); }
+    if (!reduced && !raf) { raf = requestAnimationFrame(tick); }
+    if (reduced) paint();
+  }
+
+  /* ================= 登录/注册切换 ================= */
+  function setTab(tab) {
+    INIT.tab = tab;
+    document.getElementById("tabLogin").setAttribute("aria-selected", String(tab === "login"));
+    document.getElementById("tabRegister").setAttribute("aria-selected", String(tab === "register"));
+    document.getElementById("panelLogin").classList.toggle("active", tab === "login");
+    document.getElementById("panelRegister").classList.toggle("active", tab === "register");
+  }
+  document.getElementById("tabLogin").addEventListener("click", function () { setTab("login"); });
+  document.getElementById("tabRegister").addEventListener("click", function () { setTab("register"); });
+  document.querySelectorAll("[data-tab]").forEach(function (b) {
+    b.addEventListener("click", function () { setTab(b.dataset.tab); });
+  });
+
+  /* ================= 校验（契约对齐，原型演示级） ================= */
+  function mark(f, e) {
+    f.classList.toggle("has-error", e);
+    if (e) { f.classList.remove("shake"); void f.offsetWidth; f.classList.add("shake"); }
+  }
+  function formError(formEl, msg) {
+    var box = formEl.querySelector(".form-error");
+    box.textContent = msg || "";
+    box.classList.toggle("active", !!msg);
+  }
+  var RE_USERNAME = /^[A-Za-z0-9_-]{3,32}$/;
+  var RE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  document.getElementById("panelLogin").addEventListener("submit", function (e) {
+    e.preventDefault();
+    formError(this, null);
+    var u = document.getElementById("loginUsername").value.trim();
+    var p = document.getElementById("loginPassword").value;
+    mark(document.getElementById("fLoginUsername"), !u);
+    mark(document.getElementById("fLoginPassword"), !p);
+    if (u && p) formError(this, "原型演示：校验通过（不发起真实请求）");
+  });
+  document.getElementById("panelRegister").addEventListener("submit", function (e) {
+    e.preventDefault();
+    formError(this, null);
+    var u = document.getElementById("regUsername").value.trim();
+    var p = document.getElementById("regPassword").value;
+    var p2 = document.getElementById("regPassword2").value;
+    var nk = document.getElementById("regNickname").value.trim();
+    var em = document.getElementById("regEmail").value.trim();
+    mark(document.getElementById("fRegUsername"), !RE_USERNAME.test(u));
+    mark(document.getElementById("fRegPassword"), p.length < 8 || p.length > 64);
+    mark(document.getElementById("fRegPassword2"), p2 !== p);
+    mark(document.getElementById("fRegNickname"), nk.length > 64);
+    mark(document.getElementById("fRegEmail"), em.length > 0 && !RE_EMAIL.test(em));
+    if (RE_USERNAME.test(u) && p.length >= 8 && p.length <= 64 && p2 === p && !(nk.length > 64) && !(em.length > 0 && !RE_EMAIL.test(em))) {
+      formError(this, "原型演示：校验通过（不发起真实请求）");
+    }
+  });
+  document.querySelectorAll("input").forEach(function (input) {
+    input.addEventListener("input", function () { input.classList.remove("err"); });
+  });
+  document.querySelectorAll(".vis-toggle").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var i = document.getElementById(b.dataset.for);
+      i.type = i.type === "password" ? "text" : "password";
+    });
+  });
+  document.getElementById("demoFill").addEventListener("click", function () {
+    setTab("login");
+    document.getElementById("loginUsername").value = "demo";
+    document.getElementById("loginPassword").value = "Demo@12345";
+    document.getElementById("fLoginUsername").classList.remove("has-error");
+    document.getElementById("fLoginPassword").classList.remove("has-error");
+  });
+
+  /* ================= 初始化 ================= */
+  window.addEventListener("resize", function () { if (running && stage.clientWidth > 0) fit(); });
+  applyTheme(INIT.theme);
+  refreshDotColors();
+  applyPalette(INIT.palette);
+  setTab(INIT.tab);
+})();
+</script>
+</body>
+</html>

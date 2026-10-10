@@ -1,7 +1,15 @@
 # 前端 Design System（Phase C）
+> 状态：**历史（Vue 3 时代 Phase C 设计系统）**。
+
+> ⚠️ **历史文档（Vue 时代，已归档）**：本文描述的是**已被取代的 Vue 3 前端**（原 `web/`，
+> 现归档在 `docs/archive/web-vue/`）。当前产品前端是 React 19 工程 `frontend/`：
+> 设计令牌 `frontend/src/styles/tokens.css`、通用组件 `frontend/src/components/`、
+> 动效积木 `frontend/src/bits/`、页面 `frontend/src/pages/`、后端契约层 `frontend/src/lib/api.ts`。
+> 本文里的 `web/src/...` 路径、Element Plus 选择器、`AgentView` / `KnowledgeBaseDetailView` 等
+> 组件名**只对归档副本有效**，不能当作当前实现的规范。
 
 > 阶段定位：**建立规则与公共积木**，不重写两个巨型页面的业务。
-> 上游：`docs/frontend-architecture-audit.md`（Phase A）→
+> 上游：`docs/archive/reports/frontend-architecture-audit.md`（Phase A）→
 > `docs/frontend-information-architecture.md`（Phase B）→ **本文件**。
 > 边界遵守：未新增页面 / 未删除路由 / 未加 Home / 未删 Evaluation /
 > 未动后端 API 与 SSE 协议 / 未重写 `AgentView` 与 `KnowledgeBaseDetailView` 的业务。

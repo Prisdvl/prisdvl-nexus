@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prisdvl Nexus · 登录/注册原型 v1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================
+ * 设计系统（本原型），与 .ui-craft/tokens.md 对齐
+ * ------------------------------------------------------------
+ * 风格：极简现代 SaaS（Linear/Vercel 气质），登录页沉浸式
+ * 配色：中性 90%+，唯一强调色靛蓝紫 Indigo（H≈277）；双主题
+ * 字体：Inter（拉丁/数字）+ 系统中文栈；规范级字号
+ * 圆角：输入/按钮 6px，分段控件 8px，卡片 18px（分档，绝不统一）
+ * 阴影：ambient + direct 双层；暗色靠 surface 亮度差分层
+ * 动效：入场 450ms 一次；背景漂移 26–38s 极慢；hover/focus 150ms；
+ *       prefers-reduced-motion 全部降级
+ * 反俗套：无紫粉蓝渐变；无 emoji；渐变仅限背景光斑且同色相；
+ *       卡片无左侧彩色 border accent；无凑数装饰
+ * ============================================================ */
+
+:root {
+  color-scheme: light;
+  --bg:            oklch(0.99 0.002 265);
+  --surface:       oklch(0.972 0.003 265);
+  --surface-muted: oklch(0.95 0.003 265);
+  --border:        oklch(0.915 0.004 265);
+  --border-strong: oklch(0.86 0.006 265);
+  --text:          oklch(0.21 0.01 265);
+  --text-2:        oklch(0.42 0.012 265);
+  --text-3:        oklch(0.56 0.015 265);
+  --primary:       oklch(0.57 0.18 277);
+  --primary-hover: oklch(0.52 0.19 277);
+  --primary-container: oklch(0.935 0.03 277);
+  --on-primary:    oklch(0.985 0 0);
+  --danger:        oklch(0.55 0.2 27);
+  --danger-container: oklch(0.96 0.03 27);
+  --input-bg:      oklch(1 0 0);
+  --card-bg:       oklch(0.99 0.002 265 / 0.86);
+  --ring:          oklch(0.57 0.18 277 / 0.35);
+  --shadow-card:   0 1px 2px oklch(0 0 0 / 0.04),
+                   0 24px 64px oklch(0.45 0.05 277 / 0.10);
+  --shadow-pop:    0 2px 6px oklch(0 0 0 / 0.05),
+                   0 16px 40px oklch(0.45 0.05 277 / 0.12);
+  --blob-alpha: 0.30;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:            oklch(0.165 0.008 265);
+  --surface:       oklch(0.198 0.009 265);
+  --surface-muted: oklch(0.235 0.01 265);
+  --border:        oklch(0.275 0.012 265);
+  --border-strong: oklch(0.35 0.014 265);
+  --text:          oklch(0.93 0.005 265);
+  --text-2:        oklch(0.72 0.008 265);
+  --text-3:        oklch(0.55 0.01 265);
+  --primary:       oklch(0.64 0.16 277);
+  --primary-hover: oklch(0.69 0.15 277);
+  --primary-container: oklch(0.27 0.05 277);
+  --on-primary:    oklch(0.16 0.008 265);
+  --danger:        oklch(0.68 0.14 27);
+  --danger-container: oklch(0.28 0.05 27);
+  --input-bg:      oklch(0.15 0.009 265);
+  --card-bg:       oklch(0.198 0.009 265 / 0.9);
+  --ring:          oklch(0.64 0.16 277 / 0.4);
+  --shadow-card:   0 1px 2px oklch(0 0 0 / 0.5),
+                   0 24px 64px oklch(0 0 0 / 0.55);
+  --shadow-pop:    0 2px 6px oklch(0 0 0 / 0.5),
+                   0 16px 40px oklch(0 0 0 / 0.5);
+  --blob-alpha: 0.16;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: "Inter", "PingFang SC", "Microsoft YaHei", "MiSans", "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------- 沉浸式背景 ---------- */
+
+.stage {
+  position: relative;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 48px 20px;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.bg { position: absolute; inset: 0; z-index: -1; overflow: hidden; }
+
+/* 变体 A：极光（同色相光斑慢漂移） */
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  will-change: transform;
+  pointer-events: none;
+}
+.blob-1 { width: 56vw; height: 56vw; left: -14vw; top: -20vh;
+  background: radial-gradient(circle at 32% 32%, oklch(0.57 0.16 277 / var(--blob-alpha)), transparent 62%);
+  animation: drift1 26s ease-in-out infinite alternate; }
+.blob-2 { width: 46vw; height: 46vw; right: -12vw; top: 6vh;
+  background: radial-gradient(circle at 62% 40%, oklch(0.62 0.1 255 / calc(var(--blob-alpha) * 0.85)), transparent 62%);
+  animation: drift2 33s ease-in-out infinite alternate; }
+.blob-3 { width: 40vw; height: 40vw; left: 20vw; bottom: -18vh;
+  background: radial-gradient(circle at 50% 50%, oklch(0.55 0.07 300 / calc(var(--blob-alpha) * 0.7)), transparent 62%);
+  animation: drift3 38s ease-in-out infinite alternate; }
+
+@keyframes drift1 { from { transform: translate3d(0,0,0) scale(1); }   to { transform: translate3d(6vw, 4vh, 0) scale(1.12); } }
+@keyframes drift2 { from { transform: translate3d(0,0,0) scale(1.08); } to { transform: translate3d(-5vw, -3vh, 0) scale(1); } }
+@keyframes drift3 { from { transform: translate3d(0,0,0) scale(1); }   to { transform: translate3d(4vw, -5vh, 0) scale(1.1); } }
+
+/* 变体 B：粒子（canvas 绘制，JS 驱动） */
+#bg-particles { position: absolute; inset: 0; z-index: 0; }
+
+.stage.variant-particles .blob { display: none; }
+.stage.variant-aurora  #bg-particles { display: none; }
+
+/* ---------- 预览工具（仅原型用） ---------- */
+
+.preview-tools {
+  position: fixed;
+  top: 20px; right: 20px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card-bg);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-pop);
+}
+.tool-group { display: flex; align-items: center; gap: 2px; }
+.tool-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+.tool-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 10px;
+  border: 0; border-radius: 7px;
+  background: transparent; color: var(--text-2);
+  font: inherit; font-size: 12.5px; cursor: pointer;
+  transition: background 150ms ease-out, color 150ms ease-out;
+}
+.tool-btn:hover { background: var(--surface-muted); color: var(--text); }
+.tool-btn[aria-pressed="true"] { background: var(--primary-container); color: var(--primary); font-weight: 500; }
+.tool-btn svg { width: 14px; height: 14px; }
+
+/* ---------- 登录卡片 ---------- */
+
+.card {
+  position: relative;
+  width: min(400px, 100%);
+  padding: 34px 34px 30px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--card-bg);
+  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-card);
+  animation: enter 0.45s cubic-bezier(0.2, 0.8, 0.25, 1) both;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes enter {
+  from { opacity: 0; transform: translateY(14px) scale(0.995); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.brand { text-align: center; margin-bottom: 24px; }
+.brand .mark { display: inline-flex; margin-bottom: 14px; }
+.brand h1 {
+  margin: 0;
+  font-size: 19px; font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.brand .tagline {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  letter-spacing: 0.01em;
+}
+
+/* 登录/注册 segmented tabs */
+.tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  margin-bottom: 20px;
+}
+.tab {
+  height: 34px;
+  border: 0; border-radius: 8px;
+  background: transparent; color: var(--text-2);
+  font: inherit; font-size: 13.5px; font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms ease-out, color 150ms ease-out;
+}
+.tab:hover { color: var(--text); }
+.tab[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.06);
+}
+
+.form { display: none; }
+.form.active { display: block; }
+
+.field { margin-bottom: 14px; }
+.field label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px; font-weight: 500;
+  color: var(--text-2);
+}
+.field .hint { margin-top: 5px; font-size: 12px; color: var(--text-3); }
+
+.input-wrap { position: relative; }
+.input-wrap .vis-toggle {
+  position: absolute; right: 4px; top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px;
+  border: 0; border-radius: 7px;
+  background: transparent; color: var(--text-3);
+  cursor: pointer;
+  transition: color 150ms ease-out, background 150ms ease-out;
+}
+.input-wrap .vis-toggle:hover { color: var(--text-2); background: var(--surface-muted); }
+.input-wrap .vis-toggle svg { width: 16px; height: 16px; }
+
+input[type="text"], input[type="password"], input[type="email"] {
+  width: 100%;
+  height: 44px;
+  padding: 0 40px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit; font-size: 14.5px;
+  outline: none;
+  transition: border-color 150ms ease-out, box-shadow 150ms ease-out, background 150ms ease-out;
+}
+input:not([type="password"]) { padding-right: 12px; }
+input::placeholder { color: var(--text-3); }
+input:hover { border-color: var(--border-strong); }
+input:focus-visible {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+input.err { border-color: var(--danger); }
+
+.err-text {
+  display: none;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--danger);
+}
+.field.has-error .err-text { display: block; }
+.field.has-error input { border-color: var(--danger); }
+.field.shake { animation: shake 0.3s ease-out; }
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  30% { transform: translateX(-4px); }
+  60% { transform: translateX(4px); }
+}
+
+.form-error {
+  display: none;
+  padding: 9px 12px;
+  margin-bottom: 14px;
+  border-radius: 8px;
+  background: var(--danger-container);
+  color: var(--danger);
+  font-size: 12.5px;
+}
+.form-error.active { display: block; }
+
+/* 按钮 */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%;
+  height: 44px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit; font-size: 14px; font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms ease-out, border-color 150ms ease-out, transform 80ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:active { transform: translateY(0.5px); }
+.btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+
+.btn-primary { background: var(--primary); color: var(--on-primary); }
+.btn-primary:hover { background: var(--primary-hover); }
+
+.btn-ghost {
+  margin-top: 10px;
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font-weight: 400;
+}
+.btn-ghost:hover { background: var(--surface-muted); color: var(--text); }
+.btn-ghost kbd {
+  margin-left: 2px; padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface);
+  font-family: inherit; font-size: 11.5px; color: var(--text-3);
+}
+
+.switch-line {
+  margin: 18px 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.switch-line button {
+  border: 0; background: none; padding: 0;
+  font: inherit; font-size: 13px; font-weight: 500;
+  color: var(--primary);
+  cursor: pointer;
+}
+.switch-line button:hover { text-decoration: underline; text-underline-offset: 3px; }
+.switch-line button:focus-visible { outline: none; text-decoration: underline; text-underline-offset: 3px; }
+
+.foot-note {
+  margin: 16px 0 0;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* ---------- 动效降级 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .blob, .card { animation: none; }
+  .card { transform: none; opacity: 1; }
+  * { transition-duration: 0.01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<main class="stage variant-aurora" id="stage">
+  <!-- 沉浸式背景 -->
+  <div class="bg" aria-hidden="true">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+    <canvas id="bg-particles" aria-hidden="true"></canvas>
+  </div>
+
+  <!-- 预览工具（仅原型：主题 / 背景变体） -->
+  <div class="preview-tools" role="group" aria-label="预览工具">
+    <div class="tool-group">
+      <button class="tool-btn" id="themeBtn" type="button" title="切换明暗主题">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <span id="themeLabel">主题</span>
+      </button>
+    </div>
+    <div class="tool-sep"></div>
+    <div class="tool-group">
+      <button class="tool-btn" id="bgA" type="button" aria-pressed="true">背景 A</button>
+      <button class="tool-btn" id="bgB" type="button" aria-pressed="false">背景 B</button>
+    </div>
+  </div>
+
+  <!-- 登录 / 注册卡片 -->
+  <section class="card" aria-label="账号登录注册">
+    <header class="brand">
+      <span class="mark" aria-hidden="true">
+        <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+          <rect x="1" y="1" width="32" height="32" rx="9" fill="var(--primary)"/>
+          <path d="M17 8.4l2 4.9 4.9 2-4.9 2-2 4.9-2-4.9-4.9-2 4.9-2z"
+                fill="var(--on-primary)"/>
+          <circle cx="24.2" cy="10.6" r="1.6" fill="var(--on-primary)" opacity="0.85"/>
+        </svg>
+      </span>
+      <h1>Prisdvl Nexus</h1>
+      <p class="tagline">个人知识库 · AI 对话 · 自定义 Agent</p>
+    </header>
+
+    <div class="tabs" role="tablist" aria-label="登录或注册">
+      <button class="tab" id="tabLogin" role="tab" aria-selected="true" aria-controls="panelLogin" type="button">登录</button>
+      <button class="tab" id="tabRegister" role="tab" aria-selected="false" aria-controls="panelRegister" type="button">注册</button>
+    </div>
+
+    <!-- 登录 -->
+    <form class="form active" id="panelLogin" novalidate>
+      <div class="form-error" id="loginFormError" role="alert"></div>
+
+      <div class="field" id="fLoginUsername">
+        <label for="loginUsername">用户名</label>
+        <input id="loginUsername" name="username" type="text" placeholder="请输入用户名" autocomplete="username" />
+        <p class="err-text">请输入用户名</p>
+      </div>
+
+      <div class="field" id="fLoginPassword">
+        <label for="loginPassword">密码</label>
+        <div class="input-wrap">
+          <input id="loginPassword" name="password" type="password" placeholder="请输入密码" autocomplete="current-password" />
+          <button class="vis-toggle" type="button" aria-label="显示或隐藏密码" data-for="loginPassword" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
+          </button>
+        </div>
+        <p class="err-text">请输入密码</p>
+      </div>
+
+      <button class="btn btn-primary" type="submit" id="loginSubmit">登录</button>
+      <button class="btn btn-ghost" type="button" id="demoFill">
+        一键使用演示账号<kbd>demo</kbd>
+      </button>
+
+      <p class="switch-line">还没有账号？<button type="button" data-tab="register">创建账号</button></p>
+    </form>
+
+    <!-- 注册 -->
+    <form class="form" id="panelRegister" novalidate>
+      <div class="form-error" id="regFormError" role="alert"></div>
+
+      <div class="field" id="fRegUsername">
+        <label for="regUsername">用户名</label>
+        <input id="regUsername" name="username" type="text" placeholder="3–32 位字母、数字、下划线或连字符" autocomplete="username" />
+        <p class="err-text">用户名为 3–32 位字母、数字、下划线或连字符</p>
+      </div>
+
+      <div class="field" id="fRegPassword">
+        <label for="regPassword">密码</label>
+        <div class="input-wrap">
+          <input id="regPassword" name="password" type="password" placeholder="8–64 位" autocomplete="new-password" />
+          <button class="vis-toggle" type="button" aria-label="显示或隐藏密码" data-for="regPassword" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
+          </button>
+        </div>
+        <p class="err-text">密码长度需在 8–64 位之间</p>
+      </div>
+
+      <div class="field" id="fRegPassword2">
+        <label for="regPassword2">确认密码</label>
+        <div class="input-wrap">
+          <input id="regPassword2" name="password2" type="password" placeholder="再次输入密码" autocomplete="new-password" />
+          <button class="vis-toggle" type="button" aria-label="显示或隐藏密码" data-for="regPassword2" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
+          </button>
+        </div>
+        <p class="err-text">两次输入的密码不一致</p>
+      </div>
+
+      <div class="field" id="fRegNickname">
+        <label for="regNickname">昵称 <span style="color:var(--text-3);font-weight:400">（可选）</span></label>
+        <input id="regNickname" name="nickname" type="text" placeholder="展示名称，不超过 64 位" />
+      </div>
+
+      <div class="field" id="fRegEmail">
+        <label for="regEmail">邮箱 <span style="color:var(--text-3);font-weight:400">（可选）</span></label>
+        <input id="regEmail" name="email" type="email" placeholder="用于找回密码等，暂无强制" />
+        <p class="err-text">邮箱格式不正确</p>
+        <p class="hint">邮箱与昵称均可不填，与注册接口契约一致。</p>
+      </div>
+
+      <button class="btn btn-primary" type="submit" id="regSubmit">创建账号</button>
+
+      <p class="switch-line">已有账号？<button type="button" data-tab="login">去登录</button></p>
+    </form>
+
+    <p class="foot-note">原型 v1 · 背景 A/B 与明暗主题可随时切换 · 仅演示界面，无真实提交</p>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ================= 状态 ================= */
+  var STORAGE = {
+    theme: "nx-auth-preview-theme",
+    variant: "nx-auth-preview-variant"
+  };
+  var state = {
+    theme: localStorage.getItem(STORAGE.theme) || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
+    variant: localStorage.getItem(STORAGE.variant) || "aurora",
+    tab: "login"
+  };
+  var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* URL 深链：?theme=light|dark&variant=aurora|particles&tab=login|register（截图/对比用） */
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var t = q.get("theme"); if (t === "light" || t === "dark") state.theme = t;
+    var v = q.get("variant"); if (v === "aurora" || v === "particles") state.variant = v;
+    var tb = q.get("tab"); if (tb === "login" || tb === "register") state.tab = tb;
+  })();
+
+  var stage = document.getElementById("stage");
+
+  /* ================= 主题 ================= */
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    document.getElementById("themeLabel").textContent = theme === "dark" ? "亮色" : "暗色";
+    localStorage.setItem(STORAGE.theme, theme);
+  }
+  document.getElementById("themeBtn").addEventListener("click", function () {
+    var next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    state.theme = next;
+    applyTheme(next);
+  });
+
+  /* ================= 背景变体 ================= */
+  function applyVariant(v) {
+    state.variant = v;
+    stage.classList.remove("variant-aurora", "variant-particles");
+    stage.classList.add("variant-" + v);
+    document.getElementById("bgA").setAttribute("aria-pressed", String(v === "aurora"));
+    document.getElementById("bgB").setAttribute("aria-pressed", String(v === "particles"));
+    localStorage.setItem(STORAGE.variant, v);
+    if (v === "particles") { startParticles(); }
+  }
+  document.getElementById("bgA").addEventListener("click", function () { applyVariant("aurora"); });
+  document.getElementById("bgB").addEventListener("click", function () { applyVariant("particles"); });
+
+  /* ================= 粒子背景（变体 B，Canvas） ================= */
+  var canvas = document.getElementById("bg-particles");
+  var ctx = canvas.getContext("2d");
+  var parts = [];
+  var rafId = 0;
+  var running = false;
+
+  function isDark() { return document.documentElement.dataset.theme === "dark"; }
+
+  function makeParts() {
+    var w = canvas.width, h = canvas.height;
+    var count = Math.min(90, Math.max(40, Math.round(w / 16)));
+    parts = [];
+    for (var i = 0; i < count; i++) {
+      parts.push({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        r: 0.8 + Math.random() * 1.6,
+        vx: (Math.random() - 0.5) * 0.22,
+        vy: -0.04 - Math.random() * 0.14,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.004 + Math.random() * 0.008,
+        bright: Math.random() > 0.82
+      });
+    }
+  }
+
+  function paint() {
+    var w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    var base = isDark() ? [0.64, 0.16, 277] : [0.55, 0.18, 277];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      var alpha = 0.18 + 0.22 * (0.5 + 0.5 * Math.sin(Date.now() * p.speed + p.phase));
+      if (p.bright) alpha += 0.22;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = "oklch(" + base[0] + " " + base[1] + " " + base[2] + " / " + alpha.toFixed(3) + ")";
+      ctx.fill();
+    }
+  }
+
+  function tick() {
+    var w = canvas.width, h = canvas.height;
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      p.x += p.vx; p.y += p.vy;
+      if (p.y < -4) { p.y = h + 4; p.x = Math.random() * w; }
+      if (p.x < -4) p.x = w + 4;
+      if (p.x > w + 4) p.x = -4;
+    }
+    paint();
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function fit() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(stage.clientWidth * dpr);
+    canvas.height = Math.round(stage.clientHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    makeParts();
+    if (running && reduced) paint();
+  }
+
+  function startParticles() {
+    if (!running) {
+      running = true;
+      fit();
+      if (!reduced) { tick(); } else { paint(); }
+    }
+  }
+
+  applyVariant(state.variant); /* 若为 particles 会触发 startParticles */
+  window.addEventListener("resize", function () {
+    if (running && state.variant === "particles") fit();
+  });
+  if (!reduced && state.variant === "particles" && running) tick();
+
+  /* ================= 登录/注册切换 ================= */
+  var tabs = { login: document.getElementById("tabLogin"), register: document.getElementById("tabRegister") };
+  var panels = { login: document.getElementById("panelLogin"), register: document.getElementById("panelRegister") };
+
+  function setTab(tab) {
+    state.tab = tab;
+    tabs.login.setAttribute("aria-selected", String(tab === "login"));
+    tabs.register.setAttribute("aria-selected", String(tab === "register"));
+    panels.login.classList.toggle("active", tab === "login");
+    panels.register.classList.toggle("active", tab === "register");
+  }
+  tabs.login.addEventListener("click", function () { setTab("login"); });
+  tabs.register.addEventListener("click", function () { setTab("register"); });
+  document.querySelectorAll("[data-tab]").forEach(function (btn) {
+    btn.addEventListener("click", function () { setTab(btn.dataset.tab); });
+  });
+
+  /* ================= 表单校验（原型级，契约对齐） ================= */
+  function mark(field, hasErr) {
+    field.classList.toggle("has-error", hasErr);
+    if (hasErr) {
+      field.classList.remove("shake");
+      void field.offsetWidth;
+      field.classList.add("shake");
+    }
+  }
+  function showFormError(formEl, msg) {
+    var box = formEl.querySelector(".form-error");
+    if (msg) { box.textContent = msg; box.classList.add("active"); }
+    else { box.textContent = ""; box.classList.remove("active"); }
+  }
+  function clearFormErrors(formEl) { showFormError(formEl, null); }
+
+  var RE_USERNAME = /^[A-Za-z0-9_-]{3,32}$/;
+  var RE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  function validateLogin() {
+    clearFormErrors(panels.login);
+    var u = document.getElementById("loginUsername").value.trim();
+    var p = document.getElementById("loginPassword").value;
+    var ok = true;
+    mark(document.getElementById("fLoginUsername"), !u);
+    mark(document.getElementById("fLoginPassword"), !p);
+    if (!u || !p) ok = false;
+    return ok;
+  }
+
+  function validateRegister() {
+    clearFormErrors(panels.register);
+    var u = document.getElementById("regUsername").value.trim();
+    var p = document.getElementById("regPassword").value;
+    var p2 = document.getElementById("regPassword2").value;
+    var nk = document.getElementById("regNickname").value.trim();
+    var em = document.getElementById("regEmail").value.trim();
+    var ok = true;
+
+    var uErr = !RE_USERNAME.test(u);
+    var pErr = p.length < 8 || p.length > 64;
+    var p2Err = p2 !== p;
+    var emErr = em.length > 0 && !RE_EMAIL.test(em);
+    var nkErr = nk.length > 64;
+
+    mark(document.getElementById("fRegUsername"), uErr);
+    mark(document.getElementById("fRegPassword"), pErr);
+    mark(document.getElementById("fRegPassword2"), p2Err);
+    mark(document.getElementById("fRegEmail"), emErr);
+    mark(document.getElementById("fRegNickname"), nkErr);
+
+    if (uErr || pErr || p2Err || emErr || nkErr) ok = false;
+    return ok;
+  }
+
+  /* 提交：原型不真正提交，只演示校验反馈 */
+  panels.login.addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (validateLogin()) {
+      showFormError(panels.login, "原型演示：校验通过（不发起真实请求）");
+    }
+  });
+  panels.register.addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (validateRegister()) {
+      showFormError(panels.register, "原型演示：校验通过（不发起真实请求）");
+    }
+  });
+
+  /* 输入时清除错误态 */
+  document.querySelectorAll("input").forEach(function (input) {
+    input.addEventListener("input", function () {
+      input.classList.remove("err");
+      var f = input.closest(".field");
+      if (f) f.classList.remove("has-error");
+    });
+  });
+
+  /* 密码显隐 */
+  document.querySelectorAll(".vis-toggle").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var input = document.getElementById(btn.dataset.for);
+      var hidden = input.type === "password";
+      input.type = hidden ? "text" : "password";
+    });
+  });
+
+  /* 演示账号一键填入 */
+  document.getElementById("demoFill").addEventListener("click", function () {
+    setTab("login");
+    var u = document.getElementById("loginUsername");
+    var p = document.getElementById("loginPassword");
+    u.value = "demo";
+    p.value = "Demo@12345";
+    document.getElementById("fLoginUsername").classList.remove("has-error");
+    document.getElementById("fLoginPassword").classList.remove("has-error");
+    u.focus();
+  });
+
+  /* ================= 初始化 ================= */
+  applyTheme(state.theme);
+  setTab(state.tab);
+})();
+</script>
+</body>
+</html>
