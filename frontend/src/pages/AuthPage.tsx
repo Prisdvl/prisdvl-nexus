@@ -277,7 +277,7 @@ export default function AuthPage({ theme, palette, onEnter, onRegister }: AuthPa
           </form>
         )}
 
-        <p className="auth-foot">界面原型 · 与真实注册接口契约一致（用户名 3–32 / 密码 8–64）</p>
+        <p className="auth-foot">与真实注册接口契约一致（用户名 3–32 / 密码 8–64）</p>
       </section>
       </main>
     </div>

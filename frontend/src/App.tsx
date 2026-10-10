@@ -134,7 +134,7 @@ function NotFoundRoute() {
     <div className="page" style={{ textAlign: 'center', paddingTop: 80 }}>
       <p className="eyebrow">404</p>
       <h1 className="page-title">这个地址没有页面</h1>
-      <p className="page-sub" style={{ marginBottom: 20 }}>原型里只有 入口 / 登录 / 工作台 / 知识库 / 对话 / Agent / 账号 这些路由。</p>
+      <p className="page-sub" style={{ marginBottom: 20 }}>目前只有 入口 / 登录 / 工作台 / 知识库 / 对话 / Agent / 账号 这些路由。</p>
       <button className="btn btn-primary" type="button" onClick={() => navigate('/app/workbench')}>回到工作台</button>
     </div>
   )

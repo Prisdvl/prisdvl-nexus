@@ -195,7 +195,7 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
       links: [
         { label: '登录', ariaLabel: '去登录', onClick: onEnterAuth },
         { label: '注册', ariaLabel: '去注册', onClick: onEnterAuth },
-        { label: '关于这个原型', ariaLabel: '关于这个原型', onClick: () => jumpTo('stack') },
+        { label: '关于这个项目', ariaLabel: '关于这个项目', onClick: () => jumpTo('stack') },
       ],
     },
   ]
@@ -375,7 +375,7 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
         <BrandMark />
         <p>个人知识库 · 混合检索 · 工具调用 · 自定义 Agent</p>
         <p className="lp-foot-dim">
-          <Code2 size={12} style={{ verticalAlign: -2 }} /> 界面原型 · 数据为模拟 · 校招核心项目
+          <Code2 size={12} style={{ verticalAlign: -2 }} /> 校招核心项目
         </p>
       </footer>
     </>

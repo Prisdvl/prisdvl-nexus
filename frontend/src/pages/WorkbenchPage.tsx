@@ -62,7 +62,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb }: Props) {
     setQuickOut('')
     setTimeout(() => {
       setQuickRun(false)
-      setQuickOut(`Agent「${quickAgent}」：已在「我的 Java 笔记」检索到 3 个切片并作答。\n（原型示意）`)
+      setQuickOut(`Agent「${quickAgent}」：已在「我的 Java 笔记」检索到 3 个切片并作答。\n`)
     }, 2000)
   }
 

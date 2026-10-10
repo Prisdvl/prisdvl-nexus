@@ -82,7 +82,7 @@ export default function AppShell({ theme, palette }: ShellProps) {
         <RouteFade>
           <Outlet />
         </RouteFade>
-        <p className="foot-note">界面原型 · React Bits 组件驱动（3 配色 × 明暗） · 数据为模拟，仅供设计验收</p>
+        <p className="foot-note">React Bits 组件驱动（3 配色 × 明暗）</p>
       </main>
     </div>
   )
