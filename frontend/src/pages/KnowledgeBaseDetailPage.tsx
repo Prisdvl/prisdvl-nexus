@@ -543,9 +543,9 @@ flowchart TD
             {(USE_MOCK
               ? RELATED.map((r) => ({ title: r.title, why: r.why, tone: r.status === 'resolved' ? 'success' : 'accent', tag: r.status === 'resolved' ? '已关联' : '相关' }))
               : [
-                  ...(linkData?.backlinks ?? []).map((x) => ({ title: x.documentTitle ?? x.title ?? x.documentId ?? '文档', why: `反向链接${x.relation ? ' · ' + x.relation : ''}`, tone: 'success', tag: '已关联' })),
-                  ...(linkData?.outlinks ?? []).map((x) => ({ title: x.documentTitle ?? x.title ?? x.documentId ?? '文档', why: `出链${x.relation ? ' · ' + x.relation : ''}`, tone: 'success', tag: '已关联' })),
-                  ...related.map((x) => ({ title: x.documentTitle ?? x.title ?? x.documentId ?? '文档', why: x.reason ?? (typeof x.score === 'number' ? `相关度 ${(x.score * 100).toFixed(0)}%` : '相关推荐'), tone: 'accent', tag: '相关' })),
+                  ...(linkData?.backlinks ?? []).map((x) => ({ title: x.resolvedTitle ?? x.display ?? x.target ?? '文档', why: '反向链接 · ' + (x.linkType ?? ''), tone: 'success', tag: '已关联' })),
+                  ...(linkData?.outlinks ?? []).map((x) => ({ title: x.resolvedTitle ?? x.display ?? x.target ?? '文档', why: '出链 · ' + (x.linkType ?? ''), tone: 'success', tag: '已关联' })),
+                  ...related.map((x) => ({ title: x.title ?? x.documentId ?? '文档', why: (x.reasons && x.reasons.length ? x.reasons.join(' · ') : '相关推荐') + (typeof x.score === 'number' ? ' · 相关度 ' + x.score : ''), tone: 'accent', tag: '相关' })),
                 ]
             ).map((r, i) => (
               <div className="list-row" key={i}>

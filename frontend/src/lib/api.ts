@@ -418,9 +418,9 @@ export interface RagAnswer { answer: string; citations: RagCitation[] }
 export interface SearchHit { chunkId?: string; id?: string; documentId?: string; documentName?: string; headingPath?: string; content?: string; score?: number }
 export interface ChunkView { id: string; chunkIndex: number; chunkType: string; headingPath: string | null; content: string; tokenCount: number; charCount: number; vectorStatus: string; esStatus: string }
 
-export interface DocLink { documentId?: string; documentTitle?: string; title?: string; relation?: string; code?: string }
+export interface DocLink { linkId?: string; linkType?: string; target?: string; display?: string; resolvedDocumentId?: string; resolvedTitle?: string; external?: boolean }
 export interface DocumentLinks { outlinks: DocLink[]; backlinks: DocLink[]; dangling: number }
-export interface RelatedDoc { documentId?: string; documentTitle?: string; title?: string; reason?: string; score?: number }
+export interface RelatedDoc { documentId?: string; title?: string; sharedTags?: number; linked?: boolean; reasons?: string[]; score?: number }
 
 export interface StatsTrendPoint { day: string; count: number }
 export interface StatsActivityItem { type: string; refId: string; label: string | null; at: string | null }
