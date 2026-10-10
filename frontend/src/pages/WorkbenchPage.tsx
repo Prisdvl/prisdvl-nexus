@@ -8,7 +8,8 @@ import Counter from '@/bits/Counter/Counter'
 import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
 import StatusMark from '@/bits/StatusMark/StatusMark'
 import { SkeletonRows } from '@/components/Skeleton'
-import { ACTIVITY, AGENTS, HEAT, SESSIONS, TREND, type ActivityKind } from '@/data'
+import { AGENTS, SESSIONS, ACTIVITY as SEED_ACTIVITY, HEAT as SEED_HEAT, TREND as SEED_TREND, type ActivityKind } from '@/data'
+import { relTime, useLoad } from '@/lib/backendData'
 import type { PaletteName, ThemeMode } from '@/lib/types'
 import { api, USE_MOCK } from '@/lib/api'
 
@@ -84,6 +85,24 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb }: Props) {
     return () => { alive = false }
   }, [])
 
+  /* 工作台聚合：趋势(14) / 热力(30) / 最近活动(8)，来自 GET /api/stats/summary */
+  const { data: summary } = useLoad(() => api.stats.summary())
+  const trend = USE_MOCK ? SEED_TREND : (summary?.trend.map((p) => p.count) ?? SEED_TREND)
+  const heat = USE_MOCK
+    ? SEED_HEAT
+    : (() => {
+        const tail = (summary?.heat ?? []).map((d) => Math.min(4, d.count))
+        const pad = Math.max(0, 84 - tail.length)
+        return [...Array<number>(pad).fill(0), ...tail].slice(-84)
+      })()
+  const activity = USE_MOCK
+    ? SEED_ACTIVITY
+    : (summary?.activity ?? []).map((a) => ({
+        kind: (a.type === 'IMPORT' ? 'import' : 'chat') as ActivityKind,
+        title: a.type === 'IMPORT' ? `导入 ${a.label ?? ''}` : `会话「${a.label ?? '未命名'}」`,
+        detail: a.type === 'IMPORT' ? '导入任务' : '对话',
+        time: relTime(a.at),
+      }))
   const stats: { label: string; value: number; sub: string; accent?: boolean }[] = [
     { label: '知识库', value: counts.kb, sub: '共 ' + counts.docs + ' 篇文档', accent: true },
     { label: '文档', value: counts.docs, sub: '已入库切片可检索' },
@@ -92,9 +111,9 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb }: Props) {
   ]
 
   // 趋势折线（14 天）
-  const max = Math.max(...TREND)
-  const pts = TREND.map((v, i) => {
-    const x = (i / (TREND.length - 1)) * 100
+  const max = Math.max(...trend)
+  const pts = trend.map((v, i) => {
+    const x = (i / (trend.length - 1)) * 100
     const y = 100 - (v / max) * 88 - 6
     return `${x.toFixed(2)},${y.toFixed(2)}`
   })
@@ -160,10 +179,10 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb }: Props) {
             </div>
             <div className="wb-trend-legend">
               <span>
-                <b><Counter value={TREND.reduce((a, b) => a + b, 0)} places={[1000, 100, 10, 1]} fontSize={13} fontWeight={600} gap={1} padding={2} /></b> 次调用
+                <b><Counter value={trend.reduce((a, b) => a + b, 0)} places={[1000, 100, 10, 1]} fontSize={13} fontWeight={600} gap={1} padding={2} /></b> 次调用
               </span>
               <span>
-                <b><Counter value={TREND.reduce((a, b) => a + b, 0) * 2} places={[1000, 100, 10, 1]} fontSize={13} fontWeight={600} gap={1} padding={2} /></b> Tokens
+                <b><Counter value={trend.reduce((a, b) => a + b, 0) * 2} places={[1000, 100, 10, 1]} fontSize={13} fontWeight={600} gap={1} padding={2} /></b> Tokens
               </span>
               <span>
                 <b><Counter value={1.24} places={[1, '.', 0.1, 0.01]} fontSize={13} fontWeight={600} gap={1} padding={2} /></b>s 平均时延
@@ -227,7 +246,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb }: Props) {
               <span className="wb-sub">最近 5 条</span>
             </div>
             <ul className="wb-timeline">
-              {ACTIVITY.map((a) => {
+              {activity.map((a) => {
                 const Icon = KIND_ICON[a.kind]
                 return (
                   <li key={a.title}>
@@ -261,7 +280,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb }: Props) {
               <span className="wb-sub">近 12 周</span>
             </div>
             <div className="wb-heat" aria-label="近 12 周活跃度">
-              {HEAT.map((v, i) => <span key={i} data-lv={v} />)}
+              {heat.map((v, i) => <span key={i} data-lv={v} />)}
             </div>
             <div className="wb-heat-foot">
               <span>共 84 天 · 活跃 61 天</span>

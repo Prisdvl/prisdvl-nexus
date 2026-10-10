@@ -333,6 +333,11 @@ export const api = {
   importTasks: {
     get: (taskId: string) => http.get<Result<ImportTask>>(`/import-tasks/${taskId}`).then((r) => r.data.data),
   },
+  stats: {
+    /** 工作台汇总：趋势(14) + 热力(30) + 最近活动(8)。
+     *  用户维度由服务端从令牌解析，前端不传 userId。 */
+    summary: () => http.get<Result<StatsSummary>>('/stats/summary').then((r) => r.data.data),
+  },
   rag: {
     ask: (kbId: string, question: string, topK = 5) =>
       http.post<Result<RagAnswer>>(`/knowledge-bases/${kbId}/ask`, { question, topK }).then((r) => r.data.data),
@@ -416,3 +421,7 @@ export interface ChunkView { id: string; chunkIndex: number; chunkType: string; 
 export interface DocLink { documentId?: string; documentTitle?: string; title?: string; relation?: string; code?: string }
 export interface DocumentLinks { outlinks: DocLink[]; backlinks: DocLink[]; dangling: number }
 export interface RelatedDoc { documentId?: string; documentTitle?: string; title?: string; reason?: string; score?: number }
+
+export interface StatsTrendPoint { day: string; count: number }
+export interface StatsActivityItem { type: string; refId: string; label: string | null; at: string | null }
+export interface StatsSummary { trend: StatsTrendPoint[]; heat: StatsTrendPoint[]; activity: StatsActivityItem[] }
