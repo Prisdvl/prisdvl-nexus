@@ -39,8 +39,8 @@ public class StatsService {
     /** 近 days 天的逐日计数，缺失日期补 0，按日期升序。 */
     private List<StatsSummary.TrendPoint> fill(Long userId, int days) {
         Map<String, Long> byDay = new HashMap<>();
-        for (StatsMapper.DayCount row : statsMapper.messageCountByDay(userId, days - 1)) {
-            byDay.put(row.getDay().format(DAY), row.getCnt());
+        for (StatsMapper.DayCount row : statsMapper.messageCountByDay(userId, LocalDate.now().minusDays(days - 1))) {
+            byDay.put(row.getStatDay().format(DAY), row.getMsgCount());
         }
         List<StatsSummary.TrendPoint> out = new ArrayList<>(days);
         LocalDate today = LocalDate.now();
@@ -55,10 +55,10 @@ public class StatsService {
         List<StatsSummary.ActivityItem> out = new ArrayList<>();
         for (StatsMapper.ActivityRow row : statsMapper.recentActivity(userId, limit)) {
             out.add(new StatsSummary.ActivityItem(
-                    row.getType(),
+                    row.getActType(),
                     String.valueOf(row.getRefId()),
-                    row.getLabel(),
-                    row.getAt() == null ? null : row.getAt().toString()));
+                    row.getActLabel(),
+                    row.getActAt() == null ? null : row.getActAt().toString()));
         }
         return out;
     }
