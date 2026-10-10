@@ -17,7 +17,7 @@ import DocPreview from '@/components/DocPreview'
 import Markdown from '@/components/Markdown'
 import { toast } from '@/lib/toast'
 import { DOCS, QA_HISTORY, type DocItem } from '@/data'
-import { api, USE_MOCK, errMessage } from '@/lib/api'
+import { api, USE_MOCK, errMessage, type ChunkView, type KnowledgeBase, type SearchHit } from '@/lib/api'
 import { fetchDocs } from '@/lib/backendData'
 import type { ThemeMode } from '@/lib/types'
 
@@ -70,7 +70,67 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const [cites, setCites] = useState<{ documentName?: string; score?: number }[]>([])
   const [docsLoading, setDocsLoading] = useState(!USE_MOCK)
   const [picked, setPicked] = useState<File | null>(null)
+  const [searchQ, setSearchQ] = useState('')
+  const [hits, setHits] = useState<SearchHit[]>([])
+  const [searching, setSearching] = useState(false)
+  const [chunks, setChunks] = useState<ChunkView[]>([])
+  const [kbInfo, setKbInfo] = useState<KnowledgeBase | null>(null)
+  const [indexing, setIndexing] = useState(false)
+
+  const MODE_MAP: Record<string, string> = { '向量检索': 'vector', 'BM25': 'bm25', '混合检索': 'hybrid' }
+
+  /* 高级检索：直接打检索接口（不调用模型），用于验证"到底能不能搜到" */
+  const runSearch = async () => {
+    const q = searchQ.trim()
+    if (!q || searching) return
+    setSearching(true)
+    try {
+      setHits(await api.knowledge.search(kbId, q, MODE_MAP[usage.mode] ?? 'hybrid', usage.topK))
+    } catch (e) {
+      toast.error('检索失败', errMessage(e))
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  /* 切片索引状态：解释"为什么检索是空的"（PENDING = 还没建索引） */
+  const loadFirstDocChunks = async () => {
+    if (USE_MOCK) return
+    try {
+      const first = docs[0]
+      if (!first) { setChunks([]); return }
+      setChunks(await api.documents.chunks(kbId, first.id))
+    } catch (e) {
+      toast.error('切片加载失败', errMessage(e))
+    }
+  }
+
+  const runIndex = async (rebuild: boolean) => {
+    if (USE_MOCK) { toast.info('mock 模式不建索引'); return }
+    setIndexing(true)
+    try {
+      if (rebuild) await api.knowledge.recreateIndex(kbId)
+      else await api.knowledge.index(kbId)
+      toast.success(rebuild ? '索引已重建' : '索引任务已提交')
+      await loadFirstDocChunks()
+    } catch (e) {
+      toast.error('建索引失败', errMessage(e))
+    } finally {
+      setIndexing(false)
+    }
+  }
   const [uploading, setUploading] = useState(false)
+
+  /* 按 kbId 拉知识库自身的名称/描述（此前页头是写死的演示名） */
+  useEffect(() => {
+    if (USE_MOCK) return
+    let alive = true
+    api.knowledge.get(kbId).then((k) => { if (alive) setKbInfo(k) }).catch(() => {})
+    return () => { alive = false }
+  }, [kbId])
+
+  /* 进入「高级检索」tab 时加载切片索引状态 */
+  useEffect(() => { if (tab === 'adv') void loadFirstDocChunks() }, [tab, docs])
 
   /* 真实数据：进入详情页按 kbId 拉文档列表（mock 模式继续用种子数据） */
   useEffect(() => {
@@ -176,11 +236,11 @@ flowchart TD
       <div className="page-head">
         <div>
           <p className="eyebrow" style={{ margin: 0 }}>知识库详情</p>
-          <h1 className="page-title">我的 Java 笔记</h1>
-          <p className="page-sub">集合框架 / JVM / 并发 / 调优，校招复习主线 · 12 篇文档</p>
+          <h1 className="page-title">{kbInfo?.name ?? (USE_MOCK ? '我的 Java 笔记' : '知识库')}</h1>
+          <p className="page-sub">{(kbInfo?.description || (USE_MOCK ? '集合框架 / JVM / 并发 / 调优，校招复习主线' : '（无描述）')) + ' · ' + docs.length + ' 篇文档'}</p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn btn-ghost" type="button"><RefreshCw size={15} /> 重建索引</button>
+          <button className="btn btn-ghost" type="button" disabled={indexing} onClick={() => void runIndex(true)}><RefreshCw size={15} /> 重建索引</button>
           <button className="btn btn-primary" type="button" onClick={() => setImportOpen(true)}>
             <Upload size={16} /> 导入文档
           </button>
@@ -419,16 +479,40 @@ flowchart TD
             <button className="btn btn-ghost" type="button">保存到本知识库</button>
           </div>
 
-          <h2 className="col-title"><FileText size={15} style={{ color: 'var(--primary)' }} /> 切片预览</h2>
-          {CHUNKS.map((c) => (
-            <div className="panel panel-pad" key={c.id} style={{ marginBottom: 12 }}>
+          <h2 className="col-title"><Search size={15} style={{ color: 'var(--primary)' }} /> 切片检索</h2>
+          <form onSubmit={(e) => { e.preventDefault(); void runSearch() }} style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }} />
+              <input aria-label="在知识库内检索切片" className="input" value={searchQ} onChange={(e) => setSearchQ(e.target.value)} placeholder="输入关键词，直接检索切片（不调用模型）" style={{ paddingLeft: 36 }} />
+            </div>
+            <button className="btn btn-primary" type="submit" disabled={!searchQ.trim() || searching}>{searching ? '检索中…' : '检索'}</button>
+          </form>
+
+          {!USE_MOCK && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+              <button className="btn btn-ghost btn-sm" type="button" disabled={indexing} onClick={() => void runIndex(false)}>建立索引</button>
+              <button className="btn btn-ghost btn-sm" type="button" disabled={indexing} onClick={() => void runIndex(true)}>重建索引</button>
+              <span className="hint" style={{ margin: 0 }}>
+                {chunks.length
+                  ? `切片 ${chunks.length} 条 · 向量就绪 ${chunks.filter((c) => c.vectorStatus === 'READY').length} · 全文就绪 ${chunks.filter((c) => c.esStatus === 'READY').length}`
+                  : '该库暂无切片'}
+                {chunks.some((c) => c.vectorStatus === 'PENDING' || c.esStatus === 'PENDING') ? '（有切片未建索引 → 检索会返回空，点「建立索引」）' : ''}
+              </span>
+            </div>
+          )}
+
+          {hits.map((h, i) => (
+            <div className="panel panel-pad" key={h.chunkId ?? h.id ?? i} style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>## {c.head}</span>
-                {c.tags.map((t) => <span className="chip" key={t}>{t}</span>)}
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{h.documentName ?? h.headingPath ?? '切片'}</span>
+                {typeof h.score === 'number' && <span className="chip">{(h.score * 100).toFixed(0)}%</span>}
               </div>
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)' }}>{c.text}</p>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)' }}>{h.content}</p>
             </div>
           ))}
+          {!searching && searchQ.trim() && hits.length === 0 && (
+            <p className="hint">没有命中。若上方提示"有切片未建索引"，先点「建立索引」再检索。</p>
+          )}
         </>
       )}
 

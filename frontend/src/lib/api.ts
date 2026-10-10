@@ -279,12 +279,12 @@ export const api = {
     list: (pageNum = 1, pageSize = 100) =>
       http.get<Result<PageResult<BackendAgent>>>('/agents', { params: { pageNum, pageSize } })
         .then((r) => r.data.data),
-    get: (id: string) => http.get<Result<BackendAgent>>(`/agents/`).then((r) => r.data.data),
+    get: (id: string) => http.get<Result<BackendAgent>>(`/agents/${id}`).then((r) => r.data.data),
     create: (body: { code: string; name: string }) =>
       http.post<Result<BackendAgent>>('/agents', body).then((r) => r.data.data),
     update: (id: string, body: Partial<AgentPayload>) =>
-      http.put<Result<BackendAgent>>(`/agents/`, body).then((r) => r.data.data),
-    remove: (id: string) => http.delete<Result<null>>(`/agents/`).then((r) => r.data.data),
+      http.put<Result<BackendAgent>>(`/agents/${id}`, body).then((r) => r.data.data),
+    remove: (id: string) => http.delete<Result<null>>(`/agents/${id}`).then((r) => r.data.data),
   },
   stream: {
     /** 停止生成。幂等：流已结束时后端返回 cancelled=false，不算错误。 */
@@ -295,32 +295,41 @@ export const api = {
     list: (pageNum = 1, pageSize = 100) =>
       http.get<Result<PageResult<KnowledgeBase>>>('/knowledge-bases', { params: { pageNum, pageSize } })
         .then((r) => r.data.data),
-    get: (id: string) => http.get<Result<KnowledgeBase>>(`/knowledge-bases/`).then((r) => r.data.data),
+    get: (id: string) => http.get<Result<KnowledgeBase>>(`/knowledge-bases/${id}`).then((r) => r.data.data),
     create: (body: { name: string; description?: string }) =>
       http.post<Result<KnowledgeBase>>('/knowledge-bases', body).then((r) => r.data.data),
-    remove: (id: string) => http.delete<Result<null>>(`/knowledge-bases/`).then((r) => r.data.data),
+    remove: (id: string) => http.delete<Result<null>>(`/knowledge-bases/${id}`).then((r) => r.data.data),
+    /** 检索：mode=bm25|vector|hybrid（三种都开放，便于对照融合效果）。 */
+    search: (kbId: string, q: string, mode = 'hybrid', topK?: number) =>
+      http.get<Result<SearchHit[]>>(`/knowledge-bases/${kbId}/search`, {
+        params: { q, mode, ...(topK ? { topK } : {}) },
+      }).then((r) => r.data.data),
+    /** 为待索引切片建索引（幂等，可重复调用）。 */
+    index: (kbId: string) => http.post<Result<unknown>>(`/knowledge-bases/${kbId}/index`).then((r) => r.data.data),
+    /** 重建索引：新建物理索引 → 原子切换别名 → 旧索引转待重建。 */
+    recreateIndex: (kbId: string) => http.post<Result<null>>(`/knowledge-bases/${kbId}/index/recreate`).then((r) => r.data.data),
   },
   documents: {
     list: (kbId: string, pageNum = 1, pageSize = 100) =>
-      http.get<Result<PageResult<KbDocument>>>(`/knowledge-bases//documents`, { params: { pageNum, pageSize } })
+      http.get<Result<PageResult<KbDocument>>>(`/knowledge-bases/${kbId}/documents`, { params: { pageNum, pageSize } })
         .then((r) => r.data.data),
     upload: (kbId: string, file: File) => {
       const fd = new FormData()
       fd.append('file', file)
-      return http.post<Result<ImportTask>>(`/knowledge-bases//documents`, fd).then((r) => r.data.data)
+      return http.post<Result<ImportTask>>(`/knowledge-bases/${kbId}/documents`, fd).then((r) => r.data.data)
     },
     remove: (kbId: string, docId: string) =>
-      http.delete<Result<null>>(`/knowledge-bases//documents/`).then((r) => r.data.data),
-    chunks: (kbId: string, docId: string, pageNum = 1, pageSize = 20) =>
-      http.get<Result<PageResult<ChunkRow>>>(`/knowledge-bases//documents//chunks`, { params: { pageNum, pageSize } })
-        .then((r) => r.data.data),
+      http.delete<Result<null>>(`/knowledge-bases/${kbId}/documents/${docId}`).then((r) => r.data.data),
+    chunks: (kbId: string, docId: string) =>
+      http.get<Result<ChunkView[]>>(`/knowledge-bases/${kbId}/documents/${docId}/chunks`).then((r) => r.data.data),
+
   },
   importTasks: {
-    get: (taskId: string) => http.get<Result<ImportTask>>(`/import-tasks/`).then((r) => r.data.data),
+    get: (taskId: string) => http.get<Result<ImportTask>>(`/import-tasks/${taskId}`).then((r) => r.data.data),
   },
   rag: {
     ask: (kbId: string, question: string, topK = 5) =>
-      http.post<Result<RagAnswer>>(`/knowledge-bases//ask`, { question, topK }).then((r) => r.data.data),
+      http.post<Result<RagAnswer>>(`/knowledge-bases/${kbId}/ask`, { question, topK }).then((r) => r.data.data),
   },
 }
 
@@ -394,3 +403,6 @@ export interface ImportTask {
 
 export interface RagCitation { documentId?: string; documentName?: string; chunkId?: string; score?: number; snippet?: string }
 export interface RagAnswer { answer: string; citations: RagCitation[] }
+
+export interface SearchHit { chunkId?: string; id?: string; documentId?: string; documentName?: string; headingPath?: string; content?: string; score?: number }
+export interface ChunkView { id: string; chunkIndex: number; chunkType: string; headingPath: string | null; content: string; tokenCount: number; charCount: number; vectorStatus: string; esStatus: string }
