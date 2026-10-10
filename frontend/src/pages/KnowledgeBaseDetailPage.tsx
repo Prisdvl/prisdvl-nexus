@@ -17,7 +17,7 @@ import DocPreview from '@/components/DocPreview'
 import Markdown from '@/components/Markdown'
 import { toast } from '@/lib/toast'
 import { DOCS, QA_HISTORY, type DocItem } from '@/data'
-import { api, USE_MOCK, errMessage, type ChunkView, type KnowledgeBase, type SearchHit } from '@/lib/api'
+import { api, USE_MOCK, errMessage, type ChunkView, type DocumentLinks, type KnowledgeBase, type RelatedDoc, type SearchHit } from '@/lib/api'
 import { fetchDocs } from '@/lib/backendData'
 import type { ThemeMode } from '@/lib/types'
 
@@ -75,6 +75,8 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const [searching, setSearching] = useState(false)
   const [chunks, setChunks] = useState<ChunkView[]>([])
   const [kbInfo, setKbInfo] = useState<KnowledgeBase | null>(null)
+  const [linkData, setLinkData] = useState<DocumentLinks | null>(null)
+  const [related, setRelated] = useState<RelatedDoc[]>([])
   const [indexing, setIndexing] = useState(false)
 
   const MODE_MAP: Record<string, string> = { '向量检索': 'vector', 'BM25': 'bm25', '混合检索': 'hybrid' }
@@ -129,6 +131,16 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
     return () => { alive = false }
   }, [kbId])
 
+  /* 进入「关联」tab 时按首篇文档拉出链/反链/相关推荐（后端按文档维度提供） */
+  useEffect(() => {
+    if (USE_MOCK || tab !== 'links' || !docs.length) return
+    let alive = true
+    const docId = docs[0].id
+    Promise.all([api.documents.links(kbId, docId), api.documents.related(kbId, docId)])
+      .then(([lk, rl]) => { if (alive) { setLinkData(lk); setRelated(rl) } })
+      .catch(() => { /* 关联信息缺失不阻塞页面 */ })
+    return () => { alive = false }
+  }, [tab, docs])
   /* 进入「高级检索」tab 时加载切片索引状态 */
   useEffect(() => { if (tab === 'adv') void loadFirstDocChunks() }, [tab, docs])
 
@@ -517,20 +529,39 @@ flowchart TD
       )}
 
       {tab === 'links' && (
-        <div className="panel" style={{ padding: 8 }}>
-          {RELATED.map((r) => (
-            <div className="list-row" key={r.id}>
-              <FileText size={15} style={{ color: 'var(--primary)' }} />
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500 }}>{r.title}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{r.why}</div>
-              </div>
-              <span className="badge" data-tone={r.status === 'resolved' ? 'success' : r.status === 'external' ? 'accent' : 'warning'} style={{ marginLeft: 'auto' }}>
-                {{ resolved: '已关联', external: '外部', pending: '待确认' }[r.status]}
-              </span>
+        <>
+          {!USE_MOCK && (
+            <div className="panel panel-pad" style={{ marginBottom: 14 }}>
+              <p className="hint" style={{ margin: 0 }}>
+                {docs.length
+                  ? `文档「${docs[0].name}」：反向链接 ${linkData?.backlinks.length ?? 0} · 出链 ${linkData?.outlinks.length ?? 0} · 待创建 ${linkData?.dangling ?? 0} · 相关推荐 ${related.length}`
+                  : '该知识库暂无文档，先导入再来看关联。'}
+              </p>
             </div>
-          ))}
-        </div>
+          )}
+          <div className="panel" style={{ padding: 8 }}>
+            {(USE_MOCK
+              ? RELATED.map((r) => ({ title: r.title, why: r.why, tone: r.status === 'resolved' ? 'success' : 'accent', tag: r.status === 'resolved' ? '已关联' : '相关' }))
+              : [
+                  ...(linkData?.backlinks ?? []).map((x) => ({ title: x.documentTitle ?? x.title ?? x.documentId ?? '文档', why: `反向链接${x.relation ? ' · ' + x.relation : ''}`, tone: 'success', tag: '已关联' })),
+                  ...(linkData?.outlinks ?? []).map((x) => ({ title: x.documentTitle ?? x.title ?? x.documentId ?? '文档', why: `出链${x.relation ? ' · ' + x.relation : ''}`, tone: 'success', tag: '已关联' })),
+                  ...related.map((x) => ({ title: x.documentTitle ?? x.title ?? x.documentId ?? '文档', why: x.reason ?? (typeof x.score === 'number' ? `相关度 ${(x.score * 100).toFixed(0)}%` : '相关推荐'), tone: 'accent', tag: '相关' })),
+                ]
+            ).map((r, i) => (
+              <div className="list-row" key={i}>
+                <FileText size={15} style={{ color: 'var(--primary)' }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 500 }}>{r.title}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{r.why}</div>
+                </div>
+                <span className="badge" data-tone={r.tone} style={{ marginLeft: 'auto' }}>{r.tag}</span>
+              </div>
+            ))}
+            {!USE_MOCK && docs.length > 0 && !(linkData?.outlinks.length) && !(linkData?.backlinks.length) && !related.length && (
+              <p className="hint" style={{ padding: 10 }}>暂无关联。关联来自文档间的双链（[[wiki 链接]]）与共同标签。</p>
+            )}
+          </div>
+        </>
       )}
 
       <DocPreview doc={preview} theme={theme} onClose={() => setPreview(null)} />

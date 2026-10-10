@@ -322,6 +322,12 @@ export const api = {
       http.delete<Result<null>>(`/knowledge-bases/${kbId}/documents/${docId}`).then((r) => r.data.data),
     chunks: (kbId: string, docId: string) =>
       http.get<Result<ChunkView[]>>(`/knowledge-bases/${kbId}/documents/${docId}/chunks`).then((r) => r.data.data),
+    /** 某篇文档的关联：出链 + 反向链接 + 待创建引用数。 */
+    links: (kbId: string, docId: string) =>
+      http.get<Result<DocumentLinks>>(`/knowledge-bases/${kbId}/documents/${docId}/links`).then((r) => r.data.data),
+    /** 相关推荐（共同标签 + 链接关系加权）。 */
+    related: (kbId: string, docId: string, limit = 5) =>
+      http.get<Result<RelatedDoc[]>>(`/knowledge-bases/${kbId}/documents/${docId}/related`, { params: { limit } }).then((r) => r.data.data),
 
   },
   importTasks: {
@@ -406,3 +412,7 @@ export interface RagAnswer { answer: string; citations: RagCitation[] }
 
 export interface SearchHit { chunkId?: string; id?: string; documentId?: string; documentName?: string; headingPath?: string; content?: string; score?: number }
 export interface ChunkView { id: string; chunkIndex: number; chunkType: string; headingPath: string | null; content: string; tokenCount: number; charCount: number; vectorStatus: string; esStatus: string }
+
+export interface DocLink { documentId?: string; documentTitle?: string; title?: string; relation?: string; code?: string }
+export interface DocumentLinks { outlinks: DocLink[]; backlinks: DocLink[]; dangling: number }
+export interface RelatedDoc { documentId?: string; documentTitle?: string; title?: string; reason?: string; score?: number }
