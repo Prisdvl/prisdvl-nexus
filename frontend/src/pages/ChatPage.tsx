@@ -1067,8 +1067,8 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
                   )}
                   {m.role === 'bot' && m.cites && (
                     <div className="citation">
-                      {m.cites.map((c) => (
-                        <button key={c} className="cite-chip" type="button" data-clickable onClick={() => setRefDoc(c)} title={`在右侧查看「${c}」`}>
+                      {m.cites.map((c, i) => (
+                        <button key={`${c}-${i}`} className="cite-chip" type="button" data-clickable onClick={() => setRefDoc(c)} title={`在右侧查看「${c}」`}>
                           <BookOpen size={12} /><span>{c}</span>
                         </button>
                       ))}

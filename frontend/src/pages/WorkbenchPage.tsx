@@ -255,10 +255,10 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb }: Props) {
               <span className="wb-sub">最近 5 条</span>
             </div>
             <ul className="wb-timeline">
-              {activity.map((a) => {
+              {activity.map((a, i) => {
                 const Icon = KIND_ICON[a.kind]
                 return (
-                  <li key={a.title}>
+                  <li key={`${a.kind}-${a.time}-${i}`}>
                     <span className="wb-tl-ic"><Icon size={13} /></span>
                     <div>
                       <div className="wb-tl-t">{a.title}</div>
