@@ -1,0 +1,123 @@
+/* LineSidebar（React Bits, MIT）—— 默认色已改为主题 token，并新增「标签靠近才浮出」变体 */
+
+.line-sidebar {
+  --accent-color: var(--primary);
+  --text-color: var(--text-3);
+  --marker-color: var(--border-strong);
+  --marker-length: 60px;
+  --marker-gap: 0px;
+  --tick-scale: 0.5;
+  --max-shift: 30px;
+  --item-gap: 20px;
+  --font-size: 1.1rem;
+  --smoothing: 100ms;
+
+  position: relative;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.line-sidebar--markers {
+  padding-left: calc(var(--marker-length) + var(--marker-gap));
+}
+
+.line-sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--item-gap);
+}
+
+/* --effect (0..1) 由 JS 的 rAF lerp 逐项驱动：
+   颜色 / 位移 / 缩放都读同一个值，因此天然同步、不会各自错开。 */
+.line-sidebar__item {
+  position: relative;
+  cursor: pointer;
+}
+
+/* 扩大指针命中范围，让光标还没到就已经开始响应 */
+.line-sidebar__item::before {
+  content: '';
+  position: absolute;
+  inset: -6px -48px;
+}
+
+.line-sidebar__label {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  font-size: var(--font-size);
+  line-height: 1.2;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--accent-color) calc(var(--effect, 0) * 100%), var(--text-color));
+  transform: translateX(calc(var(--effect, 0) * var(--max-shift)));
+}
+
+.line-sidebar__index {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-right: 0.6rem;
+  font-size: 0.85em;
+  opacity: calc(0.55 + var(--effect, 0) * 0.45);
+}
+
+.line-sidebar__marker {
+  position: absolute;
+  top: 50%;
+  left: calc(-1 * var(--marker-length) - var(--marker-gap));
+  height: 1px;
+  width: var(--marker-length);
+  background-color: color-mix(in srgb, var(--accent-color) calc(var(--effect, 0) * 100%), var(--marker-color));
+  transform-origin: left center;
+  transform: translateY(-50%) scaleX(calc(0.7 + var(--effect, 0) * 0.5));
+}
+
+/* 相邻两项之间的短刻度 */
+.line-sidebar--markers .line-sidebar__item:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: calc(100% + var(--item-gap) / 2);
+  left: calc(-1 * var(--marker-length) - var(--marker-gap));
+  height: 1px;
+  width: calc(var(--marker-length) * var(--tick-scale));
+  background-color: var(--marker-color);
+  opacity: 0.5;
+  transform: translateY(-50%);
+}
+
+.line-sidebar--scale-tick .line-sidebar__item:not(:last-child)::after {
+  transform-origin: left center;
+  transform: translateY(-50%) scaleX(calc(0.7 + var(--effect, 0) * 0.6));
+}
+
+/* [原型扩展] 标签默认隐去，只在光标靠近时浮出。
+   当前项**不显示文字**，只用线条颜色（accent）区分——符合"没移过去时仅显示线条"。 */
+.line-sidebar--fade-labels .line-sidebar__label {
+  opacity: calc(var(--near, 0) * 1.6 - 0.6);
+}
+
+/* [原型扩展] 按比例绝对定位：容器撑满，每项按 --at（0..1）落在对应高度，
+   这样刻度线能和真实消息位置对齐（而不是等距排列）。 */
+.line-sidebar--absolute {
+  height: 100%;
+  padding-left: 0;
+}
+.line-sidebar--absolute .line-sidebar__list {
+  position: relative;
+  height: 100%;
+  padding: 0;
+  gap: 0;
+}
+.line-sidebar--absolute .line-sidebar__item {
+  position: absolute;
+  top: calc(var(--at, 0) * 100%);
+  transform: translateY(-50%);
+}
+/* 等距模式下才画"相邻两项之间的短刻度"；按比例模式下位置本身就是信息 */
+.line-sidebar--absolute.line-sidebar--markers .line-sidebar__item:not(:last-child)::after {
+  display: none;
+}
+.line-sidebar--absolute .line-sidebar__marker {
+  left: calc(-1 * var(--marker-length));
+}

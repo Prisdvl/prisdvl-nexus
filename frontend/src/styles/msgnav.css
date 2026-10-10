@@ -1,0 +1,146 @@
+/* ============================================================
+ * 消息导航（右侧横线轨道 + Hover 预览）
+ *
+ * 全部复用现有 token（--border-strong / --primary / --card-bg / --text-2/3 /
+ * --primary-container / --primary-text / --radius-pill / --radius-lg /
+ * --shadow-lg / --dur-ui / --ease-out），不新增任何配色。
+ * 低存在感：默认只是一条很短的 muted 细线。
+ * ============================================================ */
+.msg-nav {
+  position: absolute;
+  right: 6px;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  /*
+   * 给轨道真实宽度（34px），并让它落在消息区预留的右侧内边距里。
+   * 之前这里写 `width: 0`：内部 max-content 的列表会**向右溢出**到面板之外，
+   * 被祖先的 overflow:hidden 裁掉 —— 表现就是"横线显示不全/只露出一小截"。
+   */
+  width: 34px;
+  overflow: visible;
+}
+.msg-nav__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--rail-gap, 7px);
+  max-height: 100%;
+  width: max-content;
+  flex: none;
+  /* 消息极多、压缩到最小行距仍装不下时：允许轨道内部滚动（滚动条隐藏） */
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.msg-nav__list::-webkit-scrollbar { display: none; }
+.msg-nav__item {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.msg-nav__line {
+  display: block;
+  flex: none;
+  width: 20px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  opacity: 0.75;
+  transition:
+    width var(--dur-ui) var(--ease-out),
+    background-color var(--dur-ui) var(--ease-out),
+    opacity var(--dur-ui) var(--ease-out),
+    box-shadow var(--dur-ui) var(--ease-out);
+}
+/* 用户消息的横线略长一点，方便一眼区分角色（不改配色） */
+.msg-nav__item[data-role='user'] .msg-nav__line { width: 26px; }
+
+.msg-nav__item:hover .msg-nav__line,
+.msg-nav__item:focus-visible .msg-nav__line {
+  width: 30px;
+  background: var(--primary);
+  opacity: 1;
+  box-shadow: 0 0 0 3px oklch(from var(--primary) l c h / 0.16);
+}
+.msg-nav__item:focus-visible { outline: none; }
+
+/* 当前阅读位置：更长 + 强调色（克制，不加 glow） */
+.msg-nav__item[data-active] .msg-nav__line {
+  width: 32px;
+  background: var(--primary);
+  opacity: 1;
+}
+
+/* ---------- 预览浮层（Portal 到 body，position: fixed） ---------- */
+.msg-preview {
+  position: fixed;
+  z-index: 190;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-lg);
+  cursor: pointer;
+  animation: msg-preview-in var(--dur-ui) var(--ease-out);
+}
+/* 从横线方向滑入：贴左时从右侧进 */
+.msg-preview[data-place='left'] { animation-name: msg-preview-in-left; }
+@keyframes msg-preview-in {
+  from { opacity: 0; transform: translateX(-6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes msg-preview-in-left {
+  from { opacity: 0; transform: translateX(6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.msg-preview__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.msg-preview__label {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+.msg-preview__index {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.msg-preview__body {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.msg-preview__hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* 窄屏（沿用现有断点）：隐藏导航，消息本身仍可滚动 */
+@media (max-width: 1100px) {
+  .msg-nav { display: none; }
+}

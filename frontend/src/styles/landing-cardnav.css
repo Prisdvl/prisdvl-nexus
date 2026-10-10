@@ -1,0 +1,64 @@
+/* ============================================================
+ * 入口页导航：桌面用胶囊（含章节导航），窄屏换成 CardNav
+ *
+ * 分工依据：胶囊里的章节导航（橡皮分段 + 滚动高亮）在手机上放不下，
+ * 而 CardNav 的汉堡 + 卡片菜单本来就是为窄屏设计的。
+ * ============================================================ */
+
+/* 桌面：不渲染 CardNav 的可见形态 */
+.lp-cardnav { display: none; }
+
+@media (max-width: 767px) {
+  /*
+   * 窄屏：胶囊让位给 CardNav。
+   * 这里用 `header.lp-pill` 提高权重 —— global.css 注入在本文件之后，
+   * 同权重（.lp-pill）会被它的 `display: flex` 反压回来（实测胶囊仍然显示并拦截点击）。
+   */
+  header.lp-pill { display: none; }
+  .lp-cardnav { display: block; }
+
+  /* CardNav 固定顶部（与胶囊一样常驻），并压到背景之上 */
+  .lp-cardnav .card-nav-container {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(100% - 20px);
+    max-width: none;
+    z-index: 60;          /* 高于背景层，低于弹窗 */
+  }
+  .lp-cardnav .card-nav {
+    border-radius: 14px;
+    box-shadow: var(--shadow-md);
+  }
+  /*
+   * 组件在 ≤768px 会隐藏 CTA 按钮；但在我们这里窄屏的胶囊导航整体让位给 CardNav，
+   * 登录入口不能丢 —— 所以显式恢复它（提高权重，压过组件自带规则）。
+   */
+  .lp-cardnav .card-nav .card-nav-cta-button {
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  /* 卡片里用按钮渲染链接（hash 路由）：去掉 <a> 的下划线观感 */
+  .lp-cardnav .nav-card-link {
+    background: none;
+    border: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+}
+
+@media (max-width: 767px) {
+  /* 固定导航压在首屏之上，给内容让出空间 */
+  .lp { padding-top: 76px; }
+}

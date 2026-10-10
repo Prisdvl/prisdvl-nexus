@@ -1,0 +1,239 @@
+/* ============================================================
+ * Prisdvl-Nexus 界面原型 · 设计令牌（tokens.css）
+ * ------------------------------------------------------------
+ * 基线（用户已确认 2026-10-06）：
+ *  - 极简现代 + 沉浸式大背景；醒目但克制
+ *  - 亮暗双主题：暗色一律「纯深黑 + 强调色点缀」（不要配色染色）
+ *  - 三配色：陶土橘 / 松石青 / 酸性青柠（梅子出局）
+ *  - Space Grotesk（拉丁/数字）+ 系统中文
+ *  - 圆角分档 6/10/14/18；双层阴影；动效 150-300ms
+ * ============================================================ */
+
+:root {
+  --font-display: "Space Grotesk", "PingFang SC", "Microsoft YaHei", "MiSans", "Segoe UI", system-ui, sans-serif;
+
+  /* 动效：三档时长 + 两条缓动（全局统一，避免各组件快慢不一）
+     档位依据：颜色/透明度最快，控件次之，弹窗与面板最慢 */
+  --dur-fast: 130ms;   /* 颜色、透明度、hover */
+  --dur-ui: 200ms;     /* 按钮、输入、列表项、切换 */
+  --dur-panel: 280ms;  /* 弹窗、抽屉、大面积变化 */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-inout: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* 按钮尺寸：三档收敛（此前 34/36/42/48 混用） */
+  --btn-h-sm: 32px;   /* 表格行内、工具条 */
+  --btn-h-md: 40px;   /* 默认：页面主操作、弹窗底部 */
+  --btn-h-lg: 46px;   /* hero CTA、表单提交（触控友好） */
+
+  /* 圆角分档 */
+  --radius-pill: 999px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+
+  /* 间距（4 倍数） */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+
+  --ring-a: 0.35;
+}
+
+/* ================= 主题中性层 ================= */
+
+/* ---- 亮色（底色带极淡配色色相） ---- */
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg:            var(--ng-bg);
+  --surface:       var(--ng-surface);
+  --surface-muted: var(--ng-surface-muted);
+  --border:        var(--ng-border);
+  --border-strong: var(--ng-border-strong);
+  --text:          var(--ng-text);
+  --text-2:        var(--ng-text-2);
+  --text-3:        var(--ng-text-3);
+  --input-bg:      var(--ng-input);
+  --card-bg:       var(--ng-card);
+  --on-primary:    var(--ng-inverse);
+  --danger:        oklch(0.54 0.19 27);
+  --danger-container: oklch(0.955 0.03 27);
+  --warning:       oklch(0.6 0.12 70);
+  --warning-container: oklch(0.96 0.04 70);
+  --success:       oklch(0.55 0.12 155);
+  --success-container: oklch(0.95 0.03 155);
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.05), 0 1px 1px oklch(0 0 0 / 0.03);
+  --shadow-md: 0 2px 6px oklch(0 0 0 / 0.05), 0 16px 40px oklch(0.3 0.05 45 / 0.12);
+  --shadow-lg: 0 8px 16px oklch(0 0 0 / 0.07), 0 24px 60px oklch(0.3 0.05 45 / 0.16);
+  /* 主按钮：中性底（近黑）+ 白字，对比度稳定过 AA；强调色退居点缀 */
+  --btn-bg: oklch(0.24 0.008 55);
+  --btn-bg-hover: oklch(0.31 0.01 55);
+  --btn-fg: oklch(0.99 0.002 55);
+}
+
+/* ---- 暗色（纯深黑，三配色共用同一中性基座） ---- */
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* ↓ 关键：与亮色块同构的「映射层」。少了这段，--bg/--surface/--border/--text
+     全部 undefined，页面只是靠 color-scheme 的 UA 默认底色"看起来是暗的"，
+     组件实际会掉进透明/继承色。 */
+  --bg:            var(--ng-bg);
+  --surface:       var(--ng-surface);
+  --surface-muted: var(--ng-surface-muted);
+  --border:        var(--ng-border);
+  --border-strong: var(--ng-border-strong);
+  --text:          var(--ng-text);
+  --text-2:        var(--ng-text-2);
+  --text-3:        var(--ng-text-3);
+  --input-bg:      var(--ng-input);
+  --card-bg:       var(--ng-card);
+  --on-primary:    var(--ng-inverse);
+
+  --ng-bg:            oklch(0.155 0.002 0);
+  --ng-surface:       oklch(0.196 0.002 0);
+  --ng-surface-muted: oklch(0.235 0.003 0);
+  --ng-border:        oklch(0.5 0.004 0);
+  --ng-border-strong: oklch(0.64 0.005 0);
+  --ng-text:          oklch(0.95 0.003 0);
+  --ng-text-2:        oklch(0.78 0.006 0);
+  --ng-text-3:        oklch(0.66 0.008 0);
+  --ng-input:         oklch(0.125 0.002 0);
+  --ng-card:          oklch(0.196 0.002 0 / 0.92);
+  --ng-inverse:       oklch(0.16 0.004 0);
+  --danger:        oklch(0.68 0.14 27);
+  --danger-container: oklch(0.3 0.05 27);
+  --warning:       oklch(0.75 0.11 70);
+  --warning-container: oklch(0.31 0.05 70);
+  --success:       oklch(0.72 0.11 155);
+  --success-container: oklch(0.28 0.04 155);
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.5), 0 1px 1px oklch(0 0 0 / 0.4);
+  --shadow-md: 0 2px 6px oklch(0 0 0 / 0.5), 0 16px 40px oklch(0 0 0 / 0.55);
+  --shadow-lg: 0 8px 16px oklch(0 0 0 / 0.55), 0 24px 60px oklch(0 0 0 / 0.6);
+  --btn-bg: oklch(0.95 0.003 0);
+  --btn-bg-hover: oklch(0.88 0.004 0);
+  --btn-fg: oklch(0.17 0.004 0);
+}
+
+/* ================= 三配色（明暗同套变量） ================= */
+
+/* ---- 陶土橘 ---- */
+html[data-palette="terracotta"] {
+  --pi-primary:       oklch(0.6 0.15 45);
+  --pi-primary-hover: oklch(0.54 0.16 45);
+  --pi-primary-text:      oklch(0.47 0.14 45);
+  --pi-strong:           oklch(0.5 0.15 45);
+  --pi-container:     oklch(0.942 0.035 45);
+  --pi-bg-tint:       oklch(0.5 0.05 45);
+  --pi-grad-a:        oklch(0.9 0.05 55 / 0.5);
+  --pi-grad-b:        oklch(0.88 0.045 35 / 0.45);
+  --pi-dark-primary:  oklch(0.74 0.13 48);
+  --pi-dark-hover:    oklch(0.8 0.12 48);
+  --pi-dark-container: oklch(0.3 0.05 45);
+}
+html[data-palette="terracotta"][data-theme="light"] {
+  --ng-bg: oklch(0.99 0.004 60); --ng-surface: oklch(0.966 0.01 55);
+  --ng-surface-muted: oklch(0.95 0.012 55); --ng-border: oklch(0.625 0.014 55);
+  --ng-border-strong: oklch(0.55 0.016 55); --ng-text: oklch(0.27 0.02 55);
+  --ng-text-2: oklch(0.44 0.018 55); --ng-text-3: oklch(0.47 0.014 55);
+  --ng-input: oklch(1 0 0); --ng-card: oklch(0.995 0.004 55 / 0.86);
+  --ng-inverse: oklch(0.985 0.004 60);
+  --primary: var(--pi-primary); --primary-hover: var(--pi-primary-hover);
+  --primary-container: var(--pi-container);
+  --primary-text: var(--pi-primary-text);
+  --primary-text: var(--pi-primary-text);
+  --primary-strong: var(--pi-strong);
+  --on-primary-strong: oklch(0.99 0.002 55);
+}
+html[data-palette="terracotta"][data-theme="dark"] {
+  --primary-strong: var(--pi-dark-strong);
+  --on-primary-strong: oklch(0.17 0.02 55);
+  --primary-text: var(--pi-dark-primary-text);
+  --primary: var(--pi-dark-primary); --primary-hover: var(--pi-dark-hover);
+  --primary-container: var(--pi-dark-container);
+  --pi-dark-primary-text: oklch(0.8 0.11 48);
+  --pi-dark-strong:      oklch(0.74 0.12 48);
+}
+
+/* ---- 松石青 ---- */
+html[data-palette="turquoise"] {
+  --pi-primary:       oklch(0.55 0.12 200);
+  --pi-primary-hover: oklch(0.49 0.125 200);
+  --pi-primary-text:      oklch(0.46 0.11 200);
+  --pi-strong:           oklch(0.49 0.12 200);
+  --pi-container:     oklch(0.94 0.04 198);
+  --pi-bg-tint:       oklch(0.48 0.06 198);
+  --pi-grad-a:        oklch(0.84 0.09 195 / 0.5);
+  --pi-grad-b:        oklch(0.86 0.08 185 / 0.42);
+  --pi-dark-primary:  oklch(0.72 0.1 195);
+  --pi-dark-hover:    oklch(0.79 0.095 195);
+  --pi-dark-container: oklch(0.29 0.045 198);
+}
+html[data-palette="turquoise"][data-theme="light"] {
+  --ng-bg: oklch(0.99 0.006 195); --ng-surface: oklch(0.968 0.014 192);
+  --ng-surface-muted: oklch(0.952 0.016 192); --ng-border: oklch(0.625 0.016 195);
+  --ng-border-strong: oklch(0.55 0.018 195); --ng-text: oklch(0.26 0.02 210);
+  --ng-text-2: oklch(0.43 0.02 210); --ng-text-3: oklch(0.47 0.016 205);
+  --ng-input: oklch(1 0 0); --ng-card: oklch(0.995 0.004 195 / 0.86);
+  --ng-inverse: oklch(0.985 0.004 195);
+  --primary: var(--pi-primary); --primary-hover: var(--pi-primary-hover);
+  --primary-container: var(--pi-container);
+  --primary-text: var(--pi-primary-text);
+  --primary-strong: var(--pi-strong);
+  --on-primary-strong: oklch(0.99 0.002 55);
+}
+html[data-palette="turquoise"][data-theme="dark"] {
+  --primary-strong: var(--pi-dark-strong);
+  --on-primary-strong: oklch(0.17 0.02 55);
+  --primary-text: var(--pi-dark-primary-text);
+  --primary: var(--pi-dark-primary); --primary-hover: var(--pi-dark-hover);
+  --primary-container: var(--pi-dark-container);
+  --pi-dark-primary-text: oklch(0.8 0.09 195);
+  --pi-dark-strong:      oklch(0.74 0.1 198);
+}
+
+/* ---- 酸性青柠 ---- */
+html[data-palette="lime"] {
+  --pi-primary:       oklch(0.68 0.2 130);
+  --pi-primary-hover: oklch(0.61 0.19 130);
+  --pi-primary-text:      oklch(0.47 0.16 130);
+  --pi-strong:           oklch(0.5 0.17 130);
+  --pi-container:     oklch(0.94 0.055 130);
+  --pi-bg-tint:       oklch(0.5 0.12 130);
+  --pi-grad-a:        oklch(0.86 0.14 130 / 0.45);
+  --pi-grad-b:        oklch(0.9 0.08 140 / 0.35);
+  --pi-dark-primary:  oklch(0.82 0.17 130);
+  --pi-dark-hover:    oklch(0.88 0.15 130);
+  --pi-dark-container: oklch(0.3 0.07 130);
+}
+html[data-palette="lime"][data-theme="light"] {
+  --ng-bg: oklch(0.99 0.008 120); --ng-surface: oklch(0.968 0.02 125);
+  --ng-surface-muted: oklch(0.952 0.022 125); --ng-border: oklch(0.625 0.018 125);
+  --ng-border-strong: oklch(0.55 0.02 125); --ng-text: oklch(0.27 0.022 128);
+  --ng-text-2: oklch(0.44 0.02 128); --ng-text-3: oklch(0.47 0.016 125);
+  --ng-input: oklch(1 0 0); --ng-card: oklch(0.995 0.004 120 / 0.86);
+  --ng-inverse: oklch(0.17 0.02 130);
+  --primary: var(--pi-primary); --primary-hover: var(--pi-primary-hover);
+  --primary-container: var(--pi-container);
+  --primary-text: var(--pi-primary-text);
+  --primary-strong: var(--pi-strong);
+  --on-primary-strong: oklch(0.99 0.002 55);
+}
+html[data-palette="lime"][data-theme="dark"] {
+  --primary-strong: var(--pi-dark-strong);
+  --on-primary-strong: oklch(0.17 0.02 55);
+  --primary-text: var(--pi-dark-primary-text);
+  --primary: var(--pi-dark-primary); --primary-hover: var(--pi-dark-hover);
+  --primary-container: var(--pi-dark-container);
+  --pi-dark-primary-text: oklch(0.85 0.15 130);
+  --pi-dark-strong:      oklch(0.85 0.16 130);
+}
+
+/* ================= 亮度覆盖 ================= */
+html[data-theme="light"] {
+  --bg-accent-a: var(--pi-grad-a);
+  --bg-accent-b: var(--pi-grad-b);
+}
+html[data-theme="dark"] {
+  --bg-accent-a: oklch(from var(--primary) l c h / 0.14);
+  --bg-accent-b: oklch(from var(--primary) l c h / 0.08);
+}

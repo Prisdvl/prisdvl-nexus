@@ -1,0 +1,82 @@
+/* ============================================================
+ * 弹窗内 Stepper 的适配与克制化改造
+ *
+ * 适配：组件自带 `.outer-container { aspect-ratio: 4/3 | 2/1 }`、`.step-circle-container`
+ * 的边框 + 阴影 + max-width，是按"独占一页"设计的；塞进弹窗会撑歪、溢出、出现多余竖线。
+ *
+ * 克制化：组件默认视觉是"大面积色块"（步骤圆实心强调色、下一步实心胶囊、上一步一块灰底），
+ * 一个弹窗里同时出现太多高亮 —— 这里统一收敛成「轮廓 + 文字」为主。
+ * ============================================================ */
+
+/* ---------- 1) 还原成普通弹窗内容 ---------- */
+.dialog .outer-container {
+  aspect-ratio: auto !important;   /* 关键：取消组件自带的长宽比 */
+  min-height: 0;
+  flex: none;
+  padding: 0;
+  align-items: stretch;
+}
+.dialog .step-circle-container {
+  max-width: none;
+  width: 100%;
+  border: 0 !important;            /* 弹窗自己已有边框，不要再套一层 */
+  border-radius: 0;
+  box-shadow: none;
+}
+.dialog .step-indicator-row { padding: 2px 0 20px; }
+.dialog .step-default { padding-left: 0; padding-right: 0; }
+.dialog .step-content-default { overflow: visible; }
+
+/* ---------- 2) 步骤圆：轮廓式（透明底 + 描边 + 强调色文字） ---------- */
+.dialog .step-indicator-inner {
+  border: 1.5px solid var(--border-strong);
+  /* 组件用 motion 写内联背景色，这里必须 !important 才压得住 */
+  background-color: transparent !important;
+  color: var(--text-3) !important;
+  transition: border-color var(--dur-ui) var(--ease-out), color var(--dur-ui) var(--ease-out);
+}
+.dialog .step-indicator[aria-current='step'] .step-indicator-inner,
+.dialog .step-indicator[data-state='active'] .step-indicator-inner,
+.dialog .step-indicator[data-state='complete'] .step-indicator-inner {
+  border-color: var(--primary);
+  color: var(--primary) !important;
+}
+/* 完成态的对勾与当前态的圆点：跟随强调色，而不是"反色" */
+.dialog .check-icon { color: var(--primary) !important; }
+.dialog .active-dot { background-color: var(--primary) !important; }
+
+/* 连线：未完成保持中性，完成段用强调色（更细，不抢戏） */
+.dialog .step-connector { height: 1px; background-color: var(--border); }
+.dialog .step-connector-inner { background-color: var(--primary) !important; }
+
+/* ---------- 3) 底部按钮：与全站 btn 体系一致 ---------- */
+.dialog .footer-container { padding: 0; }
+.dialog .footer-nav { margin-top: 22px; }
+.dialog .back-button {
+  display: inline-flex;
+  align-items: center;
+  height: var(--btn-h-md);
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13.5px;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.dialog .back-button:hover { background: var(--surface-muted); color: var(--text); }
+/* 不可用时不要糊成一块灰底：降透明度即可 */
+.dialog .back-button.inactive {
+  opacity: 0.45;
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-3);
+}
+.dialog .next-button {
+  height: var(--btn-h-md);
+  padding: 0 18px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  background-color: var(--btn-bg);
+  color: var(--btn-fg);
+}

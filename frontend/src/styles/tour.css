@@ -1,0 +1,73 @@
+/* ============================================================
+ * 首次登录的分步引导（coach marks）
+ *
+ * 遮罩 pointer-events: none —— 引导不阻断用户操作（也避免把功能测试挡在外面），
+ * 只有说明卡片本身可点击。高亮框用超大 box-shadow 把四周压暗、中心透明。
+ * ============================================================ */
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+  pointer-events: none;
+}
+
+.tour__spotlight {
+  position: fixed;
+  border-radius: 12px;
+  /* 环 + 四周压暗：spread 越大越暗，中心保持完全透明 */
+  /* 只保留一圈轮廓 + 轻压暗：原来 2px 强调色环 + 0.55 黑幕显得"高亮过重" */
+  box-shadow:
+    0 0 0 1.5px var(--primary),
+    0 0 0 9999px oklch(0.18 0.02 45 / 0.34);
+  transition:
+    left var(--dur-panel) var(--ease-out),
+    top var(--dur-panel) var(--ease-out),
+    width var(--dur-panel) var(--ease-out),
+    height var(--dur-panel) var(--ease-out);
+}
+
+.tour__card {
+  position: fixed;
+  pointer-events: auto;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-lg);
+  animation: tour-in var(--dur-panel) var(--ease-out);
+  transition: left var(--dur-panel) var(--ease-out), top var(--dur-panel) var(--ease-out);
+}
+@keyframes tour-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.99); }
+  to { opacity: 1; transform: none; }
+}
+
+.tour__head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.tour__badge {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--primary-text);
+  background: var(--primary-container);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-variant-numeric: tabular-nums;
+}
+.tour__close {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.tour__close:hover { background: var(--surface-muted); color: var(--text); }
+
+.tour__title { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--text); }
+.tour__desc { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--text-2); }
+.tour__actions { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+.tour__spacer { flex: 1; }

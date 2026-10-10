@@ -1,0 +1,52 @@
+{
+  "name": "nexus-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Prisdvl-Nexus 前端（React 19 + Vite）：对话 / 知识库 / Agent 界面",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "verify:contrast": "node scripts/probe-contrast.mjs",
+    "verify:shots": "node scripts/qa-shots.mjs",
+    "verify:features": "node scripts/qa-features.mjs",
+    "verify:all": "npm run build && npm run verify:contrast && npm run verify:palette && npm run verify:a11y && npm run verify:routing && npm run verify:theme && npm run verify:settings && npm run verify:unify && npm run verify:cards && npm run verify:doc && npm run verify:chat && npm run verify:mode-switch && npm run verify:tour && npm run verify:interactions && npm run verify:features && npm run verify:responsive && npm run verify:shots",
+    "verify:routing": "node scripts/qa-routing.mjs",
+    "verify:interactions": "node scripts/qa-interactions.mjs",
+    "verify:responsive": "node scripts/qa-responsive.mjs",
+    "verify:unify": "node scripts/qa-unify.mjs",
+    "verify:doc": "node scripts/qa-doc.mjs",
+    "verify:chat": "node scripts/qa-chat.mjs",
+    "verify:mode-switch": "node scripts/qa-mode-switch.mjs",
+    "verify:mode-switch-real": "node scripts/qa-mode-switch-real.mjs",
+    "verify:theme": "node scripts/qa-theme.mjs",
+    "verify:palette": "node scripts/qa-palette.mjs",
+    "verify:cards": "node scripts/qa-cards.mjs",
+    "verify:a11y": "node scripts/qa-a11y.mjs",
+    "verify:settings": "node scripts/qa-settings.mjs",
+    "verify:tour": "node scripts/qa-tour.mjs"
+  },
+  "dependencies": {
+    "@hugeicons/core-free-icons": "^4.3.5",
+    "@hugeicons/react": "^1.1.10",
+    "axios": "^1.20.0",
+    "gsap": "^3.15.0",
+    "lucide-react": "^1.52.0",
+    "marked": "^18.1.0",
+    "mermaid": "^12.1.0",
+    "motion": "^14.0.0",
+    "ogl": "github:oframe/ogl",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router": "^8.4.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "playwright-core": "^1.63.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.2"
+  }
+}

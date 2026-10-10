@@ -1,0 +1,490 @@
+import { useEffect, useState, type FormEvent } from 'react'
+import { useLocation } from 'react-router'
+import {
+  ArrowLeft, Check, FileText, FileSpreadsheet, Loader2, RefreshCw, Search, Trash2, Upload, X,
+} from 'lucide-react'
+import Stepper, { Step } from '@/bits/Stepper/Stepper'
+import Shredder from '@/bits/Shredder/Shredder'
+import ThoughtLine from '@/bits/ThoughtLine/ThoughtLine'
+import JellyRadio from '@/bits/JellyRadio/JellyRadio'
+import CometDial from '@/bits/CometDial/CometDial'
+import RubberSegment from '@/bits/RubberSegment/RubberSegment'
+import SquishSwitch from '@/bits/SquishSwitch/SquishSwitch'
+import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
+import StatusMark from '@/bits/StatusMark/StatusMark'
+import Modal from '@/components/Modal'
+import DocPreview from '@/components/DocPreview'
+import Markdown from '@/components/Markdown'
+import { toast } from '@/lib/toast'
+import { DOCS, QA_HISTORY, type DocItem } from '@/data'
+import type { ThemeMode } from '@/lib/types'
+
+type Tab = 'docs' | 'qa' | 'adv' | 'links'
+const TABS = [
+  { label: '文档', href: '#docs' },
+  { label: '问答', href: '#qa' },
+  { label: '高级检索', href: '#adv' },
+  { label: '关联', href: '#links' },
+]
+
+const CHUNKS = [
+  { id: 1, head: 'JVM 内存模型', text: '程序计数器、虚拟机栈、本地方法栈、堆、方法区；栈管运行、堆管存储……', tags: ['JVM', '内存'] },
+  { id: 2, head: 'B+ 树索引结构', text: '非叶子节点只存键，叶子节点串成链表，配合页大小减少磁盘 IO……', tags: ['MySQL', '索引'] },
+  { id: 3, head: 'synchronized 原理', text: '对象头 Mark Word、锁升级（偏向→轻量级→重量级）与 Monitor……', tags: ['并发'] },
+]
+
+const RELATED = [
+  { id: 1, title: 'MySQL 调优清单.MD', why: '与「B+ 树索引」强相关（0.93）', status: 'resolved' },
+  { id: 2, title: 'Redis 缓存与 MySQL 一致性', why: '外部链接，待关联', status: 'external' },
+  { id: 3, title: 'JVM 参数速查表.MD', why: '候选关联，待确认', status: 'pending' },
+  { id: 4, title: '分布式锁实现对比', why: '外部链接，待关联', status: 'external' },
+]
+
+interface Props {
+  theme: ThemeMode
+  onBack: () => void
+  /** 由引用跳转带入：需要高亮定位的文档名 */
+  highlightDoc?: string | null
+  /** 点引用后（带 ?doc=）重新定位到该文档 */
+  onOpenDoc?: (docName: string) => void
+  /** 高亮结束后清掉 URL 上的 ?doc=（避免地址栏留痕、刷新又亮） */
+  onClearHighlight?: () => void
+}
+
+export default function KnowledgeBaseDetailPage({ theme, onBack, highlightDoc = null, onOpenDoc, onClearHighlight }: Props) {
+  /* 高亮是"一次性"的：进来脉冲一圈、2.5s 后自动取消（此前会一直亮） */
+  const [hlActive, setHlActive] = useState(false)
+  /*
+   * location.key 每次导航都会变（即使跳到完全相同的 URL）。
+   * 只用 highlightDoc 的变化做依据的话，"再次点同一个引用"不会重新高亮——
+   * 因为 props 值没变、effect 不重跑（实测：第二次点引用毫无反应）。
+   */
+  const { key: navKey } = useLocation()
+  const [tab, setTab] = useState<Tab>('docs')
+  const [importOpen, setImportOpen] = useState(false)
+  const [docs, setDocs] = useState<DocItem[]>(DOCS)
+  const [shredIds, setShredIds] = useState<number[]>([1, 2, 3])
+  const [thinking, setThinking] = useState(false)
+  const [qa, setQa] = useState('')
+  const [answer, setAnswer] = useState<string | null>(null)
+  const [usage, setUsage] = useState({ mode: '混合检索', topK: 6, threshold: 25, rebuild: true })
+  /* 预览抽屉：点文档行打开（.md 渲染正文，PDF/DOCX 给占位 + 下载） */
+  const [preview, setPreview] = useState<DocItem | null>(null)
+
+  const C = theme === 'dark'
+    ? { chip: '#26262b', active: '#f2f2f5', text: '#a3a3ad', onActive: '#141418' }
+    : { chip: '#eef0f3', active: '#ffffff', text: '#6b7280', onActive: '#111111' }
+
+  /* 引用跳转落点：切到文档 tab → 滚动定位 → 2.5s 后取消高亮并清掉 URL 参数 */
+  useEffect(() => {
+    if (!highlightDoc) { setHlActive(false); return }
+    setTab('docs')
+    setHlActive(true)
+    const scroll = setTimeout(() => {
+      document.querySelector('.doc-row[data-hl]')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }, 220)
+    const clear = setTimeout(() => {
+      setHlActive(false)          // 先让淡出过渡跑起来
+      onClearHighlight?.()        // 再清 URL（此时刷新也不会再高亮）
+    }, 2500)
+    return () => { clearTimeout(scroll); clearTimeout(clear) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightDoc, navKey])
+
+  const ask = (e: FormEvent) => {
+    e.preventDefault()
+    if (!qa.trim() || thinking) return
+    setThinking(true)
+    setAnswer(null)
+    setTimeout(() => {
+      setThinking(false)
+      setAnswer(`## 为什么 B+ 树更适合做索引
+
+**核心原因**：把数据集中在叶子节点，内部节点只存键。
+
+| 对比项 | B 树 | B+ 树 |
+| --- | --- | --- |
+| 内部节点存数据 | 是 | 否 |
+| 单页可容纳键数 | 少 | 多（树更矮） |
+| 范围查询 | 需中序回溯 | 叶子链表顺序扫描 |
+
+### 检索路径
+
+\`\`\`mermaid
+flowchart TD
+  R[根节点] --> A[内部节点: 只存键]
+  A --> L1[叶子: 数据 + 互链]
+  A --> L2[叶子: 数据 + 互链]
+  L1 -.链表.-> L2
+\`\`\`
+
+### 与之匹配的页大小
+
+\`\`\`text
+一次磁盘 IO = 一页（16KB），局部性因此更好
+\`\`\``)
+    }, 2600)
+  }
+
+  const shredItems = docs.filter((d) => shredIds.includes(d.id))
+
+  return (
+    <div className="page">
+      <button
+        type="button"
+        /* 原来用 .list-row（列表行，带常驻灰底）→ 看起来像"永远被选中/高亮"；
+           btn-ghost 只在悬停时才有底色，符合"鼠标在其上才高亮" */
+        className="btn btn-ghost btn-sm"
+        style={{ margin: '-8px 0 6px -6px' }}
+        onClick={onBack}
+      >
+        <ArrowLeft size={15} /> <span style={{ fontSize: 13 }}>返回知识库</span>
+      </button>
+
+      <div className="page-head">
+        <div>
+          <p className="eyebrow" style={{ margin: 0 }}>知识库详情</p>
+          <h1 className="page-title">我的 Java 笔记</h1>
+          <p className="page-sub">集合框架 / JVM / 并发 / 调优，校招复习主线 · 12 篇文档</p>
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn btn-ghost" type="button"><RefreshCw size={15} /> 重建索引</button>
+          <button className="btn btn-primary" type="button" onClick={() => setImportOpen(true)}>
+            <Upload size={16} /> 导入文档
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 22 }}>
+        <RubberSegment
+          items={TABS.map((t) => t.label)}
+          value={{ docs: '文档', qa: '问答', adv: '高级检索', links: '关联' }[tab]}
+          onChange={(v) => setTab(({ 文档: 'docs', 问答: 'qa', 高级检索: 'adv', 关联: 'links' } as Record<string, Tab>)[v] ?? 'docs')}
+          size="md"
+          inset={3}
+          radius={12}
+          trackColor="var(--surface-muted)"
+          thumbColor="var(--primary-container)"
+          textColor="var(--text-2)"
+          activeTextColor="var(--primary-text)"
+          aria-label="知识库分区"
+        />
+      </div>
+
+      {tab === 'docs' && (
+        <>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }} />
+              <input className="input" placeholder="在当前知识库内搜索文档" style={{ paddingLeft: 36 }}  aria-label="在当前知识库内搜索文档" />
+            </div>
+            <span className="badge">6 篇</span>
+          </div>
+
+          <div className="panel" style={{ padding: 6 }}>
+            {docs.map((d) => (
+              <div
+                className="list-row doc-row"
+                key={d.id}
+                role="button"
+                tabIndex={0}
+                aria-label={`预览 ${d.name}`}
+                onClick={() => setPreview(d)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPreview(d) } }}
+                data-hl={hlActive && highlightDoc && (d.name === highlightDoc || highlightDoc.includes(d.name.replace(/\.[^.]+$/, ''))) ? '' : undefined}
+              >
+                <span className="ic">{d.type === 'PDF' ? <FileText size={15} /> : d.type === 'DOCX' ? <FileSpreadsheet size={15} /> : <FileText size={15} />}</span>
+                <div style={{ minWidth: 0 }}>
+                  <div className="nm">{d.name}</div>
+                  <div className="mt">{d.type} · {d.size} · {d.updated}</div>
+                </div>
+                <span className="doc-status" title={{ done: '已索引', indexing: '解析中', failed: '解析失败' }[d.status]}>
+                  {d.status === 'done' && <StatusMark status="done" size={15} label="已索引" fontSize={12} strike={false} />}
+                  {d.status === 'indexing' && (
+                    <StatusMark status="running" progress={(d.id % 5) / 5 + 0.2} size={15} label="解析中" fontSize={12} />
+                  )}
+                  {d.status === 'failed' && <StatusMark status="failed" size={15} label="失败" fontSize={12} strike={false} />}
+                </span>
+                <div className="doc-actions">
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()   // 否则点删除会顺带打开预览
+                      const idx = docs.findIndex((x) => x.id === d.id)
+                      setDocs((list) => list.filter((x) => x.id !== d.id))
+                      toast.undo('已删除文档', d.name, () => {
+                        setDocs((list) => {
+                          const out = [...list]
+                          out.splice(Math.min(idx, out.length), 0, d)
+                          return out
+                        })
+                        toast.success('已恢复文档', d.name)
+                      })
+                    }}
+                  >
+                    <Trash2 size={14} /> 删除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="panel panel-pad" style={{ marginTop: 22 }}>
+            <h2 className="col-title" style={{ margin: 0, marginBottom: 6 }}>碎纸机删除（原型演示）</h2>
+            <p style={{ margin: '0 0 14px', fontSize: 12.5, color: 'var(--text-3)' }}>
+              把文档行拖拽到下方缝隙，即可「粉碎」删除 —— 来自 React Bits 的 Shredder 组件。
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <Shredder
+                key={shredIds.join(',')}
+                items={shredItems}
+                width={440}
+                height={330}
+                fallHeight={120}
+                feedSpeed={160}
+                renderItem={(d: DocItem) => (
+                  <div className="shred-row">
+                    <span className="l"><FileText size={15} /> {d.name}</span>
+                    <span className="r">{d.size}</span>
+                  </div>
+                )}
+                onShred={(d: DocItem) => setShredIds((prev) => prev.filter((id) => id !== d.id))}
+                loopAfterDelete
+              />
+            </div>
+            <p style={{ margin: '10px 0 0', textAlign: 'center', fontSize: 12, color: 'var(--text-3)' }}>
+              已粉碎 {3 - shredIds.length} / 3 篇（loopAfterDelete 自动补回，方便反复演示）
+            </p>
+          </div>
+        </>
+      )}
+
+      {tab === 'qa' && (
+        <>
+          <form onSubmit={ask} style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }} />
+              <input aria-label="向这个知识库提问" className="input" value={qa} onChange={(e) => setQa(e.target.value)} placeholder="向这个知识库提问，例如：B+ 树为什么适合做索引？" style={{ paddingLeft: 36 }} />
+            </div>
+            <button className="btn btn-primary" type="submit" disabled={!qa.trim() || thinking}>提问</button>
+          </form>
+
+          {thinking && (
+            <div className="panel panel-pad" style={{ marginBottom: 16 }}>
+              <div className="thinking-head" style={{ marginBottom: 6 }}>
+                <StatusMark status="running" size={17} color="var(--primary)" />
+                正在检索并生成回答
+              </div>
+              <ThoughtLine
+                working
+                label=""
+                steps={['读取会话上下文', '混合检索 12 个切片', '拼接引用于回答']}
+                showTimer
+                fontSize={13}
+              />
+            </div>
+          )}
+
+          {answer && (
+            <div className="panel panel-pad" style={{ marginBottom: 16 }}>
+              <Markdown text={answer} theme={theme} />
+              <div className="citation">
+                {['集合框架.md', 'MySQL 索引原理.pdf'].map((c) => (
+                  <button key={c} className="cite-chip" type="button" data-clickable onClick={() => onOpenDoc?.(c)}>
+                    <FileText size={12} /><span>{c}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <h2 className="col-title"><Search size={15} style={{ color: 'var(--primary)' }} /> 提问历史</h2>
+          <div className="panel" style={{ padding: 6 }}>
+            {QA_HISTORY.map((h) => (
+              <div className="list-row" key={h.q}>
+                <span style={{ fontSize: 13.5 }}>{h.q}</span>
+                <span className="badge" style={{ marginLeft: 'auto' }}>{h.when}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {tab === 'adv' && (
+        <>
+          <div className="panel panel-pad" style={{ marginBottom: 16, maxWidth: 720 }}>
+            <h2 className="col-title" style={{ marginTop: 0 }}>检索配置</h2>
+            <div className="field">
+              <label>检索模式</label>
+              <JellyRadio
+                items={['向量检索', 'BM25', '混合检索']}
+                defaultValue="混合检索"
+                size="md"
+                chipColor={C.chip}
+                activeColor={C.active}
+                textColor={C.text}
+                activeTextColor={C.onActive}
+                onChange={(v) => setUsage({ ...usage, mode: v })}
+              />
+            </div>
+            <div className="field">
+              <label>相似度阈值（低于此值的切片不进入上下文）</label>
+              <CometDial
+                defaultValue={usage.threshold}
+                min={0}
+                max={100}
+                step={5}
+                unit="%"
+                label="相似度阈值"
+                size={170}
+                thickness={6}
+                accent="var(--primary)"
+                ink="var(--text-2)"
+                onChange={(v) => setUsage({ ...usage, threshold: v })}
+              />
+              <p className="hint">实测：阈值 60% 时无关提问返回 0 命中；当前 {usage.threshold}%。</p>
+            </div>
+            <div className="field">
+              <label>topK：{usage.topK}（返回切片数）</label>
+              <input type="range" min={1} max={20} value={usage.topK} onChange={(e) => setUsage({ ...usage, topK: Number(e.target.value) })} style={{ width: '100%' }} />
+            </div>
+            <div className="field" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <SquishSwitch
+                defaultChecked={usage.rebuild}
+                onChange={(v) => setUsage({ ...usage, rebuild: v })}
+                label="保存后自动重建向量与全文索引"
+                trackColor="var(--border-strong)"
+                trackOnColor="var(--primary)"
+                thumbColor="var(--surface)"
+                thumbOnColor="var(--on-primary)"
+                width={64}
+                height={32}
+              />
+            </div>
+            <button className="btn btn-ghost" type="button">保存到本知识库</button>
+          </div>
+
+          <h2 className="col-title"><FileText size={15} style={{ color: 'var(--primary)' }} /> 切片预览</h2>
+          {CHUNKS.map((c) => (
+            <div className="panel panel-pad" key={c.id} style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 14, fontWeight: 600 }}>## {c.head}</span>
+                {c.tags.map((t) => <span className="chip" key={t}>{t}</span>)}
+              </div>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)' }}>{c.text}</p>
+            </div>
+          ))}
+        </>
+      )}
+
+      {tab === 'links' && (
+        <div className="panel" style={{ padding: 8 }}>
+          {RELATED.map((r) => (
+            <div className="list-row" key={r.id}>
+              <FileText size={15} style={{ color: 'var(--primary)' }} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500 }}>{r.title}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{r.why}</div>
+              </div>
+              <span className="badge" data-tone={r.status === 'resolved' ? 'success' : r.status === 'external' ? 'accent' : 'warning'} style={{ marginLeft: 'auto' }}>
+                {{ resolved: '已关联', external: '外部', pending: '待确认' }[r.status]}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <DocPreview doc={preview} theme={theme} onClose={() => setPreview(null)} />
+
+      <Modal
+        open={importOpen}
+        title="导入文档"
+        onClose={() => setImportOpen(false)}
+        width={580}
+      >
+        <>
+            <Stepper
+              backButtonText="上一步"
+              nextButtonText="下一步"
+              onFinalStepCompleted={() => {
+                setImportOpen(false)
+                toast.task('导入任务已入队', '2 个文件正在后台解析与切片')
+              }}
+            >
+              <Step>
+                <div style={{ padding: '10px 0 6px' }}>
+                  <div style={{ border: '1.5px dashed var(--border-strong)', borderRadius: 14, padding: 26, textAlign: 'center', color: 'var(--text-3)', fontSize: 13.5 }}>
+                    <Upload size={22} style={{ marginBottom: 8 }} />
+                    <div>点击选择文件，或拖拽 Markdown / TXT / PDF / DOCX 到此处</div>
+                    <div style={{ marginTop: 6, fontSize: 12 }}>支持批量上传，单个 ≤ 20 MB</div>
+                  </div>
+                  <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {['面经整理 v4.md', 'Java 集合寻址.md'].map((f) => (
+                      <span className="chip" key={f}><Check size={12} /> {f}</span>
+                    ))}
+                  </div>
+                </div>
+              </Step>
+              <Step>
+                <div style={{ padding: '10px 0 6px' }}>
+                  <div className="field">
+                    <label>分块策略</label>
+                    <RubberSegment
+                      items={['按标题分块', '自动探测', '固定长度']}
+                      defaultValue="按标题分块"
+                      size="sm"
+                      inset={2}
+                      trackColor="var(--surface-muted)"
+                      thumbColor="var(--primary-strong)"
+                      textColor="var(--text-2)"
+                      activeTextColor="var(--on-primary-strong)"
+                      aria-label="分块策略"
+                    />
+                    <p className="hint">默认 512 字符，重叠 64 字符</p>
+                  </div>
+                  <div className="field">
+                    <label>分块大小</label>
+                    <input className="input" defaultValue={512} style={{ width: 120 }}  aria-label="切片大小（token）" />
+                  </div>
+                  <div className="field">
+                    <SquishSwitch
+                      defaultChecked
+                      label="同步重建向量索引与全文索引"
+                      trackColor="var(--border-strong)"
+                      trackOnColor="var(--primary)"
+                      thumbColor="var(--surface)"
+                      thumbOnColor="var(--on-primary)"
+                      width={64}
+                      height={32}
+                    />
+                  </div>
+                </div>
+              </Step>
+              <Step>
+                <div style={{ padding: '10px 0 6px' }}>
+                  <p style={{ margin: 0 }}>已入队：2 个文件，新建导入任务将异步解析并切片。</p>
+                  <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <LatticeLoader
+                      status="working"
+                      label="解析队列运行中"
+                      pattern="sweep"
+                      grid={3}
+                      cellSize={5}
+                      fontSize={13}
+                      step={80}
+                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                      <StatusMark status="running" progress={0.42} size={16} label="面经整理 v4.md" fontSize={13} />
+                      <StatusMark status="pending" size={16} label="Java 集合寻址.md" fontSize={13} />
+                    </div>
+                    <span style={{ fontSize: 13, color: 'var(--success)' }}><Check size={13} style={{ verticalAlign: -2 }} /> 解析引擎就绪（RabbitMQ 队列在线）</span>
+                  </div>
+                </div>
+              </Step>
+            </Stepper>
+        </>
+      </Modal>
+    </div>
+  )
+}

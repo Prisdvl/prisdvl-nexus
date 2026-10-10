@@ -1,0 +1,115 @@
+/* ============================================================
+ * 对话右侧「引用 / 知识库」面板
+ * 是聊天主区的一列（不是悬浮层），因此不涉及 overflow 裁剪。
+ * ============================================================ */
+.ref-panel {
+  flex: none;
+  width: 380px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--card-bg);
+  animation: ref-in var(--dur-panel) var(--ease-out);
+}
+@keyframes ref-in {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.ref-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.ref-ic {
+  display: grid; place-items: center; flex: none;
+  width: 30px; height: 30px; border-radius: 9px;
+  background: var(--surface-muted); color: var(--text-2);
+}
+.ref-title { min-width: 0; flex: 1; }
+.ref-title h3 {
+  margin: 0; font-size: 14px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ref-title p { margin: 3px 0 0; font-size: 11.5px; color: var(--text-3); }
+
+.ref-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 16px 28px;
+  scrollbar-width: none;
+}
+.ref-body::-webkit-scrollbar { display: none; }
+/* 面板里的正文略小一号，避免抢对话主体的注意力 */
+.ref-body .md { font-size: 13px; }
+
+.ref-binary {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 36px 12px; text-align: center;
+}
+.ref-binary-ic {
+  display: grid; place-items: center;
+  width: 46px; height: 46px; border-radius: 14px;
+  background: var(--surface-muted); color: var(--text-2);
+}
+.ref-binary-title { margin: 0; font-size: 14px; font-weight: 600; }
+.ref-binary-desc { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--text-2); }
+
+.ref-chunks { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
+.ref-chunks h4,
+.ref-related h4 {
+  display: flex; align-items: center; gap: 7px;
+  margin: 0 0 10px; font-size: 12.5px; font-weight: 600; color: var(--text-2);
+}
+.ref-chunk {
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 8px 10px; margin-bottom: 6px;
+  border: 1px solid var(--border); border-radius: 9px;
+  background: var(--surface-muted);
+}
+.ref-chunk-h { font-size: 12px; font-weight: 600; }
+.ref-chunk-d { font-size: 11px; color: var(--text-3); }
+
+.ref-related { margin-top: 20px; }
+.ref-related-grid { display: flex; flex-direction: column; gap: 6px; }
+.ref-card {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 1px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.ref-card:hover { border-color: var(--border-strong); background: var(--surface-muted); }
+.ref-card-ic {
+  grid-row: span 2;
+  display: grid; place-items: center;
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--surface-muted); color: var(--text-2);
+}
+.ref-card-name {
+  font-size: 12.5px; font-weight: 500; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ref-card-meta { font-size: 11px; color: var(--text-3); }
+
+/* 窄屏：面板改为覆盖在主区之上，避免把对话挤没 */
+@media (max-width: 1100px) {
+  .ref-panel {
+    position: absolute;
+    right: 0; top: 0; bottom: 0;
+    width: min(380px, 100%);
+    z-index: 5;
+    box-shadow: var(--shadow-lg);
+  }
+}

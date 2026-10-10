@@ -1,0 +1,8 @@
+node_modules
+dist
+*.local
+
+# P1-1 端到端验证用的临时产物 / 缓存（见 docs/p1-1-implementation-log.md §8）
+.verify-dist/
+.vite-cache-verify/
+vite.verify.config.ts
