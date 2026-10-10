@@ -28,9 +28,9 @@ mvn clean package -DskipTests
 java -Xmx512m -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=standalone
 
 # 2. 前端：Node 18+
-cd web
+cd frontend
 npm install
-npm run dev            # http://localhost:5173
+npm run dev            # http://localhost:5175
 ```
 
 - 注册任意账号即可用；演示数据见第 4 节。
@@ -68,6 +68,49 @@ docker compose ps                       # 等到 8 个服务全部 (healthy)
 **容器内不需要 JDK / Maven / Node**——镜像里只有 JRE 与静态资源（见 §2.4）。
 下面 §2 逐项说明这套编排：架构、拓扑、变量、启停、持久化、健康检查、Nginx、SSE、常见问题、
 以及本期真机验收的结果。
+
+### 方式 D：开发期热重启（`spring-boot:run`）
+
+改后端代码时不必每次 `package` 出 jar 再 `java -jar`——用 Spring Boot 插件直接在**宿主机 classpath** 上跑：
+
+```bash
+export JAVA_HOME=/path/to/jdk-21
+mvn -pl nexus-app -am spring-boot:run -Dspring-boot.run.profiles=standalone
+# local profile： -Dspring-boot.run.profiles=local
+```
+
+- ⚠️ **必须带 `-am`（also-make）**：`nexus-app` 依赖 `nexus-knowledge` / `nexus-ai` / `nexus-common`。
+  不带 `-am` 时 Maven 只用本地仓库里**旧版**依赖 jar，改了上游模块不生效（"改了代码但行为没变"，实测踩过）。
+- `spring-boot:run` 与 `mvn package` 的区别：前者把 `target/classes` 直接交给 JVM，
+  **不产出 `nexus-app/target/nexus-app-*.jar`，也不执行 `spring-boot:repackage`**（打 fat jar）。
+  所以 `spring-boot:run` 跑通 **不代表** jar 已更新；要出容器镜像必须另跑 `mvn -B package`。
+
+### 1.1 构建成功 ≠ 运行实例已更新（最容易误判的一步）
+
+`deploy/backend/Dockerfile` 是**只运行**镜像：它只做 `COPY nexus-app/target/nexus-app-*.jar /app/app.jar`
+（见 §2.4），**镜像里没有 Maven，不会替你重新编译**。因此：
+
+- 只 `docker compose up -d backend`（或 `restart`）**不会**让新代码生效——容器仍用**上次 build 时**打进去的旧 jar。
+- 只 `docker compose build backend` 也**不会**让**正在运行**的容器换成新镜像——必须再 `docker compose up -d backend`
+  （`up` 会检测到镜像变化并替换容器）。
+- 结果是"构建成功、测试通过、界面还是老样子"。判定是否真换版：看 `docker compose ps` 的 `STATUS` 时间戳，
+  或对比容器内 `/app/app.jar` 的 SHA 与本地 `nexus-app/target/nexus-app-*.jar`。
+
+**改动后端代码后的真实部署顺序**：
+
+```bash
+# 1) 宿主机构建 fat jar（先停掉占着 jar 的 java 进程——Windows 上文件会被锁）
+JAVA_HOME=/d/develop/jdk-21 mvn -B package -DskipTests
+# 2) 构建镜像（上下文=仓库根，靠根目录 .dockerignore 排除无关文件）
+docker compose -f deploy/docker-compose.yml build backend
+# 3) 用新镜像替换运行中的实例
+docker compose -f deploy/docker-compose.yml up -d backend
+# 4) 验证：健康检查
+docker compose -f deploy/docker-compose.yml exec backend curl -fsS localhost:8080/actuator/health
+```
+
+> 本小节由已删除的 `docs/project-tutorial.md` 的构建/部署经验整理而来（2026-10-10），
+> 命令已按当前 `pom.xml` / `deploy/backend/Dockerfile` / `deploy/docker-compose.yml` 复核。
 
 ## 2. 容器化部署（Phase 5.7）
 
@@ -281,7 +324,7 @@ docker compose down -v         # 连数据卷一起删（清库，慎用）
   `docker compose exec backend curl -s localhost:8080/actuator/health`
   拿得到 `{"groups":["liveness","readiness"],"status":"UP"}`。这是有意的。
 
-### 2.9 Nginx 配置（`web/nginx.conf`）
+### 2.9 Nginx 配置（`frontend/nginx.conf`）
 
 | 位置 | 作用 |
 | --- | --- |
@@ -361,7 +404,7 @@ docker compose down -v         # 连数据卷一起删（清库，慎用）
 | 悬浮提示点名是哪个库 + 原因 | ✅（库名，不是"知识库 1003"） |
 | 界面上多选真正绑了三个库 | ✅ 请求体带 A/B/C 三个 id |
 
-截图：`docs/screenshots/multi-kb-partial-failure.png`。
+截图：`docs/archive/screenshots/multi-kb-partial-failure.png`。
 
 **并发语义（§十一）**：多库检索走 `MultiKnowledgeRetriever` 的虚拟线程扇出，
 **不是串行**。本期实测的耗时观察值（单库 vs 三库，各 4 轮）显示三库的检索段
@@ -661,7 +704,7 @@ verify-multi-kb-failure 0   verify-agent-no-kb 0   verify-security 0   verify-fu
   12 个 `verify-*.mjs` 里依赖整栈的那几条**本轮没有重跑**——它们的结论停留在 5.8。
   写在这里而不是含糊过去：**测试通过不等于真机验收通过**。
 - **Known Gap · `retrieval` 事件的命中列表不落库**：刷新即失（引用列表已落库，两者不是同一件事），
-  见 `productization-gap-analysis.md` P2-4。
+  见 `docs/archive/reports/productization-gap-analysis.md` P2-4。
 - **观察值不作指标**：§2.13 的耗时/内存是单机观察值。
 - ~~**Known Gap · `recreateIndex()` 非同一秒幂等**~~ → **5.9 四 已修**（序号兜住秒级时间戳）。
 - ~~**Known Gap · `LiveChunkIndexTest` 会清空共享 ES 索引**~~ → **5.9 七 已修**（自带容器）。
@@ -871,7 +914,7 @@ DELETE FROM kb_import_task_item WHERE kb_id IN (SELECT id FROM kb_import_task WH
   它只是"问了什么、答了什么、依据哪些资料"的服务端留档）。要清它只能
   ①裸 SQL 删表——违反"复用既有级联"；②给 demo 开例外——违反 §三"保护账号任何情况下不得删除"。
   残留量级：**1 行/轮，且用户完全不可见**（无任何页面对它计数或展示）。
-  正解见 `docs/future-improvements.md` 第 17 条：让 `verify-stream` 改用自建账号 + 自建知识库
+  正解见 `docs/roadmap.md`「当前未完成待办」：让 `verify-stream` 改用自建账号 + 自建知识库
   （这也正好满足任务书 §十二「不依赖 demo 用户」），而不是给它加一条针对保护账号的特例。
 
 #### 缺陷 D：dry-run 账目对不上（`bAgt` 漏报）
@@ -982,7 +1025,7 @@ for (Long convId : convIds) {
    因此这 341 行是**修复前的历史沉积，已冻结**——本次四轮完整 E2E + 清理之后总数仍是 415，
    一行未增。
 3. **不会被本次清理回收，是工具遍历口径决定的**，不是遗漏。最小修法（**未做**，见
-   `docs/future-improvements.md` 第 20 条）：把记忆清理改为遍历"名下**全部**会话"，
+   `docs/roadmap.md`「当前未完成待办」）：把记忆清理改为遍历"名下**全部**会话"，
    key 仍走 `ChatMemoryKeys`——不在 SQL 里写 `CONCAT('conv:', id)`，
    那样等于把 key 规则复制成两份（UA-018 的修复注释专门警告过这一点）。
 

@@ -89,6 +89,31 @@
 | 长任务 | 一律返回 `taskId`，用 `GET /api/import-tasks/{id}` 或 SSE 获取进度 |
 | 流式接口 | `POST` + `Accept: text/event-stream`（不用 `EventSource`，因为它无法带 `Authorization` 头） |
 
+### 1.6 序列化契约：`Long` 一律以 JSON **字符串**返回
+
+**这是全项目统一的约定，不是单接口特例。**
+
+雪花ID（如 `2104750903666438145`）是 19 位十进制数，**超出 JavaScript `Number.MAX_SAFE_INTEGER`（2^53−1 = 9007199254740991）**。若按数字返回，前端解析后会变成 `2104750903666438144` —— 表现为"拿到的 id 查不到数据"，**且不报错**，是最难排查的一类 bug。
+
+**实现**：`nexus-app/.../infra/jackson/LongToStringJacksonComponent.java`
+（Boot 4 的 Jackson 3 写法：`@JacksonComponent` + `ValueSerializer<Long>`）。
+
+| Java 类型 | JSON 形态 | 前端类型 |
+| --- | --- | --- |
+| `Long`（包装类型） | `"2104750903666438145"` | `string` |
+| `int` / `long`（基本类型） | `123` | `number` |
+| `Integer` / `Double` | `123` / `0.93` | `number` |
+
+⚠️ **DTO 编写约定（务必遵守）**：既然 `Long` 会变成字符串，
+**计数类字段用 `int` / `long` 基本类型**（保持数字形态），**只有 ID 类字段才用包装类型 `Long`**。
+否则计数字段会意外变成字符串。
+
+> ⚠️ 已知缺口：`LongToStringJacksonComponent` 的 javadoc 提到有一个
+> `LongToStringSerializationTest` 断言这条约定，但**该测试在当前仓库里不存在**（已核实）。
+> 即这条约定目前**没有自动化测试守护**，改DTO 时需人工留意。
+>
+> 迁移自已删除的 `docs/project-tutorial.md`（2026-10-10）。
+
 ---
 
 ## 2. 认证与账号（Phase 0；账号安全部分 2026-10-02 补齐）
@@ -145,10 +170,10 @@ PUT /api/users/me/password
 ```
 
 **为什么原密码错误返回 `1001 / 400` 而不是 `2006 / 401`**：调用方已经用自己的令牌通过了认证，
-此时回 401 会让前端全局拦截器（`web/src/api/client.ts`）**立刻清 token 并跳登录页**——
+此时回 401 会让前端全局拦截器（`frontend/src/lib/api.ts` 的响应拦截器）**立刻清 token 并跳登录页**——
 把一个"打错一个字"的输入错误升级成会话中断。（此处也不构成账号枚举：攻击者必须已持有该账号的令牌。）
 代价是登录失败（`2006`）与改密失败（`1001`）口径不同，这是**刻意的区分**：
-登录 = 未认证；改密 = 已认证的参数错误。`verify-security.mjs` 有一条断言专门守这个分支。
+登录 = 未认证；改密 = 已认证的参数错误。（原 Vue 版 E2E）`docs/archive/web-vue/scripts/verify-security.mjs` 有一条断言专门守这个分支，该脚本已随 `web/` 归档。
 
 **改密成功后本次会话也会失效**：吊销的是该 user 的**全部**令牌（`sys_user.token_version` 自增，
 校验见 ADR-020），包含发起本次请求的这一支。这是"改密码 = 所有设备下线"的正确语义，
@@ -293,6 +318,27 @@ DELETE /api/knowledge-bases/1/documents/7
 > `/stream`（SSE 实时进度）与 `/cancel` 在 API 设计文档里规划过，但**没有实现**——
 > 前端目前靠 1.2s 轮询 `GET /api/import-tasks/{taskId}` 拿终态。规划与实际不符的以本节为准。
 
+#### 任务状态机（`ImportTaskStatus`）
+
+```
+QUEUED → RUNNING → ┬→ DONE       全部成功
+                   ├→ PARTIAL    部分成功（有失败项）
+                   ├→ FAILED     全部失败
+                   └→ CANCELLED  被取消
+```
+
+**终态是 4 个**：`DONE` / `PARTIAL` / `FAILED` / `CANCELLED`。
+轮询判断"是否已结束"时**必须把这 4 个都算作终态** —— 只认 `DONE` / `FAILED`，
+会让"3 成功 2 失败"这类任务**永远转圈**。
+
+⚠️ `PARTIAL` 是**刻意保留**的（见 `nexus-knowledge/.../model/ImportTaskStatus.java` 源码注释）：
+批量导入时"部分成功"远比"全失败"常见，用独立状态把它与"全部成功"区分开，
+用户才知道是否需要处理失败项。**不要在解析时把它归并进 `DONE` 或 `FAILED`。**
+
+另：`PARTIAL` 与 `FAILED` 都可被抢占重试（见 `ImportTaskExecutor`）。
+
+> 迁移自已删除的 `docs/project-tutorial.md`（2026-10-10）。
+
 #### 逐文件明细（Phase 5.3 · P1-3 / P1-4）
 
 ```http
@@ -419,14 +465,58 @@ POST /api/search
 | — | — | `agentId`（Phase 4.1）只在 `AGENT` 下有意义，且必须是**自己已发布**的 Agent（草稿 5008、停用 5009、别人的 5006→404）；不传 = 用内置默认 Agent |
 | GET | `/api/chat/conversations` | 会话列表（分页、置顶优先、按最后消息时间倒序） |
 | GET | `/api/chat/conversations/{id}` | 会话详情（含配置：mode、kbIds、agentId、模型角色、prompt 版本） |
-| PUT | `/api/chat/conversations/{id}` | 改标题 / 置顶 / 绑定知识库 / 换 Agent（`agentId` 为 null = 不改；`resetAgent:true` = 回到内置默认，见下） |
-| DELETE | `/api/chat/conversations/{id}` | 删除会话（逻辑删除 + 清理 ChatMemory 窗口） |
+| PUT | `/api/chat/conversations/{id}` | 改标题 / 置顶 / 绑定知识库 / 换 Agent（`agentId` 为 null = 不改；`resetAgent:true` = 回到内置默认，见下）。⚠️ 校验用**目标模式**，见下 |
+| DELETE | `/api/chat/conversations/{id}` | 删除会话。⚠️ **不可恢复，且消息被物理删除**，见下方说明 |
 | GET | `/api/chat/messages/{conversationId}` | 历史消息（分页，含引用、Token、耗时） |
 | POST | `/api/chat/messages` | 非流式发送（用于简单场景与自动化测试） |
 | POST | `/api/chat/stream` | **SSE 流式发送**（见 5.2） |
 | POST | `/api/chat/messages/{messageId}/regenerate` | 重新生成（删除该 assistant 消息重跑，保留原 prompt 版本） |
 | POST | `/api/chat/stream/{requestId}/stop` | 停止生成（写 Redis 取消标记；服务端落库 `status=STOPPED`，保留已生成内容） |
 | POST | `/api/chat/messages/{messageId}/feedback` | 点赞/点踩 + 备注（回流评测集） |
+
+#### ⚠️ `DELETE /api/chat/conversations/{id}` 的三重副作用（不可恢复）
+
+实现见 `ConversationServiceImpl.delete`，它**同时做三件事**：
+
+| # | 动作 | 后果 |
+| --- | --- | --- |
+| 1 | 会话**逻辑删除**（`@TableLogic` → `UPDATE deleted=1`） | 会话行仍在库里，但列表查询不再返回 |
+| 2 | 该会话的**消息被物理删除** | ⚠️ **不是软删，消息真的没了** |
+| 3 | `chatMemory.clear("conv:{id}")` | 该会话的对话记忆窗口清空 |
+
+因此：
+
+- ❌ **不能把本端点当"归档"用**。"归档"是**可恢复**的语义，与本端点的**不可恢复**是两种不同产品语义。
+  若用 DELETE 实现归档，用户点"恢复"后只会得到一个**空会话**。
+- ✅ **要"可恢复的收起"，前端应走本地归档**（从主列表隐藏、入口可找回），**不调用本端点**。
+- 为什么必须清记忆（不只是"多留几行无主数据"）：记忆是"这次发给模型多少历史"的唯一来源，
+  一旦该 id 被重新读到（重建会话、同 id 复用），新会话会**凭空记得旧会话说过的话**。
+- 为什么不软删消息：不删会随会话删除不断堆积无主数据。
+
+> 迁移自已删除的 `docs/frontend-integration-decisions.md`（2026-10-10），已按当前实现核实。
+
+#### 模式切换时，Agent / 知识库校验用**目标模式**（`targetMode`）
+
+`update` 先算出 `targetMode = request.mode() == null ? 库里当前模式 : 解析(request.mode())`，
+**后续所有校验都用 `targetMode`，不是库里的旧模式**。因此"先切模式再绑定"是**合法的一次请求**：
+
+| 会话当前 | 请求 | 结果 |
+| --- | --- | --- |
+| `AGENT` | 只带 `resetAgent:true` | ✅ 清空 `agentId`（`targetMode` 仍是 AGENT） |
+| `PLAIN` | 同时带 `mode:"AGENT"` + `resetAgent:true` | ✅ 合法：先切模式再重置 |
+| `PLAIN` | 只带 `resetAgent:true`（不传 mode） | ❌ `PARAM_INVALID`（1001）："只有 AGENT 会话可以清空 Agent" |
+| `PLAIN` | 带 `mode:"RAG"` + `kbIds` | ✅ 合法：切到 RAG 后立刻绑库 |
+| `PLAIN` | 只带 `kbIds`（不切模式） | ❌ 被 `resolveKbIds` 挡下（1001） |
+
+⚠️ **静默跳过比报错更坏**：`resetAgent` 的校验不能省。
+早期实现写成"是 AGENT 才校验，否则静默跳过"，结果给 PLAIN 会话发 `resetAgent` 返回 `200`，
+而"选用 Agent"路径却要求 `1001` —— 同一件事两种口径；
+更糟的是"返回成功但什么都没变"，属于**假成功**（用户以为回到默认助手，实际 Agent 还挂着）。
+
+实现见 `ConversationServiceImpl.update`（`targetMode` 约在 194 行）与 `requireAgentMode`。
+
+> 迁移自已删除的 `docs/backend-findings-agent-constraints.md`（2026-10-10）。
+> 该文档记录的两个具体缺陷均已修复，这里只保留当前真实语义。
 
 **消息上的产出来源 `agentId`（5.4 · P1-14）**：`GET /api/chat/messages/{conversationId}`
 返回的每条消息多一个 `agentId`。
@@ -481,6 +571,22 @@ Content-Type: application/json
 | `usage` | 结束前（**已实现**） | `{"promptTokens":1820,"completionTokens":240,"totalTokens":2060,"latencyMs":2900,"firstTokenMs":380}` |
 | `done` | 正常结束（**已实现**） | `{"finishReason":"stop"}`；用户停止时 `{"finishReason":"stopped","stopped":true}` |
 | `error` | 异常结束（**已实现**） | `{"code":4001,"message":"模型调用失败，请稍后重试","retryable":true}`；`code`/`message`/`retryable` 由 `FailureClassifier` 判定，可能是 `4007`（密钥被拒，不可重试）、`4002`（超时）、`5002`（工具轮数超限）等，见 1.2 的失败归因表 |
+
+⚠️ **两条 SSE 链路的帧结构不同，不要假设可以共用一个解析类型。**
+
+上面这张表描述的是 `/api/chat/stream`（实现见 `ChatStreamServiceImpl`）。
+知识库问答的 `/api/knowledge-bases/{id}/ask/stream`（实现见 `RagStreamServiceImpl`）字段名**不一样**：
+
+| | `/api/chat/stream` | `/api/knowledge-bases/{id}/ask/stream` |
+| --- | --- | --- |
+| `done` 的 `finishReason` | `"stop"`；用户中止时 `"stopped"` 且带 `stopped: true` | `"empty"`（无命中）；出错时 `"error"` |
+| 错误字段名 | `code` / `message` / `retryable` | **`errorCode` / `error`** / `retryable` |
+| 引用 | 由 `usage` 帧或消息落库给出 | `done` 帧里带 `citations` |
+
+即：**错误文案字段一个是 `message`、一个是 `error`**，
+所以写不出一个兼容两者的解析器 —— 前端必须按链路分别处理。
+
+> 迁移自已删除的 `docs/project-tutorial.md`（2026-10-10），字段名已按当前源码逐一核实。
 
 **实现约束**
 
@@ -748,7 +854,11 @@ curl -s -X POST localhost:8080/mcp \
 
 ## 9. 评测（Phase 9）
 
-| 方法 | 路径 | 说明 |
+> ⚠️ **已移除（2026-10-08）**：评测接口（`EvalController` / `EvalService`）已从后端删除 —— 原型没有对应界面，
+> 也没有外部调用方。下表是**当初的设计规格**，注意它与实现有差距：实际只落了 1 个端点。
+> 保留此表仅作设计记录；决策见 `decisions.md` D.11。
+
+| 方法 | 路径 | 说明 | <!-- 已移除（2026-10-08）：仅存设计记录 -->
 | --- | --- | --- |
 | POST | `/api/eval/datasets` | 创建评测集 |
 | POST | `/api/eval/datasets/{id}/import` | 导入 JSON/YAML 测试问题（question + expectedSource 等） |
@@ -769,9 +879,13 @@ POST /api/eval/datasets/1/import
 
 ## 10. 观测（Phase 10）
 
+> ⚠️ **部分已移除（2026-10-08）**：`/api/observability/summary` 与 `/api/observability/agents` 两个只读接口已删除
+> （原型无对应界面）。底层的 `ObservabilityRegistry`（`nexus-common`）与 Micrometer / Actuator 指标**保留**。
+> 下表后半部分（`overview` / `trend` / `models` / `requests` …）**从未实现**，属于当初的规划。
+
 ### 10.0 已实现（两个端点，**数据来源不同，不要混着看**）
 
-| 方法 | 路径 | 说明 |
+| 方法 | 路径 | 说明 | <!-- 部分已移除（2026-10-08）：summary/agents 已删 -->
 | --- | --- | --- |
 | GET | `/api/observability/summary` | 进程内计数快照：降级/不可用/失败次数。**自本次进程启动以来的累计，重启即归零**，且不含任何归属维度（全局） |
 | GET | `/api/observability/agents` | 按 Agent 的用量（5.4 · P1-14）：`[{agentId, code, name, deleted, messages, failed, lastUsedAt}]`，**按消息数倒序** |
@@ -850,7 +964,7 @@ token 记不到，但"调了几次、花了多久"仍然记——把它一起丢
 | 分支 | 路径（`nexus.security.*.paths`，Ant 风格） | 限制 |
 | --- | --- | --- |
 | 注册 | `/api/auth/register` | 每 **IP** 每小时 10 次（`standalone` / `local` / `test` 三个开发 profile 放宽到 1000，理由见下） |
-| 模型入口（花真钱的那几条） | `/api/chat/stream`、`/api/chat/conversations/*/messages`、`/api/knowledge-bases/*/ask`、`/api/knowledge-bases/*/ask/stream`、`/api/agent/ask`、`/api/agents/*/test-chat`、`/api/eval/**`、`/mcp` | 每用户 20 次/分钟 **＋** 每日 200 次 **＋** 每日 200,000 tokens |
+| 模型入口（花真钱的那几条） | `/api/chat/stream`、`/api/chat/conversations/*/messages`、`/api/knowledge-bases/*/ask`、`/api/knowledge-bases/*/ask/stream`、`/api/agent/ask`、`/api/agents/*/test-chat`、`/mcp` | 每用户 20 次/分钟 **＋** 每日 200 次 **＋** 每日 200,000 tokens |
 | 只限速、不计配额 | `/api/users/me/password` | 每用户 20 次/分钟 |
 | 其余全部 | —— | 不限（默认放行） |
 
@@ -946,5 +1060,5 @@ nexus:auth:tv:{userId}               用户令牌版本（缓存，DB 是事实�
 | `/api/mcp/**` | Phase 7 |
 | `POST /mcp`（进程内 MCP Server，见 §7.1） | 已实现（4.3 起；身份 5.1 起改为 JWT） |
 | `/api/workflows/**`、`/api/workflow-runs/**` | Phase 8 |
-| `/api/eval/**`、`/api/prompts/**` | Phase 9 |
-| `/api/observability/**` | Phase 10 |
+| ~~`/api/eval/**`~~（已移除）、`/api/prompts/**` | Phase 9 |
+| ~~`/api/observability/**`~~（只读接口已移除，指标仍在 `/actuator/metrics`） | Phase 10 |

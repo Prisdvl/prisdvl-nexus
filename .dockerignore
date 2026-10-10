@@ -14,8 +14,8 @@
 *.md
 .secrets
 
-# 前端是独立构建上下文（web/ 下有自己的 Dockerfile），不进后端上下文
-web
+# 前端是独立构建上下文（frontend/ 下有自己的 Dockerfile），不进后端上下文
+frontend
 
 # 其它模块的产物：后端只需 nexus-app 的 jar
 nexus-common/target

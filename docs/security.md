@@ -58,7 +58,7 @@
   区分"谁签的"的东西。测试：`JwtIssuerValidationTest`（同一套声明签三支令牌、
   只有 `iss` 不同：正确放行 / 错误 401 / 缺失 401）。
 - **无 refresh token**：代码中没有任何路径读取 `JWT_REFRESH_TOKEN_TTL`；该变量在 `.env.example:98-101` 被显式标注为"死的"。
-- **无服务端注销**：`.logout(AbstractHttpConfigurer::disable)`（`SecurityConfig.java:89`），会话策略 `STATELESS`（`:90`）。前端 `logout()` 只是清掉本地存储（`web/src/stores/auth.ts:48-54`、`web/src/api/client.ts:62-65`）——**logout = 客户端丢 token**，令牌在服务端仍然有效直到过期。
+- **无服务端注销**：`.logout(AbstractHttpConfigurer::disable)`（`SecurityConfig.java:89`），会话策略 `STATELESS`（`:90`）。前端 `logout()` 只是清掉本地存储（`frontend/src/lib/auth.ts` 的 `authStore.logout`、`frontend/src/lib/api.ts` 的 `tokenStore.clear`）——**logout = 客户端丢 token**，令牌在服务端仍然有效直到过期。
 
 ---
 
@@ -293,9 +293,9 @@
 
 - `.env`、`.env.local`、`.env.*.local`、`.env.prod`（`.gitignore:34-38`）。
 - `application-secret.yml/.yaml`、`application-prod.yml/.yaml`、`*.pem`、`*.p12`、`*.jks`（`:42-48`）。
-- `.secrets/` 与 `*.key.txt`（`:89-91`）。本机确实存在 `.secrets/`，`deploy/.env.example:35-36` 提示可放 `ai-key.txt` 并用 shell 注入。
+- `.secrets/` 与 `*.key.txt`（`:98-99`）。本机确实存在 `.secrets/`，`deploy/.env.example:35-36` 提示可放 `ai-key.txt` 并用 shell 注入。
 - `application-local.yml` 是**有意提交**的（只含 compose 开发默认口令，`:39-41` 注释说明）。
-- 另：`web/.demo-token`、`web/.demo-kb-id` 被忽略，避免演示 JWT 入库（`:80-84`）。
+- 另：演示 JWT 一律不入库——`web/.demo-token`、`web/.demo-kb-id`（`:87-88`），以及归档副本 `docs/archive/web-vue/.demo-token`、`docs/archive/web-vue/.demo-kb-id`（`:91-92`）。
 
 ---
 
@@ -315,13 +315,13 @@
 
 以下均为**代码中不存在或不完整**的机制，不是设计目标，也不应被理解为已实现。
 
-1. **Token 存 localStorage，暴露于 XSS**：前端令牌存 `localStorage`（键 `nexus.token`，`web/src/api/client.ts:33,50,58,63`），没有 HttpOnly Cookie。任何 XSS 都能读取并外带令牌。
-2. **无服务端注销、无 refresh token**：`.logout` 关闭、会话 STATELESS（`SecurityConfig.java:89-90`）；logout 仅前端清 token（`web/src/stores/auth.ts:48-54`）；refresh token 无任何实现（`.env.example:98-101`）。
+1. **Token 存 localStorage，暴露于 XSS**：前端令牌存 `localStorage`（键 `nx-token`，过期时间另存 `nx-token-expires-at`；见 `frontend/src/lib/api.ts` 的 `tokenStore`），没有 HttpOnly Cookie。任何 XSS 都能读取并外带令牌。
+2. **无服务端注销、无 refresh token**：`.logout` 关闭、会话 STATELESS（`SecurityConfig.java:89-90`）；logout 仅前端清 token（`frontend/src/lib/auth.ts` 的 `authStore.logout` / `handleUnauthorized`）；refresh token 无任何实现（`.env.example:98-101`）。
 3. ~~**`iss` 从不校验**~~ → **已关闭**（2026-10-02 Phase 5.9 九），见 §1.4。
 4. **限流在存储不可用时 fail-open，可被绕过**：Redis/内存不可用时限流直接放行（`RateLimiter.java:95-104`）；登录冻结同样 fail-open（`LoginAttemptLimiter.java:60-64,81-92`）。
 5. **`redis-enabled=false` 时多实例限流失效**：进程内实现各实例独立计数，额度乘以实例数（`SecurityStore.java:14-21`；`.env.example:34-38`）。即便开 Redis，`allkeys-lru` 淘汰也会重置计数（`docker-compose.yml:105-108`）。
 6. **停用账号不立即吊销已签发令牌**：`status=0` 只在登录时检查（`AuthServiceImpl.java:148-150`）；`TokenVersionValidator` / `UserAuthCache` 只按用户存在与版本号判断，**不检查 status**，故停用后既有令牌仍有效至过期。（软删除会立即失效，见 §3.3，两者行为不同。）
-7. **无安全响应头配置**：`web/nginx.conf` 未配置 `Content-Security-Policy`、`X-Frame-Options`、`Strict-Transport-Security` 等任何安全响应头（仅对 `index.html` 设 `Cache-Control`，`nginx.conf:42-44`）；主 `SecurityFilterChain` 也未显式调用 `.headers(...)`（全仓仅 `StandaloneDevSecurityConfig.java:30` 为 dev 的 H2 console 设置 `frameOptions.sameOrigin`）。静态页面响应不受后端安全链保护。
+7. **无安全响应头配置**：`frontend/nginx.conf` 未配置 `Content-Security-Policy`、`X-Frame-Options`、`Strict-Transport-Security` 等任何安全响应头（仅对 `index.html` 设 `Cache-Control`，`nginx.conf:42-44`）；主 `SecurityFilterChain` 也未显式调用 `.headers(...)`（全仓仅 `StandaloneDevSecurityConfig.java:30` 为 dev 的 H2 console 设置 `frameOptions.sameOrigin`）。静态页面响应不受后端安全链保护。
 8. **无 TLS**：nginx 只 `listen 80`（`nginx.conf:9`），无 HTTPS 终结、无证书配置；backend 亦无 TLS。
 9. **无 OAuth2 / OIDC 第三方登录**：`AuthServiceImpl.java:48-51` 明确这是"将来接入"方向，当前只有自建用户名口令。
 10. **无 CSRF token**：`.csrf(disable)`（`SecurityConfig.java:86`）——理由是纯 Token API 不用 Cookie/Session（类注释 `:36-38`），并非遗漏；但这也意味着一旦引入 Cookie 承载凭证就需重新评估。

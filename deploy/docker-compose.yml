@@ -105,7 +105,7 @@ services:
   # ⚠️ maxmemory-policy = allkeys-lru：内存吃紧时会**淘汰这些计数键**，
   # 表现为"当日配额被重置、限流漏掉几次"。它是有意的取舍（宁可少限几次，
   # 也不要 Redis 写满把写入也拖垮），但意味着配额不是硬保证。
-  # 要做到硬保证得把当日用量落库（见 docs/productization-gap-analysis.md P2-17）。
+  # 要做到硬保证得把当日用量落库（见 docs/archive/reports/productization-gap-analysis.md P2-17）。
   # 另外：应用侧靠 nexus.security.redis-enabled 决定用不用它，关掉时走进程内存。
   # ----------------------------------------------------------------
   redis:
@@ -319,7 +319,8 @@ services:
   # ----------------------------------------------------------------
   frontend:
     build:
-      context: ../web
+      # 前端已合并为目录 frontend/（原 Vue 版 web/ 与 React 迁移版 web-react/ 已归档到 docs/archive/）
+      context: ../frontend
       dockerfile: Dockerfile
     image: nexus-frontend:${NEXUS_APP_VERSION:-0.0.1}
     container_name: nexus-frontend

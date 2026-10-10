@@ -1,11 +1,16 @@
 /**
  * 演示数据播种（standalone / local 都可用）。
  *
+ * ⚠️ **状态：退役（Vue 时代遗留，2026-10-09）**。它服务的界面验证脚本已随 `web/` 归档到
+ * `docs/archive/web-vue/scripts/`；当前 React 前端（`frontend/`）的 QA 走 mock（`VITE_USE_MOCK=true`）
+ * 或真实后端，**不读 `.demo-token`、也不依赖本脚本**（已核实无 CI / 脚本调用方）。
+ * 保留它只为手动造演示数据与历史参考。
+ *
  * 用途：`standalone` 用的是 H2 内存库，**每次重启数据全清**，
- * 而 web/scripts 下的界面验证脚本都要求"有一个装着笔记的知识库"，
+ * 而 web/scripts 下的界面验证脚本（现已归档到 docs/archive/web-vue/scripts/）都要求"有一个装着笔记的知识库"，
  * 否则第一次跑必然失败（失败原因还是"没有数据"这种与代码无关的事）。
  * 本脚本把这一步固定下来：注册/登录 demo 用户 → 建知识库 → 导入 scripts/demo-vault.zip
- * → 把 token 写到 web/.demo-token（界面验证脚本读它）。
+ * → 把 token 写到 docs/archive/web-vue/.demo-token（供已归档的界面脚本读取；当前 React 前端的 QA 走 mock，不读它）。
  *
  * 用法（先启动后端）：
  *   node scripts/seed-demo.mjs
@@ -54,8 +59,8 @@ try {
 
 // ② 登录并写 token——界面验证脚本靠它免登录
 const { accessToken } = await api('/api/auth/login', { method: 'POST', body: { username, password } })
-writeFileSync(resolve(here, '../web/.demo-token'), accessToken, 'utf8')
-console.log('✓ 已写入 web/.demo-token')
+writeFileSync(resolve(here, '../docs/archive/web-vue/.demo-token'), accessToken, 'utf8')
+console.log('✓ 已写入 docs/archive/web-vue/.demo-token')
 
 // ③ 知识库：同名复用，避免反复运行堆出一排空库。
 // 检索参数显式写在这里（Phase 3.2 起检索按知识库配置走）：

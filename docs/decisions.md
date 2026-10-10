@@ -372,7 +372,7 @@
 | ⑤ | 缩短 access TTL + 引入 refresh token（**需要 `sys_refresh_token` 表**：存哈希、可轮换、可吊销） | ④ |
 
 **诚实边界**：本期不做，所以 **localStorage 的 XSS 暴露面依然存在**，
-只是被 30 分钟的 TTL 限了窗口。这一点登记在 `docs/productization-gap-analysis.md` 里，
+只是被 30 分钟的 TTL 限了窗口。这一点登记在 `docs/archive/reports/productization-gap-analysis.md` 里，
 而不是假装它被这一期顺手解决了。
 
 ---
@@ -2304,7 +2304,7 @@ E2E 证明界面在真机上真的把过程显示给用户，两者互相不能�
 另外 `verify-frontend.mjs` 原来那句结束语写着"（standalone，无 Docker）"——它其实是跑在**已启动的**
 后端上、与 profile 无关，本轮改成如实描述（依赖已启动的后端与演示数据）。
 
-截图留档：`docs/screenshots/agent-chat-rag.png`（RAG 腿成功现场：「检索到 4 个片段」列出 4 条命中，
+截图留档：`docs/archive/screenshots/agent-chat-rag.png`（RAG 腿成功现场：「检索到 4 个片段」列出 4 条命中，
 回答带 `[1]` 引用）、`agent-chat-failure.png`（失败现场：问题已发出、回答区一片空白——
 §1/§2 两类死路在界面上都是这个形状，截图本身分不出是哪一次）、
 `agents-failure.png`（§4 腿⑩ 的假失败现场）。
@@ -2945,18 +2945,18 @@ KB_PREFERRED 的一次真实回答开头：
 账号（并用同一个 token 查 `/api/knowledge-bases` 确认它真的是 0 个库），拿它的 token 走界面。
 每次运行、退出码 0，五步全过；三屏都留下了截图。
 
-- **提问前**（`docs/screenshots/agent-no-kb-hint.png`）：提示出现在输入框上方——
+- **提问前**（`docs/archive/screenshots/agent-no-kb-hint.png`）：提示出现在输入框上方——
   "还没有知识库：现在提问，Agent 会用自己的知识回答，并注明内容不是来自你的笔记。"
   前置条件是先自己证明的（同一个 token 查 `/api/knowledge-bases` 得 `total=0`），
   否则那句话可能是为别的理由冒出来的。
-- **提问后**（`docs/screenshots/agent-no-kb-answer.png`）：问题就是用户报的那句
+- **提问后**（`docs/archive/screenshots/agent-no-kb-answer.png`）：问题就是用户报的那句
   （"什么是缓存击穿？该怎么解决？"），结果三件事都对上了——
   ① 工具痕迹 1~2 条（界面层六次独立运行：2/2/2/2/1/1），摘要写着 **`没有知识库，0 条结果`**
   （F1 措辞 + 新摘要第一次在界面上被看见，也是"未命中"这件事对用户的唯一可见证据，
   它随消息落库、刷新后仍在——第 ④ 步就是刷新后再读一次摘要）；
   ② 回答开头是 **"以下内容不是来自你的笔记（你的知识库目前为空），是我基于自身知识的回答："**；
   ③ 旧的拒绝措辞（`没有找到相关资料` / `不能凭自己的知识`）**一次都没出现**。
-- **另一种策略的提示**（`docs/screenshots/agent-no-kb-hint-kb-only.png`）：零库账号手里只有内置
+- **另一种策略的提示**（`docs/archive/screenshots/agent-no-kb-hint-kb-only.png`）：零库账号手里只有内置
   Agent（`KB_PREFERRED`），所以脚本**在进页面之前**先给这个账号建一个 `KB_ONLY` 的 Agent 并发布，
   再在界面上选中它——提示随之换成
   "还没有知识库，而当前选用的 Agent 是「只依据笔记」：提问会如实回答'没有在笔记中找到可引用的资料'。"
@@ -2986,7 +2986,7 @@ KB_PREFERRED 的一次真实回答开头：
 
 ### B.42 Phase 5.1 实现记录（`/mcp`：一条免认证的自证身份路径，产品化审计的 P0）
 
-> 编号说明：这条属于**产品化**这条线（`docs/productization-gap-analysis.md`），
+> 编号说明：这条属于**产品化**这条线（`docs/archive/reports/productization-gap-analysis.md`），
 > 与 B.35/B.36/B.38/B.41 那条 4.x 实现串并行。它是审计里**唯一的 P0**。
 
 **1. 问题**
@@ -3022,7 +3022,7 @@ private Long resolveUser(String nexusUser) {
 
 **3. 一个重要的事实：这个问题早就被记录过，只是没被修**
 
-`docs/platform-phase3-baseline.md:301` 已经写着：
+`docs/archive/reports/platform-phase3-baseline.md:301` 已经写着：
 
 > `X-Nexus-User`；`.env.example:77` 的 `MCP_INTERNAL_API_KEY` **从未被代码引用**。
 > 任何人可达 `/mcp` 即可读任意用户知识库。
@@ -3265,7 +3265,7 @@ Unable to rename 'nexus-app-0.0.1-SNAPSHOT.jar' to '…jar.original'
 
 **1. 动手前被推翻的三条审计结论**
 
-审计写在 `productization-gap-analysis.md` 里的方案有三处经不起推敲，改了做法：
+审计写在 `docs/archive/reports/productization-gap-analysis.md` 里的方案有三处经不起推敲，改了做法：
 
 | 审计原话 | 实际 | 因此怎么改 |
 | --- | --- | --- |
@@ -3792,7 +3792,7 @@ ES 9200 + analysis-ik / RabbitMQ / Ollama）+ 后端 `--spring.profiles.active=l
 1. **修改密码**：`PUT /api/users/me/password`，BCrypt 验证原密码 → 更新哈希 →
    `token_version + 1`（一条 `LambdaUpdateWrapper` 同时改两列，`updateById` 表达不了 `+1`）。
 2. **Token 安全**：只出设计（ADR-021），代码零改动——用户明确说"不要直接大改"。
-   `docs/productization-gap-analysis.md` 里登记为**仍存在的缺口**。
+   `docs/archive/reports/productization-gap-analysis.md` 里登记为**仍存在的缺口**。
 3. **登录失败限制**：`LoginAttemptLimiter`，`nexus:auth:lf:{username}`（计数）+ `nexus:auth:ll:{username}`
    （冻结标记），5 次 / 15 分钟窗口 / 冻结 15 分钟，fail-open。注册入口另做 IP 限流（10 次/小时）。
 4. **限流 + 每日配额**：`RateLimitQuotaFilter`（一个收口点）+ `QuotaService` + `UsageMeteringAdvisor`。
@@ -3942,7 +3942,7 @@ nexus:rl:ip:{ip}:{yyyyMMddHH}       = 1    ttl 7172
 所以第 ④ 条改用"直接用 curl 把 21 次打满"来验，而不是靠脚本替我们撞。
 下期（5.7 容器化）跑通 Docker 后应把它们全部复跑一遍。
 
-**已知边界**（完整列表见 ADR-020 与 `productization-gap-analysis.md`）：
+**已知边界**（完整列表见 ADR-020 与 `docs/archive/reports/productization-gap-analysis.md`）：
 refresh token / 登出仍未实现；配额可被 Redis 重启或淘汰绕过；`status` 改动不立即吊销令牌；
 登录冻结可被定向刷锁；记账是尽力而为（模型已调用无法回滚，供应商不回传 usage 时记不到）。
 
@@ -4170,7 +4170,7 @@ Agent 复用已有字段（`agent_knowledge_base` 在 V12 就有）、单库/双
 （另一条路"停掉 ES"不行：ES 是全局共享依赖，停掉会让**所有**库一起失败，
 那验的是"全挂"而不是"隔离"。）
 
-**4. 五个只有整栈起来才看得见的问题**（详见 `productization-gap-analysis.md` §5.7 修正表）
+**4. 五个只有整栈起来才看得见的问题**（详见 `docs/archive/reports/productization-gap-analysis.md` §5.7 修正表）
 
 1. **一个 LIVE 测试会清空共享 ES 索引**：`LiveChunkIndexTest.recreateIndexSwitchesAlias`
    的断言本身没错（重建后确实为空），代价是它清的是**开发栈正在用的那个索引**。
@@ -4265,7 +4265,7 @@ Agent 模式下模型可能调多次 `knowledge_search`，而工具是无状态�
 
 全仓搜了 `TODO / FIXME / UnsupportedOperation / return null / mock / 暂不支持 / 未实现` 等标记，
 逐个判定后的结论是：**没有"其实没实现却看起来实现了"的残留**。剩下的分三类，全部如实留在
-`productization-gap-analysis.md`：①有意设计（如 `DisabledChunkIndex` / `DisabledVectorStore`
+`docs/archive/reports/productization-gap-analysis.md`：①有意设计（如 `DisabledChunkIndex` / `DisabledVectorStore`
 在开关关闭时**明确抛错**而不是静默返回空）；②已知 limitation（如单实例无 TLS、无 refresh token）；
 ③需求方明确要求**本期不做**的（如 Retrieval Event 持久化）。
 
@@ -4586,3 +4586,27 @@ At least one credential source must be specified: credential (apiKey), workloadI
 3. **`max_tokens` 可能不生效**。实测传 `max_tokens=32` 却返回了 684 个 completion token
    （推测是推理型模型的隐藏思考 token 计入）。结论：**不能把 max_tokens 当成本控制手段**，
    成本控制要靠 Phase 10 的使用量看板与配额。
+
+## D.11 后端能力与原型对齐：移除评测与观测接口（2026-10-08）
+
+**背景**：清理后端时按"原型有没有对应功能"逐个核对，发现 18 个控制器 / 51 个端点里有几块能力
+原型完全没有入口。逐块判断如下：
+
+| 能力 | 处理 | 理由 |
+| --- | --- | --- |
+| 评测 `eval`（Phase 9） | **删除** | 原型无界面、无外部调用方；`api.md` 上记的 8 个端点**实际只实现 1 个** |
+| 观测 `observe`（Phase 10） | **删除** | 同上（实际 2 个端点）；底层 `ObservabilityRegistry` 与 Micrometer 指标保留 |
+| MCP（Phase 7） | **保留** | 它是对**外部**能力：文档里有完整用法（外部 LLM 客户端连知识库），只占 1 个类 + 1 个端点 |
+| 工作流 `workflow`（Phase 6.2） | **保留** | 后续要更新，不作为删除项 |
+
+**执行内容**：删 8 个主代码文件（eval 2 + observe 5）+ 4 个测试（其中 `ObservabilityRegistryTest`
+与 `nexus-common` 里的**完全重复**）+ 1 处 `ActuatorMetricsTest` 改包到 `infra/metrics`；
+`application.yml` 的免限速清单去掉 `/api/eval/**`（`/mcp` 保留）；同步修 `api.md` / `README.md`。
+
+**为什么"删除"而不是"留着不用"**：留着会持续产生两类成本 —— ① 每次重构都要连带改它（编译面变宽）；
+② 文档与代码漂移（本次就发现 `api.md` 的端点清单远超实现）。**舍不得删的功能，本质是没想清楚它服务于谁。**
+
+**可回退**：全部改动都在 git 里（`git restore` 可恢复），不是一次性不可逆操作。
+
+**同类经验**（与 D.10 的"文档超前于代码"呼应）：**文档里的接口清单要跟实现同源生成或定期对账**，
+否则它会在几个月后变成"看起来更完整、实际不存在"的假象。

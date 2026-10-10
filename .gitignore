@@ -60,6 +60,16 @@ application-prod.yaml
 # 提交它只会让仓库多出一堆与项目无关的 diff，还会把本机路径带进去。
 .workbuddy/
 
+# ---------- 前端 QA 截图产物（可再生产物，不入库）----------
+# docs/prototypes/shots/ 是 frontend/scripts 的 QA / 截图脚本按绝对路径写入的 PNG。
+# 它们是"当前界面长什么样"的临时证据，可随时重跑生成；入库会让每次跑门禁都产生二进制 diff。
+docs/prototypes/shots/
+
+# ---------- 设计工具过程材料（本机草稿，不入库）----------
+# .ui-craft/ 是设计工具的过程材料（brief / tokens 草稿），不是产品源码或正式设计规范。
+# 若其中某份内容升级为长期规范，应移动到 docs/ 并在那里维护，而不是放回本目录。
+/.ui-craft/
+
 # ---------- 前端（Vue 3 + Vite）----------
 node_modules/
 dist/
@@ -87,6 +97,9 @@ site/
 web/.demo-token
 web/.demo-kb-id
 web/login-flow-failure.png
+# 归档副本里的同一批演示凭据（原 web/.demo-* 被忽略，归档后仍不得入库）
+docs/archive/web-vue/.demo-token
+docs/archive/web-vue/.demo-kb-id
 
 # ---- 构建日志 ----
 build.log

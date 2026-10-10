@@ -56,7 +56,7 @@
 | **用户与安全** | 注册 / 登录 / JWT / BCrypt / RBAC | ✅ |
 | | 令牌吊销（`token_version`）、登录失败冻结、限流、每日配额 | ✅ |
 | | 改密码 / 改资料 / 额度只读接口 | ✅ |
-| **可观测** | 自建计数器 + 2 个只读接口（`/api/observability/summary`、`/agents`） | ◐ |
+| **可观测** | 自建计数器 + Micrometer（`/actuator/metrics`）；只读聚合接口已移除（原型无界面） | ◐ |
 | **部署** | 8 服务 docker compose 整栈、nginx 入口、健康检查、数据卷持久化 | ✅ |
 | **前端** | Vue 3 控制台：登录 / 知识库 / 文档与切片 / 检索 / 对话（Agent + RAG）/ Agent 管理 / 账号设置 | ✅ |
 
@@ -70,7 +70,7 @@
 └──────┬───────┘
        │  http://localhost:8088
 ┌──────▼───────────────────────────────────────────────┐
-│  Nginx (web/nginx.conf, 前端容器内)                    │
+│  Nginx (frontend/nginx.conf, 前端容器内)                    │
 │  · SPA fallback   · /api/ 反代   · /mcp 反代           │
 │  · SSE 不缓冲 (proxy_buffering off, 3600s)            │
 └──────┬───────────────────────────────────────────────┘
@@ -78,7 +78,7 @@
 ┌──────▼───────────────────────────────────────────────┐
 │  nexus-app   (Spring Boot 4.1.1 / JDK 21)            │
 │  auth · user · knowledge · chat · agent · tool        │
-│  observability · mcp          ← Controller 层          │
+│  mcp                          ← Controller 层          │
 └──────┬───────────────────────────────────────────────┘
        │
 ┌──────▼───────────────────────────────────────────────┐
@@ -189,7 +189,11 @@ Agent 配置 ──► Agent Runtime ──► Prompt 装配 ──► LLM
 
 ### 4.7 Observability
 
-- 自建计数器（`ObservabilityRegistry`）+ 只读接口：`GET /api/observability/summary`、`GET /api/observability/agents`。
+> ⚠️ **2026-10-08 调整**：`GET /api/observability/summary` 与 `/agents` 两个只读接口已移除（原型无对应界面）；
+> 计数采集（`ObservabilityRegistry`）与 Micrometer / Actuator 指标保持不变。
+
+
+- 自建计数器（`ObservabilityRegistry`）~~+ 只读接口 `GET /api/observability/summary`、`/agents`~~（**已移除**，原型无界面）。
 - 覆盖 token / 延迟 / 检索数 / 工具调用 / 失败库计数（`retrieval.kb.failed`）。
 - **同一批点也接上 Micrometer**（5.9 六）：`/actuator/metrics` 可读 `nexus.llm.calls|tokens|latency`、
   `nexus.chat.requests|latency`、`nexus.retrieval.requests`、`nexus.agent.executions`、`nexus.errors`
@@ -210,10 +214,10 @@ Agent 配置 ──► Agent Runtime ──► Prompt 装配 ──► LLM
 | 关键词检索 | Elasticsearch 9.4.5 + analysis-ik 9.4.5（BM25） |
 | 缓存 / 队列 | Redis 8.10.2、RabbitMQ 4.3.6 |
 | 文档解析 | PDFBox 3.0.7、Apache POI 5.5.1 |
-| 前端 | Vue 3.5 + Vue Router 4.5 + TypeScript 5.7 + Vite 6 + Element Plus 2.9（依赖以 `web/package.json` 为准） |
+| 前端 | React 19 + Vite + TypeScript（依赖以 `frontend/package.json` 为准） |
 | 部署 | Docker / docker compose、Nginx |
 
-> 版本以 **`pom.xml` 与 `web/package.json` 为准**——这里是两者的摘要，不是另一份事实来源。
+> 版本以 **`pom.xml` 与 `frontend/package.json` 为准**——这里是两者的摘要，不是另一份事实来源。
 > 选型理由与版本决策记录在 [docs/decisions.md](docs/decisions.md)。
 > 注意：前端**没有使用 Pinia**，状态直接在组件内管理。
 
@@ -231,8 +235,8 @@ prisdvl-nexus/                      (root pom, packaging=pom)
 │                                   检索实现 / 引用 / 多库扇出
 ├── nexus-app/                      Spring Boot 可执行应用（唯一的可运行模块）
 │                                   auth · user · knowledge · chat · agent ·
-│                                   tool · observability · mcp
-├── web/                            Vue 3 + TS 前端（独立 npm 工程，不是 Maven 模块）
+│                                   tool · mcp
+├── frontend/                        React 前端（对话 / 知识库 / Agent）
 │   ├── src/                        views / api / components
 │   ├── scripts/                    E2E 与截图脚本（17 个 verify-*.mjs）
 │   ├── nginx.conf                  生产入口配置
@@ -243,7 +247,7 @@ prisdvl-nexus/                      (root pom, packaging=pom)
 │   ├── backend/Dockerfile          应用镜像（JRE only）
 │   ├── elasticsearch/Dockerfile    ES + IK 插件
 │   └── postgres/init/              扩展初始化（vector 等）
-├── scripts/                        seed-demo.mjs / smoke.ps1 / demo-vault.zip
+├── scripts/                        smoke.ps1 / cleanup-test-data.ps1 / seed-demo.mjs（历史遗留）
 ├── docs/                           架构 / 数据库 / API / RAG / Agent / 安全 / 部署 / 决策
 └── README.md
 ```
@@ -340,7 +344,8 @@ java -jar nexus-app\target\nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active
 # 另开终端：冒烟测试（注册→登录→建会话→问答→流式+停止→查历史）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
 
-# 界面验证要用的演示数据（H2 重启后要重跑）
+# （可选 / 历史遗留）手动造演示数据：仅对已归档的 Vue E2E 有用；
+# 当前 React 前端 QA 走 mock，不需要这一步（H2 重启后数据即失效）
 node scripts\seed-demo.mjs
 ```
 
@@ -381,73 +386,46 @@ npm run build      # vue-tsc 类型检查 + vite build
 
 ---
 
-## 11. E2E 验证
+## 11. 前端验证（E2E / QA）
 
-17 个脚本（`web/scripts/`），复用系统 Edge/Chrome，不下载浏览器。
-地址口径与令牌工具收在 `web/scripts/lib/`（`e2e-config.mjs` 定义 `API_BASE`/`WEB_BASE`，
-永远指向网关根、默认 `http://localhost:8088`；`demo-session.mjs` 提供现登录换令牌与会话差集清理）：
+当前前端是 `frontend/`（React 19 + Vite）。验证脚本在 `frontend/scripts/`，
+通过 `package.json` 的 `npm run verify:<name>` 调用，**复用系统 Edge**（`playwright-core`，不下载浏览器）：
 
-| 脚本 | 验证内容 |
-| --- | --- |
-| `verify-full-product.mjs` | **全链路冒烟**：注册 → 登录 → 建两个库 → 上传 → **等异步导入到终态** → 向量化 + 建索引 → RAG（断言引用） → 建 Agent + 绑两库 → 发布 → Agent Chat → **Tool Calling** → SSE 流式 → **Observability** → 越权隔离 → 真登录表单进界面。自建账号、自清理，不依赖 seed-demo |
-| `verify-real-user-flow.mjs` | **按"一个全新用户"的顺序走一遍**：注册（含确认密码与强度校验）→ 登录 → 空态首页 → 建库 → 导入 → **取消一次文件选择后不卡 loading** → 导入后独有事实可检索 → 提问 → 引用（17 条腿） |
-| `verify-login.mjs` | 真实走登录表单，确认跳转与刷新后仍保持登录 |
-| `verify-frontend.mjs` | 知识库列表 → 正文（Markdown / 大纲 / 关联面板）→ 切片 |
-| `verify-doc-lifecycle.mjs` | 导入文件 → 逐文件失败原因 → 删除文档 |
-| `verify-import-formats.mjs` | **五格式真跑**：TXT / MD / PDF / DOCX / ZIP 各上传含**独有事实**的文件 → 导入 `DONE` → 建索引 → 用该事实检索命中；PDF 与 DOCX **在脚本内手工构造**，不往仓库塞二进制样本 |
-| `verify-stream.mjs` | 知识库问答流式：逐字增长 + 引用 + 生成期间的"检索到 N 个片段" + **回答里出现该库独有事实**。**自建账号 + 自建库 + 自埋事实**，不碰演示账号 |
-| `verify-retrieval-ui.mjs` | 检索卡片渲染契约：**桩 SSE 帧**，五条腿（命中 / 零命中 / 一个库失败 / 全部失败 / 部分命中部分失败） |
-| `verify-multi-kb.mjs` | 多知识库 RAG：自建两库导不同内容 → 多选绑定 → 只能由第二个库回答的问题 → 越权绑定被拒 |
-| `verify-multi-kb-failure.mjs` | **需整栈 + 真 ES**：三库逐级覆盖 → 往真实 ES 写坏文档让 B **真失败** → 验 A✅/B❌/C✅、计数自增、界面点名 |
-| `verify-agents.mjs` | Agent 管理页全生命周期（新建 → 配置 → 发布 → 选用 → 停用 → 删除，11 条腿） |
-| `verify-agent-chat.mjs` | 对话页三条腿：Agent 工具卡片 + 重命名会话 + RAG 检索卡片（含**引用刷新后仍在**） |
-| `verify-agent-no-kb.mjs` | 零知识库新用户提问：提示 → 检索如实报空 → 回答注明不是来自笔记 |
-| `verify-stop.mjs` | **停止生成**：请求刚发出即停 / 生成到一半停，两场景共用同一组后置断言（按钮回归、服务端 `STOPPED`、刷新后内容仍在） |
-| `verify-security.mjs` | 改资料 → 错原密码不踢下线（400 而非 401）→ 改密码后旧 token 401 → 新密码登录 |
-| `verify-responsive.mjs` | 1920×1080 与 1366×768 × 三个主页面：区分"**设计如此**（link 按钮本来就矮）"与"真被挤坏" |
-| `verify-testid-dom.mjs` | **data-testid 契约守卫**：逐页断言关键锚点真的进了 DOM（含 `el-radio-button` 可点、`el-tabs` 的 `#tab-*` id）。条件渲染的锚点如实标记"未取证"并指明由谁覆盖，不假装通过 |
+```powershell
+cd D:\develop\Prisma\frontend
+npm run build          # tsc --noEmit && vite build（本轮实测 exit 0）
+npm run verify:all     # 汇总门禁（不含需后端的 verify:mode-switch-real）
+```
 
-**选择器口径（Phase 0 起）**：脚本**定位元素**一律用 `data-testid` / `role` / 结构 id，
-不再用中文文案（`has-text`）——产品措辞会变（UA-005 就把「上传文件」改成「导入文件」），
-而绑在措辞上的定位会**静默失效**。但**断言**文案是允许的：它验的就是那句话本身。
-少数按**测试自建数据**（知识库名 / Agent 名 / 文件名）筛选的选项属于数据而非产品文案，
-一律加 `popper-class` 或 `:visible` 收窄作用域。
-`verify-testid-dom.mjs` 是这份契约的可执行版本。
-
-**退出码语义（重要）**：`0` 全部通过 / `1` 真实失败 / **`2` 有跳过**。
-跳过只在**环境能力缺失**时发生（例如 `standalone` 没有 ES），脚本会打印 `⚠ SKIPPED` 与原因——**跳过不等于通过**。
-
-脚本自带清理（自建的知识库、文档在结束时删除），不依赖 `seed-demo` 的固定数据库状态。
-**17 个脚本里没有一条依赖演示账号的数据**：`verify-agent-no-kb.mjs` / `verify-security.mjs` /
-`verify-stream.mjs` 等每次运行自建 `probe-*` / `sec-check-*` 账号；少数确实要用演示数据的
-（`verify-agent-chat.mjs` / `verify-multi-kb-failure.mjs`）则用**跑前快照 + 差集删除**
-只回收本轮新建的会话，演示数据一条不动。
-**代价**：没有删号接口，因此每跑一次会留下一个 `probe-*` 这类账号——写在这里，免得以后当成残留 bug 去查；
-它们统一由 `cleanup-test-data`（前缀白名单）回收。
-
-> 另有 `screenshot.mjs` 生成文档截图；`debug-click.mjs` 是一个**遗留的调试脚本**，保留但不在验证流程内。
-
----
+- **mock 类脚本**（`verify:routing` / `verify:interactions` / `verify:unify` / `verify:chat` /
+  `verify:mode-switch` 等）需要一个以 `VITE_USE_MOCK=true` 启动的 dev server（默认端口 `5175`），
+  否则脚本靠 legacy flag 预置的登录会失效、等 `.shell` 超时。
+- **`verify:mode-switch-real`** 需要后端在 `8080`、dev server 带 `/api` proxy 且**非** mock；
+  它**不在 `verify:all` 里**。
+- 截图证据写到 `docs/prototypes/shots/`（各 QA 脚本的 `z*-*.png` 与 `verify:shots` 产出）。
+- **Vue 时代的 17 个 `web/scripts/verify-*.mjs` 已随 `web/` 归档到 `docs/archive/web-vue/scripts/`**，
+  当前流程不再使用；它们描述的地址口径（`e2e-config.mjs`）同样只对归档副本有效。
+- 本轮实测：`verify:mode-switch`（mock）11/11 通过；`verify:chat` 144/0 通过。
 
 ## 12. 测试情况
 
 | 口径 | 数字 |
 | --- | --- |
-| 单元 + 集成测试 | **621 / 0 失败 / 0 错误 / 22 跳过**（119 个测试类） |
-| 真机（容器化整栈） | 上面那 22 个 live 测试**全部真跑通过，0 跳过** |
+| 单元 + 集成测试 | **648 / 0 失败 / 0 错误 / 24 跳过**（125 个测试类，2026-10-09 第二阶段 `mvn -o test` 实测） |
+| 真机（容器化整栈） | 上面那 24 个 live 测试**全部真跑通过，0 跳过** |
 
-那 22 个跳过项**不是被删掉的失败**：它们是需要真实 MySQL / ES / pgvector / 真模型的 live 测试，
+那 24 个跳过项**不是被删掉的失败**：它们是需要真实 MySQL / ES / pgvector / 真模型的 live 测试，
 在无 Docker 的默认环境里被跳过，在整栈起来后全部执行并通过。构成（实测 surefire）：
 `LiveChunkIndexTest` 9 / `LiveVectorStoreTest` 4 / `ChatStreamLiveTest` 3 /
-`LiveEmbeddingTest` 2 / `LiveModelCallTest` 2 / `AgentLoopTest` 1 / `MultiTurnMemoryTest` 1。
+`LiveEmbeddingTest` 2 / `LiveModelCallTest` 2 / `MySqlJsonRoundTripTest` 2 / `AgentLoopTest` 1 / `MultiTurnMemoryTest` 1。
 其中两个检索类自 5.9 起**自带容器**（Testcontainers，见第 10 节 `LiveInfrastructure`），
 因此它们的跳过与否只取决于环境变量，不再取决于"你本机那套业务容器此刻是什么状态"。
 
-按模块：`nexus-common` 19 / `nexus-ai` 66 / `nexus-knowledge` 174 / `nexus-app` 362。
+按模块：`nexus-common` 19 / `nexus-ai` 66 / `nexus-knowledge` 174 / `nexus-app` 389。
 
 ```bash
 JAVA_HOME=/d/develop/jdk-21 mvn -B clean test        # 全量
-cd web && npm run build                              # 前端类型检查 + 构建
+cd frontend && npm run build                         # 前端类型检查 + 构建
 ```
 
 > **跑测试前先 `docker compose stop`**。整栈 8 个容器占着内存时，Mockito 的 ByteBuddy 自附加
@@ -481,8 +459,8 @@ cd web && npm run build                              # 前端类型检查 + 构�
 在这之后又做了一轮**产品化收口**（不新增 Phase，只修"真实用户长期使用"会踩到的问题）：
 会话删除补齐 `SPRING_AI_CHAT_MEMORY` 级联、评测集入口从普通对话页移到 Agent 管理页、
 Agent 页去掉实现叙述、知识库详情页统一为「导入」词汇，以及 E2E 全面脱离演示账号
-（`API_BASE` 口径收进 `web/scripts/lib/e2e-config.mjs`）。
-逐项见 [docs/user-acceptance-issues.md](docs/user-acceptance-issues.md) 的 UA-018 ~ UA-021。
+（`API_BASE` 口径收进 `docs/archive/web-vue/scripts/lib/e2e-config.mjs`）。
+逐项见 [docs/archive/reports/user-acceptance-issues.md](docs/archive/reports/user-acceptance-issues.md) 的 UA-018 ~ UA-021。
 
 ---
 
@@ -512,7 +490,7 @@ Agent 页去掉实现叙述、知识库详情页统一为「导入」词汇，�
 16. **软删除 / 停用不会立即吊销已签发令牌**。
 17. **token 存在 localStorage**，有 XSS 暴露面。
 
-完整清单与分级见 [docs/productization-gap-analysis.md](docs/productization-gap-analysis.md)。
+完整清单与分级见 [docs/archive/reports/productization-gap-analysis.md](docs/archive/reports/productization-gap-analysis.md)。
 
 ---
 
@@ -527,7 +505,7 @@ Agent 页去掉实现叙述、知识库详情页统一为「导入」词汇，�
 
 > 长期阶段拆分（Phase 0–11）见 [docs/roadmap.md](docs/roadmap.md)。
 > ⚠️ **该文档的 Phase 编号与上文"平台化 5.x"不是同一套编号**，两者同名不同义，读的时候注意区分。
-> 产品化差距与分级（P1/P2/P3）见 [docs/productization-gap-analysis.md](docs/productization-gap-analysis.md)。
+> 产品化差距与分级（P1/P2/P3）见 [docs/archive/reports/productization-gap-analysis.md](docs/archive/reports/productization-gap-analysis.md)。
 
 ---
 
@@ -543,10 +521,10 @@ Agent 页去掉实现叙述、知识库详情页统一为「导入」词汇，�
 | [docs/database.md](docs/database.md) | ER 图、核心表设计、索引、Redis/ES 结构 |
 | [docs/api.md](docs/api.md) | 统一返回、错误码、REST 与 SSE 协议（含"规划中未实现"的明确标注） |
 | [docs/decisions.md](docs/decisions.md) | 架构决策记录（ADR）+ 每阶段实测记录 |
-| [docs/productization-gap-analysis.md](docs/productization-gap-analysis.md) | 产品化差距审计与 P1/P2/P3 分级 |
+| [docs/archive/reports/productization-gap-analysis.md](docs/archive/reports/productization-gap-analysis.md) | 产品化差距审计与 P1/P2/P3 分级 |
 | [docs/roadmap.md](docs/roadmap.md) | Phase 0–11 任务拆分（注意编号体系与平台化轨不同） |
-| [docs/platform-upgrade-phase1-analysis.md](docs/platform-upgrade-phase1-analysis.md) | 平台化升级的架构分析 |
-| [docs/platform-phase3-baseline.md](docs/platform-phase3-baseline.md) | 平台化 Phase 3 基线与真机验证记录 |
+| [docs/archive/reports/platform-upgrade-phase1-analysis.md](docs/archive/reports/platform-upgrade-phase1-analysis.md) | 平台化升级的架构分析 |
+| [docs/archive/reports/platform-phase3-baseline.md](docs/archive/reports/platform-phase3-baseline.md) | 平台化 Phase 3 基线与真机验证记录 |
 
 ## 开发约定
 

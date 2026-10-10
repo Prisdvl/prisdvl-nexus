@@ -119,6 +119,53 @@ erDiagram
 | 迁移 | Flyway，`V{version}__{desc}.sql`，禁止修改已执行的迁移文件 |
 | 索引 | 外键列必建索引；列表查询一律走 `(user_id, created_at)` 组合索引；软删表索引包含 `deleted` |
 
+> **已知遗留（2026-10-09）**：`V15`–`V18` 的注释仍指向已归档的 `docs/productization-gap-analysis.md`
+> （正确位置是 `docs/archive/reports/productization-gap-analysis.md`）。**刻意不改**：这几个迁移
+> 可能已在真实库（本地 MySQL）执行过，改动文件（哪怕只是注释）有触发 Flyway `Migration checksum
+> mismatch` 的风险。要修这类注释，需单独评估并在真库上先跑 `flyway validate`。
+
+### 2.1 MyBatis-Plus 写入约定：JSON 列与 `null` 字段
+
+两类"看起来成功、实际没落库"的坑都已在真实缺陷里踩过，写实体 / Service 时必须遵守。
+
+**(1) JSON 列必须挂 TypeHandler，且 `@TableName` 要开 `autoResultMap`**
+
+H2 的 `json` 列会把写入的 JSON 文本存成"字符串节点"（写 `["1"]` 读回 `"[\"1\"]"`），
+而 `updateById` 走"整行读出 → 改字段 → 全列写回"，未改动的 JSON 列也会被把已转义形态再写回，
+**每 update 一次多套一层**（实测 `["1"]` → `"[\"1\"]"` → 逐层嵌套），
+表现为"改一下标题，绑定的知识库就没了"。
+
+处理：JSON 字段加 `@TableField(typeHandler = JsonTextTypeHandler.class)`，
+类上加 `@TableName(value = "...", autoResultMap = true)` —— **没有 `autoResultMap` 时
+MyBatis-Plus 不会为该字段启用 resultMap，处理器等于没挂**。
+
+- 现有挂载点：`ChatConversationPO.kbIds`、`ChatMessagePO.metadata`、`DocumentPO.frontmatter` / `tags` / `headingTree`。
+- `JsonTextTypeHandler` 有两份（`nexus-app` 与 `nexus-knowledge` 各一），是模块依赖方向（`app → knowledge`，反向引用不了）所致，非重复代码。
+- 回归保护：`JsonColumnNoNestingTest`（断言**原始库值长度不增长**）、`JsonColumnRoundTripTest`、
+  `MySqlJsonRoundTripTest`（默认跳过，需 `AI_MYSQL_LIVE=true` 才跑真 MySQL）。
+
+**(2) `updateById` 默认跳过 `null` 字段 —— 清空必须用显式信号**
+
+MyBatis-Plus 默认更新策略是 `FieldStrategy.NOT_NULL`：实体字段为 `null` 时**不生成 SET 子句**。
+把"清空某列"写成 `entity.setXxx(null)` + `updateById`，会得到
+**接口返回 200、响应体已是 null、但库里还是旧值**的假成功（`resetAgent` 就这样漏过一次）。
+
+两种正确写法（项目里都在用）：
+
+| 场景 | 写法 | 证据 |
+| --- | --- | --- |
+| 列本身允许 `null`，且"用默认"是合法语义 | 字段加 `@TableField(updateStrategy = FieldStrategy.ALWAYS)` | `ChatConversationPO.agentId`（`:89-90`） |
+| 有天然的非 null 哨兵值 | 用哨兵替代 `null`（如 `kb_ids` 用 JSON `"[]"`） | `ConversationServiceImpl`（`:213-214`、`:350-352`） |
+
+⚠️ `FieldStrategy.ALWAYS` 会让**每次** `updateById` 都写该列，因此该实体的其余更新点必须是
+"先整行读出、再改字段、再写回"（`ConversationServiceImpl.update` 即如此），否则会把未读到的字段误清空。
+
+局部更新的 null 语义在 DTO 层用独立信号表达：`kbIds` 传空列表 = 解绑、
+`agentId` 用 `resetAgent: true` 表示清空（`agentId: null` 只能表示"不改"，见 `UpdateConversationRequest`）。
+
+> 本节由已删除的 `docs/backend-findings-agent-constraints.md` 的持久化约束整理而来（2026-10-10），
+> 结论已按当前实体注解与 Service 实现重新核实。
+
 ---
 
 ## 3. 账号与权限（Phase 0）
@@ -359,7 +406,7 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 （`DocumentMapper.purgePathTombstones` / `purgeKnowledgeBaseTombstones`，原生 `@Delete` 绕过 `@TableLogic`）。
 这条路径在加删除按钮之前靠"重复导入 + 删文件"才碰得到，加了按钮就是一键复现。
 
-> 同样形状的陷阱还埋在 `uk_user_username (username, deleted)` 上（见 `productization-gap-analysis.md` P2-15）：
+> 同样形状的陷阱还埋在 `uk_user_username (username, deleted)` 上（见 `docs/archive/reports/productization-gap-analysis.md` P2-15）：
 > 目前**没有**删号接口所以不可达，补删号功能前必须先修。
 
 ---
