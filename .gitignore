@@ -48,6 +48,8 @@ application-prod.yaml
 *.jks
 
 # ---------- 本地数据 / 上传文件 / 日志 ----------
+# 后端运行时存储根（上传的原始文件）：在 nexus-app 目录下启动时会落到这里
+nexus-app/data/
 /data/
 /storage/
 /uploads/

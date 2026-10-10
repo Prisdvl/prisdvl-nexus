@@ -276,12 +276,116 @@ export const api = {
       ).then((r) => r.data.data),
   },
   agents: {
-    /**
-     * 实测未跑通（standalone 无模型不影响它，但本轮没建 Agent 实体）。
-     * ⚠️ `Agent` 字段名按 `AgentResponse` 源码抄的，接的时候要核对。
-     */
     list: (pageNum = 1, pageSize = 100) =>
-      http.get<Result<PageResult<Agent>>>('/agents', { params: { pageNum, pageSize } })
+      http.get<Result<PageResult<BackendAgent>>>('/agents', { params: { pageNum, pageSize } })
+        .then((r) => r.data.data),
+    get: (id: string) => http.get<Result<BackendAgent>>(`/agents/`).then((r) => r.data.data),
+    create: (body: { code: string; name: string }) =>
+      http.post<Result<BackendAgent>>('/agents', body).then((r) => r.data.data),
+    update: (id: string, body: Partial<AgentPayload>) =>
+      http.put<Result<BackendAgent>>(`/agents/`, body).then((r) => r.data.data),
+    remove: (id: string) => http.delete<Result<null>>(`/agents/`).then((r) => r.data.data),
+  },
+  knowledge: {
+    list: (pageNum = 1, pageSize = 100) =>
+      http.get<Result<PageResult<KnowledgeBase>>>('/knowledge-bases', { params: { pageNum, pageSize } })
+        .then((r) => r.data.data),
+    get: (id: string) => http.get<Result<KnowledgeBase>>(`/knowledge-bases/`).then((r) => r.data.data),
+    create: (body: { name: string; description?: string }) =>
+      http.post<Result<KnowledgeBase>>('/knowledge-bases', body).then((r) => r.data.data),
+    remove: (id: string) => http.delete<Result<null>>(`/knowledge-bases/`).then((r) => r.data.data),
+  },
+  documents: {
+    list: (kbId: string, pageNum = 1, pageSize = 100) =>
+      http.get<Result<PageResult<KbDocument>>>(`/knowledge-bases//documents`, { params: { pageNum, pageSize } })
+        .then((r) => r.data.data),
+    upload: (kbId: string, file: File) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      return http.post<Result<ImportTask>>(`/knowledge-bases//documents`, fd).then((r) => r.data.data)
+    },
+    remove: (kbId: string, docId: string) =>
+      http.delete<Result<null>>(`/knowledge-bases//documents/`).then((r) => r.data.data),
+    chunks: (kbId: string, docId: string, pageNum = 1, pageSize = 20) =>
+      http.get<Result<PageResult<ChunkRow>>>(`/knowledge-bases//documents//chunks`, { params: { pageNum, pageSize } })
         .then((r) => r.data.data),
   },
+  importTasks: {
+    get: (taskId: string) => http.get<Result<ImportTask>>(`/import-tasks/`).then((r) => r.data.data),
+  },
+  rag: {
+    ask: (kbId: string, question: string, topK = 5) =>
+      http.post<Result<RagAnswer>>(`/knowledge-bases//ask`, { question, topK }).then((r) => r.data.data),
+  },
 }
+
+/* ------------------------------------------------------------------ *
+ * 后端响应类型（依据真实接口实测响应定义，2026-10-10）
+ * ------------------------------------------------------------------ */
+
+export interface BackendAgent {
+  id: string
+  code: string
+  name: string
+  description: string | null
+  systemPrompt?: string | null
+  modelRole: string | null
+  answerPolicy: string
+  temperature: number | null
+  status: string
+  builtin: boolean
+  kbIds: string[]
+  toolCodes?: string[]
+}
+
+export interface AgentPayload {
+  name: string
+  description: string | null
+  systemPrompt: string | null
+  answerPolicy: string
+  temperature: number | null
+  status: string
+  kbIds: string[]
+  toolCodes: string[]
+}
+
+export interface KnowledgeBase {
+  id: string
+  name: string
+  description: string | null
+  status: string
+  docCount: number
+  chunkCount: number
+  totalTokens: string | number
+  embeddingModel?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface KbDocument {
+  id: string
+  fileName: string
+  fileExt: string
+  title: string | null
+  fileSizeKb: number
+  status: string
+  chunkCount: number
+  tokenCount: number
+  updatedAt: string
+}
+
+export interface ChunkRow { id: string; content?: string; heading?: string | null; tokenCount?: number }
+
+export interface ImportTask {
+  id: string
+  status: string
+  totalFiles?: number
+  createdCount?: number
+  updatedCount?: number
+  failedCount?: number
+  totalChunks?: number
+  errorMsg?: string | null
+}
+
+export interface RagCitation { documentId?: string; documentName?: string; chunkId?: string; score?: number; snippet?: string }
+export interface RagAnswer { answer: string; citations: RagCitation[] }

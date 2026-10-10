@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Bot, Check, Copy, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
 import PixelCard from '@/bits/PixelCard/PixelCard'
 import SpringCheck from '@/bits/SpringCheck/SpringCheck'
@@ -9,6 +9,8 @@ import Modal from '@/components/Modal'
 import { StateEmpty } from '@/components/Skeleton'
 import { toast } from '@/lib/toast'
 import { AGENTS, type AgentItem } from '@/data'
+import { api, USE_MOCK, errMessage } from '@/lib/api'
+import { fetchAgents } from '@/lib/backendData'
 
 const PIXEL = {
   terracotta: '#fde8dc,#f7cbb2,#d97a52',
@@ -19,7 +21,19 @@ const PIXEL = {
 export default function AgentsPage() {
   /* 粒子色与知识库卡片统一：跟随当前配色与明暗 */
   const particleColors = useParticleColors()
-  const [agents, setAgents] = useState<AgentItem[]>(AGENTS)
+  const [agents, setAgents] = useState<AgentItem[]>(USE_MOCK ? AGENTS : [])
+  const [newName, setNewName] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  /* 真实数据：Agent 列表（mock 模式保留种子） */
+  useEffect(() => {
+    if (USE_MOCK) return
+    let alive = true
+    fetchAgents()
+      .then((rows) => { if (alive && rows.length) setAgents(rows) })
+      .catch((e) => { if (alive) toast.error('Agent 列表加载失败', errMessage(e)) })
+    return () => { alive = false }
+  }, [])
   const [wizard, setWizard] = useState(false)
   const [testAgent, setTestAgent] = useState<AgentItem>(AGENTS[0])
   const [testIn, setTestIn] = useState('')
@@ -93,7 +107,25 @@ export default function AgentsPage() {
                   type="button"
                   aria-label="复制"
                   onClick={() => {
-                    const copy = { ...a, id: Date.now(), name: `${a.name} 副本` }
+                    if (USE_MOCK) {
+                      const copy = { ...a, id: String(Date.now()), name: `${a.name} 副本` }
+                      setAgents((list) => {
+                        const out = [...list]
+                        out.splice(out.findIndex((x) => x.id === a.id) + 1, 0, copy)
+                        return out
+                      })
+                      toast.success('已复制 Agent', copy.name)
+                      return
+                    }
+                    api.agents.create({ code: `copy-${Date.now()}`, name: `${a.name} 副本` })
+                      .then(async () => {
+                        setAgents(await fetchAgents())
+                        toast.success('已复制 Agent', `${a.name} 副本`)
+                      })
+                      .catch((e) => toast.error('复制失败', errMessage(e)))
+                    return
+                    /* eslint-disable-next-line no-unreachable */
+                    const copy = { ...a, id: String(Date.now()), name: `${a.name} 副本` }
                     setAgents((list) => {
                       const out = [...list]
                       out.splice(out.findIndex((x) => x.id === a.id) + 1, 0, copy)
@@ -109,16 +141,23 @@ export default function AgentsPage() {
                   type="button"
                   aria-label="删除"
                   onClick={() => {
-                    const idx = agents.findIndex((x) => x.id === a.id)
-                    setAgents((list) => list.filter((x) => x.id !== a.id))
-                    toast.undo('已删除 Agent', a.name, () => {
-                      setAgents((list) => {
-                        const out = [...list]
-                        out.splice(Math.min(idx, out.length), 0, a)
-                        return out
+                    if (USE_MOCK) {
+                      const idx = agents.findIndex((x) => x.id === a.id)
+                      setAgents((list) => list.filter((x) => x.id !== a.id))
+                      toast.undo('已删除 Agent', a.name, () => {
+                        setAgents((list) => {
+                          const out = [...list]
+                          out.splice(Math.min(idx, out.length), 0, a)
+                          return out
+                        })
+                        toast.success('已恢复 Agent', a.name)
                       })
-                      toast.success('已恢复 Agent', a.name)
-                    })
+                      return
+                    }
+                    if (!window.confirm(`确定删除 Agent「${a.name}」吗？`)) return
+                    api.agents.remove(a.id)
+                      .then(async () => { setAgents(await fetchAgents()); toast.success('Agent 已删除', a.name) })
+                      .catch((e) => toast.error('删除失败', errMessage(e)))
                   }}
                 >
                   <Trash2 size={13} />
@@ -158,19 +197,35 @@ export default function AgentsPage() {
             <Stepper
               backButtonText="上一步"
               nextButtonText="下一步"
-              onFinalStepCompleted={() => {
-                setWizard(false)
-                const created = { ...AGENTS[0], id: Date.now(), name: '新 Agent' }
-                setAgents((list) => [created, ...list])
-                setTestAgent(created)
-                toast.success('Agent 已创建', '已绑定知识库与 knowledge_search 工具')
+              onFinalStepCompleted={async () => {
+                if (USE_MOCK) {
+                  setWizard(false)
+                  const created = { ...AGENTS[0], id: String(Date.now()), name: newName || '新 Agent' }
+                  setAgents((list) => [created, ...list])
+                  setTestAgent(created)
+                  toast.success('Agent 已创建', '已绑定知识库与 knowledge_search 工具')
+                  return
+                }
+                if (!newName.trim()) { toast.error('请先填写名称'); return }
+                setBusy(true)
+                try {
+                  await api.agents.create({ code: `agent-`, name: newName.trim() })
+                  setAgents(await fetchAgents())
+                  setWizard(false)
+                  setNewName('')
+                  toast.success('Agent 已创建', '初始状态为草稿，发布后才能在会话中选用')
+                } catch (e) {
+                  toast.error('创建失败', errMessage(e))
+                } finally {
+                  setBusy(false)
+                }
               }}
             >
               <Step>
                 <div style={{ padding: '10px 0 6px' }}>
                   <div className="field">
                     <label>名称</label>
-                    <input className="input" placeholder="例如：代码审查员"  aria-label="Agent 名称" />
+                    <input className="input" placeholder="例如：代码审查员"  aria-label="Agent 名称" value={newName} onChange={(e) => setNewName(e.target.value)} />
                   </div>
                   <div className="field">
                     <label>模型</label>

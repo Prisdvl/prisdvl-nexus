@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { FileText, MoreHorizontal, Plus, Search, SearchX } from 'lucide-react'
 import PixelCard from '@/bits/PixelCard/PixelCard'
 import { Skeleton, StateEmpty } from '@/components/Skeleton'
 import { useParticleColors } from '@/lib/palette'
 import { KBS, type KbItem } from '@/data'
+import { api, USE_MOCK, errMessage } from '@/lib/api'
+import { fetchKbs, useLoad } from '@/lib/backendData'
+import { toast } from '@/lib/toast'
 
 interface Props {
   onOpen: (kb: KbItem) => void
@@ -13,15 +16,33 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
   /* 粒子色跟随当前配色与明暗（切换配色立即生效），不再按每张卡的"性格色" */
   const particleColors = useParticleColors()
   const [query, setQuery] = useState('')
-  /* 原型：700ms 骨架屏演示加载态（真实实现由请求状态驱动） */
-  const [loading, setLoading] = useState(true)
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 700)
-    return () => clearTimeout(t)
-  }, [])
+  /* 真实实现：加载态由请求驱动；mock 模式下直接展示种子数据 */
+  const { data, loading: remoteLoading, error, reload } = useLoad(() => fetchKbs())
+  const rows = USE_MOCK ? KBS : (data ?? [])
+  const loading = USE_MOCK ? false : remoteLoading
+  const [creating, setCreating] = useState(false)
 
   const q = query.trim().toLowerCase()
-  const list = q ? KBS.filter((k) => `${k.name}${k.desc}`.toLowerCase().includes(q)) : KBS
+  const list = useMemo(
+    () => (q ? rows.filter((k) => `${k.name}${k.desc}`.toLowerCase().includes(q)) : rows),
+    [q, rows],
+  )
+
+  const createKb = async () => {
+    if (USE_MOCK) return
+    const name = window.prompt('新知识库的名称')?.trim()
+    if (!name) return
+    setCreating(true)
+    try {
+      await api.knowledge.create({ name })
+      toast.success('知识库已创建', name)
+      reload()
+    } catch (e) {
+      toast.error('创建失败', errMessage(e))
+    } finally {
+      setCreating(false)
+    }
+  }
 
   return (
     <div className="page">
@@ -42,9 +63,22 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <button className="btn btn-primary" type="button"><Plus size={16} /> 新建知识库</button>
+          <button className="btn btn-primary" type="button" onClick={createKb} disabled={creating}>
+            <Plus size={16} /> {creating ? '创建中…' : '新建知识库'}
+          </button>
         </div>
       </div>
+
+      {error && (
+        <div className="panel" style={{ marginBottom: 12 }}>
+          <StateEmpty
+            icon={<SearchX size={20} />}
+            title="知识库加载失败"
+            desc={error}
+            action={<button className="btn btn-sm" type="button" onClick={reload}>重试</button>}
+          />
+        </div>
+      )}
 
       {loading && (
         <div className="kb-grid">
@@ -65,14 +99,14 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
         <div className="panel">
           <StateEmpty
             icon={<SearchX size={20} />}
-            title={`没有匹配「${query}」的知识库`}
-            desc="换个关键词，或直接新建一个知识库开始沉淀。"
-            action={<button className="btn btn-primary btn-sm" type="button"><Plus size={14} /> 新建知识库</button>}
+            title={q ? `没有匹配「${query}」的知识库` : '还没有知识库'}
+            desc={q ? '换个关键词，或直接新建一个知识库开始沉淀。' : '新建第一个知识库，然后把笔记导入进来。'}
+            action={<button className="btn btn-primary btn-sm" type="button" onClick={createKb}><Plus size={14} /> 新建知识库</button>}
           />
         </div>
       )}
 
-      {!loading && <div className="kb-grid">
+      {!loading && list.length > 0 && <div className="kb-grid">
         {list.map((kb) => (
           <PixelCard key={kb.id} gap={8} speed={45} colors={particleColors}>
             <div className="kb-inner" role="button" tabIndex={0} onClick={() => onOpen(kb)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(kb) }} style={{ cursor: 'pointer' }}>
@@ -83,11 +117,11 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
               </div>
               <div>
                 <h2 className="name">{kb.name}</h2>
-                <p className="desc">{kb.desc}</p>
+                <p className="desc">{kb.desc || '（无描述）'}</p>
               </div>
               <div className="meta">
                 <span className="dot" style={{ background: 'var(--primary)' }} />
-                更新于 {kb.updated}
+                更新于 {kb.updated || '—'}
               </div>
               <MoreHorizontal size={16} className="more" style={{ color: 'var(--text-3)' }} />
             </div>

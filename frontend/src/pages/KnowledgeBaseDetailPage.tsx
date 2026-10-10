@@ -17,6 +17,8 @@ import DocPreview from '@/components/DocPreview'
 import Markdown from '@/components/Markdown'
 import { toast } from '@/lib/toast'
 import { DOCS, QA_HISTORY, type DocItem } from '@/data'
+import { api, USE_MOCK, errMessage } from '@/lib/api'
+import { fetchDocs } from '@/lib/backendData'
 import type { ThemeMode } from '@/lib/types'
 
 type Tab = 'docs' | 'qa' | 'adv' | 'links'
@@ -41,6 +43,7 @@ const RELATED = [
 ]
 
 interface Props {
+  kbId: string
   theme: ThemeMode
   onBack: () => void
   /** 由引用跳转带入：需要高亮定位的文档名 */
@@ -51,7 +54,7 @@ interface Props {
   onClearHighlight?: () => void
 }
 
-export default function KnowledgeBaseDetailPage({ theme, onBack, highlightDoc = null, onOpenDoc, onClearHighlight }: Props) {
+export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlightDoc = null, onOpenDoc, onClearHighlight }: Props) {
   /* 高亮是"一次性"的：进来脉冲一圈、2.5s 后自动取消（此前会一直亮） */
   const [hlActive, setHlActive] = useState(false)
   /*
@@ -62,8 +65,24 @@ export default function KnowledgeBaseDetailPage({ theme, onBack, highlightDoc = 
   const { key: navKey } = useLocation()
   const [tab, setTab] = useState<Tab>('docs')
   const [importOpen, setImportOpen] = useState(false)
-  const [docs, setDocs] = useState<DocItem[]>(DOCS)
-  const [shredIds, setShredIds] = useState<number[]>([1, 2, 3])
+  const [docs, setDocs] = useState<DocItem[]>(USE_MOCK ? DOCS : [])
+  const [shredIds, setShredIds] = useState<string[]>([])
+  const [cites, setCites] = useState<{ documentName?: string; score?: number }[]>([])
+  const [docsLoading, setDocsLoading] = useState(!USE_MOCK)
+  const [picked, setPicked] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+
+  /* 真实数据：进入详情页按 kbId 拉文档列表（mock 模式继续用种子数据） */
+  useEffect(() => {
+    if (USE_MOCK) return
+    let alive = true
+    setDocsLoading(true)
+    fetchDocs(kbId)
+      .then((rows) => { if (alive) setDocs(rows) })
+      .catch((e) => { if (alive) toast.error('文档列表加载失败', errMessage(e)) })
+      .finally(() => { if (alive) setDocsLoading(false) })
+    return () => { alive = false }
+  }, [kbId])
   const [thinking, setThinking] = useState(false)
   const [qa, setQa] = useState('')
   const [answer, setAnswer] = useState<string | null>(null)
@@ -91,11 +110,24 @@ export default function KnowledgeBaseDetailPage({ theme, onBack, highlightDoc = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlightDoc, navKey])
 
-  const ask = (e: FormEvent) => {
+  const ask = async (e: FormEvent) => {
     e.preventDefault()
     if (!qa.trim() || thinking) return
     setThinking(true)
     setAnswer(null)
+    setCites([])
+    if (!USE_MOCK) {
+      try {
+        const res = await api.rag.ask(kbId, qa.trim(), usage.topK)
+        setAnswer(res.answer)
+        setCites(res.citations ?? [])
+      } catch (err) {
+        setAnswer(`> ⚠️ 检索/生成失败：${errMessage(err)}`)
+      } finally {
+        setThinking(false)
+      }
+      return
+    }
     setTimeout(() => {
       setThinking(false)
       setAnswer(`## 为什么 B+ 树更适合做索引
@@ -178,7 +210,7 @@ flowchart TD
               <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }} />
               <input className="input" placeholder="在当前知识库内搜索文档" style={{ paddingLeft: 36 }}  aria-label="在当前知识库内搜索文档" />
             </div>
-            <span className="badge">6 篇</span>
+            <span className="badge">{docs.length} 篇</span>
           </div>
 
           <div className="panel" style={{ padding: 6 }}>
@@ -201,7 +233,7 @@ flowchart TD
                 <span className="doc-status" title={{ done: '已索引', indexing: '解析中', failed: '解析失败' }[d.status]}>
                   {d.status === 'done' && <StatusMark status="done" size={15} label="已索引" fontSize={12} strike={false} />}
                   {d.status === 'indexing' && (
-                    <StatusMark status="running" progress={(d.id % 5) / 5 + 0.2} size={15} label="解析中" fontSize={12} />
+                    <StatusMark status="running" progress={0.4} size={15} label="解析中" fontSize={12} />
                   )}
                   {d.status === 'failed' && <StatusMark status="failed" size={15} label="失败" fontSize={12} strike={false} />}
                 </span>
@@ -211,16 +243,27 @@ flowchart TD
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation()   // 否则点删除会顺带打开预览
-                      const idx = docs.findIndex((x) => x.id === d.id)
-                      setDocs((list) => list.filter((x) => x.id !== d.id))
-                      toast.undo('已删除文档', d.name, () => {
-                        setDocs((list) => {
-                          const out = [...list]
-                          out.splice(Math.min(idx, out.length), 0, d)
-                          return out
+                      if (USE_MOCK) {
+                        const idx = docs.findIndex((x) => x.id === d.id)
+                        setDocs((list) => list.filter((x) => x.id !== d.id))
+                        toast.undo('已删除文档', d.name, () => {
+                          setDocs((list) => {
+                            const out = [...list]
+                            out.splice(Math.min(idx, out.length), 0, d)
+                            return out
+                          })
+                          toast.success('已恢复文档', d.name)
                         })
-                        toast.success('已恢复文档', d.name)
-                      })
+                        return
+                      }
+                      /* 真实删除：后端会级联清理切片/向量/索引，不可恢复 → 二次确认 */
+                      if (!window.confirm(`确定删除文档「${d.name}」吗？切片与索引会一并清除，无法恢复。`)) return
+                      api.documents.remove(kbId, d.id)
+                        .then(() => {
+                          setDocs((list) => list.filter((x) => x.id !== d.id))
+                          toast.success('文档已删除', d.name)
+                        })
+                        .catch((e) => toast.error('删除失败', errMessage(e)))
                     }}
                   >
                     <Trash2 size={14} /> 删除
@@ -289,6 +332,17 @@ flowchart TD
           {answer && (
             <div className="panel panel-pad" style={{ marginBottom: 16 }}>
               <Markdown text={answer} theme={theme} />
+                {cites.length > 0 && (
+                  <div className="panel panel-pad" style={{ marginTop: 12 }}>
+                    <h3 className="col-title" style={{ marginTop: 0 }}>引用来源（{cites.length}）</h3>
+                    {cites.map((c, i) => (
+                      <div key={i} className="list-row">
+                        <span className="nm" style={{ fontSize: 13 }}>{c.documentName ?? '(未知文档)'}</span>
+                        {typeof c.score === 'number' && <span className="badge">{(c.score * 100).toFixed(0)}%</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
               <div className="citation">
                 {['集合框架.md', 'MySQL 索引原理.pdf'].map((c) => (
                   <button key={c} className="cite-chip" type="button" data-clickable onClick={() => onOpenDoc?.(c)}>
@@ -407,9 +461,25 @@ flowchart TD
             <Stepper
               backButtonText="上一步"
               nextButtonText="下一步"
-              onFinalStepCompleted={() => {
-                setImportOpen(false)
-                toast.task('导入任务已入队', '2 个文件正在后台解析与切片')
+              onFinalStepCompleted={async () => {
+                if (USE_MOCK) {
+                  setImportOpen(false)
+                  toast.task('导入任务已入队', '2 个文件正在后台解析与切片')
+                  return
+                }
+                if (!picked) { toast.error('请先选择文件'); return }
+                setUploading(true)
+                try {
+                  const task = await api.documents.upload(kbId, picked)
+                  setImportOpen(false)
+                  setPicked(null)
+                  toast.task('导入任务已入队', `任务 ${task.id} 正在解析与切片`)
+                  setDocs(await fetchDocs(kbId))
+                } catch (e) {
+                  toast.error('导入失败', errMessage(e))
+                } finally {
+                  setUploading(false)
+                }
               }}
             >
               <Step>
@@ -417,6 +487,8 @@ flowchart TD
                   <div style={{ border: '1.5px dashed var(--border-strong)', borderRadius: 14, padding: 26, textAlign: 'center', color: 'var(--text-3)', fontSize: 13.5 }}>
                     <Upload size={22} style={{ marginBottom: 8 }} />
                     <div>点击选择文件，或拖拽 Markdown / TXT / PDF / DOCX 到此处</div>
+                    <input aria-label="选择要导入的文件" type="file" style={{ marginTop: 10 }} onChange={(e) => setPicked(e.target.files?.[0] ?? null)} />
+                    {picked && <div style={{ marginTop: 6, fontSize: 12 }}>已选：{picked.name}</div>}
                     <div style={{ marginTop: 6, fontSize: 12 }}>支持批量上传，单个 ≤ 20 MB</div>
                   </div>
                   <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>

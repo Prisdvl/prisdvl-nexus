@@ -3,7 +3,7 @@
  * ============================================================ */
 
 export interface KbItem {
-  id: number
+  id: string
   name: string
   desc: string
   docs: number
@@ -12,16 +12,16 @@ export interface KbItem {
 }
 
 export const KBS: KbItem[] = [
-  { id: 1, name: '我的 Java 笔记', desc: '集合框架 / JVM / 并发 / 调优，校招复习主线', docs: 12, updated: '2 小时前', tone: 'terracotta' },
-  { id: 2, name: '操作系统与网络', desc: '进程线程、内存分页、TCP/IP、HTTP', docs: 8, updated: '昨天', tone: 'turquoise' },
-  { id: 3, name: 'Redis 源码阅读', desc: '事件循环、字典、RDB/AOF 持久化', docs: 4, updated: '3 天前', tone: 'lime' },
-  { id: 4, name: '算法与数据结构', desc: 'LeetCode 高频题解 + 复杂度分析', docs: 9, updated: '上周', tone: 'turquoise' },
-  { id: 5, name: '面试八股合集', desc: 'Java / MySQL / 场景题 / HR 面', docs: 15, updated: '上周', tone: 'terracotta' },
-  { id: 6, name: '软技能与项目', desc: '项目讲解、埋点复盘、自我介绍', docs: 5, updated: '2 周前', tone: 'lime' },
+  { id: '1', name: '我的 Java 笔记', desc: '集合框架 / JVM / 并发 / 调优，校招复习主线', docs: 12, updated: '2 小时前', tone: 'terracotta' },
+  { id: '2', name: '操作系统与网络', desc: '进程线程、内存分页、TCP/IP、HTTP', docs: 8, updated: '昨天', tone: 'turquoise' },
+  { id: '3', name: 'Redis 源码阅读', desc: '事件循环、字典、RDB/AOF 持久化', docs: 4, updated: '3 天前', tone: 'lime' },
+  { id: '4', name: '算法与数据结构', desc: 'LeetCode 高频题解 + 复杂度分析', docs: 9, updated: '上周', tone: 'turquoise' },
+  { id: '5', name: '面试八股合集', desc: 'Java / MySQL / 场景题 / HR 面', docs: 15, updated: '上周', tone: 'terracotta' },
+  { id: '6', name: '软技能与项目', desc: '项目讲解、埋点复盘、自我介绍', docs: 5, updated: '2 周前', tone: 'lime' },
 ]
 
 export interface DocItem {
-  id: number
+  id: string
   name: string
   type: string
   size: string
@@ -30,16 +30,16 @@ export interface DocItem {
 }
 
 export const DOCS: DocItem[] = [
-  { id: 1, name: '集合框架.md', type: 'Markdown', size: '48 KB', updated: '2 小时前', status: 'done' },
-  { id: 2, name: 'JVM 内存模型.md', type: 'Markdown', size: '76 KB', updated: '2 小时前', status: 'done' },
-  { id: 3, name: '并发编程要点.md', type: 'Markdown', size: '61 KB', updated: '昨天', status: 'done' },
-  { id: 4, name: 'MySQL 索引原理.pdf', type: 'PDF', size: '1.2 MB', updated: '昨天', status: 'done' },
-  { id: 5, name: 'Spring 事务笔记.docx', type: 'DOCX', size: '340 KB', updated: '3 天前', status: 'indexing' },
-  { id: 6, name: '面经整理 v3.md', type: 'Markdown', size: '88 KB', updated: '上周', status: 'failed' },
+  { id: '1', name: '集合框架.md', type: 'Markdown', size: '48 KB', updated: '2 小时前', status: 'done' },
+  { id: '2', name: 'JVM 内存模型.md', type: 'Markdown', size: '76 KB', updated: '2 小时前', status: 'done' },
+  { id: '3', name: '并发编程要点.md', type: 'Markdown', size: '61 KB', updated: '昨天', status: 'done' },
+  { id: '4', name: 'MySQL 索引原理.pdf', type: 'PDF', size: '1.2 MB', updated: '昨天', status: 'done' },
+  { id: '5', name: 'Spring 事务笔记.docx', type: 'DOCX', size: '340 KB', updated: '3 天前', status: 'indexing' },
+  { id: '6', name: '面经整理 v3.md', type: 'Markdown', size: '88 KB', updated: '上周', status: 'failed' },
 ]
 
 export interface AgentItem {
-  id: number
+  id: string
   name: string
   desc: string
   model: string
@@ -48,10 +48,10 @@ export interface AgentItem {
 }
 
 export const AGENTS: AgentItem[] = [
-  { id: 1, name: '面试助手', desc: '结合知识库回答八股与场景题，追问式陪练', model: 'deepseek-v4-flash', tools: ['knowledge_search', 'calculator'], kb: '我的 Java 笔记' },
-  { id: 2, name: 'Java 代码审查员', desc: '贴代码即审：命名、并发、异常处理', model: 'glm-5.3', tools: ['knowledge_search', 'code_runner'], kb: '我的 Java 笔记' },
-  { id: 3, name: '简历润色师', desc: '把经历改写为 STAR 句式，对齐 JD', model: 'kimi-k2.6', tools: ['knowledge_search'], kb: '软技能与项目' },
-  { id: 4, name: '默认助手', desc: '通用对话，未绑定知识库时直接作答', model: 'auto', tools: [], kb: '无' },
+  { id: '1', name: '面试助手', desc: '结合知识库回答八股与场景题，追问式陪练', model: 'deepseek-v4-flash', tools: ['knowledge_search', 'calculator'], kb: '我的 Java 笔记' },
+  { id: '2', name: 'Java 代码审查员', desc: '贴代码即审：命名、并发、异常处理', model: 'glm-5.3', tools: ['knowledge_search', 'code_runner'], kb: '我的 Java 笔记' },
+  { id: '3', name: '简历润色师', desc: '把经历改写为 STAR 句式，对齐 JD', model: 'kimi-k2.6', tools: ['knowledge_search'], kb: '软技能与项目' },
+  { id: '4', name: '默认助手', desc: '通用对话，未绑定知识库时直接作答', model: 'auto', tools: [], kb: '无' },
 ]
 
 export const QA_HISTORY = [

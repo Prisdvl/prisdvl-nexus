@@ -10,6 +10,7 @@ import StatusMark from '@/bits/StatusMark/StatusMark'
 import { SkeletonRows } from '@/components/Skeleton'
 import { ACTIVITY, AGENTS, HEAT, SESSIONS, TREND, type ActivityKind } from '@/data'
 import type { PaletteName, ThemeMode } from '@/lib/types'
+import { api, USE_MOCK } from '@/lib/api'
 
 interface Props {
   theme: ThemeMode
@@ -64,11 +65,30 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb }: Props) {
     }, 2000)
   }
 
+  /* 真实数据：四个计数来自后端列表接口；mock 模式保留原演示数字 */
+  const [counts, setCounts] = useState({ kb: 3, docs: 18, conv: 12, agent: 4 })
+  useEffect(() => {
+    if (USE_MOCK) return
+    let alive = true
+    Promise.all([api.knowledge.list(1, 100), api.conversations.list(1, 100), api.agents.list(1, 100)])
+      .then(([kb, conv, ag]) => {
+        if (!alive) return
+        setCounts({
+          kb: kb.total,
+          docs: kb.list.reduce((s, k) => s + (k.docCount ?? 0), 0),
+          conv: conv.total,
+          agent: ag.total,
+        })
+      })
+      .catch(() => { /* 工作台计数失败不阻塞页面 */ })
+    return () => { alive = false }
+  }, [])
+
   const stats: { label: string; value: number; sub: string; accent?: boolean }[] = [
-    { label: '知识库', value: 3, sub: '共 6 篇文档待整理', accent: true },
-    { label: '文档', value: 18, sub: '本周 +3' },
-    { label: '会话', value: 12, sub: '2 条待继续' },
-    { label: 'Agent', value: 4, sub: '含默认助手' },
+    { label: '知识库', value: counts.kb, sub: '共 ' + counts.docs + ' 篇文档', accent: true },
+    { label: '文档', value: counts.docs, sub: '已入库切片可检索' },
+    { label: '会话', value: counts.conv, sub: '含历史对话' },
+    { label: 'Agent', value: counts.agent, sub: '含默认助手' },
   ]
 
   // 趋势折线（14 天）

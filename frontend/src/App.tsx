@@ -103,6 +103,7 @@ function KbDetailRoute({ theme }: { theme: ThemeMode }) {
   if (!id) return <Navigate to="/app/kb" replace />
   return (
     <KnowledgeBaseDetailPage
+      kbId={id}
       theme={theme}
       highlightDoc={doc}
       onBack={() => navigate('/app/kb')}

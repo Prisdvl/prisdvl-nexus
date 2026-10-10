@@ -32,6 +32,7 @@ import { sessionStore, useSessions } from '@/lib/sessions'
 import { ensureAgents, useAgents, DEFAULT_AGENT_NAME } from '@/lib/agents'
 import { api, errMessage, USE_MOCK, type ConversationMode } from '@/lib/api'
 import { isTempId, fetchMessages } from '@/lib/conversations'
+import { postSse } from '@/lib/sse'
 
 const REPLY = `已在绑定的知识库中检索到相关内容，下面是**结构化回答**：
 
@@ -112,6 +113,8 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
   }, [createRequests])
   const [query, setQuery] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
+  const requestIdRef = useRef<string | null>(null)
   /*
    * 运行令牌：每次发送 +1，停止/继续时也 +1。异步链在每步比对，过期就直接返回 ——
    * 这是"停止"能真正生效的关键（原来 onStop 只 setStreaming(false)，
@@ -479,6 +482,95 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
   const PROMPT_EFFORTS = ['低', '中', '高', '极高']
 
 
+  /**
+   * 真实流式对话：POST /api/chat/stream（SSE）。
+   * 与下方的模拟分支并存：USE_MOCK 时仍走模拟（离线演示 + 既有 QA 不受影响）。
+   */
+  const realStream = async (text: string, detail?: { model?: { key?: string; label?: string }; effort?: string }) => {
+    const sessionId = active.id
+    const botId = `m_${Date.now()}`
+    const runId = (runSeq.current += 1)
+    const alive = () => runSeq.current === runId
+    setInterrupted(false)
+    runMeta.current.set(botId, {
+      model: detail?.model?.label ?? detail?.model?.key,
+      effort: detail?.effort,
+      startedAt: Date.now(),
+    })
+    pushMsgToActive({ id: botId, role: 'bot', text: '', calls: [] })
+    let acc = ''
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    try {
+      await postSse('/chat/stream', { conversationId: sessionId, content: text }, {
+        onMeta: (d) => {
+          if (typeof d.requestId === 'string') requestIdRef.current = d.requestId
+        },
+        onDelta: (t2) => {
+          if (!alive()) return
+          acc += t2
+          patchMsg(sessionId, botId, (m) => ({ ...m, text: acc }))
+        },
+        onRetrieval: (d) => {
+          if (!alive()) return
+          const hit = Number(d?.hitCount ?? d?.retrieved ?? 0)
+          const kbs = Array.isArray(d?.kbNames) ? (d.kbNames as string[]) : []
+          patchMsg(sessionId, botId, (m) => ({
+            ...m,
+            context: { kbs, retrieved: hit, usedDocs: 0, scannedDocs: hit, historyTurns: 0, web: false },
+          }))
+        },
+        onToolCall: (d) => {
+          if (!alive()) return
+          patchMsg(sessionId, botId, (m) => ({
+            ...m,
+            calls: [
+              ...(m.calls ?? []),
+              {
+                id: `${Date.now()}-${String(d.tool)}`,
+                icon: 'search' as const,
+                name: String(d.tool ?? 'tool'),
+                argument: typeof d.input === 'string' ? d.input : JSON.stringify(d.input ?? ''),
+                status: 'running' as const,
+              },
+            ],
+          }))
+        },
+        onToolResult: (d) => {
+          if (!alive()) return
+          patchMsg(sessionId, botId, (m) => ({
+            ...m,
+            calls: (m.calls ?? []).map((c) => (c.name === String(d.tool) ? { ...c, status: 'done' as const } : c)),
+          }))
+        },
+        onDone: (d) => {
+          if (!alive()) return
+          const cites = Array.isArray(d?.citations)
+            ? (d.citations as { documentName?: string }[]).map((c) => c.documentName ?? '文档')
+            : []
+          patchMsg(sessionId, botId, (m) => ({ ...m, text: m.text || acc, ...(cites.length ? { cites } : {}) }))
+          if (d?.stopped) setInterrupted(true)
+        },
+        onError: (m2) => {
+          if (!alive()) return
+          toast.error('生成失败', m2)
+          patchMsg(sessionId, botId, (m) => ({ ...m, text: m.text || '> ⚠️ ' + m2 }))
+        },
+      }, ctrl.signal)
+    } catch (e) {
+      if (alive()) {
+        toast.error('对话失败', errMessage(e))
+        patchMsg(sessionId, botId, (m) => ({ ...m, text: m.text || '（生成失败）' }))
+      }
+    } finally {
+      if (alive()) {
+        const rm = runMeta.current.get(botId)
+        if (rm) rm.totalMs = Date.now() - rm.startedAt
+        setStreaming(false)
+      }
+      abortRef.current = null
+    }
+  }
   const sendText = (raw: string, detail?: { model?: { key?: string; label?: string }; effort?: string }) => {
     const t = raw.trim()
     if (!t) return
@@ -495,6 +587,11 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
     pushMsgToActive({ id: nextTmpId(), role: 'user', text: t })
     /* PromptBar 自己会清空草稿与附件，这里不再需要 setText */
     setStreaming(true)
+    /* 真实后端：非 mock 且会话已在服务端存在时，走 SSE 流式 */
+    if (!USE_MOCK && !isTempId(active.id)) {
+      void realStream(t, detail)
+      return
+    }
 
     /*
      * 模拟一次 Agent 执行：先落一条只有"工具调用轨迹"的机器人消息（第 1 条 running、其余 idle），

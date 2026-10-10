@@ -25,6 +25,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5175,
       strictPort: false,
+      host: true,
       proxy: {
         // 上下文是 api：baseURL 默认 '/api'，所以 /api/xxx → target + /api/xxx
         '/api': { target, changeOrigin: true },
