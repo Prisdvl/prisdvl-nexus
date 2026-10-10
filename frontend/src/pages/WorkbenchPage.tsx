@@ -85,6 +85,15 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb }: Props) {
     return () => { alive = false }
   }, [])
 
+  /* 最近会话：取真实会话列表前 3 条（mock 模式仍用种子 SESSIONS） */
+  const { data: convPage, loading: convLoading } = useLoad(() => api.conversations.list(1, 3))
+  const recent = USE_MOCK
+    ? SESSIONS.slice(0, 3)
+    : (convPage?.list ?? []).map((c) => ({
+        id: c.id,
+        title: c.title ?? '未命名会话',
+        updated: relTime(c.lastMessageAt ?? c.updatedAt),
+      }))
   /* 工作台聚合：趋势(14) / 热力(30) / 最近活动(8)，来自 GET /api/stats/summary */
   const { data: summary } = useLoad(() => api.stats.summary())
   const trend = USE_MOCK ? SEED_TREND : (summary?.trend.map((p) => p.count) ?? SEED_TREND)
@@ -338,7 +347,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb }: Props) {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {sessionsLoading && <SkeletonRows rows={3} />}
-              {!sessionsLoading && SESSIONS.slice(0, 3).map((s) => (
+              {!(USE_MOCK ? sessionsLoading : convLoading) && recent.map((s) => (
                 <button className="list-row" key={s.id} type="button" style={{ width: '100%', cursor: 'pointer' }} onClick={goChat}>
                   <span className="ic" style={{ display: 'inline-flex', width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', background: 'var(--primary-container)', color: 'var(--primary-text)', flex: 'none' }}>
                     <MessagesSquare size={14} />
