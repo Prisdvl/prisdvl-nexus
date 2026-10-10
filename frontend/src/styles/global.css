@@ -1913,3 +1913,25 @@ main:focus { outline: none; }
   border-radius: var(--radius-md);
   background: var(--surface-muted);
 }
+
+/* ============================================================
+ * 侧栏折叠过渡（Linear 风）
+ *
+ * 只动宽度，以及被宽度"流"出来的内容边距；不做位移、不做弹跳、不做缩放魔法。
+ * 折叠态内部元素的显隐仍是 display:none（换不来 60fps 的淡出，也换不来
+ * 布局重排的抖动），所以这里只保证"容器宽度"这一段是连续动画的——
+ * 观感上等价于 Linear 的侧栏收起。
+ * ============================================================ */
+.sidebar {
+  transition: width var(--dur-ui) var(--ease-out);
+}
+.shell-main {
+  transition: margin-left var(--dur-ui) var(--ease-out);
+}
+/* 无障碍：系统要求减少动态效果时，折叠直接跳变（不留过渡） */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .shell-main {
+    transition: none;
+  }
+}
