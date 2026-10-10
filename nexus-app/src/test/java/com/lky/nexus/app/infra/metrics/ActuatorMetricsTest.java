@@ -1,4 +1,4 @@
-package com.lky.nexus.app.observe;
+package com.lky.nexus.app.infra.metrics;
 
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.DisplayName;

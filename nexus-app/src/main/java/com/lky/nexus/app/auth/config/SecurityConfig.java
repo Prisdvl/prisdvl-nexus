@@ -59,7 +59,7 @@ public class SecurityConfig {
      * 读走别人的笔记正文、用别人的默认 Agent 跑问答（花他的额度）。
      * 2026-10-01 起与其余端点同一套身份：{@code Authorization: Bearer <JWT>}，
      * 想只在本机用就把服务绑到 127.0.0.1（隔离靠网络，不靠请求头）。
-     * 见 docs/decisions.md B.42 与 docs/productization-gap-analysis.md P0-1。
+     * 见 docs/decisions.md B.42 与 docs/archive/reports/productization-gap-analysis.md P0-1。
      */
     private static final String[] PUBLIC_ENDPOINTS = {
             "/api/auth/register",

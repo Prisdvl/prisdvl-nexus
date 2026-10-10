@@ -186,7 +186,7 @@ nexus:
         - /api/knowledge-bases/*/ask/stream
         - /api/agent/ask
         - /api/agents/*/test-chat
-        - /api/eval/**
+        # MCP 直连（外部 LLM 客户端）：不占对话额度
         - /mcp
   chat:
     memory:

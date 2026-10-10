@@ -3,6 +3,8 @@ package com.lky.nexus.app.chat.model.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.lky.nexus.app.infra.mybatis.JsonTextTypeHandler;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -15,7 +17,11 @@ import java.time.LocalDateTime;
  * Phase 10 的观测看板直接从这里取数，不必再改表。
  */
 @Data
-@TableName("chat_message")
+/**
+ * ⚠️ {@code autoResultMap = true} 不能省：没有它，MyBatis-Plus
+ * 不会为带 typeHandler 的字段启用 resultMap，处理器等于没挂。
+ */
+@TableName(value = "chat_message", autoResultMap = true)
 public class ChatMessagePO {
 
     @TableId(type = IdType.ASSIGN_ID)
@@ -76,7 +82,21 @@ public class ChatMessagePO {
 
     private String errorMsg;
 
-    /** 预留扩展信息（JSON） */
+    /**
+     * 预留扩展信息（JSON）。
+     *
+     * <p>挂 {@link com.lky.nexus.app.infra.mybatis.JsonTextTypeHandler} 的原因：
+     * H2 的 {@code json} 列把 JSON 文本存成字符串节点，而 {@code updateById}
+     * 是「整行读出 → 改字段 → 全列写回」，未改动的本列也会被把已转义的形态再写回。
+     * 实测（临时诊断，H2）：初始 len=61 → 第 1 次 85 → 第 2 次 133 → 第 3 次 229，
+     * <b>指数增长</b>。而 {@code ChatMessageServiceImpl.metadataNode} 只做单层解包，
+     * 套两层以上就解不出 {@code toolCalls} / {@code citations}
+     * → 引用面板与工具痕迹<b>静默消失</b>（不是报错，是内容没了）。
+     *
+     * <p>生产 MySQL 上实测不受影响（{@code JSON_TYPE} 始终是 {@code OBJECT}），
+     * 但 H2 上的测试无法暴露真实问题，且会给出与生产不一致的失败判断。
+     */
+    @TableField(typeHandler = JsonTextTypeHandler.class)
     private String metadata;
 
     private LocalDateTime createdAt;

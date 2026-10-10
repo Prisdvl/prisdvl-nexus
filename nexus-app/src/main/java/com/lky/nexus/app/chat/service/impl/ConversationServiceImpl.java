@@ -152,46 +152,126 @@ public class ConversationServiceImpl implements ConversationService {
         return toResponse(requireOwned(userId, conversationId));
     }
 
-    @Override
-    @Transactional
-    public ConversationResponse update(Long userId, Long conversationId, UpdateConversationRequest request) {
-        ChatConversationPO conversation = requireOwned(userId, conversationId);
+@Override
+@Transactional
+public ConversationResponse update(Long userId, Long conversationId, UpdateConversationRequest request) {
+    ChatConversationPO conversation = requireOwned(userId, conversationId);
 
-        if (request.title() != null) {
-            String title = request.title().trim();
-            if (!StringUtils.hasText(title)) {
-                throw new BusinessException(ErrorCode.PARAM_INVALID, "标题不能为空字符串");
-            }
-            conversation.setTitle(title);
-            // 用户手动改过标题后，后续对话不再自动覆盖
-            conversation.setTitleAuto(false);
-        }
-        if (request.pinned() != null) {
-            conversation.setPinned(request.pinned());
-        }
-        ChatMode mode = ChatMode.parse(conversation.getMode());
-        if (request.kbIds() != null) {
-            // null = 不改（局部更新约定）；空列表 = 解绑
-            conversation.setKbIds(resolveKbIds(userId, mode, request.kbIds()));
-        }
-        if (Boolean.TRUE.equals(request.resetAgent()) && request.agentId() != null) {
-            // 既指定又清空是自相矛盾的请求：猜哪个都可能在用户没预期的地方生效
-            throw new BusinessException(ErrorCode.PARAM_INVALID,
-                    "agentId 与 resetAgent 不能同时传");
-        }
-        if (Boolean.TRUE.equals(request.resetAgent())) {
-            // 回到内置默认 Agent。只在 AGENT 模式有意义，理由与"选 Agent"同：
-            // 给 PLAIN/RAG 会话留一个 agentId 会让"谁在执行"变得含糊
-            requireAgentMode(mode, "清空 Agent");
-            conversation.setAgentId(null);
-        } else if (request.agentId() != null) {
-            conversation.setAgentId(resolveAgentId(userId, mode, request.agentId()));
-        }
-        conversation.setUpdatedAt(LocalDateTime.now());
-
-        conversationMapper.updateById(conversation);
-        return toResponse(conversation);
+    /*
+     * 顺序说明（改动模式切换后新增，改动顺序是有讲究的）：
+     *
+     * ① 先查 agentId/resetAgent 自相矛盾 —— 必须最早，否则下面的 mode 迁移
+     *    可能已经"顺手清空"了 agentId，再报错时用户会以为是 mode 切换搞坏了它。
+     *    这个约定与既有实现一致，不因新增 mode 而改变。
+     */
+    if (Boolean.TRUE.equals(request.resetAgent()) && request.agentId() != null) {
+        // 既指定又清空是自相矛盾的请求：猜哪个都可能在用户没预期的地方生效
+        throw new BusinessException(ErrorCode.PARAM_INVALID,
+                "agentId 与 resetAgent 不能同时传");
     }
+
+    if (request.title() != null) {
+        String title = request.title().trim();
+        if (!StringUtils.hasText(title)) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID, "标题不能为空字符串");
+        }
+        conversation.setTitle(title);
+        // 用户手动改过标题后，后续对话不再自动覆盖
+        conversation.setTitleAuto(false);
+    }
+    if (request.pinned() != null) {
+        conversation.setPinned(request.pinned());
+    }
+
+    /*
+     * ② 先把目标模式定下来，后面所有校验都以它为准。
+     *
+     * ⚠️ 不能继续用 `conversation.getMode()`（旧模式）做校验——
+     * "把一个 PLAIN 会话切到 AGENT 并同时指定 agentId" 若按旧模式校验会误报1001，
+     * 而用户的意图明确是合法的（切到 AGENT 并选 Agent）。
+     */
+    ChatMode currentMode = ChatMode.parse(conversation.getMode());
+    ChatMode targetMode = request.mode() == null ? currentMode : ChatMode.parse(request.mode());
+    boolean modeChanged = targetMode != currentMode;
+
+    /*
+     * ③ 按目标模式清理不兼容绑定。
+     *
+     * 规则（kbIds 仅 RAG 有效、agentId 仅 AGENT 有效，两者互斥）：
+     *   - PLAIN：清agentId + 清 kbIds
+     *   - RAG：清 agentId；kbIds 默认保留（等下面显式更新那步再定）
+     *   - AGENT：清 kbIds；agentId 默认保留（同上）
+     *
+     * ⚠️ 只在**模式真的变了**时才做清理：
+     * "保持 AGENT 模式换 Agent" 不该顺手清 kbIds——虽然清了在语义上也是安全的
+     * （AGENT 的检索范围由 Agent 自己的知识库绑定决定，见 resolveKbIds 的提示），
+     * 但那会平白让用户丢配置，不该在没要求的情况下发生。
+     */
+    if (modeChanged) {
+        switch (targetMode) {
+            case PLAIN -> {
+                // 两条绑定都用不上，清干净（"[]" 而非 null：null 会被 updateById 跳过）
+                conversation.setKbIds(ConversationKbIds.write(jsonMapper, List.of()));
+                conversation.setAgentId(null);
+            }
+            case RAG -> conversation.setAgentId(null);
+            case AGENT -> conversation.setKbIds(ConversationKbIds.write(jsonMapper, List.of()));
+        }
+        /*
+         * ④ 同步重算 modelRole —— 这一步漏掉就是"表面切了模式、实际没切执行路径"：
+         * model_role 是 create 时按模式派生并持久化的历史记录，不重算的话
+         * 一个切到 AGENT 的会话仍记着 chat.default，而
+         * ChatStreamServiceImpl 会按 modelRole 选模型（AGENT 的工具调用需要更强模型）。
+         * 与 create 的派生规则保持一致。
+         */
+        conversation.setMode(targetMode.name());
+        conversation.setModelRole(targetMode == ChatMode.AGENT
+                ? AiModelProperties.Role.CHAT_AGENT
+                : AiModelProperties.Role.CHAT_DEFAULT);
+    }
+
+    /*
+     * ⑤ kbIds：显式提供才动（null = 不改）。
+     * 注意校验用的是 targetMode —— 切到 RAG 后立刻绑库是合法的，
+     * 而保持 PLAIN 却想绑库会被resolveKbIds 挡下（1001）。
+     */
+    if (request.kbIds() != null) {
+        conversation.setKbIds(resolveKbIds(userId, targetMode, request.kbIds()));
+    }
+
+    /*
+     * ⑥ agentId：显式绑定 / 显式重置，两种信号都不会被 mode 迁移覆盖掉——
+     * ③④ 只在modeChanged 时清空，而这里是在同一个请求里明确要设的值。
+     */
+    if (Boolean.TRUE.equals(request.resetAgent())) {
+        /*
+         * 回到内置默认 Agent。
+         *
+         * ⚠️ 这里的校验**不能省**（实测回归过一次）：
+         * 原实现写成"targetMode 是 AGENT 才校验，否则静默跳过"，
+         * 结果「给一个 PLAIN 会话发 resetAgent」返回 200 而不是 1001——
+         * 而 `resolveAgentId` 对"选用 Agent"是要求 1001 的，
+         * 同一件事两条路两种口径，是明显的契约不一致。
+         *
+         * 静默跳过比报错更坏：用户以为"已经回到默认助手"了，
+         * 实际那个 Agent 还挂在会话上（而且因为 ③ 已经在切模式时清过，
+         * 结果是"返回成功但什么都没变"），属于典型的假成功。
+         *
+         * 校验用**目标模式**（targetMode）而非库里的旧模式：
+         * "把 PLAIN 会话切到 AGENT 并同时 resetAgent" 是合法的
+         *（先切模式再重置），而"没传 mode 的 PLAIN 会话 resetAgent" 必须拒绝。
+         */
+        requireAgentMode(targetMode, "清空 Agent");
+        conversation.setAgentId(null);
+    } else if (request.agentId() != null) {
+        conversation.setAgentId(resolveAgentId(userId, targetMode, request.agentId()));
+    }
+
+    conversation.setUpdatedAt(LocalDateTime.now());
+
+    conversationMapper.updateById(conversation);
+    return toResponse(conversation);
+}
 
     @Override
     @Transactional

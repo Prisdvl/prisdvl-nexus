@@ -27,7 +27,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * "越权返回 404"建立起来的隔离<b>整条绕开</b>：知道（或枚举出）一个雪花 id 就能
  * 读走那个人的全部笔记正文，并用他的默认 Agent 花他的额度。
  *
- * <p>当时这个问题只是"读代码得出的结论"（见 docs/productization-gap-analysis.md §6.2 的自认边界）。
+ * <p>当时这个问题只是"读代码得出的结论"（见 docs/archive/reports/productization-gap-analysis.md §6.2 的自认边界）。
  * 这个类把它钉成可复现的事实：<b>没有凭据就进不来；有凭据也只能看到凭据主人自己的东西</b>。
  *
  * <p><b>断言为什么这么选</b>：test profile 下 ES 与 pgvector 都是 Disabled 实现，

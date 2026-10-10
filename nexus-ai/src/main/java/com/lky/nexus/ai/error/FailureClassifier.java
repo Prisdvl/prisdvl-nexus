@@ -46,7 +46,7 @@ public final class FailureClassifier {
     /**
      * 未知生成故障的对外文案。
      *
-     * <p>刻意保持不变：前端与 E2E 脚本（{@code web/scripts/verify-agent*.mjs}）用它区分
+     * <p>刻意保持不变：前端与 E2E 脚本（{@code docs/archive/web-vue/scripts/verify-agent*.mjs}）用它区分
      * "这台机器没配模型"与"产品坏了"——改这句话会让没配 key 的机器从"跳过"变成"失败"。
      */
     public static final String MODEL_FAILED_MESSAGE = "模型调用失败，请稍后重试";

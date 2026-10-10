@@ -17,7 +17,7 @@ spring:
       mode: always
       # ⚠️ 实测（复核于 Phase 4.1）：下面这份脚本**已经不会生效**——表是 Flyway 迁移建的，
       # 它全篇 CREATE TABLE IF NOT EXISTS，执行时全是空操作，且内容比迁移旧。
-      # 保留它只为"改动面最小"，删除属独立清理项（见 docs/platform-phase3-baseline.md §1.7/§十.1）。
+      # 保留它只为"改动面最小"，删除属独立清理项（见 docs/archive/reports/platform-phase3-baseline.md §1.7/§十.1）。
       schema-locations: classpath:db/h2/schema.sql
   flyway:
     # ⚠️ 这个开关**只关掉 Boot 自动配置的那套 Flyway**，关不掉主库迁移：

@@ -7,7 +7,7 @@
 # 表结构由 Flyway 迁移（src/main/resources/db/migration）建——与 local（MySQL）用同一套脚本，
 # 因此在 standalone 上验证过的字段/索引就是 MySQL 上那一套（H2 以 MODE=MySQL 执行）。
 # 与 test profile 共用的 db/h2/schema.sql 实测已成空操作（复核见 Phase 4.1 的启动日志，
-# 详见 docs/platform-phase3-baseline.md §1.7），保留只为最小改动。
+# 详见 docs/archive/reports/platform-phase3-baseline.md §1.7），保留只为最小改动。
 # ============================================================
 spring:
   datasource:

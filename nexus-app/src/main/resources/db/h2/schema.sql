@@ -1,6 +1,6 @@
 -- H2 建表脚本（历史文件）
 --
--- ⚠️ 现状（Phase 4.1 实测复核，见 docs/platform-phase3-baseline.md §1.7）：
+-- ⚠️ 现状（Phase 4.1 实测复核，见 docs/archive/reports/platform-phase3-baseline.md §1.7）：
 --   本文件**已经不会生效**。test / standalone 两个 H2 profile 的表都是 Flyway 迁移
 --   （src/main/resources/db/migration，共 11 个：V1–V10、V12）建的，启动日志明确：
 --   `Successfully applied 11 migrations to schema "public", now at version v12`，

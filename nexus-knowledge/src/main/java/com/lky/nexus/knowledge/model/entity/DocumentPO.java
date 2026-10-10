@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.lky.nexus.knowledge.mapper.JsonTextTypeHandler;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -16,7 +18,11 @@ import java.time.LocalDateTime;
  * "同名不同目录"（Obsidian 允许）时互相覆盖。
  */
 @Data
-@TableName("kb_document")
+/**
+ * ⚠️ {@code autoResultMap = true} 不能省：没有它，MyBatis-Plus
+ * 不会为带typeHandler 的字段启用 resultMap，处理器等于没挂。
+ */
+@TableName(value = "kb_document", autoResultMap = true)
 public class DocumentPO {
 
     @TableId(type = IdType.ASSIGN_ID)
@@ -51,13 +57,24 @@ public class DocumentPO {
     /** SHA-256(规范化正文)：判断是否"只改了时间戳、内容没变"。 */
     private String contentHash;
 
-    /** 完整 frontmatter（JSON 字符串）。 */
+    /**
+     * 完整 frontmatter（JSON 字符串）。
+     *
+     * <p>挂 {@link com.lky.nexus.knowledge.mapper.JsonTextTypeHandler} 的原因：
+     * H2 的 {@code json} 列会把 JSON 文本存成字符串节点，而 {@code updateById}
+     * 是「整行读出 → 改字段 → 全列写回」，未改动的本列也会被把已转义的形态再写回，
+     * 实测每次 update 套一层（len 61 → 85 → 133 → 229，<b>指数增长</b>），
+     * 而解析侧只做单层解包 → 套两层以上 frontmatter 就静默失效。
+     */
+    @TableField(typeHandler = JsonTextTypeHandler.class)
     private String frontmatter;
 
     /** 标签（JSON 数组字符串，冗余自 kb_document_tag）。 */
+    @TableField(typeHandler = JsonTextTypeHandler.class)
     private String tags;
 
-    /** 标题目录树（JSON 字符串）。 */
+    /** 标题目录树（JSON 字符串）。挂处理器的原因同 {@link #frontmatter}。 */
+    @TableField(typeHandler = JsonTextTypeHandler.class)
     private String headingTree;
 
     private LocalDateTime docCreatedAt;
