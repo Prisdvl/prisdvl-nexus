@@ -792,3 +792,16 @@
 /* 表格：无线则靠表头底色 + 偶数行底色区分 */
 .chat-main .thread .msg .bub thead th { background: color-mix(in srgb, var(--text) 5%, transparent); }
 .chat-main .thread .msg .bub tbody tr:nth-child(even) { background: color-mix(in srgb, var(--text) 2.5%, transparent); }
+
+/* ============================================================
+ *  9. 顶栏去线（2026-10-11 · 用户反馈"顶部存在不协调的线条"）
+ *  核查：.shell-head 已无 border-bottom；.bub hr 是 Markdown 内容线（保留）；
+ *  剩下的"线"是**顶栏与内容底色不同造成的色差假线** → 让顶栏与对话内容同底，
+ *  并显式清掉任何遗留的 border / box-shadow（不同主题都成立）。
+ * ============================================================ */
+.shell-head {
+  border-bottom: 0;
+  box-shadow: none;
+  background: var(--cgpt-main-bg, var(--bg));
+}
+.shell-main:has(.chat-fixed) .shell-head { background: var(--bg); }
