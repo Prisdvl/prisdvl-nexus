@@ -200,6 +200,23 @@ await page.waitForTimeout(600)
   await page.close()
 }
 
+// ===== 宽屏 + 暗色主题（2026-10-11 · 任务 §5 缺口补齐）=====
+{
+  const wide = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
+  await wide.addInitScript(() => {
+    localStorage.setItem('nx-proto-tour-done', '1')
+    localStorage.setItem('nx-proto-auth', '1')
+    localStorage.setItem('nx-proto-theme', 'dark')
+  })
+  for (const path of ['/#/app/workbench', '/#/app/kb', '/#/app/chat', '/#/app/agents']) {
+    await wide.goto(BASE + path, { waitUntil: 'networkidle' })
+    await wide.waitForTimeout(900)
+    const over = await wide.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    check(`宽屏暗色无横向溢出：${path}`, over <= 1, `溢出 ${over}px`)
+  }
+  await wide.screenshot({ path: `${OUT}/r-wide-dark-workbench.png` })
+  await wide.close()
+}
 await browser.close()
 if (issues.length) {
   console.log(`\n发现 ${issues.length} 个问题:`)
