@@ -159,7 +159,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   height: 26px; padding: 0 10px;
-  border: 1px solid var(--border); border-radius: 999px;
+
   background: var(--surface); color: var(--text-2);
   font-size: 12px; cursor: default;
 }
@@ -213,7 +213,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
   position: sticky; top: 0; z-index: 50;
   display: flex; align-items: center; gap: 20px;
   height: 62px; padding: 0 22px;
-  border-bottom: 1px solid var(--border);
+
   background: oklch(from var(--bg) l c h / 0.78);
   backdrop-filter: blur(16px);
 }
@@ -229,7 +229,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .auth-card {
   width: min(404px, 100%);
   padding: 32px 32px 26px;
-  border: 1px solid var(--border);
+
   border-radius: var(--radius-xl);
   background: var(--card-bg);
   backdrop-filter: blur(20px);
@@ -339,7 +339,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .cite-chip {
   display: inline-flex; align-items: center; gap: 6px;
   max-width: 220px; padding: 5px 10px;
-  border: 1px solid var(--border); border-radius: 999px;
+
   background: var(--surface); color: var(--text-2);
   font-size: 12px; cursor: pointer;
 }
@@ -377,7 +377,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .agent-picker .trigger {
   display: inline-flex; align-items: center; gap: 8px;
   height: 34px; padding: 0 12px;
-  border: 1px solid var(--border); border-radius: 999px;
+
   background: var(--surface); color: var(--text);
   font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
@@ -386,7 +386,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .agent-picker .menu {
   position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
   min-width: 240px; padding: 5px;
-  border: 1px solid var(--border); border-radius: var(--radius-lg);
+
   background: var(--card-bg);
   backdrop-filter: blur(14px);
   box-shadow: var(--shadow-lg);
@@ -421,7 +421,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .dialog {
   width: min(560px, 100%);
   padding: 24px;
-  border: 1px solid var(--border); border-radius: var(--radius-xl);
+
   background: var(--card-bg);
   box-shadow: var(--shadow-lg);
 }
@@ -482,7 +482,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
   /* 必须高于 .sb-scrim（66），否则抽屉打开后遮罩会盖住导航、点不动 */
   width: 236px; z-index: 68;
   display: flex; flex-direction: column;
-  border-right: 1px solid var(--border);
+
   background: var(--surface);
 }
 .sb-brand { padding: 20px 18px 16px; border-bottom: 1px solid var(--border); }
@@ -494,7 +494,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .sb-menu {
   position: absolute; left: 10px; right: 10px; bottom: calc(100% - 2px);
   padding: 5px;
-  border: 1px solid var(--border); border-radius: 12px;
+
   background: var(--card-bg);
   backdrop-filter: blur(14px);
   box-shadow: var(--shadow-lg);
@@ -551,7 +551,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
   z-index: 80;
   display: flex; align-items: center; gap: 30px;
   padding: 11px 12px 11px 22px;
-  border: 1px solid var(--border);
+
   border-radius: 999px;
   background: oklch(from var(--bg) l c h / 0.72);
   backdrop-filter: blur(18px);
@@ -571,7 +571,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .lp-variant {
   position: fixed; top: 18px; right: 18px; z-index: 85;
   display: flex; gap: 2px; padding: 4px;
-  border: 1px solid var(--border); border-radius: 14px;
+
   background: oklch(from var(--bg) l c h / 0.72);
   backdrop-filter: blur(14px);
   box-shadow: var(--shadow-md);
@@ -597,7 +597,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .lp-badge {
   display: inline-flex; align-items: center; gap: 7px;
   margin-bottom: 26px; padding: 6px 14px;
-  border: 1px solid var(--border); border-radius: 999px;
+
   background: oklch(from var(--surface) l c h / 0.7);
   backdrop-filter: blur(10px);
   font-size: 12.5px; font-weight: 500; color: var(--text-2);
@@ -639,7 +639,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .lp-split-stage {
   position: relative;
   height: min(70vh, 560px);
-  border: 1px solid var(--border); border-radius: 24px;
+
   overflow: hidden;
   background: var(--surface);
   box-shadow: var(--shadow-lg);
@@ -681,7 +681,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 /* 抽象骨架图（明确标注非真实截图） */
 .lp-skeleton {
   padding: 18px;
-  border: 1px solid var(--border); border-radius: 18px;
+
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
@@ -700,7 +700,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .lp-gal-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .lp-gal-tabs button {
   height: 32px; padding: 0 14px;
-  border: 1px solid var(--border); border-radius: 999px;
+
   background: transparent; color: var(--text-2);
   font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
@@ -710,7 +710,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .lp-gal-stage {
   position: relative;
   height: min(62vh, 520px);
-  border: 1px solid var(--border); border-radius: 20px;
+
   overflow: hidden; isolation: isolate;
   background: var(--surface);
   box-shadow: var(--shadow-md);
@@ -720,7 +720,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
   position: absolute; left: 16px; bottom: 16px; z-index: 3;
   display: flex; flex-direction: column; gap: 2px;
   padding: 10px 14px;
-  border: 1px solid var(--border); border-radius: 12px;
+
   background: oklch(from var(--bg) l c h / 0.78);
   backdrop-filter: blur(12px);
 }
@@ -734,7 +734,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .lp-comp {
   display: flex; flex-direction: column; gap: 10px;
   padding: 22px;
-  border: 1px solid var(--border); border-radius: 16px;
+
   background: var(--surface);
   min-height: 168px;
   overflow: hidden;
@@ -750,7 +750,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .lp-stack-row {
   display: grid; grid-template-columns: 132px 1fr; gap: 18px;
   padding: 14px 0;
-  border-top: 1px solid var(--border);
+
 }
 .lp-stack-row:last-child { border-bottom: 1px solid var(--border); }
 .lp-stack dt { font-size: 12.5px; font-weight: 600; color: var(--text-3); }
@@ -762,7 +762,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .lp-foot {
   display: flex; flex-direction: column; align-items: center; gap: 10px;
   padding: 44px 24px 56px;
-  border-top: 1px solid var(--border);
+
   text-align: center;
 }
 .lp-foot .brand { margin-bottom: 2px; }
@@ -782,7 +782,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 @media (max-width: 860px) { .lp-caps { grid-template-columns: 1fr; } }
 .lp-caps article {
   padding: 26px;
-  border: 1px solid var(--border); border-radius: 16px;
+
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
@@ -798,7 +798,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .lp-flow li {
   display: grid; grid-template-columns: 54px 1fr; gap: 18px;
   padding: 22px 0;
-  border-top: 1px solid var(--border);
+
 }
 .lp-flow li:last-child { border-bottom: 1px solid var(--border); }
 .lp-flow-num {
@@ -857,7 +857,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .wb-quick-row { display: flex; gap: 8px; }
 .wb-quick-out {
   padding: 12px 14px;
-  border: 1px solid var(--border); border-radius: 12px;
+
   background: var(--surface);
   font-size: 12.5px; line-height: 1.7; color: var(--text-2);
   white-space: pre-wrap;
@@ -901,7 +901,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .chat-bind-pop {
   position: absolute; top: calc(100% + 8px); right: 0; z-index: 65;
   width: 280px; padding: 10px;
-  border: 1px solid var(--border); border-radius: 14px;
+
   background: var(--card-bg); backdrop-filter: blur(14px);
   box-shadow: var(--shadow-lg);
 }
@@ -1024,7 +1024,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .danger-steps { display: flex; flex-direction: column; gap: 14px; }
 .danger-item {
   padding: 12px 14px;
-  border: 1px solid var(--border); border-radius: 12px;
+
   background: var(--surface);
   font-size: 13px; line-height: 1.7;
 }
@@ -1062,7 +1062,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .dialog .dfoot {
   display: flex; justify-content: flex-end; gap: 10px;
   margin-top: 18px; padding-top: 16px;
-  border-top: 1px solid var(--border);
+
 }
 .dialog .dhead h3 { font-size: 17px; }
 
@@ -1137,7 +1137,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
   position: fixed; top: 0; left: 0; right: 0; z-index: 90;
   align-items: center; gap: 10px;
   height: 56px; padding: 0 12px;
-  border-bottom: 1px solid var(--border);
+
   background: oklch(from var(--bg) l c h / 0.82);
   backdrop-filter: blur(16px);
 }
@@ -1327,7 +1327,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .drawer-head {
   display: flex; align-items: center; gap: 10px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
+
 }
 .drawer-title {
   margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
@@ -1360,7 +1360,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .doc-chunk {
   display: flex; align-items: baseline; gap: 10px;
   padding: 9px 11px; margin-bottom: 8px;
-  border: 1px solid var(--border); border-radius: 10px;
+
   background: var(--surface-muted);
 }
 .doc-chunk-h { font-size: 12.5px; font-weight: 600; }
@@ -1439,7 +1439,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .corner-btn {
   display: grid; place-items: center;
   width: 42px; height: 42px;
-  border: 1px solid var(--border); border-radius: var(--radius-pill);
+
   background: oklch(from var(--surface) l c h / 0.86);
   backdrop-filter: blur(14px);
   color: var(--text-2);
@@ -1453,7 +1453,7 @@ textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height
 .corner-panel {
   position: absolute; right: 0; bottom: calc(100% + 10px);
   width: 288px; padding: 14px;
-  border: 1px solid var(--border); border-radius: var(--radius-lg);
+
   background: var(--card-bg);
   backdrop-filter: blur(16px);
   box-shadow: var(--shadow-lg);
@@ -1688,7 +1688,7 @@ main:focus { outline: none; }
 .session-arch-list { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 .session-arch-row {
   gap: 8px; padding: 7px 10px;
-  border: 1px solid var(--border); border-radius: 10px;
+
   background: var(--surface-muted);
 }
 .session-arch-row .t {
@@ -1874,7 +1874,7 @@ main:focus { outline: none; }
 }
 .composer-hint code {
   padding: 1px 5px;
-  border: 1px solid var(--border);
+
   border-radius: 5px;
   background: var(--surface-muted);
   font-size: 11px;
@@ -1978,7 +1978,7 @@ main:focus { outline: none; }
 .export-card {
   margin-top: 14px;
   padding: 14px;
-  border: 1px solid var(--border);
+
   border-radius: var(--radius-md);
   background: var(--surface-muted);
 }
@@ -2022,7 +2022,7 @@ main:focus { outline: none; }
   position: relative;
   height: clamp(190px, 52vw, 270px);
   border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
+
   overflow: hidden;
   background: oklch(0.97 0 0);
 }
