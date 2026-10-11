@@ -1065,7 +1065,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         {/* ---------- 对话主体 ---------- */}
         <section className="panel chat-main" style={{ display: 'flex', flexDirection: 'row', padding: 0, overflow: 'hidden' }}>
           <div className="chat-main-col" data-empty={!loadingMessages && active.messages.length === 0 && !streaming ? 'true' : undefined}>
-          <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 22px 0', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+          <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 22px 10px', flexWrap: 'wrap'   /* 去顶栏分隔线（原为内联 borderBottom）；改为底部内边距留白 */ }}>
             <div style={{ minWidth: 0 }}>
               <div data-testid="chat-title" style={{ fontSize: 15, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{active.title}</div>
               <div data-testid="chat-meta" style={{ fontSize: 12, color: 'var(--text-3)' }}>{active.messages.length} 条消息 · {active.updated}</div>
