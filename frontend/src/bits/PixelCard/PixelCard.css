@@ -12,7 +12,7 @@
   display: grid;
   place-items: center;
   aspect-ratio: 4 / 5;
-  border: 1px solid var(--pixel-card-border, #27272a);
+
   background: var(--pixel-card-background, transparent);
   border-radius: 25px;
   isolation: isolate;

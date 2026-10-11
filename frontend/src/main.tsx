@@ -4,6 +4,9 @@ import App from './App'
 import './styles/tokens.css'
 import './styles/global.css'
 /* 顺序即优先级（同权重时后加载者胜）：tokens → global → chat-solid → chatgpt-web-style */
+import './bits/PromptBar/PromptBar.css';
+/* ⚠️ PromptBar.css 原本由组件引入（路由级，加载晚于本文件）→ 会盖掉覆盖层； */
+/* 提到入口并放在覆盖层之前，保证 chatgpt-web-style.css 仍最后生效。 */
 import './styles/chat-solid.css'
 import './styles/chatgpt-web-style.css'
 

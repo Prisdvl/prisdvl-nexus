@@ -30,7 +30,6 @@ import {
   SparklesIcon,
   Tick02Icon
 } from '@hugeicons/core-free-icons';
-import './PromptBar.css';
 
 export interface PromptBarSource {
   key: string;
@@ -721,23 +720,25 @@ const PromptBar: React.FC<PromptBarProps> = ({
         />
 
         <div className="prompt-bar__bar">
-          <button
-            type="button"
-            className="prompt-bar__tool"
-            aria-label="Add files and sources"
-            aria-expanded={plusOpen}
-            data-on={plusOpen ? '' : undefined}
-            onMouseDown={e => e.preventDefault()}
-            onClick={() => {
-              setModelOpen(false);
-              setEffortOpen(false);
-              setActive(0);
-              setPlusOpen(v => !v);
-              focusInput();
-            }}
-          >
-            <HugeiconsIcon icon={PlusSignIcon} size={16} strokeWidth={2} />
-          </button>
+          {sources.length > 0 && (
+            <button
+              type="button"
+              className="prompt-bar__tool"
+              aria-label="添加数据源"
+              aria-expanded={plusOpen}
+              data-on={plusOpen ? '' : undefined}
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => {
+                setModelOpen(false);
+                setEffortOpen(false);
+                setActive(0);
+                setPlusOpen(v => !v);
+                focusInput();
+              }}
+            >
+              <HugeiconsIcon icon={PlusSignIcon} size={16} strokeWidth={2} />
+            </button>
+          )}
           {models.length > 0 ? (
             <button
               type="button"

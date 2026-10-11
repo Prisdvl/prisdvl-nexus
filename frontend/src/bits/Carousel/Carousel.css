@@ -19,7 +19,7 @@
   flex-direction: column;
   align-items: flex-start;
   justify-content: space-between;
-  border: 1px solid var(--border);
+
   border-radius: calc(var(--outer-r) - var(--p-distance));
   background-color: var(--surface);
   overflow: hidden;
@@ -38,7 +38,7 @@
   background-color: var(--surface);
   position: relative;
   bottom: 0.1em;
-  border: 1px solid var(--border);
+
   justify-content: center;
   align-items: center;
   text-align: center;
