@@ -2050,3 +2050,8 @@ main:focus { outline: none; }
   .lp-modes { grid-template-columns: 1fr; gap: 8px; }
   .lp-tech-title { height: clamp(68px, 22vw, 96px); }
 }
+/* 工作台密度（2026-10-11 · 任务 §4.2）
+ * 实测：.wb-layout 本来就是 `1fr / 320px` 两栏 + 1100px 退回单列（见上），
+ * 真正缺的只是"宽屏容器太窄" → 仅加宽工作台所在页面，不动全局 .page。
+ * 刻意不再重复定义 .wb-layout 的栅格（避免覆盖层堆积）。 */
+.page:has(.wb-layout) { max-width: 1440px; }
