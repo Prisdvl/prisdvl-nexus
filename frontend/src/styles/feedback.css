@@ -10,23 +10,6 @@
   color: var(--text-3);
 }
 
-.fb__btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: none;
-  color: var(--text-3);
-  font-size: 11.5px;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
-}
-.fb__btn:hover { background: var(--surface-muted); color: var(--text); border-color: var(--border); }
-.fb__btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-
 /* 已记录：一条很低调的确认，原因标签是"可改主意"的选项，不是必填表单 */
 .fb--done { color: var(--text-3); }
 .fb--done > svg { color: var(--success, var(--primary)); }
@@ -34,7 +17,7 @@
 .fb__reason {
   height: 20px;
   padding: 0 7px;
-  border: 1px solid var(--border);
+
   border-radius: var(--radius-pill);
   background: none;
   color: var(--text-3);

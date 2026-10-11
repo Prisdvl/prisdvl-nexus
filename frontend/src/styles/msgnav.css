@@ -18,8 +18,9 @@
    * 之前这里写 `width: 0`：内部 max-content 的列表会**向右溢出**到面板之外，
    * 被祖先的 overflow:hidden 裁掉 —— 表现就是"横线显示不全/只露出一小截"。
    */
-  width: 34px;
+  width: 44px;
   overflow: visible;
+  z-index: 2;
 }
 .msg-nav__list {
   list-style: none;
@@ -41,8 +42,8 @@
   display: grid;
   flex: none;
   place-items: center;
-  width: 34px;
-  height: 10px;
+  width: 44px;
+  min-height: 24px;
   padding: 0;
   border: 0;
   background: none;
@@ -85,8 +86,12 @@
 .msg-preview {
   position: fixed;
   z-index: 190;
+  display: flex;
+  flex-direction: column;
+  max-height: min(52vh, 480px);
+  overflow: hidden;
   padding: 12px 14px;
-  border: 1px solid var(--border);
+
   border-radius: var(--radius-lg);
   background: var(--card-bg);
   backdrop-filter: blur(14px);
@@ -115,7 +120,7 @@
   font-weight: 600;
   padding: 1px 7px;
   border-radius: var(--radius-pill);
-  border: 1px solid var(--border);
+
   color: var(--text-2);
 }
 .msg-preview__index {
@@ -124,23 +129,62 @@
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
-.msg-preview__body {
-  margin: 0;
-  font-size: 12.5px;
-  line-height: 1.65;
+.msg-preview__list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  display: grid;
+  gap: 2px;
+}
+.msg-preview__item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-2);
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.msg-preview__item:hover,
+.msg-preview__item:focus-visible { background: var(--surface-muted); outline: none; }
+.msg-preview__item[data-active] { background: var(--primary-container); color: var(--primary-text); }
+.msg-preview__item-index {
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.msg-preview__item-text {
   display: -webkit-box;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  overflow-wrap: anywhere;
 }
 .msg-preview__hint {
+  flex: none;
   margin: 8px 0 0;
+  padding-top: 6px;
+
   font-size: 11px;
   color: var(--text-3);
 }
 
-/* 窄屏（沿用现有断点）：隐藏导航，消息本身仍可滚动 */
+/* 窄屏保留可点的索引轨道；点击可直接跳转，键盘焦点也会显示预览。 */
 @media (max-width: 1100px) {
-  .msg-nav { display: none; }
+  .msg-nav { right: 0; width: 42px; }
+  .msg-nav__item { width: 42px; min-height: 32px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg-preview { animation: none; }
+  .msg-nav__line { transition: none; }
 }

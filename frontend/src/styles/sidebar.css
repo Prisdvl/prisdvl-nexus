@@ -180,7 +180,7 @@
   height: 30px;
   margin: 0 0 0 6px;
   padding: 0 12px;
-  border: 1px solid var(--border);
+
   border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--text-2);
@@ -198,7 +198,7 @@
   display: flex;
   align-items: center;
   padding: 8px 8px 10px;
-  border-top: 1px solid var(--border);
+
 }
 .sb-row--settings { width: 100%; margin: 0; }
 
@@ -270,3 +270,57 @@
 .sb-project-del:hover { background: var(--surface); color: var(--danger); }
 .sb-project-form { display: flex; gap: 6px; padding: 2px 0 4px; }
 .sb-project-form .input { height: 30px; font-size: 13px; }
+
+/* ------------------------------------------------------------
+ * 手动折叠时，内容区必须跟随侧栏宽度
+ *
+ * ⚠️ `.shell-main` 的基础值是 `margin-left: 236px`（global.css），
+ * 而折叠态 `.sidebar[data-collapsed]` 只有 68px。
+ * 之前只改了 `.sidebar` 的宽度，没给内容区任何跟随规则 ——
+ * 结果折叠后左侧留下 168px 死白，chat-fixed（一屏固定布局）
+ * 与所有其它页面都被挤窄。
+ *
+ * 结构：`.shell > aside.sidebar + main.shell-main`（兄弟），故用 ~ 选择器。
+ * 宽度值必须与 `.sidebar[data-collapsed]` 保持一致。
+ * ------------------------------------------------------------ */
+/* ⚠️ 必须限定到桌面档位：≤768px 时侧栏是抽屉，
+ * global.css 里 `.shell-main { margin-left: 0 }`；
+ * 本选择器优先级更高，不加媒体查询会把移动端内容顶开 68px。 */
+@media (min-width: 769px) {
+  .sidebar[data-collapsed] ~ .shell-main { margin-left: 68px; }
+}
+@media (min-width: 769px) and (prefers-reduced-motion: reduce) {
+  .sidebar[data-collapsed] ~ .shell-main { transition: none; }
+}
+
+/* 会话行内的轻量图标操作：鼠标悬停/键盘聚焦出现，触控设备常驻。 */
+.sidebar .sb-session { gap: 2px; }
+.sidebar .sb-session[data-selected] { color: var(--text); font-weight: 600; }
+.sidebar .session-open {
+  display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; height: 32px;
+  padding: 0 5px; border: 0; border-radius: 7px; background: transparent; color: inherit;
+  text-align: left; font: inherit; cursor: pointer;
+}
+.sidebar .session-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.sidebar .session-open .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar .session-pin { flex: none; color: var(--primary-text); }
+.sidebar .session-actions {
+  display: flex; align-items: center; gap: 1px; flex: none;
+  opacity: 0; pointer-events: none; transition: opacity var(--dur-fast) var(--ease-out);
+}
+.sidebar .sb-session:hover .session-actions,
+.sidebar .sb-session:focus-within .session-actions { opacity: 1; pointer-events: auto; }
+.sidebar .session-action {
+  display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0;
+  border: 0; border-radius: 7px; background: transparent; color: var(--text-3); cursor: pointer;
+}
+.sidebar .session-action:hover,
+.sidebar .session-action:focus-visible { background: var(--surface-muted); color: var(--primary-text); }
+.sidebar .session-action:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.sidebar .session-action--danger:hover,
+.sidebar .session-action--danger:focus-visible { color: var(--danger); }
+@media (pointer: coarse) {
+  .sidebar .session-actions { opacity: 1; pointer-events: auto; }
+  .sidebar .session-action { width: 34px; height: 34px; }
+}
+@media (prefers-reduced-motion: reduce) { .sidebar .session-actions { transition: none; } }

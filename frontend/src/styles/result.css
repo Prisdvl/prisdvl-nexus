@@ -4,7 +4,7 @@
  * ============================================================ */
 .result {
   margin: 10px 0 4px;
-  border: 1px solid var(--border);
+
   border-radius: var(--radius-md);
   background: var(--surface);
   overflow: hidden;
@@ -15,7 +15,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
+
   background: var(--surface-muted);
 }
 .result__kind {

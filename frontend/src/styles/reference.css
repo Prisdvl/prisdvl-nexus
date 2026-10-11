@@ -8,7 +8,7 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--border);
+
   background: var(--card-bg);
   animation: ref-in var(--dur-panel) var(--ease-out);
 }
@@ -22,7 +22,7 @@
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
+
 }
 .ref-ic {
   display: grid; place-items: center; flex: none;
@@ -44,6 +44,9 @@
   scrollbar-width: none;
 }
 .ref-body::-webkit-scrollbar { display: none; }
+.ref-source { margin: 0 0 20px; }
+.ref-source > h4 { margin: 0 0 10px; color: var(--text-2); font-size: 12.5px; font-weight: 600; }
+.ref-document { padding-top: 16px; border-top: 1px solid var(--border); }
 /* 面板里的正文略小一号，避免抢对话主体的注意力 */
 .ref-body .md { font-size: 13px; }
 
@@ -68,7 +71,7 @@
 .ref-chunk {
   display: flex; align-items: baseline; gap: 9px;
   padding: 8px 10px; margin-bottom: 6px;
-  border: 1px solid var(--border); border-radius: 9px;
+
   background: var(--surface-muted);
 }
 .ref-chunk-h { font-size: 12px; font-weight: 600; }
@@ -83,7 +86,7 @@
   align-items: center;
   gap: 1px 8px;
   padding: 8px 10px;
-  border: 1px solid var(--border);
+
   border-radius: 10px;
   background: var(--surface);
   text-align: left;
