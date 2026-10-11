@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import {
-  BookOpen, ChevronDown, ChevronRight, Copy, Download, GitBranch, Globe, MessagesSquare, Paperclip, Pencil, Pin, Plus, RefreshCw, Search, Square, Trash2, Wrench, X,
+  BookOpen, ChevronDown, ChevronRight, Copy, Download, GitBranch, MessagesSquare, Pencil, Pin, Plus, RefreshCw, Search, Square, Trash2, Wrench, X,
 } from 'lucide-react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Archive02Icon, Delete02Icon } from '@hugeicons/core-free-icons'
@@ -13,7 +13,6 @@ import ResultCard from '@/components/chat/ResultCard'
 import QueueStrip from '@/components/chat/QueueStrip'
 import { toolPolicy } from '@/lib/toolPolicy'
 import '@/styles/reference.css'
-import '@/styles/chat-solid.css'
 import CallChip from '@/bits/CallChip/CallChip'
 import PromptBar, { type PromptBarSource } from '@/bits/PromptBar/PromptBar'
 import SwipeRow from '@/bits/SwipeRow/SwipeRow'
@@ -25,13 +24,14 @@ import Modal from '@/components/Modal'
 import { StateEmpty, Skeleton } from '@/components/Skeleton'
 import { toast } from '@/lib/toast'
 import Markdown from '@/components/Markdown'
-import { AGENTS, KBS, SESSIONS, type ChatMsg, type RunContext, type SessionItem, type ToolCall } from '@/data'
+import { KBS, type ChatCitationRef, type ChatMsg, type KbItem, type RunContext, type SessionItem, type ToolCall } from '@/data'
 import { useTokenColor } from '@/lib/palette'
 import type { ThemeMode } from '@/lib/types'
-import { sessionStore, useSessions } from '@/lib/sessions'
+import { useSessions, nextBranchTitle } from '@/lib/sessions'
 import { ensureAgents, useAgents, DEFAULT_AGENT_NAME } from '@/lib/agents'
+import { fetchKbs, useLoad } from '@/lib/backendData'
 import { api, errMessage, USE_MOCK, type ConversationMode } from '@/lib/api'
-import { isTempId, fetchMessages } from '@/lib/conversations'
+import { isTempId, fetchMessages, toSessionItem } from '@/lib/conversations'
 import { postSse } from '@/lib/sse'
 
 const REPLY = `已在绑定的知识库中检索到相关内容，下面是**结构化回答**：
@@ -91,11 +91,12 @@ const EMPTY_SESSION: SessionItem = {
 
 interface ChatPageProps {
   theme: ThemeMode
+  initialConversationId?: string
   /** 点引用 → 跳到知识库详情并高亮该文档 */
-  onOpenDoc: (docName: string) => void
+  onOpenDoc: (citation: ChatCitationRef) => void
 }
 
-export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
+export default function ChatPage({ theme, onOpenDoc, initialConversationId }: ChatPageProps) {
 
   /* 会话数据来自共享 store：侧栏的「最近会话」与这里读写同一份 */
   const {
@@ -106,13 +107,23 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
     setMessages, setMessagesFailed,
   } = useSessions()
 
-  /* 侧栏点了「新对话」→ 这里把向导打开（跨组件的意图用 store 里的计数器传递） */
-  useEffect(() => {
-    if (createRequests > 0) { setWizard(true); consumeCreate() }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [createRequests])
   const [query, setQuery] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [showSettledThought, setShowSettledThought] = useState(false)
+  /**
+   * 思考步骤：只由真实 SSE 事件驱动（P2-5.2）：
+   * retrieval → 检索步骤；tool_call → 工具步骤；首个 delta → 生成步骤。
+   * 绝不写死"正在读取/检索 N 个切片"这类无事件依据的文案。
+   */
+  const [thoughtSteps, setThoughtSteps] = useState<string[]>([])
+  const addThoughtStep = (step: string) =>
+    setThoughtSteps((list) => (list.includes(step) ? list : [...list, step]))
+  /** 后端工具 code → 面向用户的中文步骤名（未知 code 原样展示，不编造功能） */
+  const TOOL_STEP_NAME: Record<string, string> = {
+    knowledge_search: '知识库检索',
+    calculator: '数学计算',
+  }
+  const previousStreaming = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
   const requestIdRef = useRef<string | null>(null)
   /*
@@ -133,22 +144,50 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
   const [kbOpen, setKbOpen] = useState(false)
   const [wizard, setWizard] = useState(false)
   /* 点引用不跳页：在右侧面板就地查看；需要原文时再点面板里的跳转 */
-  const [refDoc, setRefDoc] = useState<string | null>(null)
+  const [refCitation, setRefCitation] = useState<ChatCitationRef | null>(null)
   /*
    * 新建会话向导的选区必须是**受控状态**。
    * 之前直接改 DOM（setAttribute('data-on')），React 每次重渲染都会把属性写回去，
    * 结果就是"点了没反应、选不中知识库和 Agent"。
    */
   /* 决策 4：向导选的也是 **id**，初值为 null（默认助手） */
+  const [wizMode, setWizMode] = useState<ConversationMode>('PLAIN')
   const [wizAgent, setWizAgent] = useState<string | null>(null)
-  const [wizKbs, setWizKbs] = useState<string[]>(KBS.slice(0, 2).map((k) => k.name))
+  const [wizKbs, setWizKbs] = useState<string[]>([])
+  const [creatingSession, setCreatingSession] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   /* 双击标题原地重命名 */
   const [renaming, setRenaming] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
-  const [dragOver, setDragOver] = useState(false)
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
+  /** 分支请求进行中：防止重复提交 */
+  const [branching, setBranching] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
+
+  /* 侧栏点了「新对话」→ 这里把向导打开（跨组件的意图用 store 里的计数器传递） */
+  useEffect(() => {
+    if (createRequests > 0) {
+      setWizard(true)
+      setWizMode('PLAIN')
+      setWizAgent(null)
+      setWizKbs([])
+      consumeCreate()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createRequests])
+
+  useEffect(() => {
+    if (streaming) {
+      previousStreaming.current = true
+      setShowSettledThought(false)
+      return
+    }
+    if (!previousStreaming.current) return
+    previousStreaming.current = false
+    setShowSettledThought(true)
+    const timeout = window.setTimeout(() => setShowSettledThought(false), 1400)
+    return () => window.clearTimeout(timeout)
+  }, [streaming])
 
   /* 滑动手势里主动作（置顶）的底色：跟随主题强调色，而不是危险红 */
   const actionAccent = useTokenColor('--primary-strong')
@@ -174,6 +213,11 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
    * 所以用 `EMPTY_SESSION` 兜底，保证任何字段访问都有值；
    * 真正的"空态 UI"由渲染层用 `isEmptyList` 判断。
    */
+  /* 工作台点开的会话通过 query 传入；等会话同步到 store 后再选中。 */
+  useEffect(() => {
+    if (initialConversationId && sessions.some((s) => s.id === initialConversationId)) setActiveId(initialConversationId)
+  }, [initialConversationId, sessions, setActiveId])
+
   const isEmptyList = sessions.length === 0
   const active: SessionItem =
     sessions.find((s) => s.id === activeId) ?? sessions[0] ?? EMPTY_SESSION
@@ -181,6 +225,10 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
   /* ---------------- 决策 4：Agent 存 id，展示名从缓存映射 ---------------- */
 
   const { agents, nameOf: agentNameOf } = useAgents()
+  const { data: loadedKbs, loading: kbsLoading, error: kbsError, reload: reloadKbs } = useLoad(fetchKbs)
+  const kbOptions = USE_MOCK ? KBS : (loadedKbs ?? [])
+  const kbKey = (kb: KbItem) => USE_MOCK ? kb.name : kb.id
+  const kbName = (key: string) => kbOptions.find((kb) => kbKey(kb) === key)?.name ?? key
   /* 进对话页就拉一次 Agent 列表（幂等，失败会静默重试） */
   useEffect(() => { void ensureAgents() }, [])
 
@@ -465,11 +513,9 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
 
   /** PromptBar 把文本交给我们，不再依赖本地 textarea 状态 */
   /* PromptBar 的 @ 数据源：当前会话绑定的知识库 + 上传/联网（原型示意） */
-  const promptSources: PromptBarSource[] = [
-    ...active.kbs.map((kb) => ({ key: kb, name: kb, description: '已绑定知识库', icon: <BookOpen size={14} /> })),
-    { key: 'upload', name: '上传文件', description: '从本机添加文档', attach: true, icon: <Paperclip size={14} /> },
-    { key: 'web', name: '联网搜索', description: '实时结果（原型示意）', icon: <Globe size={14} /> },
-  ]
+  const promptSources: PromptBarSource[] = (active.mode === 'RAG' ? kbOptions : [])
+    .filter((kb) => active.kbs.includes(kbKey(kb)))
+    .map((kb) => ({ key: kbKey(kb), name: kb.name, description: '当前会话绑定的知识库', icon: <BookOpen size={14} /> }))
   const PROMPT_COMMANDS = [
     { key: 'summarize', name: '/总结', description: '把当前会话浓缩成要点' },
     { key: 'explain', name: '/讲解', description: '用更直白的话重讲一遍' },
@@ -508,28 +554,38 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
         },
         onDelta: (t2) => {
           if (!alive()) return
+          if (!acc) addThoughtStep('生成回答')
           acc += t2
           patchMsg(sessionId, botId, (m) => ({ ...m, text: acc }))
         },
         onRetrieval: (d) => {
           if (!alive()) return
-          const hit = Number(d?.hitCount ?? d?.retrieved ?? 0)
-          const kbs = Array.isArray(d?.kbNames) ? (d.kbNames as string[]) : []
+          /* 事件契约见 RetrievalEvent：count/hits[]/failedKnowledgeBases[] */
+          const hit = Number(d?.count ?? 0)
+          const hitsArr = Array.isArray(d?.hits) ? (d.hits as Record<string, unknown>[]) : []
+          const usedDocs = new Set(
+            hitsArr.map((h) => h.documentTitle).filter((v): v is string => typeof v === 'string' && !!v),
+          ).size
+          const failedKbs = Array.isArray(d?.failedKnowledgeBases) ? (d.failedKnowledgeBases as unknown[]) : []
+          addThoughtStep(`检索知识库 · 命中 ${hit} 个切片`)
+          if (failedKbs.length) addThoughtStep('部分知识库检索失败，已跳过')
           patchMsg(sessionId, botId, (m) => ({
             ...m,
-            context: { kbs, retrieved: hit, usedDocs: 0, scannedDocs: hit, historyTurns: 0, web: false },
+            context: { kbs: [], retrieved: hit, usedDocs, scannedDocs: hit, historyTurns: 0, web: false },
           }))
         },
         onToolCall: (d) => {
           if (!alive()) return
+          const toolName = String(d.tool ?? 'tool')
+          addThoughtStep(`调用工具 · ${TOOL_STEP_NAME[toolName] ?? toolName}`)
           patchMsg(sessionId, botId, (m) => ({
             ...m,
             calls: [
               ...(m.calls ?? []),
               {
-                id: `${Date.now()}-${String(d.tool)}`,
+                id: `${Date.now()}-${toolName}`,
                 icon: 'search' as const,
-                name: String(d.tool ?? 'tool'),
+                name: toolName,
                 argument: typeof d.input === 'string' ? d.input : JSON.stringify(d.input ?? ''),
                 status: 'running' as const,
               },
@@ -545,10 +601,9 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
         },
         onDone: (d) => {
           if (!alive()) return
-          const cites = Array.isArray(d?.citations)
-            ? (d.citations as { documentName?: string }[]).map((c) => c.documentName ?? '文档')
-            : []
-          patchMsg(sessionId, botId, (m) => ({ ...m, text: m.text || acc, ...(cites.length ? { cites } : {}) }))
+          const citationRefs = Array.isArray(d?.citations) ? d.citations as ChatCitationRef[] : []
+          const cites = citationRefs.map((citation) => citation.documentTitle ?? '未知来源')
+          patchMsg(sessionId, botId, (m) => ({ ...m, text: m.text || acc, ...(cites.length ? { cites, citationRefs } : {}) }))
           if (d?.stopped) setInterrupted(true)
         },
         onError: (m2) => {
@@ -571,7 +626,11 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
       abortRef.current = null
     }
   }
-  const sendText = (raw: string, detail?: { model?: { key?: string; label?: string }; effort?: string }) => {
+  const sendText = (
+    raw: string,
+    detail?: { model?: { key?: string; label?: string }; effort?: string },
+    opts?: { skipUserPush?: boolean },
+  ) => {
     const t = raw.trim()
     if (!t) return
     /*
@@ -584,9 +643,11 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
       toast.info('已加入队列', `当前回答结束后自动发送（第 ${queue.length + 1} 条）`)
       return
     }
-    pushMsgToActive({ id: nextTmpId(), role: 'user', text: t })
+    /* skipUserPush：编辑重发时用户消息已经随截断写回，不能再推一条 */
+    if (!opts?.skipUserPush) pushMsgToActive({ id: nextTmpId(), role: 'user', text: t })
     /* PromptBar 自己会清空草稿与附件，这里不再需要 setText */
     setStreaming(true)
+    setThoughtSteps([])
     /* 真实后端：非 mock 且会话已在服务端存在时，走 SSE 流式 */
     if (!USE_MOCK && !isTempId(active.id)) {
       void realStream(t, detail)
@@ -778,11 +839,17 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
     toast.info('已停止生成', '已完成的部分保留，可继续追问或点「继续生成」')
   }
 
-  /** 中断后继续：把上一条被中断的回答补完 */
+  /** 中断后继续：真实模式发一条真实的"继续"追问（新的一轮，走 SSE）；mock 模式本地补完演示 */
   const continueRun = () => {
     const sessionId = active.id
     const lastBot = [...active.messages].reverse().find((m) => m.role === 'bot' && m.calls?.length)
     if (!lastBot) return
+    if (!USE_MOCK && !isTempId(sessionId)) {
+      /* 后端没有"续写同一条消息"的接口；以一轮真实追问继续，不能本地伪造回答 */
+      setInterrupted(false)
+      sendText('请接着上一条被中断的回答，从中断处继续输出剩余内容。')
+      return
+    }
     setInterrupted(false)
     setStreaming(true)
     const runId = (runSeq.current += 1)
@@ -823,25 +890,64 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
    * - 分支保留原会话不动，新会话带着"到这条为止"的上下文继续问，
    *   于是两种问法可以并排对比（真实产品里常用于对比 prompt / 模型）。
    */
-  /** 从某条回答分支出一条新对话（数据在 store 里，这里只负责提示） */
-  const branchFromMsg = (msgId: string) => {
-    const id = branchFrom(msgId)
-    if (id === null) return
-    setStreaming(false)
-    toast.success('已在新对话中分支', '原会话保持不变，可在新会话里换个问法继续')
+  /**
+   * 从某条回答分支出一条新对话。
+   * 真实模式调 POST /chat/conversations/{id}/fork：后端复制会话绑定与到该消息为止的内容，
+   * 标题由前端按「分支 / 分支1 / …」算出，持久化在服务端，刷新/重开不丢。
+   * mock（离线 QA）走本地 store 复制。
+   */
+  const branchFromMsg = async (msgId: string) => {
+    if (streaming || branching) return
+    if (USE_MOCK) {
+      const id = branchFrom(msgId)
+      if (id === null) return
+      setStreaming(false)
+      toast.success('已在新对话中分支', '原会话保持不变，可在新会话里换个问法继续')
+      return
+    }
+    if (isTempId(active.id)) {
+      toast.info('当前会话还没落库', '先发一条消息创建服务端会话后，才能创建持久化分支。')
+      return
+    }
+    /* 只有后端雪花数字 id 才能作为截断点；m_ 前缀的本地消息则整会话复制 */
+    const beforeId = /^\d+$/.test(msgId) ? msgId : null
+    const title = nextBranchTitle(sessions.map((s) => s.title))
+    setBranching(true)
+    try {
+      const created = await api.conversations.fork(active.id, { title, beforeMessageId: beforeId })
+      addSession(toSessionItem(created))
+      setStreaming(false)
+      toast.success('已创建分支对话', title + '：原会话保持不变')
+    } catch (e) {
+      toast.error('创建分支失败', errMessage(e))
+    } finally {
+      setBranching(false)
+    }
+  }
+
+  const copyMessage = async (text: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('当前浏览器未授权剪贴板访问。')
+      await navigator.clipboard.writeText(text)
+      toast.success('已复制消息')
+    } catch (error) {
+      toast.error('复制失败', errMessage(error))
+    }
   }
 
   const saveEdit = () => {
     if (!editing) return
+    const text = editing.text.trim()
     const idx = active.messages.findIndex((m) => m.id === editing.id)
-    if (idx >= 0) {
-      patch(active.id, (s) => ({
-        ...s,
-        messages: [...s.messages.slice(0, idx), { ...s.messages[idx], text: editing.text }, { id: nextTmpId(), role: 'bot', text: REPLY, cites: DEFAULT_CITES }],
-      }))
-    }
     setEditing(null)
-    setStreaming(false)
+    if (idx < 0 || !text) return
+    /* 编辑 = 用新问题重跑一轮：截掉该消息之后的所有内容，改写问题文本，
+       然后走与正常发送完全相同的真实链路（SSE / mock 模拟），不再本地伪造回答。 */
+    patch(active.id, (s) => ({
+      ...s,
+      messages: [...s.messages.slice(0, idx), { ...s.messages[idx], text }],
+    }))
+    sendText(text, undefined, { skipUserPush: true })
   }
 
   const exportMd = () => {
@@ -849,7 +955,7 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
       `# ${active.title}`,
       ``,
       `- Agent：${agentName}`,
-      `- 知识库：${active.kbs.join('、') || '未绑定'}`,
+      `- 知识库：${active.kbs.map(kbName).join('、') || '未绑定'}`,
       ``,
       ...active.messages.map((m) => `**${m.role === 'user' ? '我' : 'AI'}**：${m.text}${m.cites?.length ? `\n\n引用：${m.cites.join('、')}` : ''}`),
     ].join('\n')
@@ -861,11 +967,68 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
     URL.revokeObjectURL(a.href)
   }
 
-  const toggleKb = (name: string) =>
-    patch(active.id, (s) => ({
-      ...s,
-      kbs: s.kbs.includes(name) ? s.kbs.filter((k) => k !== name) : [...s.kbs, name],
-    }))
+  const toggleKb = async (kb: KbItem) => {
+    const key = kbKey(kb)
+    const next = active.kbs.includes(key)
+      ? active.kbs.filter((item) => item !== key)
+      : [...active.kbs, key]
+
+    if (!USE_MOCK && !isTempId(active.id)) {
+      if ((active.mode ?? 'PLAIN') !== 'RAG') {
+        toast.error('当前模式不支持绑定知识库', '请先切换到「知识库问答」模式。')
+        return
+      }
+      try {
+        const updated = await api.conversations.update(active.id, { kbIds: next })
+        patch(active.id, (session) => ({ ...session, kbs: updated.kbIds ?? next }))
+      } catch (error) {
+        toast.error('知识库绑定失败', errMessage(error))
+      }
+      return
+    }
+
+    patch(active.id, (session) => ({ ...session, kbs: next }))
+  }
+
+  const createConversation = async () => {
+    if (creatingSession) return
+    setCreatingSession(true)
+    const selectedAgent = wizMode === 'AGENT' ? wizAgent : null
+    const selectedKbIds = wizMode === 'RAG' && !USE_MOCK ? wizKbs : []
+    const selectedKbNames = wizMode === 'RAG'
+      ? wizKbs.map((key) => kbOptions.find((kb) => kbKey(kb) === key)?.name ?? key)
+      : []
+    try {
+      if (USE_MOCK) {
+        addSession({
+          id: nextTmpId(),
+          title: '新会话',
+          mode: wizMode,
+          agentId: selectedAgent,
+          kbs: selectedKbNames,
+          updated: '刚刚',
+          pinned: false,
+          messagesLoaded: true,
+          messages: [],
+        })
+      } else {
+        const created = await api.conversations.create({
+          title: '新会话',
+          mode: wizMode,
+          agentId: selectedAgent,
+          kbIds: selectedKbIds,
+        })
+        addSession(toSessionItem(created))
+      }
+      setWizard(false)
+      const modeName = MODE_OPTIONS.find((option) => option.value === wizMode)?.label ?? wizMode
+      toast.success('会话已创建', `${modeName}模式`)
+    } catch (error) {
+      toast.error('会话创建失败', errMessage(error))
+    } finally {
+      setCreatingSession(false)
+    }
+  }
 
   /*
    * 空列表守卫：**必须**。
@@ -900,8 +1063,8 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
       <div className="chat-layout">
 
         {/* ---------- 对话主体 ---------- */}
-        <section className="panel chat-main" style={{ display: 'flex', flexDirection: 'row', padding: 0, minHeight: 0, overflow: 'hidden' }}>
-          <div className="chat-main-col">
+        <section className="panel chat-main" style={{ display: 'flex', flexDirection: 'row', padding: 0, overflow: 'hidden' }}>
+          <div className="chat-main-col" data-empty={!loadingMessages && active.messages.length === 0 && !streaming ? 'true' : undefined}>
           <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 22px 0', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
             <div style={{ minWidth: 0 }}>
               <div data-testid="chat-title" style={{ fontSize: 15, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{active.title}</div>
@@ -943,6 +1106,7 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
               <RubberSegment
                 items={agentOptions.map((o) => o.label)}
                 value={agentName}
+                disabled={(active.mode ?? 'PLAIN') !== 'AGENT'}
                 animateExternal
                 onChange={(label) => {
                   const picked = agentOptions.find((o) => o.label === label)
@@ -960,14 +1124,22 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
             </div>
 
             <div style={{ position: 'relative' }}>
-              <button className="btn btn-ghost btn-sm" type="button" onClick={() => { setKbOpen((v) => !v) }}>
+              <button
+                className="btn btn-ghost btn-sm"
+                type="button"
+                onClick={() => setKbOpen((value) => !value)}
+                disabled={(active.mode ?? 'PLAIN') !== 'RAG'}
+                title={(active.mode ?? 'PLAIN') !== 'RAG' ? '仅「知识库问答」模式可以绑定知识库' : '管理当前会话的知识库'}
+              >
                 <BookOpen size={13} /> 知识库 {active.kbs.length} <ChevronDown size={12} />
               </button>
-              {kbOpen && (
+              {kbOpen && (active.mode ?? 'PLAIN') === 'RAG' && (
                 <div className="chat-bind-pop">
-                  <h4>绑定知识库（可多选，随时改动）</h4>
-                  {KBS.map((kb) => (
-                    <button key={kb.id} type="button" className="opt" data-on={active.kbs.includes(kb.name) ? '' : undefined} onClick={() => toggleKb(kb.name)}>
+                  <h4>绑定知识库</h4>
+                  {kbsError && <p className="form-error active" role="alert">{kbsError} <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}>重试</button></p>}
+                  {!kbsLoading && !kbsError && kbOptions.length === 0 && <p className="hint">还没有可绑定的知识库，请先创建知识库并导入资料。</p>}
+                  {kbOptions.map((kb) => (
+                    <button key={kb.id} type="button" className="opt" data-on={active.kbs.includes(kbKey(kb)) ? '' : undefined} aria-pressed={active.kbs.includes(kbKey(kb))} onClick={() => void toggleKb(kb)}>
                       <BookOpen size={13} /> {kb.name}
                     </button>
                   ))}
@@ -995,11 +1167,10 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
               </div>
             )}
             {!loadingMessages && active.messages.length === 0 && !streaming && (
-              <StateEmpty
-                icon={<MessagesSquare size={20} />}
-                title="这个会话还没有消息"
-                desc={`当前使用 Agent「${agentName}」，已绑定 ${active.kbs.length} 个知识库。直接提问即可。`}
-              />
+              <div className="chat-empty-state">
+                <h2>从一个问题开始</h2>
+                <p>回答将保存在当前会话中，可随时继续或切换模式。</p>
+              </div>
             )}
             {active.messages.map((m) => (
               <div className={`msg ${m.role}`} key={m.id} data-mid={m.id}>
@@ -1046,7 +1217,7 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
                       {m.role === 'bot' && m.context && (
                         <ContextChips
                           context={m.context}
-                          onOpenRefs={() => setRefDoc(m.cites?.[0] ?? null)}
+                          onOpenRefs={() => setRefCitation(m.citationRefs?.[0] ?? (m.cites?.[0] ? { documentTitle: m.cites[0] } : null))}
                         />
                       )}
                       {/* 高风险工具：内联确认卡（不用弹窗 —— 确认是"这一步"的事） */}
@@ -1067,11 +1238,14 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
                   )}
                   {m.role === 'bot' && m.cites && (
                     <div className="citation">
-                      {m.cites.map((c, i) => (
-                        <button key={`${c}-${i}`} className="cite-chip" type="button" data-clickable onClick={() => setRefDoc(c)} title={`在右侧查看「${c}」`}>
-                          <BookOpen size={12} /><span>{c}</span>
-                        </button>
-                      ))}
+                      {m.cites.map((c, i) => {
+                        const citation = m.citationRefs?.find((item) => item.documentTitle === c)
+                        return (
+                          <button key={`${c}-${i}`} className="cite-chip" type="button" data-clickable onClick={() => setRefCitation(citation ?? { documentTitle: c })} title={`在右侧查看「${c}」`}>
+                            <BookOpen size={12} /><span>{c}</span>
+                          </button>
+                        )
+                      })}
                     </div>
                   )}
                   {m.role === 'bot' && (
@@ -1082,16 +1256,21 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
                   )}
                   {editing?.id !== m.id && (
                     <div className="msg-ops">
-                      <button type="button" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={11} /> 复制</button>
+                      <button className="msg-op" type="button" title="复制消息" aria-label="复制消息" onClick={() => void copyMessage(m.text)}><Copy size={15} aria-hidden="true" /></button>
                       {m.role === 'user' ? (
-                        <button type="button" onClick={() => setEditing({ id: m.id, text: m.text })}><Pencil size={11} /> 编辑重发</button>
+                        <button className="msg-op" type="button" title="编辑并重新发送" aria-label="编辑并重新发送" onClick={() => setEditing({ id: m.id, text: m.text })}><Pencil size={15} aria-hidden="true" /></button>
                       ) : (
-                        /* 不再"原地重新生成"，而是从这里**分支出一条新对话**：原会话保持不变，便于对比两种问法 */
-                        <button type="button" onClick={() => branchFromMsg(m.id)}><GitBranch size={11} /> 在新对话中分支</button>
+                        <button
+                          className="msg-op"
+                          type="button"
+                          title="从此处创建分支"
+                          aria-label="从此处创建分支"
+                          disabled={branching || (!USE_MOCK && isTempId(active.id))}
+                          onClick={() => void branchFromMsg(m.id)}
+                        ><GitBranch size={15} aria-hidden="true" /></button>
                       )}
-                      {/* 被中断时给出明确的恢复入口（停止不该是死路） */}
                       {m.role === 'bot' && interrupted && m.id === [...active.messages].reverse().find((x) => x.role === 'bot')?.id && (
-                        <button type="button" onClick={continueRun}><RefreshCw size={11} /> 继续生成</button>
+                        <button className="msg-op" type="button" title="继续生成" aria-label="继续生成" onClick={continueRun}><RefreshCw size={15} aria-hidden="true" /></button>
                       )}
                       {/* 反馈：只有真正产出过文字的回答才问，避免"空回答也让人点赞" */}
                       {m.role === 'bot' && m.text.trim().length > 0 && (
@@ -1115,17 +1294,14 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
                 </div>
               </div>
             ))}
-            {streaming && (
+            {(streaming || showSettledThought) && (
               <div className="msg bot">
                 <div className="thinking-block" style={{ paddingTop: 8 }}>
-                  <span className="thinking-head">
-                    <StatusMark status="running" size={17} color="var(--primary)" />
-                    正在回答
-                  </span>
                   <ThoughtLine
-                    working
-                    label=""
-                    steps={['读取会话上下文', `使用 Agent「${agentName}」`, `检索 ${active.kbs.length} 个知识库`, '生成回答']}
+                    working={streaming}
+                    label="正在生成回答"
+                    doneLabel={interrupted ? '已停止' : '本轮已结束'}
+                    steps={USE_MOCK ? [] : thoughtSteps}
                     showTimer
                     fontSize={13}
                   />
@@ -1139,18 +1315,7 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
           </div>
 
           {/* 输入区：PromptBar（@ 数据源 / 命令 / 模型 / 档位 / 附件 / 停止） */}
-          <div
-            className={`composer-wrap${dragOver ? ' dragging' : ''}`}
-            onDragEnter={() => setDragOver(true)}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => { e.preventDefault(); setDragOver(false) }}
-            onDragOver={(e) => e.preventDefault()}
-          >
-            {dragOver && (
-              <div className="composer-drag-hint">
-                松手即可把文档导入「{active.kbs[0] ?? '未绑定知识库'}」（原型演示）
-              </div>
-            )}
+          <div className="composer-wrap">
             <PromptBar
               placeholder="输入你的问题…"
               sources={promptSources}
@@ -1160,7 +1325,6 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
               busy={streaming}
               onSend={(t, detail) => sendText(t, detail)}
               onStop={stopRun}
-              onAttach={() => ['面经整理 v3.md']}
               background="var(--surface)"
               color="var(--text)"
               menuBackground="var(--surface-muted)"
@@ -1180,107 +1344,110 @@ export default function ChatPage({ theme, onOpenDoc }: ChatPageProps) {
           </div>
 
           {/* 引用面板：点知识库引用后从右侧滑出，不打断对话 */}
-          {refDoc && (
+          {refCitation && (
             <ReferencePanel
-              docName={refDoc}
+              citation={refCitation}
               theme={theme}
-              onClose={() => setRefDoc(null)}
-              onOpenInKb={(name) => onOpenDoc(name)}
+              onClose={() => setRefCitation(null)}
+              onOpenInKb={onOpenDoc}
             />
           )}
         </section>
       </div>
 
       {/* ---------- 新建会话向导 ---------- */}
-      <Modal open={wizard} title="新建会话" onClose={() => setWizard(false)}>
-        <>
-            <Stepper
-              backButtonText="上一步"
-              nextButtonText="下一步"
-              onFinalStepCompleted={() => {
-                /* 创建会话时带上向导里选的 Agent 与知识库（之前只是关掉弹窗，选择被丢弃） */
-                /*
-                 * 决策 4：向导选的 Agent 要存 **id**，不是名字。
-                 * `wizAgent` 来自 `agentOptions`（id 为 string | null），
-                 * 展示名由 nameOf(agentId) 映射，不在这里硬编码。
-                 */
-                const picked = agentOptions.find((o) => o.id === wizAgent) ?? agentOptions[0]
-                const pickedName = agentNameOf(picked.id)
-                addSession({
-                  id: nextTmpId(),
-                  title: '新会话',
-                  agentId: picked.id,
-                  kbs: [...wizKbs],
-                  updated: '刚刚',
-                  pinned: false,
-                  /* 本地新建时就带了一条消息，所以是"已加载" —— 否则进会话会触发一次无意义请求 */
-                  messagesLoaded: true,
-                  messages: [{
-                    id: nextTmpId(),
-                    role: 'bot',
-                    text: `已按你的选择准备好：Agent「${pickedName}」，绑定 ${wizKbs.length} 个知识库。\n直接提问即可，回答会引用这些文档。`,
-                    cites: wizKbs.slice(0, 2),
-                  }],
-                })
-                setWizard(false)
-                toast.success('会话已创建', `${pickedName} · ${wizKbs.length} 个知识库`)
-              }}
-            >
-              <Step>
-                <div style={{ padding: '10px 0 6px' }}>
-                  <div className="wizard-field">
-                    <label>选择 Agent</label>
-                    <div className="wizard-opts">
-                      {/* 决策 4：选项来自后端 Agent 列表；默认助手（id=null）排第一 */}
-                      {agentOptions.map((o) => (
-                        <button
-                          key={o.id ?? '__default__'}
-                          type="button"
-                          className="chip wizard-chip"
-                          data-on={o.id === wizAgent ? '' : undefined}
-                          aria-pressed={o.id === wizAgent}
-                          onClick={() => setWizAgent(o.id)}
-                        >
-                          {o.label}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="hint" style={{ marginTop: 8 }}>不同 Agent 拥有不同的知识库、工具与提示词</p>
-                  </div>
+      <Modal
+        open={wizard}
+        title="新建会话"
+        onClose={() => { if (!creatingSession) setWizard(false) }}
+        shouldBlockClose={() => creatingSession}
+      >
+        <Stepper
+          backButtonText="上一步"
+          nextButtonText="继续"
+          onFinalStepCompleted={() => { void createConversation() }}
+        >
+          <Step>
+            <div className="wizard-field">
+              <label>选择对话模式</label>
+              <RubberSegment
+                items={MODE_OPTIONS.map((option) => option.label)}
+                value={MODE_OPTIONS.find((option) => option.value === wizMode)?.label ?? MODE_OPTIONS[0].label}
+                onChange={(label) => {
+                  const option = MODE_OPTIONS.find((item) => item.label === label)
+                  if (option) setWizMode(option.value)
+                }}
+                size="sm"
+                equalSlots
+                trackColor="var(--surface-muted)"
+                thumbColor="var(--primary-container)"
+                textColor="var(--text-2)"
+                activeTextColor="var(--primary-text)"
+                aria-label="新会话模式"
+              />
+              <p className="hint" style={{ marginTop: 9 }}>
+                普通对话不绑定资料；知识库问答使用所选知识库；Agent 模式使用已发布 Agent 的配置。
+              </p>
+            </div>
+
+            {wizMode === 'AGENT' && (
+              <div className="wizard-field" style={{ marginTop: 18 }}>
+                <label>选择 Agent</label>
+                <div className="wizard-opts">
+                  {agentOptions.map((option) => (
+                    <button
+                      key={option.id ?? '__default__'}
+                      type="button"
+                      className="chip wizard-chip"
+                      data-on={option.id === wizAgent ? '' : undefined}
+                      aria-pressed={option.id === wizAgent}
+                      onClick={() => setWizAgent(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
-              </Step>
-              <Step>
-                <div style={{ padding: '10px 0 6px' }}>
-                  <div className="wizard-field">
-                    <label>绑定知识库（可多选）</label>
-                    <div className="wizard-opts">
-                      {KBS.map((kb) => (
-                        <button
-                          key={kb.id}
-                          type="button"
-                          className="chip wizard-chip"
-                          data-on={wizKbs.includes(kb.name) ? '' : undefined}
-                          aria-pressed={wizKbs.includes(kb.name)}
-                          onClick={() =>
-                            setWizKbs((list) => (list.includes(kb.name) ? list.filter((k) => k !== kb.name) : [...list, kb.name]))
-                          }
-                        >
-                          {kb.name}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="hint" style={{ marginTop: 8 }}>会话内仍可在头部随时增删绑定</p>
-                  </div>
+              </div>
+            )}
+
+            {wizMode === 'RAG' && (
+              <div className="wizard-field" style={{ marginTop: 18 }}>
+                <label>绑定知识库（可多选）</label>
+                {kbsLoading && <p className="hint">正在加载你的知识库…</p>}
+                {kbsError && <p className="form-error active" role="alert">{kbsError} <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}>重试</button></p>}
+                {!kbsLoading && !kbsError && kbOptions.length === 0 && <p className="hint">还没有知识库。你可以先创建空会话，再到知识库页面创建并导入资料。</p>}
+                <div className="wizard-opts">
+                  {kbOptions.map((kb) => {
+                    const key = kbKey(kb)
+                    return (
+                      <button
+                        key={kb.id}
+                        type="button"
+                        className="chip wizard-chip"
+                        data-on={wizKbs.includes(key) ? '' : undefined}
+                        aria-pressed={wizKbs.includes(key)}
+                        onClick={() => setWizKbs((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])}
+                      >
+                        {kb.name}
+                      </button>
+                    )
+                  })}
                 </div>
-              </Step>
-              <Step>
-                <div style={{ padding: '10px 0 6px' }}>
-                  <p style={{ margin: 0 }}>确认创建：会话将带着所选 Agent 与知识库开始。</p>
-                  <p className="hint" style={{ marginTop: 10 }}>创建后可在头部切换 Agent、改动知识库绑定。</p>
-                </div>
-              </Step>
-            </Stepper>
-        </>
+              </div>
+            )}
+          </Step>
+          <Step>
+            <p style={{ margin: 0 }}>确认创建「{MODE_OPTIONS.find((option) => option.value === wizMode)?.label}」会话。</p>
+            <p className="hint" style={{ marginTop: 10 }}>
+              {wizMode === 'RAG'
+                ? `将绑定 ${wizKbs.length} 个知识库。`
+                : wizMode === 'AGENT'
+                  ? `将使用 Agent「${agentNameOf(wizAgent)}」。`
+                  : '会话创建后可以立即提问。'}
+            </p>
+            {creatingSession && <p role="status" className="hint">正在创建会话…</p>}
+          </Step>
+        </Stepper>
       </Modal>
     </div>
   )

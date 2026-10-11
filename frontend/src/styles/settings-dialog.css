@@ -20,7 +20,7 @@
   grid-template-columns: 232px minmax(0, 1fr);
   width: min(880px, 94vw);
   height: min(620px, 88vh);
-  border: 1px solid var(--border);
+
   border-radius: 18px;
   background: var(--card-bg);
   box-shadow: var(--shadow-lg);
@@ -39,7 +39,7 @@
   flex-direction: column;
   min-height: 0;
   padding: 12px 10px;
-  border-right: 1px solid var(--border);
+
   background: var(--surface-muted);
 }
 .settings-dialog__search {
@@ -116,7 +116,7 @@
 .settings-dialog__foot {
   padding-top: 10px;
   margin-top: 10px;
-  border-top: 1px solid var(--border);
+
 }
 .settings-dialog__logout {
   display: flex;
@@ -135,23 +135,6 @@
 }
 .settings-dialog__logout:hover { background: oklch(from var(--danger) l c h / 0.12); }
 .settings-dialog__replay,
-.settings-dialog__reset {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  height: 34px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 9px;
-  background: none;
-  color: var(--text-2);
-  font-size: 13.5px;
-  text-align: left;
-  cursor: pointer;
-}
-.settings-dialog__replay:hover,
-.settings-dialog__reset:hover { background: var(--card-bg); color: var(--text); }
 
 /* ---------- 右栏：内容 ---------- */
 .settings-dialog__body {
@@ -198,7 +181,7 @@
   }
   .settings-dialog__nav {
     border-right: 0;
-    border-bottom: 1px solid var(--border);
+
     padding: 10px;
   }
   .settings-dialog__list {

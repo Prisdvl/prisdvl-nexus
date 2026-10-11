@@ -1,35 +1,214 @@
 /* ============================================================
- * 对话页的实底与输入框可辨识度（修复"输入框不明显 / 面板透出花纹"）
+ * 对话页样式（ChatGPT 版式）
  *
- * 实测问题：
- *  1) 暗色下 .prompt-bar__field 的填充 = oklch(0.196 0.002 0)
- *     与 .chat-main 面板色**完全相同**，且边框 0px —— 输入框等于隐形。
- *  2) .chat-main 背景带 /0.92、.shell-main 带 /0.82 透明度，
- *     背后的粒子花纹会透出来，看起来像"面板没铺满 / 排版破了洞"。
+ * 两条原则（2026-10-11 按需求重写）：
+ *  1) **版式**：内容居中阅读宽度（768px），用户消息右对齐小气泡，
+ *     AI 回答是"正文"——无卡片、无边框、无内边距、不限高。
+ *  2) **不用线条**：整页不使用装饰性边框/分隔线（border）。
+ *     层级靠"底色 + 间距 + 阴影"表达，与 ChatGPT 一致。
+ *     唯一保留的是表格表头下的 1px 分隔线——表格无线则不可读；
+ *     如需彻底去线，删掉 `thead th` 那条即可。
  * ============================================================ */
 
-/* 对话页要"实底"：面板与外壳都不再半透明，粒子背景只留在留白区之外 */
+/* ---------- 0. 实底：面板不半透明，粒子背景只留在留白区之外 ---------- */
 .shell-main:has(.chat-fixed) { background: oklch(from var(--bg) l c h); }
 .chat-fixed .chat-main { background: oklch(from var(--surface) l c h); }
 
-/*
- * 输入区：给它明确的边界与比面板更亮/更暗一档的填充。
- * --surface-muted 在暗色比面板亮（0.235 vs 0.196）、在亮色比面板暗（0.95 vs 0.995），
- * 两个主题都能一眼看出"这里是输入框"。
- */
-.composer-wrap .prompt-bar__field {
-  border: 1px solid var(--border);
+/* ---------- 1. 对话区 ---------- */
+.chat-main .thread {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 28px;
+  padding: 24px 24px 36px;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+}
+
+/* 每条消息统一使用居中的阅读宽度 */
+.chat-main .thread > .msg {
+  align-self: center;
+  width: min(100%, 768px);
+  max-width: 768px;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.chat-main .thread .msg > div { min-width: 0; max-width: 100%; }
+
+/* 覆盖全局 .msg .bub 的白色气泡 + 边框 + pre-wrap */
+.chat-main .thread .msg .bub {
+  border: 0;
+  box-shadow: none;
+  white-space: normal;          /* 关键：Markdown 已产出块级元素，pre-wrap 会多出空白 */
+}
+
+/* ---------- 2. 用户消息：右对齐小气泡 ---------- */
+.chat-main .thread > .msg.user {
+  display: flex;
+  justify-content: flex-end;
+  align-self: center;
+}
+.chat-main .thread .msg.user .bub {
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: min(88%, 680px);
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 20px;
   background: var(--surface-muted);
-  transition:
-    border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;         /* 用户输入是纯文本，保留换行 */
+  box-shadow: none;
 }
-.composer-wrap .prompt-bar__field:hover { border-color: var(--border-strong); }
-.composer-wrap .prompt-bar__field:focus-within {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px oklch(from var(--primary) l c h / 0.18);
+
+/* ---------- 3. AI 回答：正文，不限制在小框里 ---------- */
+.chat-main .thread .msg:not(.user) .bub {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+  box-shadow: none;
 }
-/* 占位符与输入文字：确保在 muted 底上仍然清晰 */
-.composer-wrap .prompt-bar__input::placeholder { color: var(--text-3); }
-.composer-wrap .prompt-bar__input { color: var(--text); }
+
+/* 段落 */
+.chat-main .thread .msg .bub p { margin: 0 0 16px; }
+.chat-main .thread .msg .bub p:last-child { margin-bottom: 0; }
+
+/* 标题 */
+.chat-main .thread .msg .bub h1,
+.chat-main .thread .msg .bub h2,
+.chat-main .thread .msg .bub h3 {
+  margin: 24px 0 12px;
+  color: var(--text);
+  line-height: 1.4;
+  letter-spacing: -0.02em;
+}
+.chat-main .thread .msg .bub h1 { font-size: 1.5em; }
+.chat-main .thread .msg .bub h2 { font-size: 1.25em; }
+.chat-main .thread .msg .bub h3 { font-size: 1.1em; }
+
+/* 列表 */
+.chat-main .thread .msg .bub ul,
+.chat-main .thread .msg .bub ol { padding-left: 26px; margin: 10px 0 16px; }
+.chat-main .thread .msg .bub li { padding-left: 4px; margin: 5px 0; }
+
+/* 行内代码：只靠底色区分，不画线 */
+.chat-main .thread .msg .bub code {
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--surface-muted);
+  font-size: 0.88em;
+}
+
+/* 代码块：整块底色，不画线 */
+.chat-main .thread .msg .bub pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 14px 16px;
+  margin: 14px 0;
+  border: 0;
+  border-radius: 12px;
+  background: oklch(from var(--surface-muted) l c h);
+  line-height: 1.6;
+}
+.chat-main .thread .msg .bub pre code {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* 表格：横向可滚；除表头下方一条分隔线外不画线 */
+.chat-main .thread .msg .bub table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.chat-main .thread .msg .bub th,
+.chat-main .thread .msg .bub td {
+  padding: 9px 12px;
+  border: 0;
+  text-align: left;
+}
+.chat-main .thread .msg .bub thead th { border-bottom: 1px solid var(--border); }  /* ← 唯一保留的线 */
+.chat-main .thread .msg .bub tbody tr:nth-child(even) { background: oklch(from var(--surface-muted) l c h / 0.55); }
+
+/* ---------- 4. 底部输入区：无边框，靠底色 + 阴影 ---------- */
+.chat-main-col > .composer-wrap {
+  position: relative;
+  z-index: 3;
+  box-sizing: border-box;
+  width: min(calc(100% - 48px), 768px);
+  max-width: 768px;
+  align-self: center;
+  margin: 0 auto 10px;
+  padding: 0;
+  border-radius: 28px;
+  box-shadow: none;
+}
+.chat-main-col .composer-wrap .prompt-bar {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  --pb-w: 100%;
+  border: 0;
+  border-radius: 28px;
+  background: var(--input-bg, var(--surface-muted));
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.06), 0 0 0 1px rgb(0 0 0 / 0.03);
+  transition: box-shadow 160ms ease;
+}
+/* 聚焦只加深一点阴影，不做高亮描边 */
+.chat-main-col .composer-wrap:focus-within .prompt-bar {
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.09), 0 0 0 1px rgb(0 0 0 / 0.04);
+}
+.chat-main-col .composer-wrap .prompt-bar textarea,
+.chat-main-col .composer-wrap .prompt-bar__field {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  max-height: 200px;
+  padding: 13px 16px 8px;
+  margin: 0;
+  border: 0 !important;          /* 覆盖既有 .prompt-bar__field 的描边（那是"线条"） */
+  outline: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.65;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  field-sizing: content;         /* 输入框随内容增长（Chromium/Edge） */
+  box-shadow: none !important;   /* 去掉既有 focus 高亮圈 */
+}
+.chat-main-col .composer-wrap .prompt-bar__input::placeholder { color: var(--text-3); }
+.chat-main-col .composer-wrap .prompt-bar__input { color: var(--text); }
+
+/* ---------- 5. 窄屏 ---------- */
+@media (max-width: 640px) {
+  .chat-main .thread { gap: 22px; padding: 18px 14px 28px; }
+  .chat-main .thread > .msg { width: 100%; }
+  .chat-main .thread .msg.user .bub { max-width: 90%; padding: 9px 13px; border-radius: 18px; font-size: 14px; }
+  .chat-main .thread .msg:not(.user) .bub { font-size: 14px; line-height: 1.75; }
+  .chat-main-col > .composer-wrap { width: calc(100% - 24px); margin-bottom: 8px; }
+  .chat-main-col .composer-wrap .prompt-bar { border-radius: 24px; }
+  .chat-main-col .composer-wrap .prompt-bar textarea,
+  .chat-main-col .composer-wrap .prompt-bar__field { min-height: 44px; max-height: 160px; padding: 11px 13px 7px; font-size: 14px; }
+}

@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './styles/tokens.css'
 import './styles/global.css'
+/* 顺序即优先级（同权重时后加载者胜）：tokens → global → chat-solid → chatgpt-web-style */
+import './styles/chat-solid.css'
+import './styles/chatgpt-web-style.css'
 
 /*
  * 这里**不再**做主题的预渲染初始化。
