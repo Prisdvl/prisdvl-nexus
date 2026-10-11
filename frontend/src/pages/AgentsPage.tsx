@@ -276,7 +276,7 @@ export default function AgentsPage() {
               <StatusMark status="failed" size={18} label="执行失败" fontSize={14} strike={false} />
             )}
             {testOut && (
-              <div style={{ marginTop: 12, padding: 14, borderRadius: 12, fontSize: 13.5, whiteSpace: 'pre-wrap', lineHeight: 1.7, background: 'var(--surface)' }}>
+              <div style={{ marginTop: 12, padding: 14, border: '1px solid var(--border)', borderRadius: 12, fontSize: 13.5, whiteSpace: 'pre-wrap', lineHeight: 1.7, background: 'var(--surface)' }}>
                 {testOut}
               </div>
             )}
