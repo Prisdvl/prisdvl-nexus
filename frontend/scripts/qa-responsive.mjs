@@ -3,7 +3,7 @@ import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -16,7 +16,8 @@ const check = (name, ok, extra = '') => {
 const login = async (page) => {
   await page.goto(BASE + '/#/login', { waitUntil: 'networkidle' })
   await page.waitForTimeout(1400)
-  await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+  await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
   await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
   await page.waitForSelector('.shell', { timeout: 8000 })
   await page.waitForTimeout(1200)
@@ -112,11 +113,11 @@ const expanded = await page.evaluate(() => ({
   links: Array.from(document.querySelectorAll('.nav-card-link')).map((l) => l.textContent.trim()),
 }))
 check('汉堡展开出 3 张卡片', expanded.open === true && expanded.cards === 3, `${expanded.cards} 张`)
-check('卡片里含章节锚点（导航未丢失）', ['它能做什么', '怎么工作', 'Agent', '技术栈'].every((s) => expanded.links.includes(s)), expanded.links.slice(0, 4).join(' / '))
+check('卡片里含章节锚点（导航未丢失）', ['能力', '流程', '模式', '技术'].every((s) => expanded.links.includes(s)), expanded.links.slice(0, 4).join(' / '))
 
 // 卡片链接必须走滚动，不能被 hash 路由吃掉
 const hashBefore = await page.evaluate(() => location.hash)
-await page.locator('.nav-card-link', { hasText: '怎么工作' }).first().click()
+await page.locator('.nav-card-link', { hasText: '流程' }).first().click()
 await page.waitForTimeout(1300)
 const afterJump = await page.evaluate(() => ({ y: Math.round(window.scrollY), hash: location.hash }))
 check('点卡片里的章节会滚动过去', afterJump.y > 400, `scrollY=${afterJump.y}`)
@@ -192,16 +193,10 @@ await page.waitForTimeout(600)
   await page.keyboard.press('Escape')
   await page.waitForTimeout(400)
 
-  // 验证码组件在小屏可用
-  await page.goto(BASE + '/#/app/account', { waitUntil: 'networkidle' })
-  await page.waitForTimeout(1500)
-  await page.locator('.settings-item', { hasText: '邮箱验证' }).first().click()
-  await page.waitForTimeout(500)
-  await page.locator('button', { hasText: '验证邮箱' }).first().click()
-  await page.waitForTimeout(600)
-  const slotsFit = await page.locator('.code-slots__row').evaluate((el) => el.getBoundingClientRect().width <= window.innerWidth)
-  check('手机：验证码不超出视口', slotsFit)
-  await page.screenshot({ path: `${OUT}/r-mobile-codeslots.png` })
+  // 验证码组件在小屏可用：
+  // ⚠️ 已移除（2026-10-11）。账号页的「邮箱验证」在后端没有发送/校验接口，
+  // 该入口已诚实地改为禁用态「暂不可用」（见 pages/settings/sections.tsx 的 EmailSection），
+  // 因此"点『验证邮箱』→ 检查 .code-slots__row"这条流程已不存在，脚本不再断言它。
   await page.close()
 }
 
