@@ -14,6 +14,13 @@ public enum SearchMode {
     /** 两路 + RRF 融合（默认）。 */
     HYBRID;
 
+    /**
+     * 将外部传入的检索模式字符串解析为 {@link SearchMode}。
+     *
+     * @param raw 原始字符串（可为 null 或空白；此时回退到默认的 HYBRID）
+     * @return 对应的检索模式
+     * @throws BusinessException 当 raw 非空但不属于 bm25 / vector / hybrid 时
+     */
     public static SearchMode parse(String raw) {
         if (raw == null || raw.isBlank()) {
             return HYBRID;
@@ -26,10 +33,12 @@ public enum SearchMode {
         }
     }
 
+    /** 该模式是否需要走 BM25 一路（BM25 或 HYBRID 时为真）。 */
     public boolean usesBm25() {
         return this == BM25 || this == HYBRID;
     }
 
+    /** 该模式是否需要走向量一路（VECTOR 或 HYBRID 时为真）。 */
     public boolean usesVector() {
         return this == VECTOR || this == HYBRID;
     }

@@ -192,7 +192,33 @@ CREATE TABLE sys_user (
 | --- | --- | --- |
 | `sys_role` | `code`(`USER`/`ADMIN`)、`name` | RBAC 角色字典 |
 | `sys_user_role` | `user_id`、`role_id` | 唯一键 `(user_id, role_id)` |
-| `sys_refresh_token` | `user_id`、`token_hash`(SHA-256)、`expires_at`、`revoked`、`device_info` | **⚠️ 设计稿，表尚未创建**（迁移里没有它，`/auth/refresh`、`/auth/logout` 也未实现）。Refresh Token 的轮换与吊销要等 ADR-021 的第 ⑤ 阶段 |
+| `sys_user_session` | 见下节 V21 | Refresh Token 会话（Phase 4）；**不叫** `sys_refresh_token`（早期设计名已废弃） |
+
+#### V21：`sys_user_session`（认证 Phase 4 · Refresh + 设备会话）
+
+```sql
+CREATE TABLE sys_user_session (
+    id            BIGINT       NOT NULL,
+    user_id       BIGINT       NOT NULL,
+    token_hash    VARCHAR(64)  NOT NULL,  -- refresh 的 SHA-256 十六进制；绝不存明文
+    device_name   VARCHAR(128)          DEFAULT NULL,
+    user_agent    VARCHAR(512)          DEFAULT NULL,
+    ip_address    VARCHAR(64)           DEFAULT NULL,
+    created_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    last_used_at  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    expires_at    DATETIME(3)  NOT NULL,
+    revoked       TINYINT      NOT NULL DEFAULT 0,
+    revoked_at    DATETIME(3)           DEFAULT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY idx_session_token_hash (token_hash),
+    KEY idx_session_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+- **opaque refresh**：`SecureRandom` 32 字节 → Base64URL；服务端只存 hash，客户端持有明文一次。
+- **rotation**：刷新时 `UPDATE ... SET revoked=1 WHERE id=? AND revoked=0`（并发最多一成功），再 insert 新行。
+- **改密 / 忘记密码确认**：`token_version+1` 之外，再 `revokeAllActiveForUser`。
+- **不做** Redis 白名单 / jti 黑名单；状态以本表为准。
 
 #### V18：`sys_user.token_version`（平台化 Phase 5.6）
 
@@ -711,8 +737,8 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
 
 | Key | 类型 | TTL | 用途 |
 | --- | --- | --- | --- |
-| `nexus:auth:refresh:{jti}` | String | 7d | Refresh Token 白名单/吊销 |
-| `nexus:auth:blacklist:{jti}` | String | 与 token 同寿命 | 主动登出 |
+| ~~`nexus:auth:refresh:{jti}`~~ | — | — | **已废弃**：Phase 4 refresh 状态在 MySQL `sys_user_session`，不走 Redis |
+| `nexus:auth:blacklist:{jti}` | String | 与 token 同寿命 | 主动让单支 access 立刻失效（当前 logout 不吊销 access，靠 exp / token_version） |
 | `nexus:sse:ticket:{ticket}` | String | 60s | SSE 一次性鉴权票据（EventSource/fetch 无法带 Header 的替代方案） |
 | `nexus:import:lock:{kbId}` | String | 30m | 同一知识库导入互斥（分布式锁） |
 | `nexus:import:progress:{taskId}` | Hash | 1d | 导入进度（与 DB 双写，前端读缓存更快） |

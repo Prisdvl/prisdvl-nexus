@@ -24,6 +24,7 @@ public record VaultFile(
         return dot < 0 ? "" : fileName.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
     }
 
+    /** 文件字节数；内容为 {@code null} 时返回 0。 */
     public long size() {
         return content == null ? 0 : content.length;
     }

@@ -10,13 +10,16 @@ import com.lky.nexus.app.auth.model.dto.AuthTokenResponse;
 import com.lky.nexus.app.auth.model.dto.ChangePasswordRequest;
 import com.lky.nexus.app.auth.model.dto.LoginRequest;
 import com.lky.nexus.app.auth.model.dto.RegisterRequest;
+import com.lky.nexus.app.auth.model.dto.SessionClientInfo;
 import com.lky.nexus.app.auth.model.dto.UpdateProfileRequest;
 import com.lky.nexus.app.auth.model.dto.UserInfoResponse;
+import com.lky.nexus.app.auth.email.Emails;
 import com.lky.nexus.app.auth.model.entity.SysRolePO;
 import com.lky.nexus.app.auth.model.entity.SysUserPO;
 import com.lky.nexus.app.auth.model.entity.SysUserRolePO;
 import com.lky.nexus.app.auth.security.UserAuthCache;
 import com.lky.nexus.app.auth.service.AuthService;
+import com.lky.nexus.app.auth.session.RefreshTokenService;
 import com.lky.nexus.app.auth.token.TokenService;
 import com.lky.nexus.app.security.LoginAttemptLimiter;
 import com.lky.nexus.common.api.ErrorCode;
@@ -30,6 +33,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 认证服务实现。
@@ -63,6 +67,7 @@ public class AuthServiceImpl implements AuthService {
     private final SysUserRoleMapper sysUserRoleMapper;
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokenService;
+    private final RefreshTokenService refreshTokenService;
     private final com.lky.nexus.app.workspace.WorkspaceService workspaceService;
     private final UserAuthCache userAuthCache;
     private final LoginAttemptLimiter loginAttemptLimiter;
@@ -72,6 +77,7 @@ public class AuthServiceImpl implements AuthService {
                            SysUserRoleMapper sysUserRoleMapper,
                            PasswordEncoder passwordEncoder,
                            TokenService tokenService,
+                           RefreshTokenService refreshTokenService,
                            com.lky.nexus.app.workspace.WorkspaceService workspaceService,
                            UserAuthCache userAuthCache,
                            LoginAttemptLimiter loginAttemptLimiter) {
@@ -80,6 +86,7 @@ public class AuthServiceImpl implements AuthService {
         this.sysUserRoleMapper = sysUserRoleMapper;
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
+        this.refreshTokenService = refreshTokenService;
         this.workspaceService = workspaceService;
         this.userAuthCache = userAuthCache;
         this.loginAttemptLimiter = loginAttemptLimiter;
@@ -97,7 +104,8 @@ public class AuthServiceImpl implements AuthService {
         // 完全不知道该去换邮箱。残留竞态（预检通过后、insert 前被别人抢注）仍会撞唯一键，
         // 概率在微秒级，此处不额外 catch —— 没有可靠的依据判断撞的是用户名还是邮箱，
         // 硬猜一个码只会把错误信息编错。
-        String email = StringUtils.hasText(request.email()) ? request.email().trim() : null;
+        // 邮箱必填：规范化 + 格式校验（trim + 小写）；新注册一律未验证。
+        String email = Emails.normalizeValid(request.email());
         requireEmailAvailable(email, null);
 
         SysRolePO defaultRole = sysRoleMapper.selectOne(
@@ -112,6 +120,7 @@ public class AuthServiceImpl implements AuthService {
         user.setUsername(username);
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setEmail(email);
+        user.setEmailVerified(0);
         user.setNickname(StringUtils.hasText(request.nickname()) ? request.nickname().trim() : username);
         user.setStatus(STATUS_ENABLED);
         sysUserMapper.insert(user);
@@ -129,7 +138,7 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    public AuthTokenResponse login(LoginRequest request) {
+    public AuthTokenResponse login(LoginRequest request, SessionClientInfo clientInfo) {
         String username = request.username().trim();
         // 冻结检查放在最前面：连"这个用户存不存在"都不该在被冻结时泄露出去。
         // 命中冻结直接 7001/429，即使密码正确也拦——那正是"冻结"的含义。
@@ -163,9 +172,14 @@ public class AuthServiceImpl implements AuthService {
         long tokenVersion = user.getTokenVersion() == null ? 0L : user.getTokenVersion();
         TokenService.IssuedToken issuedToken =
                 tokenService.issueAccessToken(user.getId(), user.getUsername(), roles, tokenVersion);
+        String refreshToken = refreshTokenService.issueSession(user.getId(), clientInfo);
 
         log.info("登录成功 userId={}, username={}, roles={}", user.getId(), user.getUsername(), roles);
-        return new AuthTokenResponse(issuedToken.token(), "Bearer", issuedToken.expiresIn(),
+        return new AuthTokenResponse(
+                issuedToken.token(),
+                refreshToken,
+                "Bearer",
+                issuedToken.expiresIn(),
                 toUserInfo(user, roles));
     }
 
@@ -212,15 +226,18 @@ public class AuthServiceImpl implements AuthService {
 
         // 让缓存里的旧版本立刻作废（尽力而为：失败只计数，旧令牌最多再活一个 TTL）
         userAuthCache.invalidate(userId);
-        log.info("用户修改密码成功，已作废其此前签发的全部令牌 userId={}", userId);
+        // 改密 = 所有设备重新登录：access 靠 token_version；refresh 靠会话撤销
+        refreshTokenService.revokeAllSessions(userId);
+        log.info("用户修改密码成功，已作废其此前签发的全部令牌与 refresh 会话 userId={}", userId);
     }
 
     @Override
     public UserInfoResponse updateProfile(Long userId, UpdateProfileRequest request) {
-        requireUser(userId);
+        SysUserPO current = requireUser(userId);
 
         // 用 LambdaUpdateWrapper 而不是 updateById(entity)：MyBatis-Plus 默认跳过实体里的 null 字段，
         // 那会让"清空邮箱"变成静默空操作——接口看起来成功了，值还在。
+        // email_verified 也必须用 set 显式写入，避免 NOT_NULL 策略跳过 0。
         LambdaUpdateWrapper<SysUserPO> update = Wrappers.<SysUserPO>lambdaUpdate().eq(SysUserPO::getId, userId);
         boolean changed = false;
 
@@ -229,9 +246,17 @@ public class AuthServiceImpl implements AuthService {
             changed = true;
         }
         if (request.email() != null) {
-            String email = blankToNull(request.email());
+            // 账号必须绑定邮箱：传了 email 字段就不允许空串清空
+            String email = Emails.normalizeValid(request.email());
             requireEmailAvailable(email, userId);
             update.set(SysUserPO::getEmail, email);
+            // 规范化后地址变化 → 必须重新验证；仅大小写差异不算更换
+            String currentNorm = current.getEmail() == null
+                    ? null
+                    : Emails.normalizeOrNull(current.getEmail());
+            if (!Objects.equals(currentNorm, email)) {
+                update.set(SysUserPO::getEmailVerified, 0);
+            }
             changed = true;
         }
         if (!changed) {
@@ -266,12 +291,11 @@ public class AuthServiceImpl implements AuthService {
         return sysUserMapper.selectOne(Wrappers.<SysUserPO>lambdaQuery().eq(SysUserPO::getUsername, username));
     }
 
-    private SysUserPO findByEmail(String email) {
-        return sysUserMapper.selectOne(Wrappers.<SysUserPO>lambdaQuery().eq(SysUserPO::getEmail, email));
-    }
-
     private UserInfoResponse toUserInfo(SysUserPO user, List<String> roles) {
-        return new UserInfoResponse(user.getId(), user.getUsername(), user.getNickname(), user.getEmail(), roles);
+        boolean verified = Integer.valueOf(1).equals(user.getEmailVerified())
+                && StringUtils.hasText(user.getEmail());
+        return new UserInfoResponse(
+                user.getId(), user.getUsername(), user.getNickname(), user.getEmail(), verified, roles);
     }
 
     /**
@@ -279,12 +303,15 @@ public class AuthServiceImpl implements AuthService {
      *
      * <p>空邮箱直接放行：{@code uk_user_email(email, deleted)} 在 MySQL / H2 下都允许多行 NULL，
      * 因此"没填邮箱"或"清空邮箱"不会被唯一键挡住。
+     *
+     * <p>用 {@code LOWER(email)} 比对，与 {@link Emails} 规范化一致，避免大小写变体绕过唯一性。
      */
     private void requireEmailAvailable(String email, Long selfId) {
         if (email == null) {
             return;
         }
-        SysUserPO existing = findByEmail(email);
+        SysUserPO existing = sysUserMapper.selectOne(Wrappers.<SysUserPO>lambdaQuery()
+                .apply("LOWER(email) = {0}", email));
         if (existing != null && !existing.getId().equals(selfId)) {
             throw new BusinessException(ErrorCode.EMAIL_ALREADY_EXISTS, "邮箱 " + email + " 已被占用");
         }

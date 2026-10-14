@@ -42,7 +42,11 @@ public class AiModelRegistry {
     /** 工具循环上限的唯一载体：所有手工构建的模型共用同一份，避免各 provider 各配一套。 */
     private final ToolCallingManager toolCallingManager;
 
+    /** 全局默认值（温度 / 超时），按需构建用户自定义模型时复用同一份。 */
+    private final AiModelProperties properties;
+
     public AiModelRegistry(AiModelProperties properties) {
+        this.properties = properties;
         this.toolCallingManager = toolCallingManager(properties.getTools());
         Map<String, ChatModel> built = new LinkedHashMap<>();
         for (AiModelProperties.Provider provider : properties.getProviders()) {
@@ -121,27 +125,53 @@ public class AiModelRegistry {
      * <p>构建方式经 v2.0.1 源码核对：{@code OpenAiChatModel.builder().options(OpenAiChatOptions)}，
      * 其中 {@code OpenAiChatOptions.Builder} 提供 {@code baseUrl(String)} 与 {@code apiKey(String)}。
      */
+    /**
+     * 按需用任意 OpenAI 兼容凭据构建一个对话模型（用户自定义 key 用）。
+     *
+     * <p>与启动时按 {@code ai.providers} 构建的模型共用同一份默认温度、超时与工具循环上限，
+     * 因此用户自己的网关在行为上与服务端配置的模型一致（同样的 120s callTimeout、
+     * 同样的工具轮数上限），不会出现"换了个 key 超时也跟着变"的漂移。
+     *
+     * @param baseUrl OpenAI 兼容端点
+     * @param apiKey  用户自己的 API Key
+     * @param model   模型名
+     */
+    public ChatModel buildOpenAiChatModel(String baseUrl, String apiKey, String model) {
+        return buildOpenAiCompatibleChatModel(baseUrl, apiKey, model, null);
+    }
+
     @SuppressWarnings({"deprecation", "removal"})
     private ChatModel buildOpenAiCompatibleChatModel(AiModelProperties properties,
                                                      AiModelProperties.Provider provider,
                                                      AiModelProperties.ModelEntry entry) {
+        return buildOpenAiCompatibleChatModel(
+                provider.getBaseUrl(), provider.getApiKey(), entry.getName(), provider.getHeaders());
+    }
+
+    @SuppressWarnings({"deprecation", "removal"})
+    private ChatModel buildOpenAiCompatibleChatModel(String baseUrl, String apiKey, String modelName,
+                                                    Map<String, String> headers) {
         OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder()
-                .baseUrl(provider.getBaseUrl())
-                .apiKey(provider.getApiKey())
-                .model(entry.getName())
+                .baseUrl(baseUrl)
+                .apiKey(apiKey)
+                .model(modelName)
                 .temperature(properties.getDefaults().getTemperature());
 
         if (properties.getDefaults().getMaxTokens() != null) {
             optionsBuilder.maxTokens(properties.getDefaults().getMaxTokens());
         }
         // 网关要求的附加请求头（例如 OpenCode Zen 的 x-opencode-session 与自定义 User-Agent）
-        if (provider.getHeaders() != null && !provider.getHeaders().isEmpty()) {
-            optionsBuilder.customHeaders(provider.getHeaders());
+        if (headers != null && !headers.isEmpty()) {
+            optionsBuilder.customHeaders(headers);
         }
+
+        // 显式超时：不设时底层 OkHttp 默认超时可达数分钟，上游异常 hang 会把用户请求一起挂死。
+        var timeout = properties.getDefaults().getChatTimeout();
 
         return OpenAiChatModel.builder()
                 .options(optionsBuilder.build())
                 .toolCallingManager(toolCallingManager)
+                .httpClientBuilderCustomizer(httpBuilder -> httpBuilder.timeout(timeout))
                 .build();
     }
 

@@ -18,11 +18,17 @@ public class WorkspaceService {
 
     private final WorkspaceMapper workspaceMapper;
 
+    /** 注入 {@link WorkspaceMapper}，由 Spring 完成。 */
     public WorkspaceService(WorkspaceMapper workspaceMapper) {
         this.workspaceMapper = workspaceMapper;
     }
 
-    /** 取个人工作区；缺失（例如历史数据、直接造库的测试）则补齐一个，幂等。 */
+    /**
+     * 取用户的个人工作区；缺失（例如历史数据、直接造库的测试）则补齐一个，幂等。
+     *
+     * @param userId 用户 ID
+     * @return 个人工作区 ID（已存在则复用，不存在则新建并返回）
+     */
     public Long requirePersonalWorkspace(Long userId) {
         WorkspacePO existing = workspaceMapper.selectOne(
                 Wrappers.<WorkspacePO>lambdaQuery()

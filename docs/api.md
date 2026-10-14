@@ -116,17 +116,22 @@
 
 ---
 
-## 2. 认证与账号（Phase 0；账号安全部分 2026-10-02 补齐）
+## 2. 认证与账号（Phase 0；账号安全 2026-10-02；Refresh / 会话 Phase 4）
 
 ### 2.1 已实现
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/auth/register` | 注册（用户名 + 密码），密码 BCrypt 存储；按**来源 IP** 限流（10 次/小时，超限 `429/7001`） |
-| POST | `/api/auth/login` | 登录 → `accessToken`（30min）；连续失败达阈值后该用户名被冻结（5 次 / 15 分钟窗口，冻结 15 分钟）→ `429/7001` |
+| POST | `/api/auth/login` | 登录 → `accessToken`（默认 30m）+ `refreshToken`（默认 7d，opaque）+ `expiresIn` + `user`；连续失败冻结 → `429/7001` |
+| POST | `/api/auth/refresh` | 用 refresh 换新的 access + refresh（**rotation**：旧 refresh 立即失效）；公开端点 |
+| POST | `/api/auth/logout` | 撤销当前 refresh 会话（body：`refreshToken`）；access 不立刻删，靠 `exp` / `token_version`；公开端点 |
 | GET | `/api/users/me` | 当前用户信息与角色 |
 | PUT | `/api/users/me` | 修改资料（昵称 / 邮箱） |
-| PUT | `/api/users/me/password` | 修改密码（校验原密码；成功后**该用户全部已签发令牌立即失效**） |
+| PUT | `/api/users/me/password` | 修改密码（校验原密码；成功后 `token_version+1` **且**撤销全部 refresh 会话） |
+| GET | `/api/users/me/sessions` | 当前用户未撤销且未过期的设备会话列表（可选头 `X-Refresh-Token` 标记 `current`；**不回传 token/hash**） |
+| DELETE | `/api/users/me/sessions/{id}` | 退出指定设备（只能删自己的；否则 `404/2010`） |
+| POST | `/api/users/me/sessions/revoke-all` | 退出全部设备（批量 revoke） |
 | GET | `/api/users/me/quota` | 当前用户当日额度（只读，用于界面上"今日 N/M 次 · x/y tokens"那一行） |
 
 ```http
@@ -135,7 +140,24 @@ POST /api/auth/login
 
 200 OK
 { "code": 0, "message": "success", "data": {
-    "accessToken": "eyJ...", "username": "lky", "roles": ["USER"] } }
+    "accessToken": "eyJ...",
+    "refreshToken": "<opaque>",
+    "tokenType": "Bearer",
+    "expiresIn": 1800,
+    "user": { "id": "...", "username": "lky", "nickname": "...", "email": null,
+              "emailVerified": false, "roles": ["USER"] } } }
+```
+
+```http
+POST /api/auth/refresh
+{ "refreshToken": "<opaque>" }
+
+200 OK
+{ "code": 0, "data": {
+    "accessToken": "eyJ...", "refreshToken": "<new-opaque>",
+    "tokenType": "Bearer", "expiresIn": 1800 } }
+
+# 已用过 / 已撤销 / 已过期 → 401 / 2001
 ```
 
 **`/users/**` 全部没有 userId 参数**：身份只从 JWT 的 `sub` 取（`CurrentUser.requireId()`），
@@ -175,9 +197,15 @@ PUT /api/users/me/password
 代价是登录失败（`2006`）与改密失败（`1001`）口径不同，这是**刻意的区分**：
 登录 = 未认证；改密 = 已认证的参数错误。（原 Vue 版 E2E）`docs/archive/web-vue/scripts/verify-security.mjs` 有一条断言专门守这个分支，该脚本已随 `web/` 归档。
 
-**改密成功后本次会话也会失效**：吊销的是该 user 的**全部**令牌（`sys_user.token_version` 自增，
-校验见 ADR-020），包含发起本次请求的这一支。这是"改密码 = 所有设备下线"的正确语义，
+**改密成功后本次会话也会失效**：`sys_user.token_version` 自增（access JWT，见 ADR-020），
+并批量撤销该用户全部 refresh 会话（`sys_user_session`）。这是"改密码 = 所有设备下线"的正确语义，
 前端必须明说「密码已修改，请用新密码重新登录」并主动跳登录页，而不是等下一个请求撞 401。
+忘记密码确认成功同样：`token_version+1` + 撤销全部 refresh 会话。
+
+#### 设备会话
+
+列表项形状：`{ id, device, ip, lastUsedAt, createdAt, current }`。  
+前端设置页「会话与设备」调用上述三个 sessions 接口；`api.ts` 在 access 401/2001 时用单飞 Promise 调 `/auth/refresh` 并重放原请求。
 
 #### 当日额度 `GET /api/users/me/quota`
 
@@ -198,14 +226,12 @@ GET /api/users/me/quota
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/auth/refresh` | 刷新访问令牌（Refresh Token 轮换 + 旧 token 立即失效）——**需要 `sys_refresh_token` 表，迁移尚未写** |
-| POST | `/api/auth/logout` | 登出（吊销 refresh + access jti 进黑名单） |
 | GET | `/api/admin/users` | 管理员：用户列表（`ADMIN` 角色） |
 
-> 本节此前把 refresh / logout / `PUT /users/me` / `PUT /users/me/password` 都写成"已实现"，
-> 实际都不存在（`sys_refresh_token` 表在迁移里也没有，`jti` 声明预置了但从未被存储或校验）。
-> 2026-10-02 把其中两条做成了真的，另两条移到上面这张表里——**文档不实比功能缺失更贵**，
-> 它会让"照文档接一下就有了"的判断落空，且落空发生在集成之后。
+> Phase 4 已落地：opaque refresh + rotation + `sys_user_session`（Flyway V21）+
+> `/auth/refresh` / `/auth/logout` / `/users/me/sessions*`。
+> Access 仍是 HS256 JWT（`sub` + `ver`）；**不做** jti 黑名单、不做 Redis 存 refresh。
+> Token 仍在前端 `localStorage`（XSS 窗口见 ADR-021）；HttpOnly Cookie 迁移仍属后续。
 
 ---
 

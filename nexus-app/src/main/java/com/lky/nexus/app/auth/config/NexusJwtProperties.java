@@ -39,6 +39,14 @@ public class NexusJwtProperties {
     private Duration accessTokenTtl = Duration.ofMinutes(30);
 
     /**
+     * Refresh token / 登录会话有效期。
+     *
+     * <p>明文只发给客户端一次；服务端存 SHA-256。过期后无法再换 access，须重新登录。
+     */
+    @NotNull
+    private Duration refreshTokenTtl = Duration.ofDays(7);
+
+    /**
      * "用户当前令牌版本"的缓存 TTL（5.6）。
      *
      * <p>这个值不只是性能旋钮——它同时是**缓存失效失败时旧令牌的存活上限**：

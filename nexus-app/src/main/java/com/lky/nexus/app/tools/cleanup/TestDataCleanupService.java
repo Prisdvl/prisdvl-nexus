@@ -70,6 +70,7 @@ public class TestDataCleanupService {
      */
     private final Path storageRoot;
 
+    /** 装配各服务/映射器与数据源；存储根解析与 JdbcTemplate 构造细节见字段注释。 */
     public TestDataCleanupService(CleanupProperties properties,
                                   SysUserMapper sysUserMapper,
                                   SysUserRoleMapper sysUserRoleMapper,

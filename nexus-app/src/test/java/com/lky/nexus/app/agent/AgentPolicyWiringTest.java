@@ -71,7 +71,7 @@ class AgentPolicyWiringTest {
             captured.add(invocation.getArgument(0));
             return new ChatResponse(List.of(new Generation(new AssistantMessage("好的"))));
         });
-        when(chatClientFactory.get(anyString())).thenReturn(ChatClient.builder(stub).build());
+        when(chatClientFactory.get(anyString(), any())).thenReturn(ChatClient.builder(stub).build());
     }
 
     @Test

@@ -20,6 +20,12 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties({AiModelProperties.class, RetrievalDefaults.class})
 public class AiConfiguration {
 
+    /**
+     * 注册 {@link AiModelRegistry}：持有按 {@code ai.providers} 构建并缓存的多个 {@link ChatModel}。
+     *
+     * @param properties 模型配置（{@code ai.*}）
+     * @return 构建好的模型注册表
+     */
     @Bean
     public AiModelRegistry aiModelRegistry(AiModelProperties properties) {
         return new AiModelRegistry(properties);
@@ -39,9 +45,11 @@ public class AiConfiguration {
     @Bean
     public ChatClientFactory chatClientFactory(AiModelProperties properties, AiModelRegistry registry,
                                                ObjectProvider<ChatUsageRecorder> usageRecorder,
-                                               ObjectProvider<ObservabilityRegistry> observability) {
+                                               ObjectProvider<ObservabilityRegistry> observability,
+                                               ObjectProvider<com.lky.nexus.ai.model.UserChatCredentialsProvider> credentialsProvider) {
         return new ChatClientFactory(properties, registry,
                 usageRecorder.getIfAvailable(() -> ChatUsageRecorder.NOOP),
-                observability.getIfAvailable(ObservabilityRegistry::new));
+                observability.getIfAvailable(ObservabilityRegistry::new),
+                credentialsProvider.getIfAvailable());
     }
 }

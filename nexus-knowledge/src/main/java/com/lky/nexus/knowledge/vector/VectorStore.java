@@ -43,10 +43,23 @@ public interface VectorStore {
         return search(knowledgeBaseId, queryEmbedding, topK, minScore, null);
     }
 
-    /** 按内容哈希批量查缓存（命中则无需再调用嵌入模型）。 */
-    Map<String, float[]> findCachedEmbeddings(Collection<String> contentHashes);
+    /**
+     * 按内容哈希批量查缓存（命中则无需再调用嵌入模型）。
+     *
+     * <p><b>必须带上 {@code model}</b>：同一段文本在不同嵌入模型下的向量不可互换。
+     * 只按 hash 查会把旧模型的向量误当成新模型的缓存命中，相似度全被阈值滤掉，
+     * 表现为"vector 检索永远空、hybrid 只剩 BM25"。
+     *
+     * @param model 嵌入模型引用（与写入缓存时一致，形如 {@code bailian:text-embedding-v4}）
+     */
+    Map<String, float[]> findCachedEmbeddings(Collection<String> contentHashes, String model);
 
-    /** 写入嵌入缓存。 */
+    /**
+     * 写入嵌入缓存。
+     *
+     * <p>主键是 {@code (content_hash, model)}：换模型后同一段文本可以并存两份向量，
+     * 互不覆盖、互不误命中。
+     */
     void cacheEmbeddings(Map<String, float[]> embeddingsByHash, String model);
 
     /** 按文档删除向量（文档删除/重新切分时调用）。 */

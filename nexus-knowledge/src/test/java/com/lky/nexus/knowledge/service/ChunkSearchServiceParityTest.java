@@ -511,7 +511,7 @@ class ChunkSearchServiceParityTest {
         }
 
         @Override
-        public Map<String, float[]> findCachedEmbeddings(Collection<String> contentHashes) {
+        public Map<String, float[]> findCachedEmbeddings(Collection<String> contentHashes, String model) {
             return Map.of();
         }
 

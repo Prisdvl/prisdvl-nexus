@@ -60,7 +60,9 @@ public class WorkflowService {
     /**
      * 跑一遍知识工作流（对指定的知识库）。
      *
-     * @return 每步的 状态/耗时/消息
+     * @param userId          当前用户 ID（用于校验知识库归属并执行向量化/建索引）
+     * @param knowledgeBaseId 目标知识库 ID
+     * @return 每步的 状态/耗时/消息（顺序与步骤定义一致）
      */
     public List<StepResult> run(Long userId, Long knowledgeBaseId) {
         knowledgeBaseService.requireOwned(userId, knowledgeBaseId);

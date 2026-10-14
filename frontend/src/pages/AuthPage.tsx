@@ -5,7 +5,7 @@ import RubberSegment from '@/bits/RubberSegment/RubberSegment'
 import SkipLink from '@/components/SkipLink'
 import { toast } from '@/lib/toast'
 import { errMessage } from '@/lib/api'
-import { useLocation } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 import BrandMark from '@/components/BrandMark'
 import WavesBg from '@/components/WavesBg'
 import type { PaletteName, ThemeMode } from '@/lib/types'
@@ -28,7 +28,7 @@ export interface Credentials {
 
 export interface RegisterCredentials extends Credentials {
   nickname?: string
-  email?: string
+  email: string
 }
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1]
@@ -38,6 +38,7 @@ const LAYOUT_SPRING = { type: 'spring' as const, stiffness: 340, damping: 32, ma
 
 export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome }: AuthPageProps) {
   const location = useLocation()
+  const navigate = useNavigate()
   const from = (location.state as { from?: string } | null)?.from
   const reduceMotion = useReducedMotion()
   const [tab, setTab] = useState<'login' | 'register'>('login')
@@ -97,7 +98,7 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
     password: reg.password.length < 8 || reg.password.length > 64,
     password2: reg.password2 !== reg.password,
     nickname: reg.nickname.length > 64,
-    email: reg.email.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reg.email),
+    email: !reg.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reg.email.trim()),
   }
 
   const submitRegister = (e: FormEvent) => {
@@ -120,7 +121,7 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
         username: reg.username.trim(),
         password: reg.password,
         nickname: reg.nickname.trim() || undefined,
-        email: reg.email.trim() || undefined,
+        email: reg.email.trim(),
       })
       /* 注册成功后清空表单与校验痕迹：
          否则下一次进来 submitted 仍为 true，一输入就立刻报红（测试抓到的真问题）。
@@ -274,6 +275,9 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
                     />
                     <p className="err" id="li-p-err">请输入密码</p>
                   </div>
+                  <p className="switch-line" style={{ margin: '0 0 14px', textAlign: 'right' }}>
+                    <button type="button" onClick={() => navigate('/forgot')}>忘记密码？</button>
+                  </p>
                   <motion.button
                     className="btn btn-primary btn-block"
                     type="submit"
@@ -357,19 +361,20 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
                     <p className="err">昵称不能超过 64 位</p>
                   </div>
                   <div className={`field ${show('email', live.email) ? 'has-error' : ''}`}>
-                    <label htmlFor="rg-e">邮箱 <span className="field-optional">（可选）</span></label>
+                    <label htmlFor="rg-e">邮箱</label>
                     <input
                       id="rg-e"
                       className="input"
                       type="email"
                       value={reg.email}
-                      placeholder="用于找回密码等"
+                      placeholder="用于验证与找回密码"
                       autoComplete="email"
+                      required
                       aria-invalid={show('email', live.email)}
                       onBlur={() => setRegTouched((s) => ({ ...s, email: true }))}
                       onChange={(e) => setReg({ ...reg, email: e.target.value })}
                     />
-                    <p className="err">邮箱格式不正确</p>
+                    <p className="err">{reg.email.trim() ? '邮箱格式不正确' : '请填写邮箱'}</p>
                   </div>
                   <motion.button
                     className="btn btn-primary btn-block"

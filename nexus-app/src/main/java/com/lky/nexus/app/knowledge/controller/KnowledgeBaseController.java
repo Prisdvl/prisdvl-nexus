@@ -38,6 +38,7 @@ public class KnowledgeBaseController {
         this.workspaceService = workspaceService;
     }
 
+    /** 新建知识库；workspace 由 app 层解析为本人个人空间（knowledge 模块不依赖工作区服务）。 */
     @PostMapping
     public Result<KnowledgeBaseResponse> create(@Valid @RequestBody CreateKnowledgeBaseRequest request) {
         // 平台化 Phase 2：知识库归属 workspace。workspaceId 由 app 层解析
@@ -47,6 +48,7 @@ public class KnowledgeBaseController {
         return Result.ok(knowledgeBaseService.create(userId, workspaceId, request));
     }
 
+    /** 列出当前用户的知识库（分页）。 */
     @GetMapping
     public Result<PageResult<KnowledgeBaseResponse>> list(
             @RequestParam(defaultValue = "1") int pageNum,
@@ -54,17 +56,20 @@ public class KnowledgeBaseController {
         return Result.ok(knowledgeBaseService.list(CurrentUser.requireId(), pageNum, pageSize));
     }
 
+    /** 查看单个知识库详情（非本人返回 404）。 */
     @GetMapping("/{knowledgeBaseId}")
     public Result<KnowledgeBaseResponse> detail(@PathVariable Long knowledgeBaseId) {
         return Result.ok(knowledgeBaseService.detail(CurrentUser.requireId(), knowledgeBaseId));
     }
 
+    /** 更新知识库（非本人返回 404）。 */
     @PutMapping("/{knowledgeBaseId}")
     public Result<KnowledgeBaseResponse> update(@PathVariable Long knowledgeBaseId,
                                                @Valid @RequestBody UpdateKnowledgeBaseRequest request) {
         return Result.ok(knowledgeBaseService.update(CurrentUser.requireId(), knowledgeBaseId, request));
     }
 
+    /** 删除知识库（非本人返回 404，归属校验在服务层）。 */
     @DeleteMapping("/{knowledgeBaseId}")
     public Result<Void> delete(@PathVariable Long knowledgeBaseId) {
         knowledgeBaseService.delete(CurrentUser.requireId(), knowledgeBaseId);

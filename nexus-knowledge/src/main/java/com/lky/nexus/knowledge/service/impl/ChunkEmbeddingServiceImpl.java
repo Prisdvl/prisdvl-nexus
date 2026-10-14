@@ -34,8 +34,8 @@ import java.util.Set;
  *   <li><b>模型一致性校验</b>：知识库创建时冻结了嵌入模型（ADR-008）。如果配置里的
  *       {@code embedding.default} 已经换成了别的模型，就直接拒绝——用新模型给旧库补向量，
  *       会让同一个库里的向量来自两个语义空间，检索结果必然错乱，而且不会报任何错。</li>
- *   <li><b>按 content_hash 去重 + 查缓存</b>：同一段内容（模板、抄录、重复笔记）只嵌入一次；
- *       命中的比例在真实笔记库里相当可观，省下的既是时间也是钱。</li>
+   *   <li><b>按 (content_hash, model) 去重 + 查缓存</b>：同一段内容只嵌入一次；
+ *       缓存键必须带模型——换嵌入模型后旧向量不可复用，否则会误命中并让相似度被阈值滤光。</li>
  *   <li><b>写入幂等</b>：向量表主键是 chunk_id，写用 {@code ON CONFLICT DO UPDATE}。
  *       两库之间没有分布式事务，"写向量成功、回写状态失败"时重试必须安全。</li>
  *   <li><b>失败保持 PENDING</b>：失败批次不改状态（只记日志），下次调用自然重试；
@@ -123,9 +123,10 @@ public class ChunkEmbeddingServiceImpl implements ChunkEmbeddingService {
             textByHash.putIfAbsent(chunk.getContentHash(), chunk.getContent());
         }
 
-        // ② 查嵌入缓存
+        // ② 查嵌入缓存（必须带当前模型引用，避免跨模型误命中）
+        String model = client.reference();
         Map<String, float[]> vectors = new HashMap<>(
-                vectorStore.findCachedEmbeddings(textByHash.keySet()));
+                vectorStore.findCachedEmbeddings(textByHash.keySet(), model));
         int cacheHits = chunks.size() - countMissing(chunks, vectors);
 
         // ③ 只对未命中的调用模型
@@ -147,8 +148,8 @@ public class ChunkEmbeddingServiceImpl implements ChunkEmbeddingService {
                 newCacheEntries.put(missingHashes.get(i), newVectors.get(i));
             }
             embedded = texts.size();
-            // 写入缓存：下次相同内容直接用，不再调模型
-            vectorStore.cacheEmbeddings(newCacheEntries, client.reference());
+            // 写入缓存：下次同模型 + 相同内容直接用，不再调模型
+            vectorStore.cacheEmbeddings(newCacheEntries, model);
         }
 
         // ④ 写向量库（幂等 upsert）

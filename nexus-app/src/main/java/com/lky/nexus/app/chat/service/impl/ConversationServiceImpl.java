@@ -7,8 +7,10 @@ import com.lky.nexus.app.agent.AgentService;
 import com.lky.nexus.app.chat.mapper.ChatConversationMapper;
 import com.lky.nexus.app.chat.mapper.ChatMessageMapper;
 import com.lky.nexus.app.chat.model.ChatMode;
+import com.lky.nexus.app.chat.model.MessageRole;
 import com.lky.nexus.app.chat.model.dto.ConversationResponse;
 import com.lky.nexus.app.chat.model.dto.CreateConversationRequest;
+import com.lky.nexus.app.chat.model.dto.ForkConversationRequest;
 import com.lky.nexus.app.chat.model.dto.UpdateConversationRequest;
 import com.lky.nexus.app.chat.model.entity.ChatConversationPO;
 import com.lky.nexus.app.chat.model.entity.ChatMessagePO;
@@ -23,12 +25,16 @@ import com.lky.nexus.knowledge.service.KnowledgeBaseService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -291,6 +297,121 @@ public ConversationResponse update(Long userId, Long conversationId, UpdateConve
         chatMemory.clear(ChatMemoryKeys.of(conversationId));
         log.info("删除会话 id={}, userId={}：清理消息 {} 条、会话记忆已清空",
                 conversationId, userId, removedMessages);
+    }
+
+    /**
+     * 分支（P1-3.7）。
+     *
+     * <p>复制规则刻意保持"整份复制、互不影响"：
+     * <ul>
+     *   <li>新会话复制 mode / kbIds / agentId / modelRole，但<b>不复制置顶</b>
+     *       （置顶是列表组织，不是内容的一部分）；</li>
+     *   <li>消息复制到 beforeMessageId（含）为止，雪花 id 单调，按 id 升序取前缀即可；
+     *       复制行的内容 / token / metadata（工具调用、引用）原样保留，
+     *       但 requestId 与 parentMessageId 清空——它们指向原会话的日志与消息，
+     *       带过去会把新会话的排障串到旧链路上；</li>
+     *   <li>消息保留原 createdAt（历史事实），会话的 lastMessageAt 取最后一条复制消息，
+     *       于是分支在列表里排在"对话真正停留的时刻"附近；</li>
+     *   <li>把最近若干个完整问答对重放进新会话的 ChatMemory——
+     *       否则分支里问"那它有什么缺点"时代理消解拿不到被复制的历史（ADR-011：
+     *       ChatMemory 是发给模型的有界窗口，不会因为消息落库就自动恢复）。</li>
+     * </ul>
+     */
+    @Override
+    @Transactional
+    public ConversationResponse fork(Long userId, Long conversationId, ForkConversationRequest request) {
+        ChatConversationPO source = requireOwned(userId, conversationId);
+
+        String title = request.title() == null ? null : request.title().trim();
+        if (!StringUtils.hasText(title)) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID, "分支标题不能为空");
+        }
+
+        Long beforeId = request.beforeMessageId();
+        if (beforeId != null) {
+            Long belongs = messageMapper.selectCount(Wrappers.<ChatMessagePO>lambdaQuery()
+                    .eq(ChatMessagePO::getId, beforeId)
+                    .eq(ChatMessagePO::getConversationId, conversationId));
+            if (belongs == null || belongs == 0) {
+                // 截断点必须属于原会话，否则可能复制了错误的范围
+                throw new BusinessException(ErrorCode.PARAM_INVALID, "截断点消息不属于该会话");
+            }
+        }
+
+        List<ChatMessagePO> messages = messageMapper.selectList(Wrappers.<ChatMessagePO>lambdaQuery()
+                .eq(ChatMessagePO::getConversationId, conversationId)
+                .le(beforeId != null, ChatMessagePO::getId, beforeId)
+                .orderByAsc(ChatMessagePO::getId));
+
+        LocalDateTime now = LocalDateTime.now();
+        ChatConversationPO copy = new ChatConversationPO();
+        copy.setUserId(userId);
+        copy.setTitle(title);
+        copy.setTitleAuto(false);
+        copy.setMode(source.getMode());
+        // 直接透传 JSON 原文：复制的是同一个用户自己的绑定，不需要重新做归属校验
+        copy.setKbIds(source.getKbIds());
+        copy.setAgentId(source.getAgentId());
+        copy.setModelRole(source.getModelRole());
+        copy.setPromptTemplateId(source.getPromptTemplateId());
+        copy.setMessageCount(messages.size());
+        copy.setPinned(false);
+        copy.setLastMessageAt(messages.isEmpty() ? null : messages.get(messages.size() - 1).getCreatedAt());
+        copy.setCreatedAt(now);
+        copy.setUpdatedAt(now);
+        conversationMapper.insert(copy);
+
+        List<Message> memoryWindow = new ArrayList<>();
+        for (ChatMessagePO original : messages) {
+            ChatMessagePO cloned = new ChatMessagePO();
+            cloned.setConversationId(copy.getId());
+            cloned.setUserId(userId);
+            cloned.setAgentId(original.getAgentId());
+            cloned.setRole(original.getRole());
+            cloned.setContent(original.getContent());
+            cloned.setReasoningContent(original.getReasoningContent());
+            cloned.setModel(original.getModel());
+            cloned.setProvider(original.getProvider());
+            cloned.setPromptTokens(original.getPromptTokens());
+            cloned.setCompletionTokens(original.getCompletionTokens());
+            cloned.setTotalTokens(original.getTotalTokens());
+            cloned.setLatencyMs(original.getLatencyMs());
+            cloned.setFirstTokenMs(original.getFirstTokenMs());
+            cloned.setFinishReason(original.getFinishReason());
+            // requestId / parentMessageId 指向原会话的运行与消息，不跨会话复制
+            cloned.setRequestId(null);
+            cloned.setPromptVersionId(original.getPromptVersionId());
+            cloned.setParentMessageId(null);
+            cloned.setStatus(original.getStatus());
+            cloned.setErrorMsg(original.getErrorMsg());
+            cloned.setMetadata(original.getMetadata());
+            cloned.setCreatedAt(original.getCreatedAt());
+            messageMapper.insert(cloned);
+
+            /*
+             * 记忆重放只收成对的 USER/ASSISTANT 纯文本（与 ChatMemoryTurns.remember
+             * 的写入口径保持一致），且只重放最近窗口内的部分：
+             * ChatMemory 本身是有界窗口，灌太多也会被裁掉，还会平白放大写库量。
+             */
+            if (StringUtils.hasText(original.getContent())) {
+                if (MessageRole.USER.name().equals(original.getRole())) {
+                    memoryWindow.add(new UserMessage(original.getContent()));
+                } else if (MessageRole.ASSISTANT.name().equals(original.getRole())) {
+                    memoryWindow.add(new AssistantMessage(original.getContent()));
+                }
+            }
+        }
+        if (!memoryWindow.isEmpty()) {
+            int maxWindowMessages = 20;
+            List<Message> replay = memoryWindow.size() > maxWindowMessages
+                    ? memoryWindow.subList(memoryWindow.size() - maxWindowMessages, memoryWindow.size())
+                    : memoryWindow;
+            chatMemory.add(ChatMemoryKeys.of(copy.getId()), replay);
+        }
+
+        log.info("分支会话 id={} 由 id={} 复制，消息 {} 条，userId={}",
+                copy.getId(), conversationId, messages.size(), userId);
+        return toResponse(copy);
     }
 
     @Override

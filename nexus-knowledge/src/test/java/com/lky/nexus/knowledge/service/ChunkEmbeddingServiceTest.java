@@ -34,7 +34,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -86,8 +88,8 @@ class ChunkEmbeddingServiceTest {
         ChunkPO cached = chunk(1L, "hash-a", "命中缓存的内容");
         ChunkPO fresh = chunk(2L, "hash-b", "需要新嵌入的内容");
         when(chunkMapper.selectList(any(Wrapper.class))).thenReturn(List.of(cached, fresh));
-        // hash-a 已在缓存里
-        when(vectorStore.findCachedEmbeddings(anyCollection()))
+        // hash-a 已在缓存里（必须按当前模型引用查，否则会跨模型误命中）
+        when(vectorStore.findCachedEmbeddings(anyCollection(), eq("ollama:bge-m3")))
                 .thenReturn(Map.of("hash-a", vector(1024, 0.5f)));
         when(embeddingClientFactory.get(anyString())).thenReturn(client());
 
@@ -100,6 +102,8 @@ class ChunkEmbeddingServiceTest {
         assertThat(result.failed()).isZero();
         // 两条向量都要入库（缓存命中的那条直接从缓存取向量）
         assertThat(capturedRecords()).hasSize(2);
+        verify(vectorStore).findCachedEmbeddings(anyCollection(), eq("ollama:bge-m3"));
+        verify(vectorStore).cacheEmbeddings(anyMap(), eq("ollama:bge-m3"));
     }
 
     @Test
@@ -108,7 +112,7 @@ class ChunkEmbeddingServiceTest {
         ChunkPO first = chunk(1L, "same-hash", "重复的内容");
         ChunkPO second = chunk(2L, "same-hash", "重复的内容");
         when(chunkMapper.selectList(any(Wrapper.class))).thenReturn(List.of(first, second));
-        when(vectorStore.findCachedEmbeddings(anyCollection())).thenReturn(Map.of());
+        when(vectorStore.findCachedEmbeddings(anyCollection(), anyString())).thenReturn(Map.of());
         when(embeddingClientFactory.get(anyString())).thenReturn(client());
 
         ChunkEmbeddingService service = newService();

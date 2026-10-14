@@ -357,7 +357,8 @@ public class RagAnswerServiceImpl implements RagAnswerService {
      */
     private String generate(Long userId, String question, PreparedAnswer prepared, List<RagTurn> history) {
         try {
-            ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_DEFAULT);
+            // 传 userId：用户配了自己的对话模型就走他自己的凭据，未配置回落全局模型。
+            ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_DEFAULT, userId);
             return client.prompt()
                     .system(systemPrompt())
                     .user(userMessage(question, prepared, history))

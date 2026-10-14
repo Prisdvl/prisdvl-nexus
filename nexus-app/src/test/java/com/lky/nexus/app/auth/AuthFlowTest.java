@@ -66,11 +66,14 @@ class AuthFlowTest {
                 .andExpect(jsonPath("$.data.tokenType").value("Bearer"))
                 // expiresIn 是基本类型 long，必须是数字（ADR-017 的配套约定）
                 .andExpect(jsonPath("$.data.expiresIn").isNumber())
+                .andExpect(jsonPath("$.data.refreshToken").isString())
                 .andExpect(jsonPath("$.data.user.roles[0]").value(RoleCode.USER))
                 .andReturn().getResponse().getContentAsString();
 
         String accessToken = JsonPath.read(loginBody, "$.data.accessToken");
+        String refreshToken = JsonPath.read(loginBody, "$.data.refreshToken");
         assertThat(accessToken).isNotBlank();
+        assertThat(refreshToken).isNotBlank();
 
         mockMvc.perform(get("/api/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken))
                 .andExpect(status().isOk())
@@ -117,7 +120,7 @@ class AuthFlowTest {
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"duplicated","password":"%s","nickname":"duplicated"}
+                                {"username":"duplicated","password":"%s","nickname":"duplicated","email":"duplicated2@example.com"}
                                 """.formatted(PASSWORD)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value(2005));
@@ -197,8 +200,8 @@ class AuthFlowTest {
         return mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"%s","password":"%s","nickname":"%s"}
-                                """.formatted(username, PASSWORD, username)))
+                                {"username":"%s","password":"%s","nickname":"%s","email":"%s@example.com"}
+                                """.formatted(username, PASSWORD, username, username)))
                 .andExpect(jsonPath("$.code").value(0));
     }
 

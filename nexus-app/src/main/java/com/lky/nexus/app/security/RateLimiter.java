@@ -92,6 +92,24 @@ public class RateLimiter {
         }
     }
 
+    /**
+     * 邮箱验证码发送：按来源 IP 每小时上限（与注册限流同桶算法，键前缀独立）。
+     *
+     * <p>复用本类的固定窗口 + fail-open，不另起一套限流系统。
+     * {@code limit} 由调用方从 {@code nexus.email.code.ip-per-hour} 读入。
+     */
+    public void checkEmailCodeSend(String clientIp, int limit) {
+        if (limit <= 0) {
+            return;
+        }
+        String key = "nexus:rl:email-code:ip:" + clientIp + ":" + LocalDateTime.now().format(HOUR);
+        long used = increment(key, HOUR_TTL);
+        if (used > limit) {
+            throw new BusinessException(ErrorCode.RATE_LIMITED,
+                    "验证码发送过于频繁（每小时上限 " + limit + " 次），请稍后再试");
+        }
+    }
+
     /** 计数；存储不可用时放行（返回 1，必然不超限）并计数。 */
     private long increment(String key, Duration ttl) {
         try {

@@ -21,6 +21,13 @@ public enum ChunkStrategy {
 
     public static final ChunkStrategy DEFAULT = MARKDOWN_HEADING;
 
+    /**
+     * 解析切分策略字符串。
+     *
+     * @param raw 客户端传入的原始字符串（忽略大小写与首尾空白）
+     * @return 对应的切分策略；{@code raw} 为空或空白时回退到 {@link #DEFAULT}
+     * @throws BusinessException 当 {@code raw} 非空但不匹配任何枚举值时
+     */
     public static ChunkStrategy parse(String raw) {
         if (raw == null || raw.isBlank()) {
             return DEFAULT;

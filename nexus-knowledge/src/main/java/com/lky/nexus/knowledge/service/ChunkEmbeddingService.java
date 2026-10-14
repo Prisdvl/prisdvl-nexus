@@ -38,6 +38,12 @@ public interface ChunkEmbeddingService {
      */
     record EmbeddingResult(int total, int embedded, int cacheHits, int failed, long costMillis) {
 
+        /**
+         * 空结果：total / embedded / cacheHits / failed / costMillis 全部为 0，
+         * 表示本次未处理任何切片（如知识库里已无 PENDING 切片时）。
+         *
+         * @return 全字段为 0 的 {@code EmbeddingResult}
+         */
         public static EmbeddingResult empty() {
             return new EmbeddingResult(0, 0, 0, 0, 0);
         }

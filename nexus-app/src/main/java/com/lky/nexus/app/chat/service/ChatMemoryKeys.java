@@ -33,6 +33,12 @@ public final class ChatMemoryKeys {
     private ChatMemoryKeys() {
     }
 
+    /**
+     * 构造会话记忆的 key（{@code conv:{conversationId}}）。
+     *
+     * @param conversationId 会话 id；最大长度受 {@link #MAX_KEY_LENGTH} 约束
+     * @return 记忆存储 key
+     */
     public static String of(Long conversationId) {
         return PREFIX + conversationId;
     }

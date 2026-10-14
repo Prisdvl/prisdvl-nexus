@@ -31,6 +31,9 @@ import java.util.OptionalLong;
  * （{@code nexus.jwt.token-version-cache-ttl}，默认 5 分钟）。这条路径会计数
  * （{@link ObservabilityRegistry#SECURITY_TOKEN_VERSION_INVALIDATE_FAILED}），
  * 不会静默。
+ *
+ * <p>禁用账号：缓存未命中时查库发现 {@code status != 1} 返回 null（与 refresh 拒绝一致）。
+ * 缓存命中路径只存版本号，禁用后最多仍有一个 cache TTL 窗口——与改密失效失败同量级。
  */
 @Component
 public class UserAuthCache {
@@ -68,6 +71,10 @@ public class UserAuthCache {
         SysUserPO user = sysUserMapper.selectById(userId);
         if (user == null) {
             // 令牌合法但用户已被删除：不缓存，下次请求仍然查库（不会有"复活"的窗口）
+            return null;
+        }
+        // 与登录 / refresh 一致：禁用账号不得继续通过 access JWT（缓存未命中路径）
+        if (!Integer.valueOf(1).equals(user.getStatus())) {
             return null;
         }
         long version = user.getTokenVersion() == null ? 0L : user.getTokenVersion();

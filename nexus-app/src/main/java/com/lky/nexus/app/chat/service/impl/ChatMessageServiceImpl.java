@@ -196,7 +196,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     @Override
     public PageResult<ChatMessageResponse> listMessages(Long userId, Long conversationId, int pageNum, int pageSize) {
         conversationService.requireOwned(userId, conversationId);
-
         int safePageNum = PageQuery.normalizePageNum(pageNum);
         int safePageSize = PageQuery.normalizePageSize(pageSize);
 

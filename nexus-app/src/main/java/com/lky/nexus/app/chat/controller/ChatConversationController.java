@@ -2,6 +2,7 @@ package com.lky.nexus.app.chat.controller;
 
 import com.lky.nexus.app.chat.model.dto.ConversationResponse;
 import com.lky.nexus.app.chat.model.dto.CreateConversationRequest;
+import com.lky.nexus.app.chat.model.dto.ForkConversationRequest;
 import com.lky.nexus.app.chat.model.dto.UpdateConversationRequest;
 import com.lky.nexus.app.chat.service.ConversationService;
 import com.lky.nexus.app.auth.security.CurrentUser;
@@ -49,6 +50,17 @@ public class ChatConversationController {
     @GetMapping("/{conversationId}")
     public Result<ConversationResponse> detail(@PathVariable Long conversationId) {
         return Result.ok(conversationService.detail(CurrentUser.requireId(), conversationId));
+    }
+
+    /**
+     * 分支：复制出一条新会话，消息可截断到某条消息（含）。
+     *
+     * <p>归属校验与其他接口一致：源会话不属于当前用户时返回 404。
+     */
+    @PostMapping("/{conversationId}/fork")
+    public Result<ConversationResponse> fork(@PathVariable Long conversationId,
+                                             @Valid @RequestBody ForkConversationRequest request) {
+        return Result.ok(conversationService.fork(CurrentUser.requireId(), conversationId, request));
     }
 
     @PutMapping("/{conversationId}")

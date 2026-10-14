@@ -131,15 +131,45 @@ nexus:
     secret: ${JWT_SECRET:}
     issuer: prisdvl-nexus
     access-token-ttl: ${JWT_ACCESS_TOKEN_TTL:30m}
+    # Refresh token / 设备会话 TTL（Phase 4）。库中只存 hash，明文只在签发时返回一次。
+    refresh-token-ttl: ${JWT_REFRESH_TOKEN_TTL:7d}
     # 令牌版本缓存的 TTL。它同时也是"失效失败时旧令牌还能活多久"的上限：
     # invalidate 抛异常的话，缓存里那条旧版本会继续被读到、直到过期
     # （DB 已是新值，所以下一次缓存 miss 就会纠正）。TTL 越短越安全、查库越多。
     token-version-cache-ttl: ${JWT_TOKEN_VERSION_CACHE_TTL:5m}
+  # 邮箱验证码（Phase 1 基础设施 + Phase 2 已登录验邮）。
+  # 默认 unconfigured：生产不会把明文验证码打进日志，也不会自动降级为 console。
+  # local / standalone / test profile 覆盖为 console（仅开发）。
+  # 生产发真信：NEXUS_EMAIL_SENDER=smtp|resend，凭据只用环境变量。
+  email:
+    sender: ${NEXUS_EMAIL_SENDER:unconfigured}
+    code:
+      length: ${NEXUS_EMAIL_CODE_LENGTH:6}
+      expire: ${NEXUS_EMAIL_CODE_EXPIRE:5m}
+      max-attempts: ${NEXUS_EMAIL_CODE_MAX_ATTEMPTS:5}
+      cooldown: ${NEXUS_EMAIL_CODE_COOLDOWN:60s}
+      # 同一 IP 每小时发送上限（走 RateLimiter 固定窗口）
+      ip-per-hour: ${NEXUS_EMAIL_CODE_IP_PER_HOUR:30}
+    smtp:
+      host: ${NEXUS_EMAIL_SMTP_HOST:}
+      port: ${NEXUS_EMAIL_SMTP_PORT:587}
+      username: ${NEXUS_EMAIL_SMTP_USERNAME:}
+      password: ${NEXUS_EMAIL_SMTP_PASSWORD:}
+      from: ${NEXUS_EMAIL_SMTP_FROM:}
+      start-tls: ${NEXUS_EMAIL_SMTP_START_TLS:true}
+    resend:
+      # API Key 仅环境变量；勿写入仓库。缺失且 sender=resend 时启动失败。
+      api-key: ${RESEND_API_KEY:}
+      from: ${NEXUS_EMAIL_RESEND_FROM:}
+      base-url: ${NEXUS_EMAIL_RESEND_BASE_URL:https://api.resend.com}
+      connect-timeout: ${NEXUS_EMAIL_RESEND_CONNECT_TIMEOUT:5s}
+      read-timeout: ${NEXUS_EMAIL_RESEND_READ_TIMEOUT:15s}
   security:
     # 限流/配额/令牌版本存储用 Redis 还是进程内存。
     # 默认 **false** 是刻意的：内存实现让 standalone 与测试保持"零外部基础设施"，
     # 也让"忘了配 Redis"这件事表现为"单实例限流仍生效"，而不是启动失败。
     # ⚠️ 多实例部署必须置 true —— 内存实现每个实例各算一份，限流会被放大 N 倍。
+    # 邮箱验证码存储（EmailCodeStore）共用同一开关。
     redis-enabled: ${NEXUS_SECURITY_REDIS_ENABLED:false}
     login:
       # 登录失败限制：同一用户名在 window 内失败 max-failures 次 → 冻结 lock-duration。
@@ -268,52 +298,60 @@ ai:
     max-calls-per-tool-default: 40
     max-total-tool-calls: 150
   providers:
-    # 当前接入 OpenCode Zen（OpenAI 兼容网关）。换供应商只需改 base-url 与 model，
-    # 例如 DeepSeek 官方：base-url=https://api.deepseek.com + model=deepseek-chat。
+    # 当前接入 DeepSeek 官方 OpenAI 兼容 API。换供应商只需改 base-url / model / api-key。
     #
     # 重要：同一个网关内不同模型可能走不同协议端点（官方文档 "Endpoints" 表）：
-    #   /chat/completions → OpenAI 兼容（GLM / Kimi / DeepSeek / MiMo / Hy3 …）
+    #   /chat/completions → OpenAI 兼容（DeepSeek / GLM / Kimi / MiMo …）
     #   /responses        → OpenAI Responses API（Grok / GPT-Luna / Muse Spark）
     #   /messages         → Anthropic 协议（Qwen3.8 / MiniMax）
     # 选模型不能只看效果，必须确认它属于哪种协议，否则要换 Spring AI 的 Anthropic 接入模块。
-    - name: opencode
+    - name: deepseek
       type: OPENAI_COMPATIBLE
-      base-url: ${AI_CHAT_BASE_URL:https://opencode.ai/zen/go/v1}
+      base-url: ${AI_CHAT_BASE_URL:https://api.deepseek.com}
       api-key: ${AI_CHAT_API_KEY:}
-      # 该网关的两条额外要求（官方文档 "Where can I use it?"）：
-      #   1) 客户端用自己的 User-Agent 标识自己，而不是通用 SDK / HTTP 库的名字；
-      #   2) 每个会话发送稳定的 x-opencode-session，用于路由优化与 prompt 缓存。
-      # 其它网关也在这里加各自的头（OpenRouter 的 HTTP-Referer、Azure 的 api-version）。
+      # 自定义 User-Agent：标准做法，部分网关用它识别客户端。
+      # 其它网关也在这里加各自的头（OpenRouter 的 HTTP-Referer、Azure 的 api-version、
+      # OpenCode Zen 的 x-opencode-session——切回那家时把它加回来即可）。
       headers:
         User-Agent: ${AI_CHAT_USER_AGENT:nexus-knowledge-hub/0.1}
-        x-opencode-session: ${AI_CHAT_SESSION_ID:nexus-local-session}
       models:
-        - name: ${AI_CHAT_MODEL:deepseek-v4-flash}
+        - name: ${AI_CHAT_MODEL:deepseek-chat}
+          # deepseek-chat 官方上下文窗口 64K（输出上限 8K）
           context-window: 65536
           capabilities: [CHAT, TOOL_CALLING, JSON]
-        # 评测裁判用另一家的模型：既省钱，又降低"自己评自己"的偏好偏差（Phase 9）
-        - name: ${AI_JUDGE_MODEL:glm-5.3-flash}
+        # 评测裁判：当前与对话模型同源（DeepSeek 一家）。要降偏差可换成另一家的便宜模型。
+        - name: ${AI_JUDGE_MODEL:deepseek-chat}
           context-window: 65536
           capabilities: [CHAT, JSON]
-    # 本地 Ollama：嵌入模型（bge-m3，1024 维）在 Phase 3 使用；这里同时预留一个本地对话模型
-    - name: ollama
-      type: OLLAMA
-      base-url: ${AI_EMBEDDING_BASE_URL:http://localhost:11434}
+    # 阿里云百炼（DashScope）OpenAI 兼容端点：云端嵌入模型 text-embedding-v4。
+    #   base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    #   模型:    text-embedding-v4（支持 dimensions ∈ {2048,1536,1024,768,512,256,128,64}）
+    #   鉴权:    Authorization: Bearer <DASHSCOPE_API_KEY>（Spring AI 自动加）
+    # 没有 api-key 时，真正调到 embedding.default 才报 4006（启动不失败，对话不受影响）。
+    #
+    # 历史：本地 Ollama bge-m3 已下线。若要切回本地模型，把下面这个 ollama provider 块加回来
+    #   - name: ollama
+    #     type: OLLAMA
+    #     base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    #     models:
+    #       - name: bge-m3
+    #         dimensions: 1024
+    #         capabilities: [EMBEDDING]
+    # 然后把 embedding.default 改成 "ollama:bge-m3"。代码里 OLLAMA 协议路径仍保留。
+    - name: bailian
+      type: OPENAI_COMPATIBLE
+      base-url: ${AI_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${AI_EMBEDDING_API_KEY:}
       models:
-        - name: qwen3:7b
-          context-window: 32768
-          capabilities: [CHAT, TOOL_CALLING]
-        - name: bge-m3
-          # 嵌入维度必须声明：知识库创建时要把它冻结进 kb_knowledge_base（ADR-008）。
-          # 缺失时建库会直接报 4006 —— 这是刻意的"提前失败"，
-          # 避免一批维度不一致的向量悄悄入库（那种错误不会报错，只会让检索结果莫名其妙）。
-          dimensions: 1024
+        - name: ${AI_EMBEDDING_MODEL:text-embedding-v4}
+          # 维度必须与知识库冻结值一致；这里默认 1024，与原 bge-m3 同维，可平滑替换。
+          dimensions: ${AI_EMBEDDING_DIM:1024}
           capabilities: [EMBEDDING]
   roles:
-    chat.default: "opencode:${AI_CHAT_MODEL:deepseek-v4-flash}"
-    chat.agent: "opencode:${AI_CHAT_MODEL:deepseek-v4-flash}"
-    chat.judge: "opencode:${AI_JUDGE_MODEL:glm-5.3-flash}"
-    embedding.default: "ollama:bge-m3"
+    chat.default: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"
+    chat.agent: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"
+    chat.judge: "deepseek:${AI_JUDGE_MODEL:deepseek-chat}"
+    embedding.default: "bailian:${AI_EMBEDDING_MODEL:text-embedding-v4}"
 
 logging:
   # 日志模板里带上 MDC 中的 requestId（由 RequestIdFilter 写入）：

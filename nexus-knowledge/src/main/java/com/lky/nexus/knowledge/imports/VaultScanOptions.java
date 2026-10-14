@@ -19,6 +19,7 @@ public record VaultScanOptions(int maxEntries, long maxFileBytes, long maxTotalB
     public static final long DEFAULT_MAX_FILE_BYTES = 20L * 1024 * 1024;
     public static final long DEFAULT_MAX_TOTAL_BYTES = 200L * 1024 * 1024;
 
+    /** 返回默认安全限额（5000 条目 / 单文件 20MB / 总 200MB）。 */
     public static VaultScanOptions defaults() {
         return new VaultScanOptions(DEFAULT_MAX_ENTRIES, DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_TOTAL_BYTES);
     }

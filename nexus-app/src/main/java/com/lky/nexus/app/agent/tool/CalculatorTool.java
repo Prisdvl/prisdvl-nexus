@@ -38,6 +38,13 @@ public class CalculatorTool {
     /** 表达式长度上限：挡住病态输入，正常提问远不到这个量级。 */
     private static final int MAX_LENGTH = 500;
 
+    /**
+     * 计算器工具的执行方法（模型通过 {@code calculator} 工具调用）。
+     *
+     * @param expression 数学表达式，支持四则运算、括号、一元负号、函数与常数 pi/e
+     * @return "{@code 表达式 = 结果}" 形式的结果串
+     * @throws IllegalArgumentException 表达式为空、过长、含无法识别内容或非法运算（如除以零）时
+     */
     @Tool(name = "calculator",
             description = "计算数学表达式并返回精确结果。涉及算术、百分比、复利、单位换算等需要准确数字的问题时"
                     + "必须先调用本工具，不要心算、也不要凭估算回答。"

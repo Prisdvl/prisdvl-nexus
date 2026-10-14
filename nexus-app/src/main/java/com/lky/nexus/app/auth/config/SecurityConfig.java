@@ -63,7 +63,12 @@ public class SecurityConfig {
      */
     private static final String[] PUBLIC_ENDPOINTS = {
             "/api/auth/register",
-            "/api/auth/login"
+            "/api/auth/login",
+            // refresh / logout 凭 body 中的 opaque refreshToken 鉴权；access 可能已过期
+            "/api/auth/refresh",
+            "/api/auth/logout",
+            "/api/auth/password/reset/request",
+            "/api/auth/password/reset/confirm"
     };
 
     /** 健康检查与错误页放行，供 Docker healthcheck、K8s 探针与统一错误处理使用。 */

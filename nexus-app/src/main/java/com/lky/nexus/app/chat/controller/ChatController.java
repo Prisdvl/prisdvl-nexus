@@ -28,6 +28,15 @@ public class ChatController {
         this.chatService = chatService;
     }
 
+    /**
+     * 发起一轮非流式提问。
+     *
+     * @param conversationId 目标会话 id（须属于当前用户）
+     * @param request 提问内容（已做非空与长度校验）
+     * @return 用户消息与助手完整回答
+     * @throws com.lky.nexus.common.exception.BusinessException 会话不存在/越权（8001）、
+     *         RAG 模式须改走流式接口（CONVERSATION_MODE_UNSUPPORTED）、Agent 不可用（5008/5009）等
+     */
     @PostMapping("/conversations/{conversationId}/messages")
     public Result<ChatAnswerResponse> ask(@PathVariable Long conversationId,
                                          @Valid @RequestBody AskRequest request) {

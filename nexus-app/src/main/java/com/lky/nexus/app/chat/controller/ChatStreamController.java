@@ -32,6 +32,16 @@ public class ChatStreamController {
         this.chatStreamService = chatStreamService;
     }
 
+    /**
+     * 建立一次流式问答，立即返回 {@link SseEmitter}。
+     *
+     * <p>会话归属校验与用户消息落库在方法内同步完成，模型生成在返回后异步推送。
+     *
+     * @param request 流式提问请求（会话 id + 内容）
+     * @return 交给 Spring MVC 直接返回客户端的 SseEmitter
+     * @throws com.lky.nexus.common.exception.BusinessException 会话不存在/越权（8001）、
+     *         知识库越权（3001）、Agent 不可用（5008/5009）等
+     */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@Valid @RequestBody StreamChatRequest request) {
         return chatStreamService.stream(CurrentUser.requireId(), request.conversationId(), request.content());

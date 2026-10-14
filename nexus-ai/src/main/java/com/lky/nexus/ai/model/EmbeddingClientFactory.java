@@ -9,6 +9,8 @@ import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.ollama.OllamaEmbeddingModel;
 import org.springframework.ai.ollama.api.OllamaApi;
 import org.springframework.ai.ollama.api.OllamaEmbeddingOptions;
+import org.springframework.ai.openai.OpenAiEmbeddingModel;
+import org.springframework.ai.openai.OpenAiEmbeddingOptions;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -26,10 +28,16 @@ import java.util.function.Supplier;
  * <p>与 {@link ChatClientFactory} 同样的约束：业务代码里不允许出现具体模型类名，
  * 换供应商只改配置。
  *
- * <p><b>当前支持范围</b>：Ollama 原生协议（本项目的嵌入角色就是本地 {@code bge-m3}）。
- * OpenAI 兼容协议暂不支持——Spring AI 2.0 的 {@code OpenAiEmbeddingModel} 需要自行构建
- * 官方 SDK 客户端（baseUrl + 凭证 + 传输层），这是一块独立工作；
- * 与其写一段没验证过的代码，不如在这里明确报错，并把扩展点留清楚。
+ * <p><b>支持协议</b>：
+ * <ul>
+ *   <li>Ollama 原生协议（{@code /api/embed}）：本地模型，如 {@code bge-m3}；</li>
+ *   <li>OpenAI 兼容协议（{@code /v1/embeddings}）：阿里云百炼 compatible-mode、
+ *       DeepSeek、SiliconFlow、vLLM 等。由 {@code OpenAiEmbeddingModel} 直接构建，
+ *       base-url / api-key / dimensions / customHeaders 全部走配置。</li>
+ * </ul>
+ * 嵌入维度通过 {@code OpenAiEmbeddingOptions.dimensions(...)} 显式下发，确保远端
+ * 实际返回维度与 {@code ModelEntry.dimensions} 一致（百炼 text-embedding-v4 默认
+ * 1024，也可指定 2048/1536/768/512/256/128/64）。
  */
 @Component
 public class EmbeddingClientFactory {
@@ -74,13 +82,17 @@ public class EmbeddingClientFactory {
                     "模型 %s 未声明 EMBEDDING 能力，不能用于嵌入角色 %s".formatted(ref.value(), role));
         }
 
+        if (provider.getType() == AiModelProperties.ProviderType.OPENAI_COMPATIBLE
+                && !StringUtils.hasText(provider.getApiKey())) {
+            throw new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
+                    "嵌入角色 %s 指向了 OpenAI 兼容供应商 %s，但它没有配置 api-key。"
+                            + "请在 .env 里填入该供应商对应的 API Key。"
+                            .formatted(role, ref.provider()));
+        }
+
         EmbeddingModel model = buildWithApplicationClassLoader(() -> switch (provider.getType()) {
             case OLLAMA -> buildOllamaEmbeddingModel(provider, entry);
-            case OPENAI_COMPATIBLE -> throw new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
-                    ("嵌入角色 %s 指向了 OpenAI 兼容协议的模型 %s，这是当前尚未支持的路径"
-                            + "（Spring AI 2.0 需要自行构建官方 SDK 客户端）。"
-                            + "请把 embedding.default 指向 Ollama 模型，例如 ollama:bge-m3。")
-                            .formatted(role, ref.value()));
+            case OPENAI_COMPATIBLE -> buildOpenAiCompatibleEmbeddingModel(provider, entry);
         });
 
         log.info("为角色 {} 构建嵌入客户端：{}（声明维度 {}）", role, ref.value(), entry.getDimensions());
@@ -137,6 +149,30 @@ public class EmbeddingClientFactory {
         return OllamaEmbeddingModel.builder()
                 .ollamaApi(ollamaApi)
                 .options(options)
+                .build();
+    }
+
+    /**
+     * OpenAI 兼容协议：{@code /v1/embeddings}。
+     *
+     * <p>适配阿里云百炼 compatible-mode（{@code https://dashscope.aliyuncs.com/compatible-mode/v1}）、
+     * DeepSeek、SiliconFlow、vLLM 等。{@code dimensions} 显式下发，避免远端默认值与知识库
+     * 冻结维度不一致（百炼 text-embedding-v4 默认 1024，但显式传更安全）。
+     */
+    private EmbeddingModel buildOpenAiCompatibleEmbeddingModel(AiModelProperties.Provider provider,
+                                                               AiModelProperties.ModelEntry entry) {
+        OpenAiEmbeddingOptions.Builder options = OpenAiEmbeddingOptions.builder()
+                .baseUrl(provider.getBaseUrl())
+                .apiKey(provider.getApiKey())
+                .model(entry.getName());
+        if (entry.getDimensions() != null && entry.getDimensions() > 0) {
+            options.dimensions(entry.getDimensions());
+        }
+        if (provider.getHeaders() != null && !provider.getHeaders().isEmpty()) {
+            options.customHeaders(provider.getHeaders());
+        }
+        return OpenAiEmbeddingModel.builder()
+                .options(options.build())
                 .build();
     }
 }

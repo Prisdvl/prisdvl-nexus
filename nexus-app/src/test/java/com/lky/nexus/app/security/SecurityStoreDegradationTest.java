@@ -75,7 +75,7 @@ class SecurityStoreDegradationTest {
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"degraded-user","password":"%s"}
+                                {"username":"degraded-user","password":"%s","email":"degraded-user@example.com"}
                                 """.formatted(PASSWORD)))
                 .andExpect(status().isOk());
 
@@ -111,7 +111,7 @@ class SecurityStoreDegradationTest {
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"degraded-plain","password":"%s"}
+                                {"username":"degraded-plain","password":"%s","email":"degraded-plain@example.com"}
                                 """.formatted(PASSWORD)))
                 .andExpect(status().isOk());
 

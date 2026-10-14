@@ -111,7 +111,7 @@ class ChatAgentProvenanceTest {
             captured.add(invocation.getArgument(0));
             return Flux.just(response("这是一句"), response("回答。"));
         });
-        when(chatClientFactory.get(anyString())).thenReturn(ChatClient.builder(stub).build());
+        when(chatClientFactory.get(anyString(), any())).thenReturn(ChatClient.builder(stub).build());
     }
 
     @Test

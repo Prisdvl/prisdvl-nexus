@@ -141,7 +141,7 @@
                              中文 Windows 上默认是 GBK，会导致测试日志里的中文变成乱码。
                              同时给 fork 出来的 JVM 限定堆上限：本机 15.6GB 而 Docker VM 占 7.6GB，
                              默认堆（1/4 物理内存）会让多个 JVM 一起把内存吃光。 -->
-                        <argLine>-Xmx512m -XX:MaxMetaspaceSize=256m -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -Dfile.encoding=UTF-8</argLine>
+                        <argLine>-Xmx512m -XX:MaxMetaspaceSize=256m -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -Dfile.encoding=UTF-8 -XX:+EnableDynamicAgentLoading -Xshare:off</argLine>
                     </configuration>
                 </plugin>
             </plugins>

@@ -130,19 +130,25 @@ class LiveVectorStoreTest {
     }
 
     @Test
-    @DisplayName("嵌入缓存：写入后可按内容哈希取回，且向量值不失真")
-    void cachesEmbeddingsByHash() {
+    @DisplayName("嵌入缓存：写入后可按 (内容哈希, 模型) 取回，且向量值不失真")
+    void cachesEmbeddingsByHashAndModel() {
         String hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         float[] original = mixed();
+        float[] otherModel = axis(2);
         vectorStore.cacheEmbeddings(Map.of(hash, original), "ollama:bge-m3");
+        vectorStore.cacheEmbeddings(Map.of(hash, otherModel), "bailian:text-embedding-v4");
 
-        Map<String, float[]> cached = vectorStore.findCachedEmbeddings(List.of(hash));
+        Map<String, float[]> cached = vectorStore.findCachedEmbeddings(List.of(hash), "ollama:bge-m3");
+        Map<String, float[]> other = vectorStore.findCachedEmbeddings(List.of(hash), "bailian:text-embedding-v4");
+        Map<String, float[]> miss = vectorStore.findCachedEmbeddings(List.of(hash), "openai:text-embedding-3-small");
 
         assertThat(cached).containsKey(hash);
         assertThat(cached.get(hash)).hasSize(DIMENSIONS);
         // 经过文本字面量往返后精度可能略有损失，但必须高度一致
         assertThat(cached.get(hash)[0]).isCloseTo(original[0],
                 org.assertj.core.data.Offset.offset(1e-4f));
+        assertThat(other.get(hash)[2]).isCloseTo(1.0f, org.assertj.core.data.Offset.offset(1e-4f));
+        assertThat(miss).isEmpty();
     }
 
     // ------------------------------------------------------------------

@@ -131,34 +131,42 @@ public class PgVectorStore implements VectorStore {
     }
 
     @Override
-    public Map<String, float[]> findCachedEmbeddings(Collection<String> contentHashes) {
-        if (contentHashes == null || contentHashes.isEmpty()) {
+    public Map<String, float[]> findCachedEmbeddings(Collection<String> contentHashes, String model) {
+        if (contentHashes == null || contentHashes.isEmpty() || model == null || model.isBlank()) {
             return Map.of();
         }
         List<String> hashes = List.copyOf(contentHashes);
         // 用 IN 列表查询；切片数量级在万级，分批由调用方控制（见 ChunkEmbeddingServiceImpl）
         String placeholders = String.join(",", java.util.Collections.nCopies(hashes.size(), "?"));
         Map<String, float[]> result = new HashMap<>();
+        // 参数顺序：model 在前，再接 hash 列表——与 WHERE 占位符一一对应
+        Object[] args = new Object[hashes.size() + 1];
+        args[0] = model;
+        for (int i = 0; i < hashes.size(); i++) {
+            args[i + 1] = hashes.get(i);
+        }
         jdbcTemplate.query("""
                 SELECT content_hash, embedding::text AS embedding_text
                 FROM embedding_cache
-                WHERE content_hash IN (%s)
+                WHERE model = ?
+                  AND content_hash IN (%s)
                 """.formatted(placeholders), rs -> {
             result.put(rs.getString("content_hash"), fromVectorLiteral(rs.getString("embedding_text")));
-        }, hashes.toArray());
+        }, args);
         return result;
     }
 
     @Override
     public void cacheEmbeddings(Map<String, float[]> embeddingsByHash, String model) {
-        if (embeddingsByHash == null || embeddingsByHash.isEmpty()) {
+        if (embeddingsByHash == null || embeddingsByHash.isEmpty() || model == null || model.isBlank()) {
             return;
         }
         List<Map.Entry<String, float[]>> entries = List.copyOf(embeddingsByHash.entrySet());
         jdbcTemplate.batchUpdate("""
                 INSERT INTO embedding_cache (content_hash, model, embedding)
                 VALUES (?, ?, CAST(? AS vector))
-                ON CONFLICT (content_hash) DO NOTHING
+                ON CONFLICT (content_hash, model) DO UPDATE
+                    SET embedding = EXCLUDED.embedding
                 """, entries, entries.size(), (statement, entry) -> {
             statement.setString(1, entry.getKey());
             statement.setString(2, model);

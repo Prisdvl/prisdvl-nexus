@@ -86,6 +86,16 @@ public class AgentService {
     // 读
     // ------------------------------------------------------------------
 
+    /**
+     * 分页列出当前用户的 Agent：内置默认 Agent 置顶，其余按更新时间倒序。
+     *
+     * <p>读路径上会先（幂等地）补齐内置默认 Agent 那一行，保证新用户的列表不为空。
+     *
+     * @param userId   归属用户
+     * @param pageNum  页码（会被归一化到 ≥1）
+     * @param pageSize 每页条数（会被归一化到合法范围）
+     * @return 当前用户的 Agent 分页列表
+     */
     public PageResult<AgentResponse> list(Long userId, int pageNum, int pageSize) {
         int safePageNum = PageQuery.normalizePageNum(pageNum);
         int safePageSize = PageQuery.normalizePageSize(pageSize);
@@ -108,11 +118,28 @@ public class AgentService {
         return PageResult.of(list, result.getTotal(), safePageNum, safePageSize);
     }
 
+    /**
+     * 查看单个 Agent 详情（含绑定知识库与工具白名单），仅限本人。
+     *
+     * @param userId   归属用户
+     * @param agentId  目标 Agent 主键
+     * @return 该 Agent 的视图
+     */
     public AgentResponse detail(Long userId, Long agentId) {
         AgentPO agent = requireOwned(userId, agentId);
         return toResponse(agent);
     }
 
+    /**
+     * 取当前用户名下、指定 id 的 Agent；越权或不存在一律抛 {@code AGENT_NOT_FOUND}（404 语义，
+     * 不泄露资源存在性）。
+     *
+     * <p>归属校验放进 SQL 条件（{@code owner_id} 进 WHERE），而不是查出来再比对。
+     *
+     * @param userId   归属用户
+     * @param agentId  目标 Agent 主键（为 null 直接按"找不到"处理）
+     * @return 命中的 Agent 实体
+     */
     public AgentPO requireOwned(Long userId, Long agentId) {
         if (agentId == null) {
             throw new BusinessException(ErrorCode.AGENT_NOT_FOUND);
@@ -189,6 +216,16 @@ public class AgentService {
         return toResponse(agent);
     }
 
+    /**
+     * 局部更新 Agent：{@code null} 字段"不改"，空列表表示"解绑/回到不限制"。
+     *
+     * <p>启停也走这里（{@code status} 字段），复用同一套局部更新语义，不再单独开接口。
+     *
+     * @param userId   归属用户
+     * @param agentId  目标 Agent 主键
+     * @param request  更新参数；为 null 的字段不改，{@code status} 变更会做状态机校验
+     * @return 更新后的 Agent 视图
+     */
     @Transactional
     public AgentResponse update(Long userId, Long agentId, UpdateAgentRequest request) {
         AgentPO agent = requireOwned(userId, agentId);
@@ -253,6 +290,14 @@ public class AgentService {
         return toResponse(copy);
     }
 
+    /**
+     * 删除当前用户自己的 Agent，并级联清掉知识库/工具绑定行（避免无主数据）。
+     *
+     * <p>内置默认 Agent 不可删——AGENT 模式需要它兜底。
+     *
+     * @param userId   归属用户
+     * @param agentId  目标 Agent 主键
+     */
     @Transactional
     public void delete(Long userId, Long agentId) {
         AgentPO agent = requireOwned(userId, agentId);

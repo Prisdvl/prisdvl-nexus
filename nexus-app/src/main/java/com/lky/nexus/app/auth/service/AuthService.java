@@ -4,6 +4,7 @@ import com.lky.nexus.app.auth.model.dto.AuthTokenResponse;
 import com.lky.nexus.app.auth.model.dto.ChangePasswordRequest;
 import com.lky.nexus.app.auth.model.dto.LoginRequest;
 import com.lky.nexus.app.auth.model.dto.RegisterRequest;
+import com.lky.nexus.app.auth.model.dto.SessionClientInfo;
 import com.lky.nexus.app.auth.model.dto.UpdateProfileRequest;
 import com.lky.nexus.app.auth.model.dto.UserInfoResponse;
 
@@ -15,8 +16,12 @@ public interface AuthService {
     /** 注册新用户，默认授予 USER 角色。 */
     UserInfoResponse register(RegisterRequest request);
 
-    /** 登录：校验凭证并签发访问令牌。 */
-    AuthTokenResponse login(LoginRequest request);
+    /**
+     * 登录：校验凭证，签发 access JWT + refresh opaque，并写入设备会话。
+     *
+     * @param clientInfo 来自 HTTP 的 IP / User-Agent（可空字段）
+     */
+    AuthTokenResponse login(LoginRequest request, SessionClientInfo clientInfo);
 
     /** 查询当前用户信息（供 /api/users/me 使用）。 */
     UserInfoResponse currentUser(Long userId);

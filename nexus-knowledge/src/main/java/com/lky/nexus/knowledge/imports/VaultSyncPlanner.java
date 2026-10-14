@@ -22,6 +22,18 @@ import java.util.Map;
 @Component
 public class VaultSyncPlanner {
 
+    /**
+     * 对比"库里已有的"与"本次扫描到的"，得出四类结果。
+     *
+     * <p>判定顺序：路径不在库里 → {@code added}；路径在库里且 {@code file_hash} 一致 →
+     * {@code unchanged}；路径在库里但哈希不同 → {@code changed}；库里有而清单没有 →
+     * 仅当 {@code detectDeletions=true} 时计入 {@code missing}（否则视为未删除）。
+     *
+     * @param existingDocuments 该知识库现有文档（来自数据库）
+     * @param scannedFiles      本次扫描出的文件（含各自 file_hash）
+     * @param detectDeletions   是否允许判定删除（仅完整 Vault 同步时为 true）
+     * @return 四类分类结果；{@code missing} 在 {@code detectDeletions=false} 时为空
+     */
     public VaultSyncPlan plan(List<DocumentPO> existingDocuments,
                               List<ScannedFile> scannedFiles,
                               boolean detectDeletions) {

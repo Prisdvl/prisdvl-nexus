@@ -78,6 +78,18 @@ public class KnowledgeSearchTool {
         this.multiRetriever = multiRetriever;
     }
 
+    /**
+     * 知识库检索工具的执行方法（模型通过 {@code knowledge_search} 工具调用）。
+     *
+     * <p>按 Agent 绑定的知识库范围（来自 {@link ToolContext}，模型不可指定）逐库并行召回，
+     * 汇总后取前 {@code limit} 条拼成给模型的观察结果；检索降级、库被禁用/已删除等
+     * 都如实写进结果，绝不空手返回。
+     *
+     * @param query       检索关键词或问题（自然语言）
+     * @param topK        返回条数，null 或 ≤0 时取默认 5，上限 10；可不传
+     * @param toolContext 框架注入的上下文，携带当前用户与知识库范围
+     * @return 给模型的检索结果文本（含来源编号，供回答时引用）
+     */
     @Tool(name = "knowledge_search",
             description = "检索当前用户知识库中的资料片段（混合检索：BM25 + 向量 + RRF 融合）。"
                     + "当用户的问题可能涉及他的笔记内容时，必须先调用本工具，再根据检索结果回答。")

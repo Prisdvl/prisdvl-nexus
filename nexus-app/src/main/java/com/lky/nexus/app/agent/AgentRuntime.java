@@ -114,7 +114,8 @@ public class AgentRuntime {
         List<AgentContext.ToolCallRecord> trace = new ArrayList<>();
         String answer;
         try {
-            answer = configure(chatClientFactory.get(definition.modelRole()).prompt(),
+            // 传 userId：用户配了自己的对话模型就走他自己的凭据跑 Agent，未配置回落全局模型。
+            answer = configure(chatClientFactory.get(definition.modelRole(), userId).prompt(),
                     userId, definition, AgentContext.collector(trace))
                     .user(question)
                     // token 记账归属（5.6）。Agent 会跑多轮工具循环，而 UsageMeteringAdvisor

@@ -41,6 +41,9 @@ spring:
 nexus:
   jwt:
     secret: ${JWT_SECRET:standalone-only-dev-secret-do-not-use-in-production-32b}
+  email:
+    # 开发：控制台打印验证码；无外部邮件服务时的默认发信实现
+    sender: ${NEXUS_EMAIL_SENDER:console}
   import:
     # 该 profile 的定位是"没有 Docker / 没有 broker 也能跑通全链路"，
     # 因此导入走同步执行；同时关掉 RabbitMQ 健康检查，

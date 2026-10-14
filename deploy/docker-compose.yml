@@ -184,36 +184,10 @@ services:
     networks: [nexus-net]
 
   # ----------------------------------------------------------------
-  # Ollama：本地嵌入模型 bge-m3（Phase 3）
-  #
-  # 【Phase 5.7 起**默认启动**，不再是 --profile ai-local】
-  # 原来它挂在 profile 后面（"占内存大，要时才起"）。但容器化的目标就是
-  # `docker compose up -d` 得到**完整系统**，而嵌入是 RAG 检索链路的必经一环：
-  # 缺了它，检索不是"部分可用"，是直接报错（4003/4006）。让用户先 up 一次、
-  # 发现不对、再加 profile 起第二次，是把一个必选依赖伪装成可选项。
-  # 代价是常驻内存（空载约 100~200MB，bge-m3 载入后约 1.2GB），
-  # 资源观察值见 docs/deployment.md。
-  #
-  #   首次启动后模型若不在卷里（本次验收时 bge-m3 已在卷内）：
-  #     docker compose exec ollama ollama pull bge-m3
+  # （原 ollama 服务已移除：嵌入切到阿里云百炼 text-embedding-v4，见 backend 环境变量。）
+  # 本地 bge-m3 方案若要恢复：把这段 ollama: 服务加回，再把 backend 的
+  # AI_EMBEDDING_BASE_URL 改回 http://ollama:11434，并在 application.yml 加 ollama provider。
   # ----------------------------------------------------------------
-  ollama:
-    image: ollama/ollama:latest
-    container_name: nexus-ollama
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${NEXUS_OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    healthcheck:
-      # 用 ollama 自己的 `list`（它要连本机 daemon）：比 curl 打 /api/tags 更能
-      # 说明"daemon 真的在"，而且不需要镜像里恰好装了 curl
-      test: ["CMD", "ollama", "list"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 20s
-    networks: [nexus-net]
 
   # ----------------------------------------------------------------
   # backend：Spring Boot 单体（java -jar）
@@ -244,8 +218,9 @@ services:
       redis:         { condition: service_healthy }
       rabbitmq:      { condition: service_healthy }
       elasticsearch: { condition: service_healthy }
-      ollama:        { condition: service_healthy }
-    ports: []
+      # ollama 已移除：嵌入走云端百炼，不依赖本地容器。
+    ports: 
+        - "127.0.0.1:8080:8080"
     environment:
       # 单机真实基础设施 = 本项目既有的 local profile（Flyway 开、Redis 限流开）。
       # 它不是"生产 profile"——生产（外置密钥、ES 开安全、多实例）见 Phase 11。
@@ -277,8 +252,11 @@ services:
       RABBITMQ_USER: ${NEXUS_RABBITMQ_USER:-nexus}
       RABBITMQ_PASSWORD: ${NEXUS_RABBITMQ_PASSWORD:-nexus_pwd}
 
-      # ---- 模型：嵌入走 compose 内的 ollama，对话走外部网关 ----
-      AI_EMBEDDING_BASE_URL: http://ollama:11434
+      # ---- 模型：嵌入走阿里云百炼（DashScope compatible-mode），对话走外部网关 ----
+      AI_EMBEDDING_BASE_URL: ${AI_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-text-embedding-v4}
+      AI_EMBEDDING_DIM: ${AI_EMBEDDING_DIM:-1024}
+      AI_EMBEDDING_API_KEY: ${AI_EMBEDDING_API_KEY:?AI_EMBEDDING_API_KEY 未配置：请在 deploy/.env 里填入 DashScope API-KEY}
       AI_CHAT_BASE_URL: ${AI_CHAT_BASE_URL:-https://opencode.ai/zen/go/v1}
       AI_CHAT_MODEL: ${AI_CHAT_MODEL:-deepseek-v4-flash}
       AI_JUDGE_MODEL: ${AI_JUDGE_MODEL:-glm-5.3-flash}
@@ -291,6 +269,15 @@ services:
       # 注意 `.env` 在 .gitignore 里（`deploy/.env` 同理），不进版本库。
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 未配置：请复制 deploy/.env.example 为 deploy/.env 并填入至少 32 字节的随机值}
       AI_CHAT_API_KEY: ${AI_CHAT_API_KEY:?AI_CHAT_API_KEY 未配置：请复制 deploy/.env.example 为 deploy/.env 并填入模型网关的 Key}
+
+      # ---- 邮件（Resend / console / smtp）----
+      # 默认 console（local profile 一致，验证码进容器日志）。
+      # 真邮：宿主机设 RESEND_API_KEY（系统环境变量即可，勿写入仓库），
+      # 并在 deploy/.env 设 NEXUS_EMAIL_SENDER=resend + NEXUS_EMAIL_RESEND_FROM。
+      # compose 会把宿主机/同目录 .env 中的变量注入容器；Key 缺失且 sender=resend 时应用启动失败。
+      NEXUS_EMAIL_SENDER: ${NEXUS_EMAIL_SENDER:-console}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      NEXUS_EMAIL_RESEND_FROM: ${NEXUS_EMAIL_RESEND_FROM:-}
 
       # ---- 存储：原始文件（增量同步要重新解析原文）----
       NEXUS_STORAGE_ROOT: /app/data
@@ -346,7 +333,6 @@ volumes:
   redis-data:
   es-data:
   rabbitmq-data:
-  ollama-data:
   backend-data:
 
 networks:

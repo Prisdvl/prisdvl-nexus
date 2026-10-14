@@ -13,6 +13,7 @@ public record ChunkingOptions(int maxTokens, int overlapTokens, int minTokens) {
     public static final int DEFAULT_OVERLAP_TOKENS = 50;
     public static final int DEFAULT_MIN_TOKENS = 60;
 
+    /** 返回安全默认切分参数（max=400 / overlap=50 / min=60）。 */
     public static ChunkingOptions defaults() {
         return new ChunkingOptions(DEFAULT_MAX_TOKENS, DEFAULT_OVERLAP_TOKENS, DEFAULT_MIN_TOKENS);
     }

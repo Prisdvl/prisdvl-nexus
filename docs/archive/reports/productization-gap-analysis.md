@@ -282,7 +282,7 @@ private Long resolveUser(String nexusUser) {
 
 | 编号 | 模块 | 问题 | 备注 |
 | --- | --- | --- | --- |
-| P2-1 | Auth | **无登出接口、无 refresh token** | 5.6 只解决了"改密码后旧令牌失效"（`token_version`，ADR-020）。**登出仍然是"客户端丢弃令牌"**——服务端没有任何动作。refresh / `sys_refresh_token` 属 ADR-021 第 ⑤ 阶段，未做 |
+| P2-1 | Auth | ~~无登出接口、无 refresh token~~ → **已关闭（认证 Phase 4）** | 已落地：`/auth/refresh` + rotation、`/auth/logout`、`sys_user_session`（V21）、设备会话管理；改密/重置同时 revoke 全会话。**剩余**：令牌仍在 localStorage（XSS，见 ADR-021 Cookie 迁移未做） |
 | P2-2 | Auth | ~~登录失败无计数/无锁定~~ | ✅ **5.6（2026-10-02）**：`LoginAttemptLimiter`（5 次 / 15 分钟 → 冻结 15 分钟，fail-open）。**已知代价**：按 username 冻结可被用来定向刷锁别人的账号，窗口因此取得短（ADR-020） |
 | P2-3 | Security | **令牌存 localStorage（XSS 可窃取）** | ⚠️ **5.6 只出了设计，风险仍在**：ADR-021 给了分阶段迁移路径（Cookie + CSRF + refresh），代码零改动——用户明确要求"不要直接大改"。今天的缓解只有 30 分钟 TTL，且**没有 refresh ⇒ 被盗后无法主动止损** |
 | P2-17 | Security | **配额可被绕过**：Redis 重启 / `allkeys-lru` 淘汰会丢当日计数；多实例下内存实现不共享（每实例各算一份，限流被放大 N 倍） | 5.6 新增。要真正可靠得把当日用量落到表（`sys_user_daily_usage`）或至少确保 Redis 不淘汰这些键；**多实例部署必须 `nexus.security.redis-enabled=true`**（已写进 `application.yml` 注释） |

@@ -25,6 +25,12 @@ public enum AgentStatus {
     /** 新建时的默认状态：不自动发布，逼一次"测试再发布"。 */
     public static final AgentStatus DEFAULT = DRAFT;
 
+    /**
+     * 把字符串解析成状态：null/空白回落到 {@link #DEFAULT}（DRAFT）；非法值抛 {@code PARAM_INVALID}。
+     *
+     * @param raw 原始字符串（大小写不敏感，会 trim）
+     * @return 对应的状态枚举
+     */
     public static AgentStatus parse(String raw) {
         if (raw == null || raw.isBlank()) {
             return DEFAULT;

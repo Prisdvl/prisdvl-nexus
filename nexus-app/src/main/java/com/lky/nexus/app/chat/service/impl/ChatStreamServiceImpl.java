@@ -49,6 +49,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -156,7 +157,8 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                         : defaultRole(mode);
         // 取模型放在落库之前：模型未注册（4006）属于配置问题，必须在<b>产生副作用之前</b>失败。
         // 否则会留下一条用户消息 + 一条永远停在 STREAMING 的空助手消息，用户看到的是"消息凭空多了一条"。
-        ChatClient chatClient = chatClientFactory.get(modelRole);
+        // 传 userId：用户配了自己的模型就走他自己的凭据，未配置回落全局模型。
+        ChatClient chatClient = chatClientFactory.get(modelRole, userId);
 
         // RAG 模式的检索同样放在落库之前（与 /ask/stream 一致，见 RagStreamServiceImpl）：
         // ① 知识库未绑定/不属于自己、索引不可用，都会以统一 JSON 报错，而不是"先开一条 SSE 再在半路报错"；
@@ -220,8 +222,12 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             return emitter;
         }
 
+        // 无进展超时：60s 内没有任何新 chunk 就断。与 SseEmitter 的 5 分钟总期限互补——
+        // 总期限防"模型一直慢慢生成"，无进展超时防"连接活着但上游卡死不发数据"。
+        // Flux.timeout 从每个 onNext 起重新计时，所以正常长回答不会被误杀。
         Flux<ChatResponse> modelFlux = buildFlux(userId, chatClient, session, conversationId, content,
-                ragMode, prepared, history, agentDefinition);
+                ragMode, prepared, history, agentDefinition)
+                .timeout(Duration.ofSeconds(60));
         // subscribeOn：分片读取可能阻塞，必须离开 MVC 请求线程
         Disposable subscription = modelFlux.subscribeOn(Schedulers.boundedElastic())
                 .subscribe(session::onChunk, session::onError, session::onComplete);
@@ -346,17 +352,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         /** 工具调用痕迹：工具在订阅线程上执行、结束时在订阅线程上落库，但仍然按并发安全的容器声明 */
         private final List<MessageToolCall> toolCalls = Collections.synchronizedList(new ArrayList<>());
 
-        /**
-         * 这一轮<b>交给模型的</b>资料片段，按"第几次召回"分组（RAG 模式恰好一组，
-         * Agent 模式每次工具调用各一组）。
-         *
-         * <p>为什么要分组：编号规则不同。RAG 的 {@code [n]} 是这一组内的位置；
-         * Agent 的 {@code [n]} 是<b>每次工具调用各自</b>从 1 开始的（工具是无状态的，
-         * 它不知道自己是本轮的第二次调用）。而"这段资料被引用了吗"只能拿
-         * <b>它自己那一组的编号</b>去回答正文里比对——拉平之后再算，
-         * 第二次调用的第 1 条会被拿去比对第一次调用的 {@code [1]}，
-         * 结论就反了。因此在 {@link #citations()} 里逐组算、算完再合并编号。
-         */
+
         private final List<List<ChunkSearchService.SearchHit>> retrievalGroups =
                 Collections.synchronizedList(new ArrayList<>());
 

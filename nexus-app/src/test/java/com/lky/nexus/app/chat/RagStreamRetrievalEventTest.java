@@ -245,7 +245,7 @@ class RagStreamRetrievalEventTest {
         ChatClient chatClient = org.mockito.Mockito.mock(ChatClient.class);
         ChatClient.ChatClientRequestSpec requestSpec = org.mockito.Mockito.mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.StreamResponseSpec streamSpec = org.mockito.Mockito.mock(ChatClient.StreamResponseSpec.class);
-        when(chatClientFactory.get(anyString())).thenReturn(chatClient);
+        when(chatClientFactory.get(anyString(), any())).thenReturn(chatClient);
         when(chatClient.prompt()).thenReturn(requestSpec);
         when(requestSpec.system(anyString())).thenReturn(requestSpec);
         when(requestSpec.user(anyString())).thenReturn(requestSpec);

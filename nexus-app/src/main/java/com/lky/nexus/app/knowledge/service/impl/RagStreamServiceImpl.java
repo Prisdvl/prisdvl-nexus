@@ -92,7 +92,9 @@ public class RagStreamServiceImpl implements RagStreamService {
         // ② 流式生成
         StringBuilder assembled = new StringBuilder();
         AtomicBoolean finished = new AtomicBoolean(false);
-        ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_DEFAULT);
+        // 传 userId：用户配了自己的对话模型就走他自己的凭据，未配置回落服务端全局模型。
+        // 注意检索（嵌入）仍走服务端全局配置——嵌入维度建库时冻结，不随用户 key 切换。
+        ChatClient client = chatClientFactory.get(AiModelProperties.Role.CHAT_DEFAULT, userId);
 
         Flux<ChatResponse> flux = client.prompt()
                 .system(ragAnswerService.systemPrompt())

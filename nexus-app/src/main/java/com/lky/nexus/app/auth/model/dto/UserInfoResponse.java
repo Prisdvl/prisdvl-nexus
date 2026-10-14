@@ -9,11 +9,14 @@ import java.util.List;
  * 这是防止密码哈希泄漏最可靠的做法。
  *
  * <p>{@code id} 是 {@code Long}，会被全局序列化为字符串（ADR-017），前端按字符串处理。
+ *
+ * <p>{@code emailVerified}：当前绑定邮箱是否已通过归属验证；无邮箱时为 {@code false}。
  */
 public record UserInfoResponse(
         Long id,
         String username,
         String nickname,
         String email,
+        boolean emailVerified,
         List<String> roles) {
 }

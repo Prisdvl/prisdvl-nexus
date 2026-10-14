@@ -42,6 +42,13 @@ public class AgentResourceController {
         this.agentRuntime = agentRuntime;
     }
 
+    /**
+     * 分页列出当前用户的 Agent：内置默认 Agent 置顶，其余按更新时间倒序。
+     *
+     * @param pageNum  页码（缺省 1，会被归一化到 ≥1）
+     * @param pageSize 每页条数（缺省 20，会被归一化到合法范围）
+     * @return 当前用户的 Agent 分页列表
+     */
     @GetMapping
     public Result<PageResult<AgentResponse>> list(
             @RequestParam(defaultValue = "1") int pageNum,
@@ -49,11 +56,25 @@ public class AgentResourceController {
         return Result.ok(agentService.list(CurrentUser.requireId(), pageNum, pageSize));
     }
 
+    /**
+     * 创建一个 Agent（初始为 DRAFT，不可被会话直接选用，需先测试再发布）。
+     *
+     * <p>归属用户取自当前登录身份，code 不可与同名标识冲突；绑定的知识库与工具在此处校验归属。
+     *
+     * @param request 创建参数（标识、名称、提示词、模型角色、策略、温度、绑定）
+     * @return 新建 Agent 的视图
+     */
     @PostMapping
     public Result<AgentResponse> create(@Valid @RequestBody CreateAgentRequest request) {
         return Result.ok(agentService.create(CurrentUser.requireId(), request));
     }
 
+    /**
+     * 查看单个 Agent 详情（含绑定的知识库与工具白名单），仅限本人。
+     *
+     * @param agentId 目标 Agent 主键
+     * @return 该 Agent 的视图
+     */
     @GetMapping("/{agentId}")
     public Result<AgentResponse> detail(@PathVariable Long agentId) {
         return Result.ok(agentService.detail(CurrentUser.requireId(), agentId));
@@ -77,6 +98,13 @@ public class AgentResourceController {
         return Result.ok(agentService.duplicate(CurrentUser.requireId(), agentId));
     }
 
+    /**
+     * 删除当前用户自己的 Agent，并级联清理其知识库/工具绑定行（避免无主数据）。
+     *
+     * <p>内置默认 Agent 不可删——AGENT 模式需要它兜底。
+     *
+     * @param agentId 目标 Agent 主键
+     */
     @DeleteMapping("/{agentId}")
     public Result<Void> delete(@PathVariable Long agentId) {
         agentService.delete(CurrentUser.requireId(), agentId);

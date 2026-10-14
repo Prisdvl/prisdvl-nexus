@@ -10,6 +10,7 @@ import type { ChatCitationRef } from '@/data'
 import { useEffect, useState } from 'react'
 import LandingPage from '@/pages/LandingPage'
 import AuthPage from '@/pages/AuthPage'
+import ForgotPasswordPage from '@/pages/ForgotPasswordPage'
 import WorkbenchPage from '@/pages/WorkbenchPage'
 import KnowledgeBaseListPage from '@/pages/KnowledgeBaseListPage'
 import KnowledgeBaseDetailPage from '@/pages/KnowledgeBaseDetailPage'
@@ -31,6 +32,21 @@ function LandingRoute({ theme, palette }: { theme: ThemeMode; palette: PaletteNa
   return (
     <>
       <LandingPage theme={theme} palette={palette} onEnterAuth={() => navigate('/login')} />
+      <CornerControls />
+    </>
+  )
+}
+
+function ForgotPasswordRoute({ theme, palette }: { theme: ThemeMode; palette: PaletteName }) {
+  const navigate = useNavigate()
+  return (
+    <>
+      <ForgotPasswordPage
+        theme={theme}
+        palette={palette}
+        onGoHome={() => navigate('/')}
+        onGoLogin={() => navigate('/login')}
+      />
       <CornerControls />
     </>
   )
@@ -165,6 +181,16 @@ export default function App() {
             <RedirectIfAuthenticated>
               <RouteFade>
                 <LoginRoute theme={theme} palette={palette} />
+              </RouteFade>
+            </RedirectIfAuthenticated>
+          ),
+        },
+        {
+          path: '/forgot',
+          element: (
+            <RedirectIfAuthenticated>
+              <RouteFade>
+                <ForgotPasswordRoute theme={theme} palette={palette} />
               </RouteFade>
             </RedirectIfAuthenticated>
           ),

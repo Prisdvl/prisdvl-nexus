@@ -28,6 +28,12 @@ public class StatsService {
         this.statsMapper = statsMapper;
     }
 
+    /**
+     * 汇总当前用户的工作台数据。
+     *
+     * @param userId 当前用户 ID（由服务端从令牌解析，绝不接受前端传入）
+     * @return 趋势 / 热力 / 最近活动三块数据；空缺日期已补 0
+     */
     @Transactional(readOnly = true)
     public StatsSummary summary(Long userId) {
         return new StatsSummary(

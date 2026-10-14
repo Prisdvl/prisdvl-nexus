@@ -2,9 +2,11 @@ package com.lky.nexus.ai.error;
 
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.openai.errors.OpenAIServiceException;
 import org.springframework.ai.model.tool.ToolCallLimitExceededException;
 
 import java.net.SocketTimeoutException;
+import java.util.Optional;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -89,13 +91,80 @@ public final class FailureClassifier {
             ErrorCode code = ErrorCode.fromCode(business.getCode());
             return new Failure(code, business.getMessage(), retryable(code));
         }
+        // 优先用 SDK 的结构化异常（HTTP 状态码 + 错误体 code）精确分类；
+        // 类名匹配是兜底，只在拿不到结构化信息时用。
+        OpenAIServiceException http = firstOfType(error, OpenAIServiceException.class);
+        if (http != null) {
+            Failure fromHttp = fromHttpError(http);
+            if (fromHttp != null) {
+                return fromHttp;
+            }
+        }
         if (isCredentialRejected(error)) {
             return new Failure(ErrorCode.MODEL_AUTH_FAILED, MODEL_AUTH_FAILED_MESSAGE, false);
+        }
+        if (isRateLimited(error)) {
+            return new Failure(ErrorCode.RATE_LIMITED,
+                    "模型服务限流，请稍后重试", true);
+        }
+        if (isBadRequest(error)) {
+            return new Failure(ErrorCode.MODEL_BAD_REQUEST,
+                    "模型拒绝了本次请求（参数或模型配置有误），请联系管理员", false);
         }
         if (isTimeout(error)) {
             return new Failure(ErrorCode.MODEL_TIMEOUT, MODEL_TIMEOUT_MESSAGE, true);
         }
         return new Failure(ErrorCode.MODEL_UNAVAILABLE, MODEL_FAILED_MESSAGE, true);
+    }
+
+    /**
+     * 从 SDK 的结构化 HTTP 异常精确分类。
+     *
+     * <p>为什么必须看 statusCode 和错误体 code，而不是只看异常类名：
+     * <ul>
+     *   <li>同样是 429，OpenAI 的 {@code RateLimitException} 可能是"短时间太快"（可重试），
+     *       也可能是账户额度耗尽（不可重试，必须充值）——二者重试行为完全相反；</li>
+     *   <li>DeepSeek 余额不足返回 HTTP 402 + {@code insufficient_user_quota}，
+     *       不是 429，但同样是"钱没了"；</li>
+     *   <li>不看错误体就把所有 429 都说成"限流稍后重试"，用户会对着一个空账户反复点击。</li>
+     * </ul>
+     *
+     * @return 分类结果；拿不准时返回 null，走类名兜底
+     */
+    private static Failure fromHttpError(OpenAIServiceException ex) {
+        int status = ex.statusCode();
+        // 错误体里的 code 字段（OpenAI 风格："insufficient_quota" / "invalid_api_key"）
+        // 和 type 字段（"rate_limit_error"）
+        Optional<String> errCode = ex.code();
+        String codeHint = (errCode.orElse("") + " "
+                + ex.type().orElse("") + " "
+                + ex.body().toString()).toLowerCase();
+
+        // 额度耗尽：402，或 429/403 错误体里明确说余额/额度不足
+        boolean quotaExhausted = status == 402
+                || codeHint.contains("insufficient_quota")
+                || codeHint.contains("insufficient_user_quota")
+                || codeHint.contains("insufficient_balance")
+                || codeHint.contains("quota_exhausted")
+                || codeHint.contains("billing_not_active");
+        if (quotaExhausted) {
+            return new Failure(ErrorCode.QUOTA_EXHAUSTED,
+                    "模型账户余额或额度已耗尽，请充值或更换 API Key（服务端配置问题）", false);
+        }
+
+        return switch (status) {
+            case 401, 403 -> new Failure(ErrorCode.MODEL_AUTH_FAILED, MODEL_AUTH_FAILED_MESSAGE, false);
+            case 429 -> new Failure(ErrorCode.RATE_LIMITED,
+                    "模型服务限流，请稍后重试", true);
+            case 400, 404, 422 -> new Failure(ErrorCode.MODEL_BAD_REQUEST,
+                    "模型拒绝了本次请求（参数或模型配置有误），请联系管理员", false);
+            default -> {
+                if (status >= 500) {
+                    yield new Failure(ErrorCode.MODEL_UNAVAILABLE, MODEL_FAILED_MESSAGE, true);
+                }
+                yield null; // 其他状态码走类名兜底
+            }
+        };
     }
 
     /**
@@ -160,6 +229,36 @@ public final class FailureClassifier {
             String name = current.getClass().getSimpleName();
             if (name.contains("Unauthorized") || name.contains("Authentication")
                     || name.contains("InvalidApiKey") || name.contains("PermissionDenied")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 429 限流判定（openai-java SDK 抛 {@code RateLimitException}）。
+     * 与 5xx 的区别：429 是明确的"退避即可恢复"，5xx 是"服务端自己炸了"。
+     * 文案说"限流或额度用尽"，因为 opencode 额度耗尽也走 429。
+     */
+    private static boolean isRateLimited(Throwable error) {
+        for (Throwable current = error; current != null; current = next(current)) {
+            String name = current.getClass().getSimpleName();
+            if (name.contains("RateLimit") || name.contains("TooManyRequests")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 400/422 客户端错误判定（{@code BadRequestException} / {@code UnprocessableEntityException}）。
+     * 这类错误是确定性的：同样的请求再发一次还是被拒，重试按钮没有意义。
+     */
+    private static boolean isBadRequest(Throwable error) {
+        for (Throwable current = error; current != null; current = next(current)) {
+            String name = current.getClass().getSimpleName();
+            if (name.contains("BadRequest") || name.contains("UnprocessableEntity")
+                    || name.contains("InvalidRequest")) {
                 return true;
             }
         }

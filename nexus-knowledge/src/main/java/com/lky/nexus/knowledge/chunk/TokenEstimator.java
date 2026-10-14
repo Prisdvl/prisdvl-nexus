@@ -23,6 +23,12 @@ public final class TokenEstimator {
     private TokenEstimator() {
     }
 
+    /**
+     * 估算文本的 token 数（保守近似，规则见类注释）。
+     *
+     * @param text 待估算文本；{@code null} 或空串返回 0
+     * @return 估算的 token 数量（CJK 约 1 token/字，其他字符约 4 字符/token）
+     */
     public static int estimate(String text) {
         if (text == null || text.isEmpty()) {
             return 0;

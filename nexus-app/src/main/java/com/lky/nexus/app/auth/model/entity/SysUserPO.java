@@ -32,6 +32,14 @@ public class SysUserPO {
     /** 邮箱，可空 */
     private String email;
 
+    /**
+     * 当前 {@link #email} 是否已通过归属验证（迁移 V20）。
+     *
+     * <p>1 = 已验证；0 = 未验证（含空邮箱、刚绑定、刚更换、存量历史邮箱）。
+     * 更换邮箱地址后必须重新变为 0；仅改昵称等不得清除。
+     */
+    private Integer emailVerified;
+
     /** BCrypt 密码哈希，绝不存明文 */
     private String passwordHash;
 

@@ -36,6 +36,7 @@ public class CleanupRunner implements ApplicationRunner {
     private final TestDataCleanupService cleanupService;
     private final ConfigurableApplicationContext context;
 
+    /** 注入配置、清理服务与上下文，由 Spring 完成（仅 {@code cleanup} profile 装配）。 */
     public CleanupRunner(CleanupProperties properties,
                          TestDataCleanupService cleanupService,
                          ConfigurableApplicationContext context) {

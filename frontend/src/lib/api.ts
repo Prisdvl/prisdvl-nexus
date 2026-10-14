@@ -10,11 +10,11 @@
  * 2. **统一包络**。后端一律返回 `{ code, message, data }`，`code === 0` 才算成功。
  *    业务错误码（实测）：2001 未认证 / 2006 凭证错 / 1001 参数校验 / 4006 模型未注册。
  *
- * 3. **无 refresh token**（`grep refresh --include=*.java` 零命中）。
- *    令牌 30 分钟过期（实测 `expiresIn: 1800`），过期只能重新登录。
- *    决策：存 localStorage，不引入内存副本之外的持久化。
+ * 3. **Access + Refresh**。access 短寿命（默认 30m）；refresh 为 opaque 长寿命凭证。
+ *    access 401 时用单飞 Promise 队列刷新并重放原请求；refresh 失败才清登录态。
+ *    决策：存 localStorage（XSS 风险见 Phase 4 报告；httpOnly Cookie 属后续项）。
  */
-import axios, { AxiosError, type AxiosInstance } from 'axios'
+import axios, { AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios'
 
 /* ------------------------------------------------------------------ *
  * 环境开关
@@ -40,12 +40,14 @@ export const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
  * ------------------------------------------------------------------ */
 
 const TOKEN_KEY = 'nx-token'
+const REFRESH_KEY = 'nx-refresh-token'
 const EXPIRES_KEY = 'nx-token-expires-at'
 /** 兼容旧版留下的 '1' 标记；新版登录成功后它会被移除 */
 const LEGACY_AUTH_KEY = 'nx-proto-auth'
 
 export const tokenStore = {
   get: (): string => localStorage.getItem(TOKEN_KEY) ?? '',
+  getRefresh: (): string => localStorage.getItem(REFRESH_KEY) ?? '',
   /** 过期时间存成毫秒时间戳；缺失视为过期（宁可多登一次也不发一个必失败的请求） */
   expiresAt: (): number => Number(localStorage.getItem(EXPIRES_KEY) ?? '0'),
   isExpired: (): boolean => {
@@ -54,13 +56,17 @@ export const tokenStore = {
     if (!exp) return true
     return Date.now() >= exp
   },
-  save: (token: string, expiresInSec: number) => {
-    localStorage.setItem(TOKEN_KEY, token)
+  save: (accessToken: string, expiresInSec: number, refreshToken?: string | null) => {
+    localStorage.setItem(TOKEN_KEY, accessToken)
     localStorage.setItem(EXPIRES_KEY, String(Date.now() + expiresInSec * 1000))
+    if (refreshToken) {
+      localStorage.setItem(REFRESH_KEY, refreshToken)
+    }
     localStorage.removeItem(LEGACY_AUTH_KEY)
   },
   clear: () => {
     localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(REFRESH_KEY)
     localStorage.removeItem(EXPIRES_KEY)
   },
 }
@@ -89,14 +95,92 @@ export interface AuthUser {
   username: string
   nickname: string | null
   email: string | null
+  /** 当前绑定邮箱是否已通过归属验证；无邮箱时为 false */
+  emailVerified: boolean
   roles: string[]
 }
 
 export interface AuthToken {
   accessToken: string
+  refreshToken: string
   tokenType: string
   expiresIn: number
   user: AuthUser
+}
+
+export interface RefreshTokenResult {
+  accessToken: string
+  refreshToken: string
+  tokenType: string
+  expiresIn: number
+}
+
+export interface UserSession {
+  id: string
+  device: string
+  ip: string | null
+  lastUsedAt: string
+  createdAt: string
+  current: boolean
+}
+
+/** 标记已做过一次 refresh 重试，避免死循环 */
+type RetriableConfig = InternalAxiosRequestConfig & { _retry?: boolean }
+
+/** 单飞：并发 401 共用同一个 refresh Promise */
+let refreshInFlight: Promise<RefreshTokenResult> | null = null
+
+/**
+ * 登录世代：logout / 强制清态时递增。
+ * 防止「主动退出后仍在飞的 refresh」把新令牌写回 localStorage。
+ */
+let authGeneration = 0
+
+/** 主动清登录态时调用（logout / 401 终态）；使进行中的 refresh 结果作废 */
+export function bumpAuthGeneration() {
+  authGeneration += 1
+  refreshInFlight = null
+}
+
+function isAuthPublicUrl(url: string): boolean {
+  return (
+    url.includes('/auth/login') ||
+    url.includes('/auth/register') ||
+    url.includes('/auth/refresh') ||
+    url.includes('/auth/logout') ||
+    url.includes('/auth/password/reset/')
+  )
+}
+
+async function refreshTokens(): Promise<RefreshTokenResult> {
+  if (!refreshInFlight) {
+    const generationAtStart = authGeneration
+    refreshInFlight = (async () => {
+      const refreshToken = tokenStore.getRefresh()
+      if (!refreshToken) {
+        throw new Error('missing refresh token')
+      }
+      // 用裸 axios，避开本实例拦截器（否则 refresh 401 会递归）
+      const resp = await axios.post<Result<RefreshTokenResult>>(
+        `${API_BASE}/auth/refresh`,
+        { refreshToken },
+        { timeout: 20_000 },
+      )
+      if (resp.data.code !== 0 || !resp.data.data?.accessToken) {
+        throw new Error(resp.data.message || 'refresh failed')
+      }
+      // 退出或清态发生在 refresh 途中：丢弃结果，勿写回令牌
+      if (generationAtStart !== authGeneration) {
+        throw new Error('auth cleared during refresh')
+      }
+      const data = resp.data.data
+      tokenStore.save(data.accessToken, data.expiresIn, data.refreshToken)
+      return data
+    })().finally(() => {
+      refreshInFlight = null
+    })
+  }
+  return refreshInFlight
 }
 
 export interface Conversation {
@@ -175,9 +259,9 @@ export const http: AxiosInstance = axios.create({
 })
 
 http.interceptors.request.use((config) => {
-  //登录 / 注册本身还没有令牌，跳过以免带上陈旧 token
-  const isAuthEntry = config.url?.includes('/auth/login') || config.url?.includes('/auth/register')
-  if (!isAuthEntry && !tokenStore.isExpired()) {
+  // 登录 / 注册 / refresh / logout / 忘记密码：不带陈旧 access
+  const url = config.url ?? ''
+  if (!isAuthPublicUrl(url) && !tokenStore.isExpired()) {
     config.headers.Authorization = `Bearer ${tokenStore.get()}`
   }
   return config
@@ -185,15 +269,41 @@ http.interceptors.request.use((config) => {
 
 http.interceptors.response.use(
   (resp) => resp,
-  (error: AxiosError<Result<unknown>>) => {
+  async (error: AxiosError<Result<unknown>>) => {
     const status = error.response?.status
     const bizCode = error.response?.data?.code
-    // 2001 = 未认证或凭证缺失（实测）；401 也可能由网关返回
-    if (status === 401 || bizCode === 2001) {
+    const config = error.config as RetriableConfig | undefined
+    const url = config?.url ?? ''
+
+    // 2001 = 未认证或凭证缺失；401 也可能由网关返回
+    if (status !== 401 && bizCode !== 2001) {
+      return Promise.reject(error)
+    }
+
+    // refresh / login 等公开入口失败：直接清态，勿再 refresh
+    if (!config || isAuthPublicUrl(url) || config._retry) {
       tokenStore.clear()
       onUnauthorized()
+      return Promise.reject(error)
     }
-    return Promise.reject(error)
+
+    if (!tokenStore.getRefresh()) {
+      tokenStore.clear()
+      onUnauthorized()
+      return Promise.reject(error)
+    }
+
+    try {
+      config._retry = true
+      const tokens = await refreshTokens()
+      config.headers = config.headers ?? {}
+      config.headers.Authorization = `Bearer ${tokens.accessToken}`
+      return http.request(config)
+    } catch {
+      tokenStore.clear()
+      onUnauthorized()
+      return Promise.reject(error)
+    }
   },
 )
 
@@ -222,14 +332,26 @@ export function bizCodeOf(e: unknown): number | undefined {
 
 export const api = {
   auth: {
-    /** 实测响应：{ accessToken, tokenType, expiresIn, user } */
+    /** 登录：accessToken + refreshToken + expiresIn + user */
     login: (username: string, password: string) =>
       http.post<Result<AuthToken>>('/auth/login', { username, password }).then((r) => r.data.data),
     /** 实测响应：UserInfoResponse */
-    register: (body: { username: string; password: string; email?: string; nickname?: string }) =>
+    register: (body: { username: string; password: string; email: string; nickname?: string }) =>
       http.post<Result<AuthUser>>('/auth/register', body).then((r) => r.data.data),
     /** 实测响应：与登录同一形状的 user */
     me: () => http.get<Result<AuthUser>>('/users/me').then((r) => r.data.data),
+    /** 当前设备退出（凭 refreshToken；access 过期仍可调用） */
+    logout: (refreshToken: string) =>
+      http.post<Result<null>>('/auth/logout', { refreshToken }).then((r) => r.data.data),
+    /**
+     * 请求密码重置验证码（公开）。
+     * 无论账户是否存在均返回防枚举提示文案（取自 Result.message）。
+     */
+    requestPasswordReset: (email: string) =>
+      http.post<Result<null>>('/auth/password/reset/request', { email }).then((r) => r.data.message),
+    /** 提交验证码与新密码完成重置（公开）；成功时取 Result.message */
+    confirmPasswordReset: (body: { email: string; code: string; newPassword: string }) =>
+      http.post<Result<null>>('/auth/password/reset/confirm', body).then((r) => r.data.message),
   },
   users: {
     me: () => http.get<Result<AuthUser>>('/users/me').then((r) => r.data.data),
@@ -244,6 +366,25 @@ export const api = {
     /** 保存自定义对话模型配置；apiKey 留空 = 保留已存的 key */
     saveLlmConfig: (body: { baseUrl?: string | null; apiKey?: string; modelName?: string | null; enabled: boolean }) =>
       http.put<Result<UserLlmConfig>>('/users/me/llm-config', body).then((r) => r.data.data),
+    /** 向当前绑定邮箱发送归属验证码（服务端强制冷却与 IP 限流） */
+    sendEmailVerification: () =>
+      http.post<Result<null>>('/users/me/email/verification/send').then((r) => r.data.data),
+    /** 提交验证码，完成当前绑定邮箱验证 */
+    verifyEmail: (code: string) =>
+      http.post<Result<AuthUser>>('/users/me/email/verification', { code }).then((r) => r.data.data),
+    /** 设备会话列表；可选带 refresh 以标记 current */
+    sessions: () => {
+      const headers: Record<string, string> = {}
+      const rt = tokenStore.getRefresh()
+      if (rt) headers['X-Refresh-Token'] = rt
+      return http
+        .get<Result<UserSession[]>>('/users/me/sessions', { headers })
+        .then((r) => r.data.data)
+    },
+    revokeSession: (id: string) =>
+      http.delete<Result<null>>(`/users/me/sessions/${id}`).then((r) => r.data.data),
+    revokeAllSessions: () =>
+      http.post<Result<null>>('/users/me/sessions/revoke-all').then((r) => r.data.data),
   },
   conversations: {
     /** 实测：{ list, total, pageNum, pageSize, pages } */

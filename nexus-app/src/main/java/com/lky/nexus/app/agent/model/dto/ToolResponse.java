@@ -20,6 +20,7 @@ public record ToolResponse(
         boolean enabled,
         boolean builtin) {
 
+    /** 把工具的领域定义转成界面视图（enabled 已是用户覆盖后的真实状态）。 */
     public static ToolResponse of(ToolDefinition definition) {
         return new ToolResponse(
                 definition.code(),

@@ -82,7 +82,7 @@ class RagAnswerServiceFailureTest {
             }
         };
         ChatClientFactory factory = mock(ChatClientFactory.class);
-        when(factory.get(anyString())).thenReturn(ChatClient.builder(failing).build());
+        when(factory.get(anyString(), any())).thenReturn(ChatClient.builder(failing).build());
 
         ragAnswerService = new RagAnswerServiceImpl(
                 knowledgeBaseService,
@@ -138,7 +138,7 @@ class RagAnswerServiceFailureTest {
             }
         };
         ChatClientFactory factory = mock(ChatClientFactory.class);
-        when(factory.get(anyString())).thenReturn(ChatClient.builder(ok).build());
+        when(factory.get(anyString(), any())).thenReturn(ChatClient.builder(ok).build());
         KnowledgeBaseService knowledgeBaseService = mock(KnowledgeBaseService.class);
         KnowledgeBasePO knowledgeBase = new KnowledgeBasePO();
         knowledgeBase.setId(KB_ID);

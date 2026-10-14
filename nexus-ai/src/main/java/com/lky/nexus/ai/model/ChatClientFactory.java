@@ -8,9 +8,11 @@ import com.lky.nexus.common.security.ChatUsageRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.util.StringUtils;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -48,6 +50,15 @@ public class ChatClientFactory {
     private final ChatUsageRecorder usageRecorder;
     private final ObservabilityRegistry observability;
     private final Map<String, ChatClient> clientsByRole = new ConcurrentHashMap<>();
+    /**
+     * 用户自定义凭据查询端口；纯 AI 层 / 无此 bean 时为 {@code null}，全部走服务端全局模型。
+     */
+    private final UserChatCredentialsProvider credentialsProvider;
+    /**
+     * 用户级 client 缓存：key 是"用户 + 凭据指纹"。凭据一变指纹就变 → 自动重建；
+     * 旧条目留在内存里不清理（个人系统，量级可控），避免跨组件做失效通知。
+     */
+    private final Map<String, ChatClient> clientsByUser = new ConcurrentHashMap<>();
 
     /** 不记账的构造：给不关心配额的测试与纯 AI 层使用。 */
     public ChatClientFactory(AiModelProperties properties, AiModelRegistry registry) {
@@ -62,20 +73,62 @@ public class ChatClientFactory {
 
     public ChatClientFactory(AiModelProperties properties, AiModelRegistry registry,
                              ChatUsageRecorder usageRecorder, ObservabilityRegistry observability) {
+        this(properties, registry, usageRecorder, observability, null);
+    }
+
+    /** 全参构造（装配用）：带上用户自定义凭据端口。 */
+    public ChatClientFactory(AiModelProperties properties, AiModelRegistry registry,
+                             ChatUsageRecorder usageRecorder, ObservabilityRegistry observability,
+                             UserChatCredentialsProvider credentialsProvider) {
         this.properties = properties;
         this.registry = registry;
         this.usageRecorder = usageRecorder == null ? ChatUsageRecorder.NOOP : usageRecorder;
         this.observability = observability == null ? new ObservabilityRegistry() : observability;
+        this.credentialsProvider = credentialsProvider;
     }
 
     /**
-     * 按逻辑角色取 ChatClient。
+     * 按逻辑角色取 ChatClient（服务端全局模型，不带用户上下文）。
      *
      * @param role 角色名，建议使用 {@link AiModelProperties.Role} 中的常量
      * @throws BusinessException 4006：角色未配置，或角色指向的模型未注册（例如 API Key 缺失）
      */
     public ChatClient get(String role) {
         return clientsByRole.computeIfAbsent(role, this::create);
+    }
+
+    /**
+     * 按逻辑角色取 ChatClient，并优先使用<b>该用户自己配置的</b>对话模型。
+     *
+     * <p>规则：
+     * <ul>
+     *   <li>{@code userId} 为空、没有凭据端口、或该用户没启用自定义配置 → 回落 {@link #get(String)}</li>
+     *   <li>用户已启用并填齐 base-url / api-key / 模型名 → 用他自己的凭据构建（或命中缓存），
+     *       此时忽略 {@code role} 指向的全局模型——"我配了自己的模型，就该全程用它"。</li>
+     * </ul>
+     *
+     * <p>设计取舍：自定义凭据只替换<b>对话生成</b>，不替换嵌入与重排（重排是平台为检索质量
+     * 自己花的钱，见 {@code LlmReranker} 的 SYSTEM_CALL 注释）。
+     */
+    public ChatClient get(String role, Long userId) {
+        if (userId == null || credentialsProvider == null) {
+            return get(role);
+        }
+        Optional<UserChatCredentials> credentials = credentialsProvider.find(userId);
+        if (credentials.isEmpty()) {
+            return get(role);
+        }
+        UserChatCredentials creds = credentials.get();
+        String cacheKey = userId + "|" + creds.baseUrl() + "|" + creds.apiKey() + "|" + creds.model();
+        return clientsByUser.computeIfAbsent(cacheKey, key -> createWithUserCredentials(creds));
+    }
+
+    private ChatClient createWithUserCredentials(UserChatCredentials creds) {
+        ChatModel model = registry.buildOpenAiChatModel(creds.baseUrl(), creds.apiKey(), creds.model());
+        log.info("使用用户自定义对话模型：baseUrl={}, model={}", creds.baseUrl(), creds.model());
+        return ChatClient.builder(model)
+                .defaultAdvisors(new UsageMeteringAdvisor(usageRecorder, observability))
+                .build();
     }
 
     /** 已配置的角色集合。 */

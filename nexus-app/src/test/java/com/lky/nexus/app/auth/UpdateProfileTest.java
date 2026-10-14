@@ -59,12 +59,14 @@ class UpdateProfileTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.nickname").value("新的昵称"))
-                .andExpect(jsonPath("$.data.email").value("profile-new@example.com"));
+                .andExpect(jsonPath("$.data.email").value("profile-new@example.com"))
+                .andExpect(jsonPath("$.data.emailVerified").value(false));
 
         mockMvc.perform(get("/api/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.nickname").value("新的昵称"))
                 .andExpect(jsonPath("$.data.email").value("profile-new@example.com"))
+                .andExpect(jsonPath("$.data.emailVerified").value(false))
                 // 接口绝不返回密码哈希（即使改了资料也不例外）
                 .andExpect(jsonPath("$.data.passwordHash").doesNotExist());
     }
@@ -87,8 +89,8 @@ class UpdateProfileTest {
     }
 
     @Test
-    @DisplayName("邮箱传空串 = 清空（能真的落成空值，不是静默空操作）")
-    void blankEmailClearsIt() throws Exception {
+    @DisplayName("邮箱传空串 = 拒绝（账号必须绑定邮箱）")
+    void blankEmailRejected() throws Exception {
         register("profile-clear", "profile-clear@example.com");
         String token = loginToken("profile-clear");
 
@@ -98,12 +100,11 @@ class UpdateProfileTest {
                         .content("""
                                 {"email":""}
                                 """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.email").value(nullValue()));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(1001));
 
-        // 再读一次，确认落库了（不是只改了返回值）
         mockMvc.perform(get("/api/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
-                .andExpect(jsonPath("$.data.email").value(nullValue()));
+                .andExpect(jsonPath("$.data.email").value("profile-clear@example.com"));
     }
 
     @Test

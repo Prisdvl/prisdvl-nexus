@@ -77,6 +77,7 @@ public class McpEndpoint {
     private final ObservabilityRegistry observability;
     private final JsonMapper jsonMapper;
 
+    /** 注入 MCP 端点所需的各项依赖，由 Spring 完成。 */
     public McpEndpoint(ToolCatalog toolCatalog,
                        ToolRegistry toolRegistry,
                        AgentRuntime agentRuntime,

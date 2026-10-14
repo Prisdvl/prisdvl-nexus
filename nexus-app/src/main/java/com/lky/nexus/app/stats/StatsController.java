@@ -18,11 +18,16 @@ public class StatsController {
 
     private final StatsService statsService;
 
+    /** 注入 {@link StatsService}，由 Spring 完成。 */
     public StatsController(StatsService statsService) {
         this.statsService = statsService;
     }
 
-    /** 趋势（14 天）+ 热力（30 天）+ 最近活动（8 条）。 */
+    /**
+     * 工作台汇总：趋势（近 14 天）+ 热力（近 30 天）+ 最近活动（近 8 条）。
+     *
+     * @return 当前用户的汇总数据（用户身份取自令牌，不接受前端传入的 userId）
+     */
     @GetMapping("/summary")
     public Result<StatsSummary> summary() {
         return Result.ok(statsService.summary(CurrentUser.requireId()));

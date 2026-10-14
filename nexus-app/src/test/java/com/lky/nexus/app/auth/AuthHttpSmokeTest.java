@@ -49,7 +49,7 @@ class AuthHttpSmokeTest {
     void realHttpAuthFlowWorks() throws Exception {
         // 1) 注册
         HttpResponse<String> registerResponse = post("/api/auth/register", """
-                {"username":"httpuser","password":"%s","nickname":"HTTP 用户"}
+                {"username":"httpuser","password":"%s","nickname":"HTTP 用户","email":"httpuser@example.com"}
                 """.formatted(PASSWORD));
         assertThat(registerResponse.statusCode()).isEqualTo(200);
         assertThat((int) JsonPath.read(registerResponse.body(), "$.code")).isZero();

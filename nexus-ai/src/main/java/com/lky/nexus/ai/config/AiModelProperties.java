@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -71,6 +72,27 @@ public class AiModelProperties {
         private Double temperature = 0.7;
         /** 默认单次最大输出 token；null 表示交给服务端默认值。 */
         private Integer maxTokens;
+        /**
+         * 单次模型调用的总超时（connect + read，含流式首字节与完整生成）。
+         *
+         * <p>为什么必须显式设：不设时 Spring AI 底层 OkHttp 用系统默认（可达 5 分钟以上），
+         * 一旦上游挂住（非标准错误体未被识别为错误、或网关 silently hang），用户请求会一直挂到
+         * TCP 层超时——实测 opencode.ai/zen 额度耗尽时同步请求挂了 180s 不返回。
+         * 120s 覆盖 DeepSeek 长输出上限，超过即按 MODEL_TIMEOUT 快速失败。
+         */
+        private Duration chatTimeout = Duration.ofSeconds(120);
+
+        /**
+         * 同步 /ask 的<b>业务总时限</b>：覆盖一次调用里所有 HTTP 尝试 + SDK 自动重试 + 退避。
+         *
+         * <p>为什么需要它：{@link #chatTimeout} 是 OkHttp callTimeout，只管单次 HTTP call；
+         * SDK 默认 maxRetries=2，最坏 3 次 call × 120s = 360s。业务层不能让用户等 6 分钟，
+         * 因此在这之上加一道总闸——从一次业务调用开始计时，到点不再等。
+         *
+         * <p>超时后 {@code future.cancel(true)} 中断底层线程；OkHttp 的 120s callTimeout
+         * 是第二道兜底，即使应用层中断没生效，底层最多再跑 120s 自己断。
+         */
+        private Duration chatTotalTimeout = Duration.ofSeconds(180);
     }
 
     /**

@@ -34,8 +34,17 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * 对话服务实现（非流式）。
@@ -83,6 +92,7 @@ public class ChatServiceImpl implements ChatService {
     private final AgentService agentService;
     private final AgentRuntime agentRuntime;
     private final ObservabilityRegistry observabilityRegistry;
+    private final AiModelProperties aiModelProperties;
 
     public ChatServiceImpl(ConversationService conversationService,
                            ChatMessageService chatMessageService,
@@ -90,7 +100,8 @@ public class ChatServiceImpl implements ChatService {
                            ChatMemory chatMemory,
                            AgentService agentService,
                            AgentRuntime agentRuntime,
-                           ObservabilityRegistry observabilityRegistry) {
+                           ObservabilityRegistry observabilityRegistry,
+                           AiModelProperties aiModelProperties) {
         this.conversationService = conversationService;
         this.chatMessageService = chatMessageService;
         this.chatClientFactory = chatClientFactory;
@@ -98,6 +109,7 @@ public class ChatServiceImpl implements ChatService {
         this.agentService = agentService;
         this.agentRuntime = agentRuntime;
         this.observabilityRegistry = observabilityRegistry;
+        this.aiModelProperties = aiModelProperties;
     }
 
     @Override
@@ -124,7 +136,9 @@ public class ChatServiceImpl implements ChatService {
                 : StringUtils.hasText(conversation.getModelRole())
                         ? conversation.getModelRole()
                         : AiModelProperties.Role.CHAT_DEFAULT;
-        ChatClient chatClient = chatClientFactory.get(role);
+        // 传入 userId：若该用户在「设置 → 模型 Key」配了自己的 OpenAI 兼容模型，
+        // 这里就用他自己的凭据；未配置则回落服务端全局模型（见 ChatClientFactory.get(role, userId)）。
+        ChatClient chatClient = chatClientFactory.get(role, userId);
 
         String requestId = RequestIdHolder.current();
         ChatMessagePO userMessage = chatMessageService.appendUserMessage(
@@ -156,7 +170,7 @@ public class ChatServiceImpl implements ChatService {
                 request = agentRuntime.configure(request, userId, agentDefinition,
                         AgentContext.collector(trace));
             }
-            response = request.call().chatResponse();
+            response = callWithTotalBudget(request);
         } catch (BusinessException ex) {
             // 配置类错误（如 4006 未配置模型、5008/5009 Agent 不可用）原样抛出，不做包装
             throw ex;
@@ -224,6 +238,74 @@ public class ChatServiceImpl implements ChatService {
                 usage.getCompletionTokens(),
                 usage.getTotalTokens(),
                 latencyMs);
+    }
+
+    /**
+     * 同步模型调用的专用线程池。
+     *
+     * <p>为什么不用 ForkJoinPool.commonPool()：
+     * <ul>
+     *   <li>commonPool 是 JVM 全局池，被流操作、parallelStream 共用，阻塞模型调用会饿死其他任务；</li>
+     *   <li>需要 {@code shutdownNow()} 中断超时任务——commonPool 不能 shutdown。</li>
+     * </ul>
+     *
+     * <p>有界：最多 16 并发（本项目是单用户 RAG 系统，不会同时跑几百个模型调用），
+     * 队列 32，满了直接拒绝（快速失败比排队等好）。
+     */
+    private static final ExecutorService CHAT_EXECUTOR = new ThreadPoolExecutor(
+            4, 16, 60L, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(32),
+            new ThreadFactory() {
+                private int n = 0;
+                @Override public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "chat-model-" + (n++));
+                    t.setDaemon(true);
+                    return t;
+                }
+            },
+            new ThreadPoolExecutor.AbortPolicy());
+
+    /**
+     * 在业务总预算内执行同步模型调用。
+     *
+     * <p>三层超时防护：
+     * <ol>
+     *   <li>业务总预算 180s：{@code future.get(180s)} 到点就返回，不再等；</li>
+     *   <li>{@code future.cancel(true)}：中断底层线程，OkHttp 响应线程中断会关闭 socket；</li>
+     *   <li>OkHttp callTimeout=120s：即使中断没生效，底层最多再跑 120s 自己断。</li>
+     * </ol>
+     *
+     * <p>为什么用 {@link ExecutorService#submit} 而不是 {@code CompletableFuture.supplyAsync}：
+     * {@code CompletableFuture.cancel(true)} 只把 future 标记为取消，<b>不中断</b>正在跑的线程；
+     * {@code ExecutorService.submit} 返回的 {@code FutureTask.cancel(true)} 会真的调 {@code Thread.interrupt()}。
+     */
+    private ChatResponse callWithTotalBudget(ChatClient.ChatClientRequestSpec request) {
+        Duration totalBudget = aiModelProperties.getDefaults().getChatTotalTimeout();
+        Future<ChatResponse> future;
+        try {
+            future = CHAT_EXECUTOR.submit(() -> request.call().chatResponse());
+        } catch (java.util.concurrent.RejectedExecutionException ex) {
+            // 线程池满了（16 并发 + 32 队列）：快速失败，不排队
+            throw new BusinessException(ErrorCode.MODEL_UNAVAILABLE,
+                    "模型服务繁忙，请稍后重试");
+        }
+        try {
+            return future.get(totalBudget.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException ex) {
+            // 中断底层线程：OkHttp 的 socket read 响应 Thread.interrupt()，会关闭连接
+            future.cancel(true);
+            throw new BusinessException(ErrorCode.MODEL_TIMEOUT,
+                    "模型调用超时（超过 %d 秒）".formatted(totalBudget.toSeconds()));
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            future.cancel(true);
+            throw new BusinessException(ErrorCode.MODEL_TIMEOUT, "模型调用被中断");
+        } catch (ExecutionException ex) {
+            Throwable cause = ex.getCause();
+            if (cause instanceof RuntimeException re) throw re;
+            if (cause instanceof Error e) throw e;
+            throw new BusinessException(ErrorCode.MODEL_UNAVAILABLE, cause != null ? cause.getMessage() : "模型调用失败");
+        }
     }
 
     /**

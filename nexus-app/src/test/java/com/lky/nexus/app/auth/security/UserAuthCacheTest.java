@@ -45,6 +45,7 @@ class UserAuthCacheTest {
         SysUserPO user = new SysUserPO();
         user.setId(100L);
         user.setTokenVersion(tokenVersion);
+        user.setStatus(1);
         return user;
     }
 
@@ -107,6 +108,18 @@ class UserAuthCacheTest {
     void missingUserIsNotCached() {
         when(securityStore.get(anyString())).thenReturn(OptionalLong.empty());
         when(sysUserMapper.selectById(100L)).thenReturn(null);
+
+        assertThat(cache().expectedTokenVersion(100L)).isNull();
+        verify(securityStore, never()).put(anyString(), anyLong(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("禁用账号：返回 null 且不缓存（与 refresh / 登录拒绝对齐）")
+    void disabledUserIsRejectedAndNotCached() {
+        when(securityStore.get(anyString())).thenReturn(OptionalLong.empty());
+        SysUserPO disabled = user(3L);
+        disabled.setStatus(0);
+        when(sysUserMapper.selectById(100L)).thenReturn(disabled);
 
         assertThat(cache().expectedTokenVersion(100L)).isNull();
         verify(securityStore, never()).put(anyString(), anyLong(), any(Duration.class));

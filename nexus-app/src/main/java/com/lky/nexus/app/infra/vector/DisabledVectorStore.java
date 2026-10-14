@@ -50,7 +50,7 @@ public class DisabledVectorStore implements VectorStore {
     }
 
     @Override
-    public Map<String, float[]> findCachedEmbeddings(Collection<String> contentHashes) {
+    public Map<String, float[]> findCachedEmbeddings(Collection<String> contentHashes, String model) {
         // 缓存查询可以安全地"没有"：它只影响是否重复调用嵌入模型
         return Map.of();
     }

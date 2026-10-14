@@ -196,7 +196,7 @@ class PasswordChangeFlowTest {
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"%s","password":"%s","nickname":"%s"}
+                                {"username":"%s","password":"%s","nickname":"%s","email":"%s@example.com"}
                                 """.formatted(username, OLD_PASSWORD, username)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));

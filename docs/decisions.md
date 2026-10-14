@@ -262,8 +262,8 @@
 8. **userId 只从 JWT 的 `sub` 取**（`CurrentUser.requireId()`），任何接口都不得从请求参数接收 userId（水平越权的典型来源）。
 
 **代价 / 后续**
-- 无状态意味着**登出与吊销需要额外机制**（Redis 黑名单 + `jti`）→ claims 里已预置 `jti`，Phase 11 落地。
-- 短 access token + 长会话需要 refresh token → **Step 1.1b** 实现（`sys_refresh_token` 表已设计好，存哈希并支持轮换与吊销）。
+- 无状态意味着**登出与吊销需要额外机制**。Access 侧：改密 / 重置靠 `token_version`（ADR-020）；单支 access 的 jti 黑名单仍未做（logout 不立刻废 access）。
+- 短 access + 长会话：认证 **Phase 4 已落地** opaque refresh + rotation + `sys_user_session`（V21），见 `docs/api.md` §2.1。
 
 ---
 
@@ -336,44 +336,43 @@
 
 ---
 
-## ADR-021 Token 从 localStorage 迁到 HttpOnly Cookie：**本期只出设计，不改代码**
+## ADR-021 Token 从 localStorage 迁到 HttpOnly Cookie：**Cookie 迁移仍只出设计；Refresh 已另轨落地**
 
 **背景**：用户要求"分析 localStorage 的 XSS / Token 泄露风险，给出 HttpOnly Cookie 升级方案，
-**但不要直接大改**"。所以这是一份**设计记录**，本期代码零改动，缺口如实登记。
+**但不要直接大改**"。Cookie 迁移仍是**设计记录**；认证 Phase 4 已在**不改 Cookie 模型**的前提下
+落地 refresh + 会话（见下「已落地」）。
 
 **现状与风险**
 
-- 令牌存在 `localStorage['nexus.token']`（`web/src/api/client.ts:33`），
-  用户名同样在 `localStorage['nexus.username']`。
-- **任意一次 XSS 即可读走一支 30 分钟有效的令牌**并离线使用。前端已经把 Markdown 输出
-  过 `marked + DOMPurify`（`web/src/utils/markdown.ts`），但"渲染层已消毒"不等于"没有 XSS"——
-  依赖供应链、第三方脚本、内联事件处理器都不在 DOMPurify 的覆盖范围内。
-- 今天的缓解只有 **access token TTL = 30 分钟**，且**没有 refresh token、没有登出**
-  （见 `docs/api.md` §2.2），所以令牌一旦被偷，30 分钟内无法主动止损。
+- 令牌存在 `localStorage`（现键：`nx-token` / `nx-refresh-token` / `nx-token-expires-at`，
+  `frontend/src/lib/api.ts`），**任意一次 XSS 即可读走 access 与 refresh**。
+- 前端 Markdown 经消毒不等于没有 XSS（供应链 / 第三方脚本等）。
+- **已落地（认证 Phase 4，非本 ADR 的 Cookie 阶段）**：
+  - opaque refresh + rotation + `sys_user_session`（V21）；
+  - `/api/auth/refresh`、`/api/auth/logout`、`/api/users/me/sessions*`；
+  - 前端 401 → 单飞 refresh → 重放；改密 / 重置密码撤销全部 refresh。
+- **仍未缓解的 XSS 面**：refresh 与 access 同在 localStorage；被盗后可在会话过期前持续换发
+  （可用「退出全部设备」或改密止损）。HttpOnly Cookie 才是把凭证移出 JS 可读域的路径。
 
 **Cookie 不是"白拿的安全"**——迁移必须一起处理三件事，否则是拿 XSS 换 CSRF：
 
-1. `SecurityConfig` 关 CSRF 的**前提正是"不用 Cookie"**（ADR-018 第 2 条：纯 Token API
-   不存在 CSRF 的适用场景）。换成 Cookie 之后这个前提消失，`CookieCsrfTokenRepository` 必须加回来。
-2. `HttpOnly` + `Secure` + `SameSite` 三者的组合要按部署形态定：
-   `SameSite=Lax` 能挡住跨站表单提交，但前端与后端不同源时（Vite dev 代理、独立域名的生产部署）
-   还要 `withCredentials` 与 CORS `allow-credentials` 一起配。
-3. 前端 401 处理（`client.ts` 拦截器）要从"清 localStorage 跳登录页"改成
-   "回调 `/auth/refresh` 再重放原请求"，否则每一个浏览器重启都会把用户踢出去。
+1. `SecurityConfig` 关 CSRF 的**前提正是"不用 Cookie"**（ADR-018 第 2 条）。换成 Cookie 后
+   `CookieCsrfTokenRepository` 必须加回来。
+2. `HttpOnly` + `Secure` + `SameSite` 按部署形态定；跨源还需 `withCredentials` + CORS credentials。
+3. 前端 401：已实现「调 `/auth/refresh` 再重放」；迁 Cookie 后要把读写从 localStorage 换成 Cookie 通道。
 
-**分阶段迁移路径**（本期均不实施）
+**分阶段迁移路径**（①–④ 仍未实施；⑤ 的 refresh 能力已由 Phase 4 用 DB 会话表完成）
 
-| 阶段 | 内容 | 前置 |
+| 阶段 | 内容 | 状态 |
 | --- | --- | --- |
-| ① | 登录时**同时**下发 `HttpOnly + Secure + SameSite=Lax` Cookie，保留 `Bearer` 头路径 | 无 |
-| ② | 后端加自定义 `BearerTokenResolver`（**请求头优先、Cookie 兜底**），使两种客户端都能用 | ① |
-| ③ | 前端去掉 localStorage 读写，改为 `withCredentials` | ② |
-| ④ | 开 `CookieCsrfTokenRepository`，前端读 `XSRF-TOKEN` 并回填 `X-XSRF-TOKEN` | ③ |
-| ⑤ | 缩短 access TTL + 引入 refresh token（**需要 `sys_refresh_token` 表**：存哈希、可轮换、可吊销） | ④ |
+| ① | 登录时**同时**下发 `HttpOnly + Secure + SameSite=Lax` Cookie，保留 `Bearer` 头路径 | 未做 |
+| ② | 后端 `BearerTokenResolver`（**请求头优先、Cookie 兜底**） | 未做 |
+| ③ | 前端去掉 localStorage，改为 `withCredentials` | 未做 |
+| ④ | 开 `CookieCsrfTokenRepository`，前端回填 `X-XSRF-TOKEN` | 未做 |
+| ⑤ | 缩短 access TTL + refresh（原计划 `sys_refresh_token`） | **Refresh 已用 `sys_user_session` 落地**；缩短 access TTL / Cookie 化仍属后续 |
 
-**诚实边界**：本期不做，所以 **localStorage 的 XSS 暴露面依然存在**，
-只是被 30 分钟的 TTL 限了窗口。这一点登记在 `docs/archive/reports/productization-gap-analysis.md` 里，
-而不是假装它被这一期顺手解决了。
+**诚实边界**：**localStorage 的 XSS 暴露面依然存在**（现含长寿命 refresh）。
+Cookie 迁移未做完之前，不得宣称"令牌已不可被 JS 读取"。
 
 ---
 

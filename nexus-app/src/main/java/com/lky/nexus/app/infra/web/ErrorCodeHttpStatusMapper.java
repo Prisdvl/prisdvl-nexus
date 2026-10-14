@@ -34,6 +34,9 @@ public final class ErrorCodeHttpStatusMapper {
             // 2005 / 2007：字段占用。用 409 而不是 400 —— 请求本身是合法的，
             // 只是与现有资源冲突；前端据此把错误指到对应输入框
             case USERNAME_ALREADY_EXISTS, EMAIL_ALREADY_EXISTS -> HttpStatus.CONFLICT;
+            // 2008 / 2009：验证码问题 → 400（客户端可修正：重填或重发）
+            case EMAIL_CODE_INVALID, EMAIL_CODE_TOO_MANY_ATTEMPTS -> HttpStatus.BAD_REQUEST;
+            case SESSION_NOT_FOUND -> HttpStatus.NOT_FOUND;
 
             // 3xxx 知识库 / 文档
             case KNOWLEDGE_BASE_NOT_FOUND, DOCUMENT_NOT_FOUND, IMPORT_TASK_NOT_FOUND -> HttpStatus.NOT_FOUND;
@@ -53,7 +56,7 @@ public final class ErrorCodeHttpStatusMapper {
             // 而这里是我们作为网关去调上游时被拒——错在我们的配置，不在客户端，
             // 返回 401 会诱导前端去清 Token、跳登录页，那是完全错误的自救动作
             case TOKEN_LIMIT_EXCEEDED, EMBEDDING_FAILED, MODEL_ROLE_NOT_CONFIGURED,
-                 MODEL_AUTH_FAILED -> HttpStatus.BAD_GATEWAY;
+                 MODEL_AUTH_FAILED, MODEL_BAD_REQUEST -> HttpStatus.BAD_GATEWAY;
 
             // 5xxx / 6xxx / 9999：服务端自身问题
             case TOOL_EXECUTION_FAILED, AGENT_MAX_ITERATIONS_EXCEEDED, WORKFLOW_DEFINITION_INVALID,

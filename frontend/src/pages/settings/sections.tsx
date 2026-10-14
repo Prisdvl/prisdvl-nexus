@@ -12,7 +12,7 @@ import StatusMark from '@/bits/StatusMark/StatusMark'
 import Modal from '@/components/Modal'
 import { AppearanceControls } from '@/components/Appearance'
 import { toast } from '@/lib/toast'
-import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig } from '@/lib/api'
+import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserSession } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ACCOUNT_PREFS_KEY, readAccountPreferences } from '@/lib/preferences'
 
@@ -42,9 +42,9 @@ export function ProfileSection() {
   const [error, setError] = useState('')
   useEffect(() => {
     let alive = true
-    const local = localStorage.getItem('nx-mock-profile')
-    const request = USE_MOCK
-      ? Promise.resolve(local ? JSON.parse(local) as AuthUser : { id: 'mock-user', username: 'demo', nickname: '演示用户', email: null, roles: ['USER'] })
+      const local = localStorage.getItem('nx-mock-profile')
+      const request = USE_MOCK
+      ? Promise.resolve(local ? JSON.parse(local) as AuthUser : { id: 'mock-user', username: 'demo', nickname: '演示用户', email: null, emailVerified: false, roles: ['USER'] })
       : api.auth.me()
     request.then((u) => { if (alive) { setUser(u); setNickname(u.nickname ?? ''); setEmail(u.email ?? '') } })
       .catch((e) => { if (alive) setError(errMessage(e)) }).finally(() => { if (alive) setLoading(false) })
@@ -55,12 +55,24 @@ export function ProfileSection() {
     if (!user || saving) return
     setSaving(true); setError('')
     try {
+      const nextEmail = email.trim()
+      if (!nextEmail) {
+        setError('邮箱不能为空')
+        return
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+        setError('邮箱格式不正确')
+        return
+      }
+      const prevNorm = (user.email ?? '').trim().toLowerCase()
+      const nextNorm = nextEmail.toLowerCase()
+      const emailChanged = prevNorm !== nextNorm
       const updated = USE_MOCK
-        ? { ...(user as AuthUser), nickname: nickname || null, email: email || null }
-        : await api.users.updateProfile({ nickname, email })
+        ? { ...(user as AuthUser), nickname: nickname || null, email: nextEmail, emailVerified: emailChanged ? false : user.emailVerified }
+        : await api.users.updateProfile({ nickname, email: nextEmail })
       if (USE_MOCK) localStorage.setItem('nx-mock-profile', JSON.stringify(updated))
       setUser(updated); setNickname(updated.nickname ?? ''); setEmail(updated.email ?? '')
-      toast.success('资料已保存', USE_MOCK ? '仅保存在本机演示数据' : '已同步到账号')
+      toast.success('资料已保存', USE_MOCK ? '仅保存在本机演示数据' : (emailChanged ? '邮箱已更新，请到「邮箱验证」完成归属验证' : '已同步到账号'))
     } catch (e) { const message = errMessage(e); setError(message); toast.error('保存失败', message) }
     finally { setSaving(false) }
   }
@@ -70,7 +82,7 @@ export function ProfileSection() {
       {error && <p className="form-error active" role="alert">{error}</p>}
       <div className="field"><label htmlFor="ac-username">用户名</label><input id="ac-username" className="input" value={user?.username ?? ''} disabled /><p className="hint">用户名不可修改，作为登录凭证</p></div>
       <div className="field"><label htmlFor="ac-nick">昵称</label><input id="ac-nick" className="input" placeholder="展示名称" value={nickname} maxLength={64} onChange={(e) => setNickname(e.target.value)} /></div>
-      <div className="field"><label htmlFor="ac-email">邮箱（可选）</label><input id="ac-email" className="input" type="email" placeholder="用于找回密码等" value={email} maxLength={128} onChange={(e) => setEmail(e.target.value)} /><p className="hint">留空会清除邮箱；邮箱验证码服务端尚未实现。</p></div>
+      <div className="field"><label htmlFor="ac-email">邮箱</label><input id="ac-email" className="input" type="email" placeholder="用于验证与找回密码" value={email} maxLength={128} required onChange={(e) => setEmail(e.target.value)} /><p className="hint">账号必须绑定邮箱，不能清空。更换后需在「邮箱验证」重新验证；当前状态：{user?.email ? (user.emailVerified ? '已验证' : '未验证') : '未绑定'}。</p></div>
       <button className="btn btn-primary" type="submit" disabled={saving}><Save size={15} /> {saving ? '保存中…' : '保存'}</button>
     </form>}
   </section>
@@ -241,18 +253,271 @@ export function SecuritySection() {
   </section>
 }
 /* ---------------- 访问与安全 · 邮箱验证 ---------------- */
+const EMAIL_CODE_COOLDOWN_SEC = 60
+
 export function EmailSection() {
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [code, setCode] = useState('')
+  const [slotsStatus, setSlotsStatus] = useState<'idle' | 'error' | 'success'>('idle')
+  const [sending, setSending] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [error, setError] = useState('')
+  const [cooldownLeft, setCooldownLeft] = useState(0)
+
+  useEffect(() => {
+    let alive = true
+    const local = localStorage.getItem('nx-mock-profile')
+    const request = USE_MOCK
+      ? Promise.resolve(local ? JSON.parse(local) as AuthUser : { id: 'mock-user', username: 'demo', nickname: '演示用户', email: 'demo@example.com', emailVerified: false, roles: ['USER'] })
+      : api.auth.me()
+    request.then((u) => { if (alive) setUser(u) })
+      .catch((e) => { if (alive) setError(errMessage(e)) })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [])
+
+  useEffect(() => {
+    if (cooldownLeft <= 0) return
+    const t = window.setTimeout(() => setCooldownLeft((s) => Math.max(0, s - 1)), 1000)
+    return () => window.clearTimeout(t)
+  }, [cooldownLeft])
+
+  const sendCode = async () => {
+    if (sending || cooldownLeft > 0 || !user?.email) return
+    setSending(true); setError(''); setSlotsStatus('idle')
+    try {
+      if (USE_MOCK) {
+        await new Promise((r) => setTimeout(r, 300))
+        toast.success('验证码已发送（演示）', '离线模式不会真正发信，请任意输入 6 位数字后提交')
+      } else {
+        await api.users.sendEmailVerification()
+        toast.success('验证码已发送', `请查收 ${user.email}（开发态可能在服务端控制台）`)
+      }
+      setCooldownLeft(EMAIL_CODE_COOLDOWN_SEC)
+      setCode('')
+    } catch (e) {
+      const message = errMessage(e)
+      setError(message)
+      toast.error('发送失败', message)
+      // 服务端冷却：前端倒计时与提示对齐，但仍以服务端为准
+      if (message.includes('频繁') || message.includes('后再试')) setCooldownLeft(EMAIL_CODE_COOLDOWN_SEC)
+    } finally { setSending(false) }
+  }
+
+  const submitCode = async (override?: string) => {
+    const value = (override ?? code).replace(/\D/g, '')
+    if (verifying || value.length < 4) return
+    setVerifying(true); setError(''); setSlotsStatus('idle')
+    try {
+      if (USE_MOCK) {
+        await new Promise((r) => setTimeout(r, 300))
+        const updated = { ...(user as AuthUser), emailVerified: true }
+        localStorage.setItem('nx-mock-profile', JSON.stringify(updated))
+        setUser(updated)
+        setSlotsStatus('success')
+        toast.success('邮箱已验证（演示）')
+      } else {
+        const updated = await api.users.verifyEmail(value)
+        setUser(updated)
+        setSlotsStatus('success')
+        toast.success('邮箱已验证', updated.email ?? undefined)
+      }
+      setCode('')
+    } catch (e) {
+      const message = errMessage(e)
+      setError(message)
+      setSlotsStatus('error')
+      toast.error('验证失败', message)
+    } finally { setVerifying(false) }
+  }
+
   return <section className="panel panel-pad">
-    <SectionHead title="邮箱验证" desc="用于找回账号等流程。" />
-    <div className="settings-inline"><div><strong style={{ fontSize: 13.5 }}>邮箱验证码</strong><p className="hint" style={{ margin: '4px 0 0' }}>服务端当前没有发送或校验邮箱验证码的接口；邮箱地址可在「公开资料」维护，但不能标记为已验证。</p></div><button className="btn btn-ghost btn-sm" type="button" disabled aria-disabled="true">暂不可用</button></div>
+    <SectionHead title="邮箱验证" desc="向当前绑定邮箱发送验证码，确认你拥有该邮箱。更换邮箱后需重新验证。" />
+    {loading ? <p className="hint" role="status">正在加载…</p> : <>
+      {error && <p className="form-error active" role="alert">{error}</p>}
+      {!user?.email ? (
+        <div className="settings-inline">
+          <div>
+            <strong style={{ fontSize: 13.5 }}>尚未绑定邮箱</strong>
+            <p className="hint" style={{ margin: '4px 0 0' }}>请先在「公开资料」填写邮箱并保存，再回来验证归属。</p>
+          </div>
+        </div>
+      ) : user.emailVerified ? (
+        <div className="settings-inline">
+          <div>
+            <strong style={{ fontSize: 13.5 }}>{user.email}</strong>
+            <p className="hint" style={{ margin: '4px 0 0' }}>当前邮箱已通过归属验证。</p>
+          </div>
+          <span className="badge" data-tone="success">已验证</span>
+        </div>
+      ) : (
+        <>
+          <div className="settings-inline" style={{ marginBottom: 16 }}>
+            <div>
+              <strong style={{ fontSize: 13.5 }}>{user.email}</strong>
+              <p className="hint" style={{ margin: '4px 0 0' }}>未验证。发送验证码后请在有效期内输入；冷却与限流由服务端强制执行。</p>
+            </div>
+            <span className="badge" data-tone="warn">未验证</span>
+          </div>
+          <div className="field">
+            <label>验证码</label>
+            <CodeSlots
+              length={6}
+              value={code}
+              onChange={(v) => { setCode(v); if (slotsStatus !== 'idle') setSlotsStatus('idle') }}
+              onComplete={(v) => { void submitCode(v) }}
+              status={slotsStatus}
+              disabled={verifying || sending}
+              ariaLabel="邮箱验证码"
+              accentColor="var(--accent, #0d9488)"
+              inkColor="var(--text-1, #18181b)"
+              slotColor="var(--surface-2, #f4f4f5)"
+              digitColor="var(--text-1, #18181b)"
+              dangerColor="var(--danger, #dc2626)"
+              slotSize={40}
+              gap={8}
+              radius={10}
+            />
+            <p className="hint">6 位数字；填满后可自动提交，也可点下方按钮。</p>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
+            <button
+              className="btn btn-ghost"
+              type="button"
+              disabled={sending || cooldownLeft > 0}
+              onClick={() => { void sendCode() }}
+            >
+              <MailCheck size={15} />
+              {sending ? '发送中…' : cooldownLeft > 0 ? `${cooldownLeft}s 后可重发` : '发送验证码'}
+            </button>
+            <button
+              className="btn btn-primary"
+              type="button"
+              disabled={verifying || code.replace(/\D/g, '').length < 4}
+              onClick={() => { void submitCode() }}
+            >
+              {verifying ? '验证中…' : '提交验证'}
+            </button>
+          </div>
+        </>
+      )}
+    </>}
   </section>
 }
 /* ---------------- 访问与安全 · 会话与设备 ---------------- */
 export function SessionsSection() {
+  const { logout } = useAuth()
+  const [sessions, setSessions] = useState<UserSession[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [revokingAll, setRevokingAll] = useState(false)
+
+  const reload = () => {
+    if (USE_MOCK) {
+      setSessions([{
+        id: 'mock-current',
+        device: '当前浏览器',
+        ip: '127.0.0.1',
+        lastUsedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        current: true,
+      }])
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    setError('')
+    api.users.sessions()
+      .then(setSessions)
+      .catch((e) => setError(errMessage(e)))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => { reload() }, [])
+
+  const revokeOne = async (id: string, isCurrent: boolean) => {
+    if (USE_MOCK || busyId) return
+    setBusyId(id)
+    setError('')
+    try {
+      await api.users.revokeSession(id)
+      if (isCurrent) {
+        await logout()
+        return
+      }
+      toast.success('已退出该设备')
+      reload()
+    } catch (e) {
+      setError(errMessage(e))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const revokeAll = async () => {
+    if (USE_MOCK || revokingAll) return
+    setRevokingAll(true)
+    setError('')
+    try {
+      await api.users.revokeAllSessions()
+      toast.success('已退出全部设备')
+      await logout()
+    } catch (e) {
+      setError(errMessage(e))
+    } finally {
+      setRevokingAll(false)
+    }
+  }
+
+  const fmt = (iso: string) => {
+    try { return new Date(iso).toLocaleString() } catch { return iso }
+  }
+
   return <section className="panel panel-pad">
-    <SectionHead title="会话与设备" desc="当前后端使用无状态 JWT；暂不提供设备会话列表或单设备远程登出。" />
-    <div className="list-row"><Laptop size={15} style={{ color: 'var(--text-3)' }} /><span style={{ fontSize: 13.5 }}>当前浏览器会话</span><span className="badge" data-tone="success" style={{ marginLeft: 'auto' }}>当前设备</span></div>
-    <p className="hint" style={{ marginBottom: 0, marginTop: 10 }}>如需让所有设备重新登录，请到「密码与登录」修改密码；后端会吊销该账号全部令牌。</p>
+    <SectionHead title="会话与设备" desc="管理仍持有 refresh 凭证的登录设备；退出指定设备后该设备需重新登录。" />
+    {loading && <p className="hint" role="status">正在读取会话…</p>}
+    {error && <p className="form-error active" role="alert">{error}</p>}
+    {!loading && sessions.length === 0 && (
+      <p className="hint">暂无活跃会话。</p>
+    )}
+    {sessions.map((s) => (
+      <div className="list-row" key={s.id} style={{ gap: 10, alignItems: 'center' }}>
+        <Laptop size={15} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span>{s.device || 'Unknown device'}</span>
+            {s.current && <span className="badge" data-tone="success">当前设备</span>}
+          </div>
+          <p className="hint" style={{ margin: '2px 0 0' }}>
+            {s.ip ? `${s.ip} · ` : ''}上次活动 {fmt(s.lastUsedAt)} · 登录于 {fmt(s.createdAt)}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          disabled={!!busyId || revokingAll}
+          onClick={() => void revokeOne(s.id, s.current)}
+        >
+          {busyId === s.id ? '退出中…' : '退出'}
+        </button>
+      </div>
+    ))}
+    <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+      <button type="button" className="btn btn-ghost btn-sm" disabled={loading || !!busyId} onClick={reload}>刷新</button>
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        disabled={USE_MOCK || revokingAll || !!busyId || sessions.length === 0}
+        onClick={() => void revokeAll()}
+      >
+        {revokingAll ? '处理中…' : '退出全部设备'}
+      </button>
+    </div>
+    <p className="hint" style={{ marginBottom: 0, marginTop: 10 }}>
+      修改密码或重置密码也会吊销全部设备上的 refresh 会话；短期 access JWT 仍依赖过期或 token_version。
+    </p>
   </section>
 }
 /* ---------------- 数据与用量 · 用量配额 ---------------- */

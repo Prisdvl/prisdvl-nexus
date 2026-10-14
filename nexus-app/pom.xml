@@ -46,6 +46,13 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- SMTP 发信（nexus.email.sender=smtp 时由 SmtpEmailSender 使用；
+             不启用 spring.mail 自动配置属性，SMTP 参数走 nexus.email.smtp.*） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
         <!-- 可观测（Step 0.7 起用 /actuator/health 做验收） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

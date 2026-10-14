@@ -18,6 +18,7 @@ public record VaultSyncPlan(
         List<ScannedFile> added,
         List<DocumentPO> missing) {
 
+    /** 本次扫描到的文件总数（unchanged + changed + added，不含被跳过项与缺失项）。 */
     public int totalScanned() {
         return unchanged.size() + changed.size() + added.size();
     }

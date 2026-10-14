@@ -28,11 +28,18 @@ public class AgentController {
         this.agentRuntime = agentRuntime;
     }
 
+    /**
+     * 用该用户的<b>内置默认 Agent</b>跑一次一次性问答。
+     *
+     * @param request 请求体，含 {@code question} 字段（非空）
+     * @return 默认 Agent 的回答（含工具痕迹）
+     */
     @PostMapping("/ask")
     public Result<AgentAnswer> ask(@RequestBody AskRequest request) {
         return Result.ok(agentRuntime.askWithDefault(CurrentUser.requireId(), request.question()));
     }
 
+    /** 一次性问答请求：只需一个问题文本。 */
     public record AskRequest(@NotBlank String question) {
     }
 }

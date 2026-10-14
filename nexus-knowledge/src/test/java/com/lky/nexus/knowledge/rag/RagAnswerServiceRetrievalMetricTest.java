@@ -149,7 +149,7 @@ class RagAnswerServiceRetrievalMetricTest {
             }
         };
         ChatClientFactory factory = mock(ChatClientFactory.class);
-        when(factory.get(anyString())).thenReturn(ChatClient.builder(ok).build());
+        when(factory.get(anyString(), any())).thenReturn(ChatClient.builder(ok).build());
         return factory;
     }
 }
