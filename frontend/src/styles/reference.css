@@ -48,65 +48,7 @@
 .ref-source > h4 { margin: 0 0 10px; color: var(--text-2); font-size: 12.5px; font-weight: 600; }
 .ref-document { padding-top: 16px; border-top: 1px solid var(--border); }
 /* 面板里的正文略小一号，避免抢对话主体的注意力 */
-.ref-body .md { font-size: 13px; }
-
-.ref-binary {
-  display: flex; flex-direction: column; align-items: center; gap: 10px;
-  padding: 36px 12px; text-align: center;
-}
-.ref-binary-ic {
-  display: grid; place-items: center;
-  width: 46px; height: 46px; border-radius: 14px;
-  background: var(--surface-muted); color: var(--text-2);
-}
-.ref-binary-title { margin: 0; font-size: 14px; font-weight: 600; }
-.ref-binary-desc { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--text-2); }
-
-.ref-chunks { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
-.ref-chunks h4,
-.ref-related h4 {
-  display: flex; align-items: center; gap: 7px;
-  margin: 0 0 10px; font-size: 12.5px; font-weight: 600; color: var(--text-2);
-}
-.ref-chunk {
-  display: flex; align-items: baseline; gap: 9px;
-  padding: 8px 10px; margin-bottom: 6px;
-
-  background: var(--surface-muted);
-}
-.ref-chunk-h { font-size: 12px; font-weight: 600; }
-.ref-chunk-d { font-size: 11px; color: var(--text-3); }
-
-.ref-related { margin-top: 20px; }
-.ref-related-grid { display: flex; flex-direction: column; gap: 6px; }
-.ref-card {
-  display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  align-items: center;
-  gap: 1px 8px;
-  padding: 8px 10px;
-
-  border-radius: 10px;
-  background: var(--surface);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
-}
-.ref-card:hover { border-color: var(--border-strong); background: var(--surface-muted); }
-.ref-card-ic {
-  grid-row: span 2;
-  display: grid; place-items: center;
-  width: 26px; height: 26px; border-radius: 7px;
-  background: var(--surface-muted); color: var(--text-2);
-}
-.ref-card-name {
-  font-size: 12.5px; font-weight: 500; color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.ref-card-meta { font-size: 11px; color: var(--text-3); }
-
-/* 窄屏：面板改为覆盖在主区之上，避免把对话挤没 */
+.ref-body .md { font-size: 13px; }/* 窄屏：面板改为覆盖在主区之上，避免把对话挤没 */
 @media (max-width: 1100px) {
   .ref-panel {
     position: absolute;

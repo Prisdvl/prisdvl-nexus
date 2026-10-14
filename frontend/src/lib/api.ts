@@ -231,12 +231,26 @@ export const api = {
     /** 实测响应：与登录同一形状的 user */
     me: () => http.get<Result<AuthUser>>('/users/me').then((r) => r.data.data),
   },
+  users: {
+    me: () => http.get<Result<AuthUser>>('/users/me').then((r) => r.data.data),
+    updateProfile: (body: { nickname?: string | null; email?: string | null }) =>
+      http.put<Result<AuthUser>>('/users/me', body).then((r) => r.data.data),
+    changePassword: (oldPassword: string, newPassword: string) =>
+      http.put<Result<null>>('/users/me/password', { oldPassword, newPassword }).then((r) => r.data.data),
+    quota: () => http.get<Result<UserQuota>>('/users/me/quota').then((r) => r.data.data),
+    /** 读取当前用户的自定义对话模型配置（apiKey 只回掩码） */
+    llmConfig: () =>
+      http.get<Result<UserLlmConfig>>('/users/me/llm-config').then((r) => r.data.data),
+    /** 保存自定义对话模型配置；apiKey 留空 = 保留已存的 key */
+    saveLlmConfig: (body: { baseUrl?: string | null; apiKey?: string; modelName?: string | null; enabled: boolean }) =>
+      http.put<Result<UserLlmConfig>>('/users/me/llm-config', body).then((r) => r.data.data),
+  },
   conversations: {
     /** 实测：{ list, total, pageNum, pageSize, pages } */
     list: (pageNum = 1, pageSize = 50) =>
       http.get<Result<PageResult<Conversation>>>('/chat/conversations', { params: { pageNum, pageSize } })
         .then((r) => r.data.data),
-    create: (body: { title?: string; mode?: string; agentId?: string | null }) =>
+    create: (body: { title?: string; mode?: ConversationMode; kbIds?: string[]; agentId?: string | null }) =>
       http.post<Result<Conversation>>('/chat/conversations', body).then((r) => r.data.data),
     /**
      * 局部更新会话。
@@ -266,6 +280,12 @@ export const api = {
     ) => http.put<Result<Conversation>>(`/chat/conversations/${id}`, body).then((r) => r.data.data),
     /** ⚠️ 级联物理删：会话 deleted=1 + 消息物理删除 + 会话记忆清空（不可恢复） */
     remove: (id: string) => http.delete<Result<null>>(`/chat/conversations/${id}`).then((r) => r.data.data),
+    /**
+     * 分支（P1-3.7）：复制新会话，消息复制到 beforeMessageId（含）为止。
+     * 标题由前端按「分支 / 分支1 / …」计算后显式传入。
+     */
+    fork: (id: string, body: { title: string; beforeMessageId?: string | null }) =>
+      http.post<Result<Conversation>>(`/chat/conversations/${id}/fork`, body).then((r) => r.data.data),
   },
   messages: {
     /** 实测：空会话返回 { list: [], total: 0, ... } */
@@ -280,11 +300,26 @@ export const api = {
       http.get<Result<PageResult<BackendAgent>>>('/agents', { params: { pageNum, pageSize } })
         .then((r) => r.data.data),
     get: (id: string) => http.get<Result<BackendAgent>>(`/agents/${id}`).then((r) => r.data.data),
-    create: (body: { code: string; name: string }) =>
-      http.post<Result<BackendAgent>>('/agents', body).then((r) => r.data.data),
+    create: (body: {
+      code: string
+      name: string
+      description?: string | null
+      systemPrompt?: string | null
+      kbIds?: string[]
+      toolCodes?: string[]
+    }) => http.post<Result<BackendAgent>>('/agents', body).then((r) => r.data.data),
     update: (id: string, body: Partial<AgentPayload>) =>
       http.put<Result<BackendAgent>>(`/agents/${id}`, body).then((r) => r.data.data),
+    /** 复制（副本回到 DRAFT，服务端生成新 code） */
+    duplicate: (id: string) =>
+      http.post<Result<BackendAgent>>(`/agents/${id}/duplicate`).then((r) => r.data.data),
+    testChat: (id: string, question: string) =>
+      http.post<Result<AgentAnswer>>(`/agents/${id}/test-chat`, { question }).then((r) => r.data.data),
     remove: (id: string) => http.delete<Result<null>>(`/agents/${id}`).then((r) => r.data.data),
+  },
+  tools: {
+    /** 当前用户的工具目录（GET /api/tools）：code/名称/描述/是否启用 */
+    list: () => http.get<Result<ToolInfo[]>>('/tools').then((r) => r.data.data),
   },
   stream: {
     /** 停止生成。幂等：流已结束时后端返回 cancelled=false，不算错误。 */
@@ -318,6 +353,8 @@ export const api = {
       fd.append('file', file)
       return http.post<Result<ImportTask>>(`/knowledge-bases/${kbId}/documents`, fd).then((r) => r.data.data)
     },
+    get: (kbId: string, docId: string) =>
+      http.get<Result<DocumentDetail>>(`/knowledge-bases/${kbId}/documents/${docId}`).then((r) => r.data.data),
     remove: (kbId: string, docId: string) =>
       http.delete<Result<null>>(`/knowledge-bases/${kbId}/documents/${docId}`).then((r) => r.data.data),
     chunks: (kbId: string, docId: string) =>
@@ -374,6 +411,17 @@ export interface AgentPayload {
   toolCodes: string[]
 }
 
+/** GET /api/tools 的工具视图（对应用户级启用状态） */
+export interface ToolInfo {
+  code: string
+  name: string
+  description: string | null
+  source: string
+  category: string
+  enabled: boolean
+  builtin: boolean
+}
+
 export interface KnowledgeBase {
   id: string
   name: string
@@ -425,3 +473,36 @@ export interface RelatedDoc { documentId?: string; title?: string; sharedTags?: 
 export interface StatsTrendPoint { day: string; count: number }
 export interface StatsActivityItem { type: string; refId: string; label: string | null; at: string | null }
 export interface StatsSummary { trend: StatsTrendPoint[]; heat: StatsTrendPoint[]; activity: StatsActivityItem[] }
+
+export interface UserQuota {
+  requestUsed: number
+  requestLimit: number
+  tokenUsed: number
+  tokenLimit: number
+  resetAt: string
+}
+
+/** 当前用户的自定义对话模型配置（GET 回显；apiKey 不回明文） */
+export interface UserLlmConfig {
+  baseUrl: string | null
+  modelName: string | null
+  enabled: boolean
+  hasApiKey: boolean
+  apiKeyMasked: string | null
+}
+
+export interface AgentToolTrace { tool: string; input?: unknown; output?: unknown; error?: string | null; status?: string }
+export interface AgentAnswer { answer: string; toolCalls: AgentToolTrace[]; usedTools: boolean }
+
+export interface DocumentDetail {
+  id: string
+  fileName: string
+  title: string | null
+  fileExt: string
+  status: string
+  content: string | null
+  tags: string[]
+  chunkCount: number
+  tokenCount: number
+  updatedAt: string
+}

@@ -4,7 +4,7 @@
  * 基线（用户已确认 2026-10-06）：
  *  - 极简现代 + 沉浸式大背景；醒目但克制
  *  - 亮暗双主题：暗色一律「纯深黑 + 强调色点缀」（不要配色染色）
- *  - 三配色：陶土橘 / 松石青 / 酸性青柠（梅子出局）
+ *  - 品牌主题 Prisdvl（Deep Ocean Blue）+ 陶配色 / AccentColor
  *  - Space Grotesk（拉丁/数字）+ 系统中文
  *  - 圆角分档 6/10/14/18；双层阴影；动效 150-300ms
  * ============================================================ */
@@ -25,6 +25,14 @@
   --btn-h-md: 40px;   /* 默认：页面主操作、弹窗底部 */
   --btn-h-lg: 46px;   /* hero CTA、表单提交（触控友好） */
 
+  /* 侧栏宽度：侧栏本身、内容区的 margin-left、折叠态三处必须同源。
+     之前 236/68 硬编码在 global.css / sidebar.css / chatgpt-web-style.css 三份文件里，
+     改一处就错位（折叠后左侧留下 168px 死白就是这么来的）。 */
+  --sb-w: 236px;
+  --sb-w-collapsed: 68px;
+  /* 侧栏软展开量：1=展开 0=图标栏；点击折叠与拖拽软过渡带共用 */
+  --sb-soft: 1;
+
   /* 圆角分档 */
   --radius-pill: 999px;
   --radius-sm: 6px;
@@ -37,6 +45,28 @@
   --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
 
   --ring-a: 0.35;
+
+  /* ============================================================
+   * 语义层：交互与状态的统一表达
+   * ------------------------------------------------------------
+   * 目标：组件不再各自写 `color-mix(in srgb, var(--text) 6%, transparent)`
+   * 这类"每处拍一个比例"的写法 —— 同一个 hover 在不同组件里颜色不同，
+   * 是"层级看起来很乱"的真正来源。这里给出唯一一套取值：
+   *
+   *   --ui-hover     行/按钮的悬停底色（最弱）
+   *   --ui-selected  选中底色（比 hover 明确一档，各组件一致）
+   *   --ui-ring      键盘焦点环
+   *   --ui-scrim     弹层遮罩
+   *
+   * 弱分隔线不放这里：--border / --border-strong 已经是这条语义，
+   * 另起名字只会制造第二套真相。
+   * ============================================================ */
+  --ui-hover-a: 6%;
+  --ui-selected-a: 10%;
+  --ui-hover: color-mix(in oklab, var(--text) var(--ui-hover-a), transparent);
+  --ui-selected: color-mix(in oklab, var(--text) var(--ui-selected-a), transparent);
+  --ui-ring: color-mix(in oklab, var(--primary) 34%, transparent);
+  --ui-scrim: oklch(0.16 0.01 0 / 0.46);
 }
 
 /* ================= 主题中性层 ================= */
@@ -73,6 +103,12 @@ html[data-theme="light"] {
 /* ---- 暗色（纯深黑，三配色共用同一中性基座） ---- */
 html[data-theme="dark"] {
   color-scheme: dark;
+
+  /* 暗色下"加亮"的路径与亮色相反：与浅色文字混合才是提亮。
+     比例略高于亮色（深底上同样的 6% 几乎看不出来）。 */
+  --ui-hover-a: 9%;
+  --ui-selected-a: 14%;
+  --ui-scrim: oklch(0 0 0 / 0.62);
 
   /* ↓ 关键：与亮色块同构的「映射层」。少了这段，--bg/--surface/--border/--text
      全部 undefined，页面只是靠 color-scheme 的 UA 默认底色"看起来是暗的"，
@@ -112,6 +148,111 @@ html[data-theme="dark"] {
   --btn-bg: oklch(0.95 0.003 0);
   --btn-bg-hover: oklch(0.88 0.004 0);
   --btn-fg: oklch(0.17 0.004 0);
+}
+
+/* ============================================================
+ * Prisdvl · 独立深色深钴蓝主题（强制 dark）
+ * ------------------------------------------------------------
+ * 不是 Accent 点缀，而是整套深色界面：
+ * 冷黑底 + 深钴蓝主色 (#2457D6) + 电光蓝仅悬停 + 冰蓝仅高光文字。
+ * ============================================================ */
+html[data-palette="prisdvl"] {
+  color-scheme: dark;
+
+  --brand-primary: #2457D6;
+  --brand-hover: #3978F6;
+  --brand-active: #193FA8;
+  --blue-deep: #071747;
+  --blue-cobalt: #2457D6;
+  --blue-electric: #3987EC;
+  --blue-ice: #75C8FF;
+  --blue-highlight: #C7EDFF;
+  --focus-ring: #3987EC;
+  --selection: rgba(36, 87, 214, 0.28);
+  --glow: rgba(36, 87, 214, 0.14);
+  --gradient-brand: linear-gradient(135deg, #193FA8 0%, #2457D6 42%, #3987EC 100%);
+  --gradient-background: radial-gradient(
+    ellipse at 50% 0%,
+    rgba(36, 87, 214, 0.14) 0%,
+    rgba(8, 11, 18, 0) 55%
+  );
+  --shadow-blue: 0 0 24px rgba(36, 87, 214, 0.18);
+
+  /* 深色界面基座（独立于通用 dark 纯黑） */
+  --ng-bg: #080B12;
+  --ng-surface: #101522;
+  --ng-surface-muted: #171F31;
+  --ng-border: #273349;
+  --ng-border-strong: #334663;
+  --ng-text: #E8EEF8;
+  --ng-text-2: #A3B1C7;
+  --ng-text-3: #71809A;
+  --ng-input: #0A0E16;
+  --ng-card: #1B2435;
+  --ng-inverse: #080B12;
+
+  --bg: var(--ng-bg);
+  --surface: var(--ng-surface);
+  --surface-muted: var(--ng-surface-muted);
+  --border: var(--ng-border);
+  --border-strong: var(--ng-border-strong);
+  --text: var(--ng-text);
+  --text-2: var(--ng-text-2);
+  --text-3: var(--ng-text-3);
+  --input-bg: var(--ng-input);
+  --card-bg: color-mix(in oklab, var(--ng-card) 94%, transparent);
+  --on-primary: #E8EEF8;
+
+  /* 主色 = 深钴蓝；电光蓝只用于 hover；冰蓝只用于文字高光 */
+  --primary: #2457D6;
+  --primary-hover: #3978F6;
+  --primary-strong: #193FA8;
+  --primary-text: #75C8FF;
+  --primary-container: color-mix(in oklab, #2457D6 18%, #101522);
+  --on-primary-strong: #E8EEF8;
+
+  --pi-primary: #2457D6;
+  --pi-primary-hover: #3978F6;
+  --pi-primary-text: #75C8FF;
+  --pi-strong: #193FA8;
+  --pi-container: color-mix(in oklab, #2457D6 18%, #101522);
+  --pi-bg-tint: #071747;
+  --pi-grad-a: rgba(36, 87, 214, 0.14);
+  --pi-grad-b: rgba(25, 63, 168, 0.1);
+  --pi-dark-primary: #2457D6;
+  --pi-dark-hover: #3978F6;
+  --pi-dark-container: color-mix(in oklab, #2457D6 18%, #101522);
+  --pi-dark-primary-text: #75C8FF;
+  --pi-dark-strong: #193FA8;
+
+  --ui-hover-a: 8%;
+  --ui-selected-a: 12%;
+  --ui-hover: color-mix(in oklab, #E8EEF8 7%, transparent);
+  --ui-selected: color-mix(in oklab, #2457D6 16%, transparent);
+  --ui-ring: color-mix(in oklab, #3987EC 42%, transparent);
+  --ui-scrim: rgba(8, 11, 18, 0.72);
+
+  --btn-bg: #2457D6;
+  --btn-bg-hover: #3978F6;
+  --btn-fg: #E8EEF8;
+
+  --bg-accent-a: rgba(36, 87, 214, 0.14);
+  --bg-accent-b: rgba(7, 23, 71, 0.35);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.5), 0 12px 32px rgba(7, 23, 71, 0.4);
+  --shadow-lg: 0 8px 20px rgba(0, 0, 0, 0.55), 0 24px 56px rgba(7, 23, 71, 0.45);
+
+  --danger: #f07178;
+  --danger-container: color-mix(in oklab, #f07178 16%, #101522);
+  --warning: #e6b450;
+  --warning-container: color-mix(in oklab, #e6b450 14%, #101522);
+  --success: #7fd99a;
+  --success-container: color-mix(in oklab, #7fd99a 14%, #101522);
+}
+
+html[data-palette="prisdvl"] ::selection {
+  background: var(--selection);
+  color: var(--text);
 }
 
 /* ================= 三配色（明暗同套变量） ================= */
@@ -226,6 +367,121 @@ html[data-palette="lime"][data-theme="dark"] {
   --primary-container: var(--pi-dark-container);
   --pi-dark-primary-text: oklch(0.85 0.15 130);
   --pi-dark-strong:      oklch(0.85 0.16 130);
+}
+
+/* ============================================================
+ * AccentColor 预设（indigo / ocean / violet / rose）
+ * 与上面三套"全配色"不同：这四套**只替换强调色族**，
+ * 亮色中性基座统一无色相（见下方 :is(...) 共享块），
+ * 暗色继续用 html[data-theme="dark"] 的纯黑基座，不把整页染色。
+ * 对比度：亮色 --primary L≤0.56（白底 ≥4.5:1），暗色 L≥0.72（黑底 ≥7:1）。
+ * ============================================================ */
+
+/* ---- 靛蓝 indigo ---- */
+html[data-palette="indigo"] {
+  --pi-primary:       oklch(0.52 0.16 272);
+  --pi-primary-hover: oklch(0.47 0.17 272);
+  --pi-primary-text:  oklch(0.45 0.15 272);
+  --pi-strong:        oklch(0.48 0.17 272);
+  --pi-container:     oklch(0.95 0.03 272);
+  --pi-bg-tint:       oklch(0.5 0.02 272);
+  --pi-dark-primary:  oklch(0.72 0.15 272);
+  --pi-dark-hover:    oklch(0.78 0.13 272);
+  --pi-dark-container: oklch(0.3 0.06 272);
+}
+html[data-palette="indigo"][data-theme="dark"] {
+  --primary: var(--pi-dark-primary); --primary-hover: var(--pi-dark-hover);
+  --primary-container: var(--pi-dark-container);
+  --primary-text: oklch(0.84 0.11 272);
+  --primary-strong: oklch(0.76 0.14 272);
+  --on-primary-strong: oklch(0.16 0.03 272);
+}
+
+/* ---- 棱镜蓝 ocean（自 Prisdvl 图标钢蓝 #305478 / #8aacc4） ---- */
+html[data-palette="ocean"] {
+  --pi-primary:       oklch(0.46 0.075 245);
+  --pi-primary-hover: oklch(0.40 0.08 245);
+  --pi-primary-text:  oklch(0.38 0.07 245);
+  --pi-strong:        oklch(0.42 0.08 245);
+  --pi-container:     oklch(0.94 0.025 245);
+  --pi-bg-tint:       oklch(0.48 0.04 245);
+  --pi-grad-a:        oklch(0.78 0.05 245 / 0.4);
+  --pi-grad-b:        oklch(0.72 0.04 230 / 0.32);
+  --pi-dark-primary:  oklch(0.74 0.06 245);
+  --pi-dark-hover:    oklch(0.80 0.055 245);
+  --pi-dark-container: oklch(0.28 0.035 245);
+}
+html[data-palette="ocean"][data-theme="light"] {
+  --primary: var(--pi-primary); --primary-hover: var(--pi-primary-hover);
+  --primary-container: var(--pi-container);
+  --primary-text: var(--pi-primary-text);
+  --primary-strong: var(--pi-strong);
+  --on-primary-strong: oklch(0.99 0.01 245);
+}
+html[data-palette="ocean"][data-theme="dark"] {
+  --primary: var(--pi-dark-primary); --primary-hover: var(--pi-dark-hover);
+  --primary-container: var(--pi-dark-container);
+  --primary-text: oklch(0.82 0.05 245);
+  --primary-strong: oklch(0.70 0.06 245);
+  --on-primary-strong: oklch(0.16 0.02 245);
+}
+
+/* ---- 紫罗兰 violet ---- */
+html[data-palette="violet"] {
+  --pi-primary:       oklch(0.53 0.17 305);
+  --pi-primary-hover: oklch(0.48 0.18 305);
+  --pi-primary-text:  oklch(0.46 0.16 305);
+  --pi-strong:        oklch(0.49 0.18 305);
+  --pi-container:     oklch(0.95 0.03 305);
+  --pi-bg-tint:       oklch(0.5 0.02 305);
+  --pi-dark-primary:  oklch(0.74 0.15 305);
+  --pi-dark-hover:    oklch(0.8 0.13 305);
+  --pi-dark-container: oklch(0.31 0.06 305);
+}
+html[data-palette="violet"][data-theme="dark"] {
+  --primary: var(--pi-dark-primary); --primary-hover: var(--pi-dark-hover);
+  --primary-container: var(--pi-dark-container);
+  --primary-text: oklch(0.85 0.11 305);
+  --primary-strong: oklch(0.78 0.14 305);
+  --on-primary-strong: oklch(0.17 0.03 305);
+}
+
+/* ---- 玫红 rose ---- */
+html[data-palette="rose"] {
+  --pi-primary:       oklch(0.56 0.18 15);
+  --pi-primary-hover: oklch(0.51 0.19 15);
+  --pi-primary-text:  oklch(0.49 0.17 15);
+  --pi-strong:        oklch(0.52 0.19 15);
+  --pi-container:     oklch(0.95 0.025 15);
+  --pi-bg-tint:       oklch(0.5 0.02 15);
+  --pi-dark-primary:  oklch(0.73 0.15 15);
+  --pi-dark-hover:    oklch(0.79 0.13 15);
+  --pi-dark-container: oklch(0.31 0.055 15);
+}
+html[data-palette="rose"][data-theme="dark"] {
+  --primary: var(--pi-dark-primary); --primary-hover: var(--pi-dark-hover);
+  --primary-container: var(--pi-dark-container);
+  --primary-text: oklch(0.85 0.1 15);
+  --primary-strong: oklch(0.77 0.14 15);
+  --on-primary-strong: oklch(0.17 0.02 15);
+}
+
+/* AccentColor 四套共用：亮色无色相中性基座 + 强调色族映射 + 无染色背景渐变 */
+html:is([data-palette="indigo"], [data-palette="ocean"], [data-palette="violet"], [data-palette="rose"])[data-theme="light"] {
+  --ng-bg: oklch(0.99 0 0); --ng-surface: oklch(0.97 0 0);
+  --ng-surface-muted: oklch(0.95 0 0); --ng-border: oklch(0.625 0 0);
+  --ng-border-strong: oklch(0.55 0 0); --ng-text: oklch(0.27 0 0);
+  --ng-text-2: oklch(0.44 0 0); --ng-text-3: oklch(0.48 0 0);
+  --ng-input: oklch(1 0 0); --ng-card: oklch(0.995 0 0 / 0.86);
+  --ng-inverse: oklch(0.99 0 0);
+  --primary: var(--pi-primary); --primary-hover: var(--pi-primary-hover);
+  --primary-container: var(--pi-container);
+  --primary-text: var(--pi-primary-text);
+  --primary-strong: var(--pi-strong);
+  --on-primary-strong: oklch(0.99 0 0);
+  /* 背景氛围渐变保持中性，强调色只出现在控件与状态上 */
+  --pi-grad-a: oklch(0.9 0 0 / 0.5);
+  --pi-grad-b: oklch(0.88 0 0 / 0.42);
 }
 
 /* ================= 亮度覆盖 ================= */

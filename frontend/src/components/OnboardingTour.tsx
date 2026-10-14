@@ -67,7 +67,7 @@ const STEPS: Step[] = [
   {
     id: 'settings',
     title: '外观与数据都在这里',
-    desc: '主题、配色、通知、用量与数据导出，统一收在「个人设置」里。',
+    desc: '主题、配色、通知、用量与数据导出，统一收在「设置」里。',
     place: 'right',
     find: () => document.querySelector<HTMLElement>('.sb-row--settings'),
   },

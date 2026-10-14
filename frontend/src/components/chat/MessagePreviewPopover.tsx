@@ -1,71 +1,90 @@
 import { createPortal } from 'react-dom'
-import { useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { messageSummary } from '@/lib/summary'
 import type { ChatMsg } from '@/data'
 
-/** 预览浮层与视口边缘的最小留白 */
 const VIEWPORT_PAD = 14
-/** 浮层与横线之间的间距 */
 const GAP = 12
-const POPOVER_W = 300
+const POPOVER_W = 320
+/** 隐藏动画兜底：动画被关掉或 animationend 未触发时仍要卸载 */
+const CLOSE_FALLBACK_MS = 280
+
+export type PanelPhase = 'open' | 'closing'
 
 interface Props {
-  message: ChatMsg
-  index: number
-  /** 被 hover 的横线元素（定位基准） */
+  messages: ChatMsg[]
+  /** 当前阅读提问序号（1-based） */
+  currentIndex: number
+  /** 整条轨道锚点：面板位置固定贴轨道，不跟单根横线跑 */
   anchor: HTMLElement | null
+  phase: PanelPhase
   onMouseEnter: () => void
   onMouseLeave: () => void
-  onJump: () => void
+  onJump: (index: number) => void
+  /** closing 动画结束后由父级卸掉节点 */
+  onClosed: () => void
 }
 
-/**
- * 消息预览浮层。
- *
- * 关键约束（踩过坑）：**必须 Portal 到 document.body + position: fixed**。
- * 对话页里 `.thread` 是 `overflow-y: auto`、`.chat-fixed`/`.shell-main` 是 `overflow: hidden`，
- * 把浮层放在轨道内部再指望 `overflow: visible` 一定会被裁掉（只露一小块）。
- * 挂到 body 后，再用 getBoundingClientRect() 自己算 fixed 坐标，就与任何祖先的
- * overflow / border-radius / transform 无关了。
- *
- * 定位：默认贴在横线**左侧**（轨道本身在内容右侧，往左才在视口内），
- * 左侧空间不够时翻到右侧；上下同样做边界收敛，始终留 VIEWPORT_PAD。
- */
-export default function MessagePreviewPopover({ message, index, anchor, onMouseEnter, onMouseLeave, onJump }: Props) {
+/** Portal 预览：靠近轨道时整块出现，带显示/隐藏动画。 */
+export default function MessagePreviewPopover({
+  messages,
+  currentIndex,
+  anchor,
+  phase,
+  onMouseEnter,
+  onMouseLeave,
+  onJump,
+  onClosed,
+}: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number; place: 'left' | 'right' } | null>(null)
 
+  useEffect(() => {
+    if (phase !== 'closing') return
+    const t = window.setTimeout(onClosed, CLOSE_FALLBACK_MS)
+    return () => window.clearTimeout(t)
+  }, [phase, onClosed])
+
   useLayoutEffect(() => {
     if (!anchor) return
+    let alive = true
     const compute = () => {
+      if (!alive) return
       const a = anchor.getBoundingClientRect()
       const el = ref.current
-      const h = el?.offsetHeight ?? 120
-      const w = el?.offsetWidth ?? POPOVER_W
-      const vw = window.innerWidth
-      const vh = window.innerHeight
-
-      /* 优先左侧；放不下再翻到右侧 */
-      const roomLeft = a.left - GAP - VIEWPORT_PAD
-      const place: 'left' | 'right' = roomLeft >= w ? 'left' : 'right'
-      let left = place === 'left' ? a.left - GAP - w : a.right + GAP
-      left = Math.min(Math.max(left, VIEWPORT_PAD), vw - w - VIEWPORT_PAD)
-
-      /* 垂直：与横线居中对齐，再收敛到视口内 */
-      let top = a.top + a.height / 2 - h / 2
-      top = Math.min(Math.max(top, VIEWPORT_PAD), vh - h - VIEWPORT_PAD)
-
+      const h = Math.min(el?.offsetHeight ?? 160, window.innerHeight - VIEWPORT_PAD * 2)
+      const w = Math.min(el?.offsetWidth ?? POPOVER_W, window.innerWidth - VIEWPORT_PAD * 2)
+      const place: 'left' | 'right' = a.left - GAP - VIEWPORT_PAD >= w ? 'left' : 'right'
+      const left = Math.min(
+        Math.max(place === 'left' ? a.left - GAP - w : a.right + GAP, VIEWPORT_PAD),
+        window.innerWidth - w - VIEWPORT_PAD,
+      )
+      /* 相对整条轨道垂直居中，移动横线时位置不变 */
+      const top = Math.min(
+        Math.max(a.top + a.height / 2 - h / 2, VIEWPORT_PAD),
+        window.innerHeight - h - VIEWPORT_PAD,
+      )
       setPos({ left, top, place })
     }
     compute()
-    /* 滚动/缩放时跟随（横线位置会变） */
     window.addEventListener('scroll', compute, true)
     window.addEventListener('resize', compute)
+    const ro = new ResizeObserver(compute)
+    ro.observe(anchor)
+    if (ref.current) ro.observe(ref.current)
     return () => {
+      alive = false
       window.removeEventListener('scroll', compute, true)
       window.removeEventListener('resize', compute)
+      ro.disconnect()
     }
-  }, [anchor, message.id])
+  }, [anchor, messages.length, currentIndex, phase])
+
+  useLayoutEffect(() => {
+    if (phase !== 'open') return
+    const active = ref.current?.querySelector<HTMLElement>('.msg-preview__item[data-active]')
+    active?.scrollIntoView({ block: 'nearest' })
+  }, [currentIndex, messages.length, phase])
 
   if (!anchor) return null
 
@@ -74,23 +93,44 @@ export default function MessagePreviewPopover({ message, index, anchor, onMouseE
       ref={ref}
       className="msg-preview"
       data-place={pos?.place ?? 'left'}
+      data-phase={phase}
       style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999, width: POPOVER_W }}
-      role="tooltip"
+      role="group"
+      aria-label="本次对话的问题导航"
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      onClick={onJump}
+      onFocusCapture={onMouseEnter}
+      onBlurCapture={(e) => {
+        if (!ref.current?.contains(e.relatedTarget as Node | null)) onMouseLeave()
+      }}
+      onKeyDown={(e) => { if (e.key === 'Escape') onMouseLeave() }}
+      onAnimationEnd={(e) => {
+        if (e.target !== ref.current) return
+        if (phase === 'closing') onClosed()
+      }}
     >
-      {/* 轨道只展示"我的提问"，因此不再重复标注角色（去掉「我 / 助手」标签） */}
-      <div className="msg-preview__head">
-        <span className="msg-preview__label">提问</span>
-        <span className="msg-preview__index">#{index}</span>
+      <div className="msg-preview__list">
+        {messages.map((message, index) => {
+          const qIndex = index + 1
+          const isCurrent = qIndex === currentIndex
+          return (
+            <button
+              key={`${message.id}-${qIndex}`}
+              type="button"
+              className="msg-preview__item"
+              data-active={isCurrent ? '' : undefined}
+              aria-current={isCurrent ? 'location' : undefined}
+              aria-label={`跳转到第 ${qIndex} 个提问：${messageSummary(message.text)}`}
+              title={message.text}
+              onClick={() => onJump(qIndex)}
+            >
+              <span className="msg-preview__item-index">{qIndex}</span>
+              <span className="msg-preview__item-text">{messageSummary(message.text)}</span>
+            </button>
+          )
+        })}
       </div>
-      <p className="msg-preview__body">{messageSummary(message.text)}</p>
-      <p className="msg-preview__hint">点击跳转</p>
     </div>,
-    document.body
+    document.body,
   )
 }
-
-/** 让 TS 满意：RefObject 类型在别处可能被引用 */
-export type AnchorRef = RefObject<HTMLElement | null>

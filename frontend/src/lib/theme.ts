@@ -15,32 +15,58 @@ export type ThemeModeSetting = ThemeMode | 'system'
 const MODE_KEY = 'nx-proto-theme-mode'
 const LEGACY_KEY = 'nx-proto-theme' // 兼容旧键
 const PALETTE_KEY = 'nx-proto-palette'
+const SCHEMA_KEY = 'nx-theme-schema'
+const SCHEMA_VER = '3'
 
 type Listener = () => void
 const listeners = new Set<Listener>()
 
 const systemDark = () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-color-scheme: dark)').matches
 
+const PALETTES: PaletteName[] = ['prisdvl', 'terracotta', 'turquoise', 'lime', 'indigo', 'ocean', 'violet', 'rose']
+
+/** schema 3：强制启用独立深色深钴蓝主题 Prisdvl */
+function migrateThemeSchema() {
+  if (typeof localStorage === 'undefined') return
+  if (localStorage.getItem(SCHEMA_KEY) === SCHEMA_VER) return
+  localStorage.setItem(PALETTE_KEY, 'prisdvl')
+  localStorage.setItem(MODE_KEY, 'dark')
+  localStorage.removeItem(LEGACY_KEY)
+  localStorage.setItem(SCHEMA_KEY, SCHEMA_VER)
+}
+
+migrateThemeSchema()
+
 function readMode(): ThemeModeSetting {
   const v = localStorage.getItem(MODE_KEY)
   if (v === 'light' || v === 'dark' || v === 'system') return v
   const legacy = localStorage.getItem(LEGACY_KEY)
   if (legacy === 'light' || legacy === 'dark') return legacy
-  return 'system'
+  return 'dark'
 }
 
 function readPalette(): PaletteName {
   const v = localStorage.getItem(PALETTE_KEY)
-  return v === 'turquoise' || v === 'lime' || v === 'terracotta' ? v : 'terracotta'
+  return (PALETTES as string[]).includes(v ?? '') ? (v as PaletteName) : 'prisdvl'
 }
 
 let mode: ThemeModeSetting = readMode()
 let palette: PaletteName = readPalette()
 
-const resolve = (m: ThemeModeSetting): ThemeMode => (m === 'system' ? (systemDark() ? 'dark' : 'light') : m)
+/** Prisdvl 是独立深色主题：选中时界面始终按 dark 渲染 */
+const resolve = (m: ThemeModeSetting): ThemeMode => {
+  if (palette === 'prisdvl') return 'dark'
+  return m === 'system' ? (systemDark() ? 'dark' : 'light') : m
+}
 
 function apply() {
   const root = document.documentElement
+  /* Prisdvl 锁定暗色，避免亮色壳盖住深钴蓝界面 */
+  if (palette === 'prisdvl' && mode !== 'dark') {
+    mode = 'dark'
+    localStorage.setItem(MODE_KEY, 'dark')
+    localStorage.removeItem(LEGACY_KEY)
+  }
   root.dataset.theme = resolve(mode)
   root.dataset.palette = palette
   root.dataset.themeMode = mode
@@ -71,14 +97,20 @@ export const themeStore = {
   /** 实际生效的主题（system 已解析） */
   resolved: () => resolve(mode),
   setMode: (m: ThemeModeSetting) => {
-    mode = m
-    localStorage.setItem(MODE_KEY, m)
+    /* Prisdvl 模式不接受亮色 / 跟随系统 */
+    mode = palette === 'prisdvl' ? 'dark' : m
+    localStorage.setItem(MODE_KEY, mode)
     localStorage.removeItem(LEGACY_KEY)
     emit()
   },
   setPalette: (p: PaletteName) => {
     palette = p
     localStorage.setItem(PALETTE_KEY, p)
+    if (p === 'prisdvl') {
+      mode = 'dark'
+      localStorage.setItem(MODE_KEY, 'dark')
+      localStorage.removeItem(LEGACY_KEY)
+    }
     emit()
   },
 }

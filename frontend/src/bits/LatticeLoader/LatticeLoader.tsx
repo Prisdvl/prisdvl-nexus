@@ -71,8 +71,12 @@ const PATTERNS: Record<LatticePatternName, Partial<Record<LatticeGrid, ResolvedP
 };
 const DEFAULT_PATTERN: Record<LatticeGrid, LatticePatternName> = { 3: 'orbit', 4: 'sweep' };
 const MARKS: Record<LatticeGrid, Record<'done' | 'error', number[]>> = {
-  3: { done: [2, 3, 5, 7], error: [0, 2, 4, 6, 8] },
-  4: { done: [7, 8, 10, 13], error: [0, 3, 5, 6, 9, 10, 12, 15] }
+  /* done：整格点亮（全绿）；error：对角叉 */
+  3: { done: [0, 1, 2, 3, 4, 5, 6, 7, 8], error: [0, 2, 4, 6, 8] },
+  4: {
+    done: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    error: [0, 3, 5, 6, 9, 10, 12, 15],
+  },
 };
 
 const resolvePattern = (pattern: LatticePatternName | LatticePattern, grid: LatticeGrid): ResolvedPattern => {

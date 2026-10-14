@@ -7,16 +7,16 @@
  */
 import type { ReactNode } from 'react'
 import {
-  BellRing, Download, Gauge, KeyRound, Laptop, MailCheck, Palette, ShieldAlert,
+  BellRing, Cpu, Download, Gauge, KeyRound, Laptop, MailCheck, Palette, ShieldAlert,
   SlidersHorizontal, UserRound,
 } from 'lucide-react'
 import {
-  AppearanceSection, DangerSection, EmailSection, ExportSection, NotifySection,
+  AppearanceSection, DangerSection, EmailSection, ExportSection, ModelKeySection, NotifySection,
   PrefsSection, ProfileSection, SecuritySection, SessionsSection, UsageSection,
 } from './sections'
 
 export type SectionId =
-  | 'profile' | 'prefs' | 'appearance'
+  | 'profile' | 'model' | 'prefs' | 'appearance'
   | 'security' | 'email' | 'sessions'
   | 'notify'
   | 'usage' | 'export'
@@ -36,8 +36,9 @@ export const SETTINGS_GROUPS: { title: string; items: SettingsItem[] }[] = [
     title: '个人',
     items: [
       { id: 'profile', label: '公开资料', icon: UserRound, alias: '用户名 昵称 邮箱 头像 资料', render: () => <ProfileSection /> },
+      { id: 'model', label: '模型 Key', icon: Cpu, alias: '大模型 key api key 自定义 模型 网关 base url deepseek', render: () => <ModelKeySection /> },
       { id: 'prefs', label: '账号偏好', icon: SlidersHorizontal, alias: '语言 时区 默认 落地页', render: () => <PrefsSection /> },
-      { id: 'appearance', label: '外观', icon: Palette, alias: '主题 配色 暗色 亮色 跟随系统 颜色', render: () => <AppearanceSection /> },
+      { id: 'appearance', label: '外观', icon: Palette, alias: '主题 配色 暗色 浅色 亮色 跟随系统 颜色', render: () => <AppearanceSection /> },
     ],
   },
   {
@@ -68,3 +69,7 @@ export const SETTINGS_GROUPS: { title: string; items: SettingsItem[] }[] = [
     ],
   },
 ]
+
+/** 分区 → 所属分组标题（弹层顶栏显示"个人 / 公开资料"这样的定位信息） */
+export const GROUP_OF = (id: SectionId): string | undefined =>
+  SETTINGS_GROUPS.find((g) => g.items.some((it) => it.id === id))?.title

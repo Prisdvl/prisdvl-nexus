@@ -6,7 +6,7 @@ import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -51,7 +51,8 @@ await page.goto(BASE, { waitUntil: 'networkidle' })
 await page.waitForTimeout(2200)
 await page.locator('.lp-pill button', { hasText: '登录' }).first().click()
 await page.waitForSelector('.auth-card')
-await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell')
 /* 引导延后 700ms 才出现，这里多等一点 */

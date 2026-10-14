@@ -3,7 +3,7 @@ import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -91,12 +91,9 @@ const pdfRow = page.locator('.doc-row', { hasText: 'MySQL 索引原理.pdf' }).f
 await pdfRow.click()
 await page.waitForTimeout(700)
 check('PDF 打开占位面板', (await page.locator('.doc-binary').count()) === 1)
-check('占位面板提供下载', (await page.locator('.doc-binary button', { hasText: '下载原文' }).count()) === 1)
+check('PDF 原文不可下载时操作明确禁用', (await page.locator('.drawer-head button[disabled][title*="暂不支持下载"]').count()) === 1)
 await page.screenshot({ path: `${OUT}/w-doc-preview-pdf.png` })
 console.log('ok   w-doc-preview-pdf（截图）')
-await page.locator('.doc-binary button', { hasText: '下载原文' }).click()
-await page.waitForTimeout(600)
-check('点下载弹出任务提示', (await page.locator('.toast-host .swipe-toast').count()) > 0)
 await page.keyboard.press('Escape')
 await page.waitForTimeout(400)
 

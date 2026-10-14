@@ -1,10 +1,10 @@
-// 原型 QA + 全页截图：入口页（3 版构图 / 5 背景画廊 / 组件展示）+ 应用内 19 视角
+// UI 回归截图：当前入口页与真实功能界面状态
 import { chromium } from 'playwright-core'
 import { setTheme, setPalette } from './_theme.mjs'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -54,12 +54,11 @@ await noOverflow('flow')
 
 await page.locator('#agents').scrollIntoViewIfNeeded()
 await page.waitForTimeout(900)
-await shot('lp-agents-1')
-// 切换到第二个 Agent，验证多 Agent 切换
-await page.locator('.lp-agents-pick .rubber-segment__item', { hasText: '代码审查员' }).first().click()
-await page.waitForTimeout(1200)
-await shot('lp-agents-2')
-await noOverflow('agents')
+const modeCount = await page.locator('.lp-modes article').count()
+console.log(`${modeCount === 3 ? 'ok' : 'FAIL'} 入口页展示三个真实会话模式说明（${modeCount}）`)
+if (modeCount !== 3) process.exitCode = 1
+await shot('lp-modes')
+await noOverflow('modes')
 
 await page.evaluate(() => window.scrollTo(0, 0))
 await page.waitForTimeout(900)
@@ -82,7 +81,8 @@ await shot('p-auth-dark-lime')
 await setPalette(page, 'terracotta')
 await setTheme(page, 'light')
 
-await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell', { timeout: 8000 })
 await page.waitForTimeout(2400)

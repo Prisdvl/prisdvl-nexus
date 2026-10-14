@@ -7,82 +7,132 @@
  * 低存在感：默认只是一条很短的 muted 细线。
  * ============================================================ */
 .msg-nav {
+  /* 轨道尺寸：横线更密、更短，靠近时再拉开一点 */
+  --rail-w: 36px;
+  --line-w: 14px;
+  --line-w-hover: 20px;
+  --line-w-active: 22px;
+  --line-h: 2px;
+
   position: absolute;
-  right: 6px;
+  right: 0;
   top: 0;
   bottom: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
   /*
-   * 给轨道真实宽度（34px），并让它落在消息区预留的右侧内边距里。
-   * 之前这里写 `width: 0`：内部 max-content 的列表会**向右溢出**到面板之外，
-   * 被祖先的 overflow:hidden 裁掉 —— 表现就是"横线显示不全/只露出一小截"。
+   * 轨道宽度 = 阅读列右侧的整段留白（--chat-pad + --chat-rail，由 chat-view.css
+   * 在 .chat-fixed 上定义，左右对称计入内边距）。它住在留白里，所以永远不会压到正文。
    */
-  width: 44px;
+  width: var(--chat-gutter, 76px);
   overflow: visible;
   z-index: 2;
+  /*
+   * 整条右侧留白都可触发「靠近显示面板」。
+   * 消息正文在中间阅读列，不会被这里挡住。
+   */
+  pointer-events: auto;
 }
 .msg-nav__list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 2px 0;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: var(--rail-gap, 7px);
+  gap: var(--rail-gap, 3px);
   max-height: 100%;
   width: max-content;
   flex: none;
   /* 消息极多、压缩到最小行距仍装不下时：允许轨道内部滚动（滚动条隐藏） */
   overflow-y: auto;
   scrollbar-width: none;
+  /* 默认略收敛；靠近（.is-open）时整组横线弹开 */
+  opacity: 0.55;
+  transform: translateX(4px);
+  transition:
+    opacity var(--dur-ui, 200ms) var(--ease-out, ease),
+    transform var(--dur-ui, 200ms) var(--ease-out, ease);
+}
+.msg-nav.is-open .msg-nav__list {
+  opacity: 1;
+  transform: none;
 }
 .msg-nav__list::-webkit-scrollbar { display: none; }
 .msg-nav__item {
   display: grid;
   flex: none;
   place-items: center;
-  width: 44px;
-  min-height: 24px;
+  width: var(--rail-w);
+  min-height: 12px;
   padding: 0;
   border: 0;
   background: none;
   cursor: pointer;
 }
+.msg-nav__list > li {
+  /* 靠近时横线依次滑入，强化「整块出现」而不是一根一根冒 */
+  opacity: 0.85;
+  transform: translateX(6px);
+  transition:
+    opacity calc(var(--dur-ui, 200ms) + 40ms) var(--ease-out, ease),
+    transform calc(var(--dur-ui, 200ms) + 40ms) var(--ease-out, ease);
+  transition-delay: 0ms;
+}
+.msg-nav.is-open .msg-nav__list > li {
+  opacity: 1;
+  transform: none;
+  transition-delay: calc(var(--i, 0) * 18ms);
+}
 .msg-nav__line {
   display: block;
   flex: none;
-  width: 20px;
-  height: 3px;
+  width: var(--line-w);
+  height: var(--line-h);
   border-radius: var(--radius-pill);
   background: var(--border-strong);
   opacity: 0.75;
-  transition:
-    width var(--dur-ui) var(--ease-out),
-    background-color var(--dur-ui) var(--ease-out),
-    opacity var(--dur-ui) var(--ease-out),
-    box-shadow var(--dur-ui) var(--ease-out);
+  /* 禁止任何发光/描边：细线套主色 ring 在视觉上就是整根主色条 */
+  box-shadow: none !important;
+  outline: none !important;
+  filter: none !important;
+  /* 宽度可过渡；颜色不做过渡，避免 active 切换时卡在半透明主色 */
+  transition: width var(--dur-ui, 200ms) var(--ease-out, ease);
 }
-/* 用户消息的横线略长一点，方便一眼区分角色（不改配色） */
-.msg-nav__item[data-role='user'] .msg-nav__line { width: 26px; }
+/*
+ * 整条轨道永远只有 1 根主色 = .is-active。
+ * hover 只加长、不上主色，避免「焦点 + 悬停 + 阅读」同时亮多根。
+ */
+.msg-nav__item:not(.is-active) .msg-nav__line {
+  background: var(--border-strong);
+  opacity: 0.75;
+}
+.msg-nav__item:not(.is-active):hover .msg-nav__line,
+.msg-nav__item:not(.is-active):focus-visible .msg-nav__line,
+.msg-nav__item:not(.is-active):focus .msg-nav__line {
+  width: var(--line-w-hover);
+  opacity: 1;
+  background: var(--border-strong);
+}
+/* 盖住 global.css 的 `:focus-visible { outline: 2px solid var(--primary) }` */
+.msg-nav__item:focus,
+.msg-nav__item:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
 
-.msg-nav__item:hover .msg-nav__line,
-.msg-nav__item:focus-visible .msg-nav__line {
-  width: 30px;
+/* 当前阅读位置：唯一允许上主色 */
+.msg-nav__item.is-active .msg-nav__line,
+.msg-nav__item.is-active:hover .msg-nav__line,
+.msg-nav__item.is-active:focus-visible .msg-nav__line,
+.msg-nav__item.is-active:focus .msg-nav__line {
+  width: var(--line-w-active);
   background: var(--primary);
   opacity: 1;
-  box-shadow: 0 0 0 3px oklch(from var(--primary) l c h / 0.16);
-}
-.msg-nav__item:focus-visible { outline: none; }
-
-/* 当前阅读位置：更长 + 强调色（克制，不加 glow） */
-.msg-nav__item[data-active] .msg-nav__line {
-  width: 32px;
-  background: var(--primary);
-  opacity: 1;
 }
 
-/* ---------- 预览浮层（Portal 到 body，position: fixed） ---------- */
+/* ---------- 预览浮层（Portal；靠近整条轨道显示，位置固定贴轨道） ---------- */
 .msg-preview {
   position: fixed;
   z-index: 190;
@@ -90,44 +140,48 @@
   flex-direction: column;
   max-height: min(52vh, 480px);
   overflow: hidden;
-  padding: 12px 14px;
+  padding: 8px 10px;
 
   border-radius: var(--radius-lg);
   background: var(--card-bg);
   backdrop-filter: blur(14px);
   box-shadow: var(--shadow-lg);
-  cursor: pointer;
-  animation: msg-preview-in var(--dur-ui) var(--ease-out);
+  transform-origin: right center;
+  pointer-events: auto;
 }
-/* 从横线方向滑入：贴左时从右侧进 */
-.msg-preview[data-place='left'] { animation-name: msg-preview-in-left; }
+.msg-preview[data-place='left'] { transform-origin: right center; }
+.msg-preview[data-place='right'] { transform-origin: left center; }
+
+/* 显示 / 隐藏动画（phase 由 JS 驱动，closing 结束后卸载） */
+.msg-preview[data-phase='open'] {
+  animation: msg-preview-in 220ms var(--ease-out, ease) both;
+}
+.msg-preview[data-phase='open'][data-place='left'] {
+  animation-name: msg-preview-in-left;
+}
+.msg-preview[data-phase='closing'] {
+  animation: msg-preview-out 180ms var(--ease-out, ease) both;
+  pointer-events: none;
+}
+.msg-preview[data-phase='closing'][data-place='left'] {
+  animation-name: msg-preview-out-left;
+}
+
 @keyframes msg-preview-in {
-  from { opacity: 0; transform: translateX(-6px) scale(0.98); }
+  from { opacity: 0; transform: translateX(-10px) scale(0.96); }
   to { opacity: 1; transform: none; }
 }
 @keyframes msg-preview-in-left {
-  from { opacity: 0; transform: translateX(6px) scale(0.98); }
+  from { opacity: 0; transform: translateX(10px) scale(0.96); }
   to { opacity: 1; transform: none; }
 }
-.msg-preview__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
+@keyframes msg-preview-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateX(-8px) scale(0.97); }
 }
-.msg-preview__label {
-  font-size: 11.5px;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: var(--radius-pill);
-
-  color: var(--text-2);
-}
-.msg-preview__index {
-  margin-left: auto;
-  font-size: 11.5px;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
+@keyframes msg-preview-out-left {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateX(8px) scale(0.97); }
 }
 .msg-preview__list {
   min-height: 0;
@@ -156,7 +210,17 @@
 }
 .msg-preview__item:hover,
 .msg-preview__item:focus-visible { background: var(--surface-muted); outline: none; }
-.msg-preview__item[data-active] { background: var(--primary-container); color: var(--primary-text); }
+/* 只有阅读位置高亮（跟悬停无关）；左侧色条 + 容器色，保证列表里永远只有一条"当前" */
+.msg-preview__item[data-active] {
+  background: var(--primary-container);
+  color: var(--primary-text);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+.msg-preview__item[data-active]:hover,
+.msg-preview__item[data-active]:focus-visible {
+  background: var(--primary-container);
+}
+.msg-preview__item[data-active] .msg-preview__item-index { color: var(--primary-text); }
 .msg-preview__item-index {
   color: var(--text-3);
   font-size: 11px;
@@ -170,21 +234,25 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
-.msg-preview__hint {
-  flex: none;
-  margin: 8px 0 0;
-  padding-top: 6px;
 
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-/* 窄屏保留可点的索引轨道；点击可直接跳转，键盘焦点也会显示预览。 */
-@media (max-width: 1100px) {
-  .msg-nav { right: 0; width: 42px; }
-  .msg-nav__item { width: 42px; min-height: 32px; }
+/* 窄屏：轨道随阅读列留白一起收窄，仍可点跳转 */
+@media (max-width: 767px) {
+  .msg-nav {
+    --rail-w: 18px;
+    --line-w: 10px;
+    --line-w-hover: 14px;
+    --line-w-active: 16px;
+  }
+  .msg-nav__item { min-height: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .msg-preview { animation: none; }
-  .msg-nav__line { transition: none; }
+  .msg-nav__list,
+  .msg-nav__list > li,
+  .msg-nav__line {
+    transition: none !important;
+  }
+  .msg-preview[data-phase='open'],
+  .msg-preview[data-phase='closing'] {
+    animation-duration: 1ms !important;
+  }
 }

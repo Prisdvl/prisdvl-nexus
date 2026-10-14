@@ -112,7 +112,7 @@ export const authStore = {
    * 所以这里只建号，由用户在登录页主动登录（多一次输入，换来流程可预期）。
    */
   register: async (body: { username: string; password: string; email?: string; nickname?: string }) => {
-    if (USE_MOCK) return
+    if (USE_MOCK) throw new Error('注册需要真实后端；请关闭离线测试模式后重试。')
     await api.auth.register(body)
   },
 

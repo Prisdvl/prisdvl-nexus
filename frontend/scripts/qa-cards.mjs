@@ -118,63 +118,25 @@ const after = await page.evaluate(() => ({
 check('2.5s 后高亮自动取消', after.hl === 0, `高亮 ${after.hl} 个`)
 check('同时清掉 URL 的 ?doc= 参数', !after.url.includes('doc='), after.url.slice(0, 60))
 
-/* ---------- 3.5 再次点同一个引用要能重新高亮 ---------- */
-/* 历史 bug：清参数后的 effect 只依赖 highlightDoc，同链接再次导航（值没变）不会重新高亮 */
+/* ---------- 3.5 引用预览不伪造历史文档内容 ---------- */
 await page.goto(BASE + '/#/app/chat', { waitUntil: 'networkidle' })
-await page.waitForTimeout(1800)
-
-/* 点引用现在**不跳页**：在右侧面板就地查看；要跳转得点面板里的「在知识库中打开」 */
+await page.waitForTimeout(1600)
 await page.locator('.thread .cite-chip[data-clickable]').first().click()
-await page.waitForTimeout(900)
-const ref = await page.evaluate(() => {
-  const panel = document.querySelector('.ref-panel')
-  const r = panel?.getBoundingClientRect()
-  return {
-    open: !!panel,
-    url: location.hash,
-    title: panel?.querySelector('.ref-title h3')?.textContent,
-    hasMarkdown: (panel?.querySelectorAll('.md h1, .md h2').length ?? 0) > 0,
-    chunks: panel?.querySelectorAll('.ref-chunk').length ?? 0,
-    related: panel?.querySelectorAll('.ref-card').length ?? 0,
-    inside: r ? r.right <= window.innerWidth + 1 : false,
-    threadW: Math.round(document.querySelector('.thread').getBoundingClientRect().width),
-    scrollbar: panel ? getComputedStyle(panel.querySelector('.ref-body')).scrollbarWidth : null,
-  }
-})
-check('点引用在右侧打开面板（不跳页）', ref.open === true && ref.url.includes('/app/chat'), JSON.stringify({ url: ref.url }))
-check('面板展示引用文档的正文', ref.hasMarkdown === true, String(ref.title))
-check('面板列出命中切片', ref.chunks >= 3, `${ref.chunks} 条`)
-check('面板有相关文档卡片', ref.related >= 3, `${ref.related} 张`)
-check('面板完整落在视口内', ref.inside === true)
-check('面板内滚动条已隐藏', ref.scrollbar === 'none', String(ref.scrollbar))
-
-/* 从面板跳转到知识库详情（这才会离开对话页） */
-await page.locator('.ref-panel button', { hasText: '在知识库中打开' }).click()
-await page.waitForTimeout(1400)
-check('点「在知识库中打开」跳到知识库详情', (await page.evaluate(() => location.hash)).includes('/app/kb/'))
-check('跳转后目标文档被高亮', (await page.locator('.doc-row[data-hl]').count()) === 1)
-
-/* 返回按钮不能"永远高亮"：默认透明底，只有悬停才有底色 */
-const backBtn = await page.evaluate(() => {
-  const b = Array.from(document.querySelectorAll('button')).find((x) => x.textContent.includes('返回知识库'))
-  if (!b) return null
-  const cs = getComputedStyle(b)
-  return { cls: b.className, bg: cs.backgroundColor, isListRow: b.classList.contains('list-row') }
-})
-check('返回按钮使用 btn 体系而非列表行样式', backBtn !== null && !backBtn.isListRow, String(backBtn?.cls))
-check('返回按钮默认无底色（仅悬停高亮）', backBtn !== null && String(backBtn.bg).includes('rgba(0, 0, 0, 0)'), String(backBtn?.bg))
-
-await page.waitForTimeout(2300)
-check('高亮已自动取消（进入下一次前）', (await page.locator('.doc-row[data-hl]').count()) === 0)
-
-/* 再次走一遍：确认可重复触发高亮 */
-await page.locator('.sb-nav button.rubber-segment__item', { hasText: '对话' }).first().click()
-await page.waitForTimeout(1200)
-await page.locator('.thread .cite-chip[data-clickable]').first().click()
-await page.waitForTimeout(700)
-await page.locator('.ref-panel button', { hasText: '在知识库中打开' }).click()
-await page.waitForTimeout(1200)
-check('再次从引用进入仍会重新高亮', (await page.locator('.doc-row[data-hl]').count()) === 1, `高亮 ${await page.locator('.doc-row[data-hl]').count()} 个`)
+await page.waitForTimeout(500)
+const ref = await page.evaluate(() => ({
+  open: !!document.querySelector('.ref-panel'),
+  url: location.hash,
+  error: document.querySelector('.ref-panel [role="alert"]')?.textContent ?? '',
+  body: document.querySelector('.ref-panel .ref-body')?.textContent ?? '',
+  sourceButtonDisabled: document.querySelector('.ref-panel .ref-head button[disabled]') !== null,
+  inside: (() => { const r = document.querySelector('.ref-panel')?.getBoundingClientRect(); return r ? r.right <= innerWidth + 1 : false })(),
+}))
+check('点击引用在右侧打开面板（不跳页）', ref.open && ref.url.includes('/app/chat'))
+check('历史 mock 引用缺少 ID 时明确说明且不展示伪造正文', ref.error.includes('未包含知识库与文档 ID') && !ref.body.includes('虚构'))
+check('缺少来源 ID 时禁止跳转到假知识库', ref.sourceButtonDisabled)
+check('引用面板完整落在视口内', ref.inside)
+await page.locator('.ref-panel button[aria-label="关闭引用面板"]').click()
+await page.waitForTimeout(250)
 
 /* ---------- 4. 迟到的高亮清理不得顶掉后续导航（历史记录必须完好） ---------- */
 await page.goto(BASE + '/#/app/kb/1?doc=' + encodeURIComponent('集合框架.md'), { waitUntil: 'networkidle' })

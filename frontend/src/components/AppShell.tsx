@@ -47,20 +47,6 @@ export default function AppShell({ theme, palette }: ShellProps) {
   useEffect(() => { void syncConversations() }, [])
 
   /*
-   * 进入应用时同步一次会话列表（不是只在登录那一刻）。
-   *
-   * ⚠️ 之前只在 `LoginRoute.onEnter` 里同步，导致**刷新页面就回到种子数据**：
-   * store 从 localStorage 快照或 `SESSIONS` 初始化，之后再没人去问后端。
-   * 于是侧栏混进 `seed_s1`，点它去调后端就是 400
-   * `conversationId=seed_s1（需要 Long）` —— 实测踩过。
-   *
-   * 放在 AppShell（所有受保护页面的共同外壳）里，
-   * 保证"进入应用"这件事在任何入口下都会同步一次。
-   * `syncConversations` 内部幂等，路由切换不会重复打接口。
-   */
-  useEffect(() => { void syncConversations() }, [])
-
-  /*
    * 验收用测试钩子（仅 DEV）：window.__nxCrash = true 时主动抛错，
    * 用来验证「错误边界」真的会兜住并展示我们自己的恢复页，而不是 Router 的默认英文错误页。
    * 与已有的 window.__nxTheme 同风格，不影响生产构建。

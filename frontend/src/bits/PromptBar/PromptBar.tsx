@@ -83,6 +83,10 @@ export interface PromptBarProps {
   squash?: number;
   tilt?: number;
   pressScale?: number;
+  /** 专注写作放大模式：textarea 撑满固定高度的 field，不再按 maxRows 限高 */
+  expanded?: boolean;
+  /** 行数变化回调：由 fit() 在每次重排后上报当前渲染行数（用于父级决定放大按钮显隐） */
+  onLineCountChange?: (lines: number) => void;
   className?: string;
 }
 
@@ -241,6 +245,8 @@ const PromptBar: React.FC<PromptBarProps> = ({
   squash = 0.12,
   tilt = 8,
   pressScale = 0.96,
+  expanded = false,
+  onLineCountChange,
   className = ''
 }) => {
   const reduce = useReducedMotion();
@@ -256,6 +262,10 @@ const PromptBar: React.FC<PromptBarProps> = ({
   const dictation = useRef(0);
   const latest = useRef<Latest>({});
   latest.current = { onSend, onStop, onAttach, onDictate, onEffortChange };
+  /* 行数上报：回调与上次值都存 ref，避免 fit() 闭包捕获旧值/每次键入都 setState */
+  const onLinesRef = useRef(onLineCountChange);
+  onLinesRef.current = onLineCountChange;
+  const lastLines = useRef(0);
 
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -329,12 +339,55 @@ const PromptBar: React.FC<PromptBarProps> = ({
 
   useLayoutEffect(() => {
     const el = inputRef.current;
-    if (!el) return;
-    el.style.height = '0px';
-    const max = LINE * maxRows;
-    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
-    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
-  }, [draft, maxRows]);
+    if (!el) return undefined;
+    const fit = () => {
+      const cs = getComputedStyle(el);
+      const line = parseFloat(cs.lineHeight) || LINE;
+      const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+      /* 上报当前内容行数（放大/普通都报，父级据此决定放大按钮显隐） */
+      const reportLines = (content: number) => {
+        const lines = Math.max(1, Math.round((content - pad) / line));
+        if (lines !== lastLines.current) {
+          lastLines.current = lines;
+          onLinesRef.current?.(lines);
+        }
+      };
+      /* 放大模式：高度交给 CSS flex 撑满，不设 inline 像素高度，
+         否则 inline height 会和 flex:1 打架，导致中间空白。 */
+      if (expanded) {
+        el.style.height = 'auto';
+        el.style.minHeight = '';
+        el.style.overflowY = 'auto';
+        void el.offsetHeight;
+        reportLines(el.scrollHeight);
+        return;
+      }
+      const max = line * maxRows + pad;
+      /* 关键：textarea 是 flex 列容器里的 item。
+         用 height='0px' 折叠再读 scrollHeight 时，Chromium 会把它卡在
+         flex item 的旧内容高度，删空文字后缩不回去（实测 0px 时 sh 恒为旧值）。
+         改成 height='auto'：让浏览器按内容做 intrinsic 排版，scrollHeight
+         才是真实内容高度；空文本 = 单行高，多行 = 内容全高，再据此夹紧。 */
+      el.style.height = 'auto';
+      void el.offsetHeight;
+      const content = el.scrollHeight;
+      const h = Math.min(content, max);
+      el.style.height = `${h}px`;
+      el.style.overflowY = content > max ? 'auto' : 'hidden';
+      reportLines(content);
+    };
+    fit();
+    /* 放大→收起（或收起→放大）时，data-expanded 控制的 field 固定高度、
+       textarea flex:1 等布局在同一帧内未必完全生效，同步 fit 会读到
+       放大态的残留高度，导致收起后卡片停在大尺寸。下一帧布局稳定后再校正一次。 */
+    const raf = requestAnimationFrame(() => fit());
+    /* 列宽变化（窗口缩放、侧栏收起）会改变换行，不重算高度就会停在旧值 */
+    window.addEventListener('resize', fit);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', fit);
+    };
+  }, [draft, maxRows, expanded]);
 
   useEffect(
     () => () => {
@@ -569,6 +622,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
       className={`prompt-bar${className ? ` ${className}` : ''}`}
       data-busy={busy ? '' : undefined}
       data-max={maxed ? '' : undefined}
+      data-expanded={expanded ? '' : undefined}
       style={
         {
           '--pb-bg': background,

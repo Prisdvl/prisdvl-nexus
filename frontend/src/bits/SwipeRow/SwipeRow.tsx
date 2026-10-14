@@ -95,15 +95,23 @@ const velocityOf = (hist: Sample[]) => {
   const b = hist[hist.length - 1];
   return ((b[1] - a[1]) / Math.max(1, b[0] - a[0])) * 1000;
 };
-const onColor = (hex: string) => {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return '#ffffff';
+const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
+/** 强调色（danger / primary 一类）背景上的文字：解析不了亮度时交给 --on-primary，跟随主题明暗 */
+const onColor = (bg: string) => {
+  const m = HEX.exec(bg.trim());
+  if (!m) return 'var(--on-primary)';
   const h = m[1].length === 3 ? [...m[1]].map(ch => ch + ch).join('') : m[1];
   const r = parseInt(h.slice(0, 2), 16);
   const g = parseInt(h.slice(2, 4), 16);
   const b = parseInt(h.slice(4, 6), 16);
   return (r * 299 + g * 587 + b * 114) / 1000 >= 150 ? '#111111' : '#ffffff';
 };
+/**
+ * 表面色（--surface-muted 一类）背景上的文字。
+ * 不能复用 onColor：它对 var(...) 一律返回白色，浅色主题下就是"白字配浅底"，
+ * 滑动轨道上的「归档 / 置顶」标签会直接看不见。
+ */
+const onSurface = (bg: string) => (HEX.test(bg.trim()) ? onColor(bg) : 'var(--text)');
 const watchWindow = (live: { current: Live }) => {
   const onMove = (e: PointerEvent) => {
     if (e.isTrusted) live.current.move(e);
@@ -125,10 +133,10 @@ const SwipeRow: React.FC<SwipeRowProps> = ({
   children,
   actions = DEFAULT_ACTIONS,
   startActions = [],
-  actionColor = '#e5484d',
-  drawerColor = '#3f3f46',
-  rowColor = '#27272a',
-  textColor = '#f5f5f5',
+  actionColor = 'var(--danger)',
+  drawerColor = 'var(--surface-muted)',
+  rowColor = 'var(--surface)',
+  textColor = 'var(--text)',
   height = 64,
   radius = 16,
   actionWidth = 80,
@@ -483,10 +491,14 @@ const SwipeRow: React.FC<SwipeRowProps> = ({
           '--sr-h': `${height}px`,
           '--sr-r': `${radius}px`,
           '--sr-a': `${A}px`,
+          /* 轨道（抽屉）的实际宽度：CSS 用它把轨道限制在"被揭示的那一段"，
+             否则整行宽的轨道会从静止的行底下透出来 */
+          '--sr-d': `${D}px`,
+          '--sr-d-start': `${Dstart}px`,
           '--sr-row': rowColor,
           '--sr-text': textColor,
           '--sr-drawer': drawerColor,
-          '--sr-on-drawer': onColor(drawerColor),
+          '--sr-on-drawer': onSurface(drawerColor),
           '--sr-action': actionColor,
           '--sr-on-action': onColor(actionColor),
           '--sr-collapse': `${collapseMs}ms`,
@@ -507,7 +519,7 @@ const SwipeRow: React.FC<SwipeRowProps> = ({
                 style={{
                   left: i * A,
                   background: a.color ?? drawerColor,
-                  color: onColor(a.color ?? drawerColor)
+                  color: a.color ? onColor(a.color) : onSurface(drawerColor)
                 }}
               >
                 <span className="swipe-row__glyph">
@@ -533,8 +545,8 @@ const SwipeRow: React.FC<SwipeRowProps> = ({
               onClick={e => act(a, e)}
               style={
                 s < 0
-                  ? { right: (i + 1) * A, background: a.color ?? drawerColor, color: onColor(a.color ?? drawerColor) }
-                  : { left: (i + 1) * A, background: a.color ?? drawerColor, color: onColor(a.color ?? drawerColor) }
+                  ? { right: (i + 1) * A, background: a.color ?? drawerColor, color: a.color ? onColor(a.color) : onSurface(drawerColor) }
+                  : { left: (i + 1) * A, background: a.color ?? drawerColor, color: a.color ? onColor(a.color) : onSurface(drawerColor) }
               }
             >
               <span className="swipe-row__glyph">

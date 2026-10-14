@@ -9,7 +9,7 @@
   display: grid;
   place-items: center;
   padding: 24px;
-  background: oklch(0.2 0.02 45 / 0.5);
+  background: var(--ui-scrim);
   backdrop-filter: blur(6px);
   animation: sd-fade var(--dur-ui) var(--ease-out);
 }
@@ -17,11 +17,19 @@
 
 .settings-dialog {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
-  width: min(880px, 94vw);
-  height: min(620px, 88vh);
+  /* 240px 导航 + 剩余内容；导航与内容比例稳定，不随窗口宽度漂移 */
+  grid-template-columns: 240px minmax(0, 1fr);
+  /*
+   * 高度**跟着内容走**，只设上限。
+   * 原来写死 height: min(640px, 88vh)：内容只有两三行时，右栏底部就是一大片
+   * 没有意义的空白（截图里"设置弹层下面空一块"就是这个）。
+   * 行用 minmax(0,1fr) 是为了在触到上限时让内部滚动区正确收缩，而不是溢出被裁。
+   */
+  grid-template-rows: minmax(0, 1fr);
+  width: min(920px, 96vw);
+  max-height: min(640px, 88vh);
 
-  border-radius: var(--radius-xl);   /* 统一到 token：其它弹层用 radius-xl，此处原为硬编码 18px */
+  border-radius: var(--radius-xl);
   background: var(--card-bg);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
@@ -38,9 +46,9 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 12px 10px;
-
+  padding: 14px 10px;
   background: var(--surface-muted);
+  overflow: hidden;
 }
 .settings-dialog__search {
   position: relative;
@@ -49,12 +57,14 @@
   gap: 7px;
   padding: 0 9px;
   height: 34px;
+  flex: none;
   margin-bottom: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--card-bg);
+  background: var(--input-bg);
   color: var(--text-3);
 }
+.settings-dialog__search:focus-within { border-color: var(--border-strong); }
 .settings-dialog__search .input {
   flex: 1;
   min-width: 0;
@@ -72,7 +82,7 @@
   border: 0; border-radius: 6px; background: none;
   color: var(--text-3); cursor: pointer;
 }
-.settings-dialog__clear:hover { background: var(--surface-muted); color: var(--text); }
+.settings-dialog__clear:hover { background: var(--surface); color: var(--text); }
 
 .settings-dialog__list {
   flex: 1;
@@ -104,37 +114,51 @@
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.settings-dialog__item:hover { background: var(--card-bg); color: var(--text); }
+.settings-dialog__item:hover { background: var(--ui-hover); color: var(--text); }
+.settings-dialog__item:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .settings-dialog__item[aria-current='true'] {
-  background: var(--card-bg);
+  background: var(--ui-selected);
   color: var(--text);
   font-weight: 500;
-  background: color-mix(in srgb, var(--text) 8%, transparent);  /* 选中态改用底色（原为 box-shadow 假边框） */
 }
 .settings-dialog__empty { margin: 10px 8px; font-size: 12.5px; color: var(--text-3); }
 
 .settings-dialog__foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   padding-top: 10px;
   margin-top: 10px;
-
 }
+/*
+ * 底部两个按钮共用一套外观，只有"退出登录"用危险色。
+ * ⚠️ 之前这里写着 `.settings-dialog__replay,` 后面直接接了注释和下一条规则，
+ * 于是 replay 按钮的声明块被吞掉、整条规则失效 —— 浏览器按 UA 默认样式
+ * 渲染它（2px outset 黑边、直角），这就是截图里"重新查看新手引导按钮很突兀"的根因。
+ */
+.settings-dialog__replay,
 .settings-dialog__logout {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 34px;
+  min-height: 34px;
   padding: 0 9px;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--danger);
+  color: var(--text-2);
   font-size: 13.5px;
   text-align: left;
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.settings-dialog__logout:hover { background: oklch(from var(--danger) l c h / 0.12); }
-.settings-dialog__replay,
+.settings-dialog__replay:hover,
+.settings-dialog__logout:hover { background: var(--ui-hover); color: var(--text); }
+.settings-dialog__replay:focus-visible,
+.settings-dialog__logout:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.settings-dialog__logout { color: var(--danger); }
+.settings-dialog__logout:hover { background: color-mix(in oklab, var(--danger) 12%, transparent); color: var(--danger); }
 
 /* ---------- 右栏：内容 ---------- */
 .settings-dialog__body {
@@ -145,30 +169,51 @@
   background: var(--card-bg);
 }
 .settings-dialog__close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
-  background: none;
+  background: transparent;
   color: var(--text-3);
   cursor: pointer;
-  z-index: 1;
 }
-.settings-dialog__close:hover { background: var(--surface-muted); color: var(--text); }
+.settings-dialog__close:hover { background: var(--ui-hover); color: var(--text); }
+.settings-dialog__close:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+/* 内容区顶栏：定位信息 + 关闭（不使用绝对定位，避免内容被迫右移） */
+.settings-dialog__bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 48px;
+  padding: 0 16px 0 30px;
+}
+.settings-dialog__bar-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+
+/*
+ * 内容区：padding 均匀，不再有额外的 padding-right。
+ * 原来为了避开绝对定位的关闭按钮硬留了 56px，
+ * 在内容不宽时就表现为右侧一大片无意义空白。
+ */
 .settings-dialog__content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 26px 26px 30px;
-  padding-right: 56px;   /* 给右上角关闭按钮留位 */
-  scrollbar-width: none;
+  padding: 4px 30px 30px;
+  scrollbar-width: thin;
 }
-.settings-dialog__content::-webkit-scrollbar { display: none; }
+.settings-dialog__content::-webkit-scrollbar { display: block; }
 
 /* 窄屏：左栏收成一行横向滚动，避免弹层挤成两栏不可用 */
 @media (max-width: 767px) {
@@ -177,13 +222,11 @@
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     width: 100%;
+    /* 窄屏是整屏抽屉：高度固定，避免切换分类时弹层上下跳 */
     height: 92vh;
+    max-height: 92vh;
   }
-  .settings-dialog__nav {
-    border-right: 0;
-
-    padding: 10px;
-  }
+  .settings-dialog__nav { padding: 10px; }
   .settings-dialog__list {
     display: flex;
     gap: 6px;
@@ -193,7 +236,21 @@
   }
   .settings-dialog__group { display: contents; }
   .settings-dialog__group-title { display: none; }
-  .settings-dialog__item { width: auto; flex: none; padding: 0 12px; }
-  .settings-dialog__foot { padding-top: 8px; margin-top: 8px; }
-  .settings-dialog__content { padding: 20px 18px 24px; }
+  /* 横向 tab 需要看得出的"选中"：圆角胶囊 + 底色，与桌面端一致 */
+  .settings-dialog__item {
+    width: auto;
+    flex: none;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: var(--radius-pill);
+    white-space: nowrap;
+  }
+  .settings-dialog__foot {
+    flex-direction: row;
+    gap: 8px;
+    padding-top: 8px;
+    margin-top: 8px;
+  }
+  .settings-dialog__bar { padding-left: 18px; }
+  .settings-dialog__content { padding: 4px 18px 24px; }
 }

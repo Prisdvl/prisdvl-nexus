@@ -4,7 +4,7 @@ import { setTheme, setPalette } from './_theme.mjs'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -42,12 +42,15 @@ await shot('z-previewbar-rubber-dark')
 // 4. 对话页：Agent 横向橡皮选择
 await page.locator('.auth-card .rubber-segment button.rubber-segment__item', { hasText: '登录' }).click()
 await page.waitForTimeout(400)
-await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell', { timeout: 8000 })
 await page.waitForTimeout(1500)
 await page.locator('.sb-nav button.rubber-segment__item', { hasText: '对话' }).click()
 await page.waitForTimeout(1200)
+await page.locator('.mode-seg button.rubber-segment__item', { hasText: 'Agent' }).click()
+await page.waitForTimeout(400)
 await page.locator('.agent-seg button.rubber-segment__item', { hasText: 'Java 代码审查员' }).click()
 await page.waitForTimeout(800)
 await shot('z-chat-agent-rubber')

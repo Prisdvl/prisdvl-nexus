@@ -108,15 +108,24 @@ void main() {
 
   vec3 auroraColor = intensity * rampColor;
 
+  /*
+   * 垂直衰减：shader 的 intensity 随 uv.y 线性增大，画布**顶边**因此是一条
+   * 满饱和、满不透明的色带；它垫在半透明的 .shell-main 下面时，就表现为
+   * 页面顶边一条贯穿屏幕的强调色粗线。这里让顶边渐隐回背景，
+   * 光带只保留在中上部，作为氛围而不是边界。
+   */
+  float vfall = smoothstep(1.0, 0.68, uv.y);
+
   if (uLightMode > 0.5) {
     float energy = clamp(max(intensity, 0.0), 0.0, 1.0);
-    float coverage = clamp(auroraAlpha * (0.55 + 0.45 * energy), 0.0, 0.86);
+    float coverage = clamp(auroraAlpha * (0.55 + 0.45 * energy), 0.0, 0.86) * vfall;
     vec3 chroma = pow(clamp(rampColor, 0.0, 1.0), vec3(1.2));
     float chromaPeak = max(chroma.r, max(chroma.g, chroma.b));
     chroma /= max(chromaPeak, 0.0001);
-    fragColor = vec4(mix(vec3(1.0), chroma, min(coverage * 1.08, 0.94)), 1.0);
+    /* 亮色下背景只是"极淡的色相洗"：混色上限压低，保证正文对比度 */
+    fragColor = vec4(mix(vec3(1.0), chroma, min(coverage * 0.62, 0.42)), 1.0);
   } else {
-    fragColor = vec4(auroraColor * auroraAlpha, auroraAlpha);
+    fragColor = vec4(auroraColor * auroraAlpha, auroraAlpha * vfall);
   }
 }
 `;
@@ -141,12 +150,20 @@ export default function Aurora(props: AuroraProps) {
     const ctn = ctnDom.current;
     if (!ctn) return;
 
-    const renderer = new Renderer({
-      alpha: true,
-      premultipliedAlpha: true,
-      antialias: true
-    });
+    // 运行时兜底：WebGL 不可用时静默降级为无背景，不能抛错炸掉整页
+    let renderer: Renderer;
+    try {
+      renderer = new Renderer({
+        alpha: true,
+        premultipliedAlpha: true,
+        antialias: true,
+        dpr: Math.min(window.devicePixelRatio || 1, 1.5),
+      });
+    } catch {
+      return;
+    }
     const gl = renderer.gl;
+    if (!gl) return;
     gl.clearColor(0, 0, 0, 0);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -154,13 +171,17 @@ export default function Aurora(props: AuroraProps) {
 
     let program: Program | undefined;
 
+    // 性能：DPR 封顶到 1.5，避免高分屏上每帧算 2~3 倍像素的 simplex noise。
+    // 视觉上 Aurora 是氛围光带，1.5x 与原生 DPR 肉眼无差，但 GPU 帧时间差一倍以上。
+    const DPR_CAP = 1.5;
+    const dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
     function resize() {
       if (!ctn) return;
       const width = ctn.offsetWidth;
       const height = ctn.offsetHeight;
       renderer.setSize(width, height);
       if (program) {
-        program.uniforms.uResolution.value = [width, height];
+        program.uniforms.uResolution.value = [width * dpr, height * dpr];
       }
     }
     window.addEventListener('resize', resize);
@@ -192,8 +213,16 @@ export default function Aurora(props: AuroraProps) {
     ctn.appendChild(gl.canvas);
 
     let animateId = 0;
+    let running = true;
+    let lastFrame = 0;
+    // 性能：30fps 上限（每 33ms 一帧）。氛围光带不需要 60fps，
+    // 半帧率下 GPU 占用直接减半，且视觉上仍然流畅。
+    const FRAME_INTERVAL_MS = 1000 / 30;
     const update = (t: number) => {
       animateId = requestAnimationFrame(update);
+      if (!running) return;
+      if (t - lastFrame < FRAME_INTERVAL_MS) return;
+      lastFrame = t;
       const { time = t * 0.01, speed = 1.0 } = propsRef.current;
       if (program) {
         program.uniforms.uTime.value = time * speed * 0.1;
@@ -210,11 +239,20 @@ export default function Aurora(props: AuroraProps) {
     };
     animateId = requestAnimationFrame(update);
 
+    // 性能：页签切走时停掉渲染循环，切回时恢复。
+    // Chrome 后台 rAF 会被节流，但切回瞬间会补一帧；显式 pause 更彻底。
+    const onVisibility = () => {
+      running = document.visibilityState === 'visible';
+      if (running) lastFrame = 0;
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
     resize();
 
     return () => {
       cancelAnimationFrame(animateId);
       window.removeEventListener('resize', resize);
+      document.removeEventListener('visibilitychange', onVisibility);
       if (ctn && gl.canvas.parentNode === ctn) {
         ctn.removeChild(gl.canvas);
       }

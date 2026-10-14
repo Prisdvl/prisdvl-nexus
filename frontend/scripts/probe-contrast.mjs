@@ -118,7 +118,8 @@ for (const theme of ['light', 'dark']) {
   await page.waitForTimeout(1000)
   show('登录页', await page.evaluate(PROBE))
 
-  await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+  await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
   await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
   await page.waitForSelector('.shell')
   await page.waitForTimeout(2000)

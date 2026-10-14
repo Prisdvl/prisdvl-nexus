@@ -136,3 +136,32 @@ export async function fetchAgents(): Promise<AgentItem[]> {
   const page = await api.agents.list(1, 100)
   return page.list.map(toAgentItem)
 }
+export interface RecentImportItem {
+  id: string
+  name: string
+  knowledgeBase: string
+  status: 'done' | 'running' | 'failed'
+  detail: string
+  updated: string
+}
+
+/** 工作台最近文档处理状态（后端目前没有独立任务汇总 API，以文档状态呈现真实结果）。 */
+export async function fetchRecentImports(): Promise<RecentImportItem[]> {
+  const kbPage = await api.knowledge.list(1, 100)
+  const groups = await Promise.all(kbPage.list.map(async (kb) => {
+    const docs = await api.documents.list(kb.id, 1, 100)
+    return docs.list.map((doc) => ({
+      id: doc.id,
+      name: doc.fileName,
+      knowledgeBase: kb.name,
+      status: docStatus(doc.status) === 'done' ? 'done' as const : docStatus(doc.status) === 'failed' ? 'failed' as const : 'running' as const,
+      detail: `${doc.chunkCount} 个切片 · ${doc.status}`,
+      updated: doc.updatedAt,
+    }))
+  }))
+  return groups.flat().sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated)).slice(0, 4).map((x) => ({
+    ...x,
+    detail: `${x.knowledgeBase} · ${x.detail}`,
+    updated: relTime(x.updated),
+  }))
+}

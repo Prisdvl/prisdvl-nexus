@@ -1,0 +1,52 @@
+/* ============================================================
+ * MarqueeTitle —— 单行标题，溢出时悬停滚动
+ * 动画：0%→35% 滚到末尾，35%→65% 末尾停顿，65%→100% 平滑回起点
+ * ============================================================ */
+
+.marquee-title {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 仅当标题实际溢出容器时，末尾 20px 才淡出；短标题不挂 mask */
+.marquee-title.is-overflowing {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+
+.marquee-title__inner {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+  /* 短标题或未滚动时默认停在起点 */
+  transform: translateX(0);
+}
+
+.marquee-title.is-scrolling .marquee-title__inner {
+  animation: marquee-scroll var(--marquee-duration, 6s) ease-in-out infinite;
+}
+
+@keyframes marquee-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  35% {
+    transform: translateX(calc(-1 * var(--marquee-distance, 0px)));
+  }
+  65% {
+    transform: translateX(calc(-1 * var(--marquee-distance, 0px)));
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* 尊重系统「减少动态效果」 */
+@media (prefers-reduced-motion: reduce) {
+  .marquee-title.is-scrolling .marquee-title__inner {
+    animation: none;
+  }
+}

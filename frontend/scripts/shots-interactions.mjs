@@ -3,7 +3,7 @@ import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -19,7 +19,8 @@ const nav = (l) => page.locator('.sb-nav button.rubber-segment__item', { hasText
 
 await page.goto(BASE + '/#/login', { waitUntil: 'networkidle' })
 await page.waitForTimeout(1500)
-await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell', { timeout: 8000 })
 await page.waitForTimeout(1000)

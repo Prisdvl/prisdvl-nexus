@@ -1,11 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import {
-  BellRing, Download, Gauge, KeyRound, Laptop, MailCheck, Palette,
+  BellRing, Cpu, Download, Gauge, KeyRound, Laptop, MailCheck, Palette,
   Search, ShieldAlert, SlidersHorizontal, UserRound,
 } from 'lucide-react'
 import type { ThemeMode } from '@/lib/types'
 import {
-  AppearanceSection, DangerSection, EmailSection, ExportSection, NotifySection,
+  AppearanceSection, DangerSection, EmailSection, ExportSection, ModelKeySection, NotifySection,
   PrefsSection, ProfileSection, SecuritySection, SessionsSection, UsageSection,
 } from '@/pages/settings/sections'
 
@@ -18,7 +18,7 @@ import {
  */
 
 type SectionId =
-  | 'profile' | 'prefs' | 'appearance'
+  | 'profile' | 'prefs' | 'appearance' | 'model'
   | 'security' | 'email' | 'sessions'
   | 'notify'
   | 'usage' | 'export'
@@ -38,8 +38,9 @@ const GROUPS: { title: string; items: Item[] }[] = [
     title: '个人',
     items: [
       { id: 'profile', label: '公开资料', icon: UserRound, alias: '用户名 昵称 邮箱 头像 资料', render: () => <ProfileSection /> },
+      { id: 'model', label: '模型 Key', icon: Cpu, alias: '大模型 key api key 自定义 模型 网关 base url deepseek', render: () => <ModelKeySection /> },
       { id: 'prefs', label: '账号偏好', icon: SlidersHorizontal, alias: '语言 时区 默认 落地页', render: () => <PrefsSection /> },
-      { id: 'appearance', label: '外观', icon: Palette, alias: '主题 配色 暗色 亮色 跟随系统 颜色', render: () => <AppearanceSection /> },
+      { id: 'appearance', label: '外观', icon: Palette, alias: '主题 配色 暗色 浅色 亮色 跟随系统 颜色', render: () => <AppearanceSection /> },
     ],
   },
   {
@@ -143,7 +144,7 @@ export default function AccountPage({ theme }: { theme: ThemeMode }) {
           <div className="settings-body route-fade" key={current.id}>
             {current.render()}
           </div>
-          <p className="foot-note">设置只作用于原型演示环境；涉及后端的操作都会以提示说明真实实现。</p>
+          <p className="foot-note">资料、密码与用量连接后端；偏好与通知开关保存在当前浏览器。尚未支持的服务端操作会明确标注。</p>
         </div>
       </div>
     </div>

@@ -35,9 +35,10 @@ export default function Modal({ open, title, onClose, children, footer, width = 
     if (!open) return
     lastActive.current = document.activeElement as HTMLElement | null
 
-    // 初始焦点：优先第一个可聚焦元素，否则落到面板本身
+    // 初始焦点：优先 autofocus（如表单输入），否则第一个可聚焦元素，否则面板本身
     const panel = panelRef.current
-    const first = panel?.querySelector<HTMLElement>(FOCUSABLE)
+    const preferred = panel?.querySelector<HTMLElement>('[autofocus]')
+    const first = preferred ?? panel?.querySelector<HTMLElement>(FOCUSABLE)
     ;(first ?? panel)?.focus({ preventScroll: true })
 
     const onKey = (e: KeyboardEvent) => {

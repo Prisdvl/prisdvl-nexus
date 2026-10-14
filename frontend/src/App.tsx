@@ -4,7 +4,9 @@ import AppShell from '@/components/AppShell'
 import { RedirectIfAuthenticated, RequireAuth } from '@/components/RequireAuth'
 import { useAuth, registerAccount } from '@/lib/auth'
 import { syncConversations } from '@/lib/sync'
+import { preferredLandingPath } from '@/lib/preferences'
 import type { PaletteName, ThemeMode } from '@/lib/types'
+import type { ChatCitationRef } from '@/data'
 import { useEffect, useState } from 'react'
 import LandingPage from '@/pages/LandingPage'
 import AuthPage from '@/pages/AuthPage'
@@ -42,6 +44,7 @@ function LoginRoute({ theme, palette }: { theme: ThemeMode; palette: PaletteName
       <AuthPage
         theme={theme}
         palette={palette}
+        onGoHome={() => navigate('/')}
         onEnter={async (from, cred) => {
           /*
            * 登录失败要停在这里：authStore.login 会抛（凭证错/连不上后端），
@@ -61,7 +64,7 @@ function LoginRoute({ theme, palette }: { theme: ThemeMode; palette: PaletteName
            *   侧栏会继续显示本地数据，用户可以正常进应用。
            */
           void syncConversations()
-          navigate(from && from.startsWith('/app') ? from : '/app/workbench', { replace: true })
+          navigate(from && from.startsWith('/app') ? from : preferredLandingPath(), { replace: true })
         }}
         onRegister={async (cred) => {
           /*
@@ -86,6 +89,7 @@ function WorkbenchRoute({ theme, palette }: { theme: ThemeMode; palette: Palette
       palette={palette}
       goChat={() => navigate('/app/chat')}
       goKb={() => navigate('/app/kb')}
+      onOpenConversation={(id) => navigate(`/app/chat?conversation=${encodeURIComponent(id)}`)}
     />
   )
 }
@@ -125,7 +129,9 @@ function KbDetailRoute({ theme }: { theme: ThemeMode }) {
 
 function ChatRoute({ theme }: { theme: ThemeMode }) {
   const navigate = useNavigate()
-  return <ChatPage theme={theme} onOpenDoc={(docName) => navigate(`/app/kb/1?doc=${encodeURIComponent(docName)}`)} />
+  const [params] = useSearchParams()
+  const conversationId = params.get('conversation') ?? undefined
+  return <ChatPage theme={theme} initialConversationId={conversationId} onOpenDoc={(citation: ChatCitationRef) => { if (citation.knowledgeBaseId) navigate(`/app/kb/${encodeURIComponent(citation.knowledgeBaseId)}?doc=${encodeURIComponent(citation.documentTitle ?? '')}`) }} />
 }
 
 function NotFoundRoute() {

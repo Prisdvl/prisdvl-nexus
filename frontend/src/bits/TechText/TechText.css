@@ -1,0 +1,33 @@
+.tech-text {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  touch-action: pan-y;
+  user-select: none;
+}
+
+.tech-text-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+
+.tech-text__fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: inherit;
+  font-size: clamp(28px, 9vw, 92px);
+  font-weight: 600;
+  letter-spacing: -0.05em;
+  line-height: 1;
+  text-align: center;
+  overflow-wrap: anywhere;
+  opacity: 0;
+}
+
+.tech-text[data-canvas-unavailable] .tech-text__fallback { opacity: 1; }
+.tech-text[data-canvas-unavailable] .tech-text-canvas { visibility: hidden; }
+.tech-text-canvas { pointer-events: none; }

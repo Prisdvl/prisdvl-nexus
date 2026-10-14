@@ -25,7 +25,7 @@ const BLOCKLIST = [
 ]
 
 // 只在"文字色"上检查（背景可能是合法的撞色）
-const TEXT_BLOCKLIST = ['rgb(245, 245, 245)'] // Shredder #f5f5f5 墨色
+const TEXT_BLOCKLIST = []
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 const issues = []
@@ -74,7 +74,8 @@ const scan = async (page, label) => {
 const login = async (page) => {
   await page.goto(BASE + '/#/login', { waitUntil: 'networkidle' })
   await page.waitForTimeout(1400)
-  await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+  await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
   await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
   await page.waitForSelector('.shell', { timeout: 8000 })
   await page.waitForTimeout(1200)
@@ -105,18 +106,18 @@ for (const theme of ['light', 'dark']) {
     console.log(`[${theme}] ${label}:`, (await scan(page, `${theme}/${label}`)) ? 'ok' : 'FAIL')
   }
 
-  // 展开向导（Stepper 只在这里出现）+ 关键对比度断言
+  // 打开真实文件导入弹窗，并检查可执行上传操作的对比度
   await page.goto(BASE + '/#/app/kb/1', { waitUntil: 'networkidle' })
   await page.waitForTimeout(1600)
   await page.getByRole('button', { name: /导入文档/ }).click()
   await page.waitForTimeout(800)
-  console.log(`[${theme}] 导入向导(Stepper):`, (await scan(page, `${theme}/导入向导`)) ? 'ok' : 'FAIL')
-  const nextContrast = await page.evaluate(() => window.__contrast('.next-button'))
+  console.log(`[${theme}] 文档导入弹窗:`, (await scan(page, `${theme}/文档导入弹窗`)) ? 'ok' : 'FAIL')
+  const nextContrast = await page.evaluate(() => window.__contrast('.dialog .btn-primary'))
   if (nextContrast !== null && nextContrast >= 4.5) {
-    console.log(`[${theme}] 向导「下一步」按钮文字对比度: ok (${nextContrast})`)
+    console.log(`[${theme}] 导入按钮文字对比度: ok (${nextContrast})`)
   } else {
-    console.log(`[${theme}] 向导「下一步」按钮文字对比度: FAIL (${nextContrast})`)
-    issues.push(`${theme}/向导下一步按钮对比度 ${nextContrast} < 4.5`)
+    console.log(`[${theme}] 导入按钮文字对比度: FAIL (${nextContrast})`)
+    issues.push(`${theme}/导入按钮对比度 ${nextContrast} < 4.5`)
   }
   await page.keyboard.press('Escape')
   await page.waitForTimeout(400)
@@ -132,7 +133,7 @@ for (const theme of ['light', 'dark']) {
     issues.push(`${theme}/轮播指示点对比度 ${indContrast} < 3`)
   }
 
-  // 新建会话向导（同样是 Stepper）
+  // 新建会话模式选择控件使用主题 token
   await page.goto(BASE + '/#/app/chat', { waitUntil: 'networkidle' })
   await page.waitForTimeout(1500)
   await page.locator('.sb-row--quick').click()   // 「新对话」已移到全局侧栏

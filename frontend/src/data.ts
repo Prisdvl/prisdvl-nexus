@@ -81,12 +81,26 @@ export interface ToolCall {
   expectedMs?: number
 }
 
+export interface ChatCitationRef {
+  index?: number
+  knowledgeBaseId?: string
+  chunkId?: string
+  documentId?: string
+  documentTitle?: string
+  headingPath?: string
+  snippet?: string
+  score?: number
+  referenced?: boolean
+}
+
 export interface ChatMsg {
   /** 字符串 id（同 SessionItem.id：雪花 ID 不能转 Number） */
   id: string
   role: 'user' | 'bot'
   text: string
   cites?: string[]
+  /** Real source identifiers and excerpt returned by the backend; absent in older history rows. */
+  citationRefs?: ChatCitationRef[]
   /** Agent 的工具调用轨迹（原型：模拟数据 + 发送时逐条推进） */
   calls?: ToolCall[]
   /** 这一轮用到的上下文（检索到多少、引用了哪些、是否联网、是否省略了历史） */

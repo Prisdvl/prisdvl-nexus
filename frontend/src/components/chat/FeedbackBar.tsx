@@ -68,11 +68,11 @@ export default function FeedbackBar({ meta }: Props) {
 
   return (
     <span className="fb" role="group" aria-label="这条回答有帮助吗">
-      <button className="fb__btn" type="button" aria-label="有帮助" onClick={() => save('up')}>
-        <ThumbsUp size={12} /> 有帮助
+      <button className="msg-op" type="button" title="有帮助" aria-label="有帮助" onClick={() => save('up')}>
+        <ThumbsUp size={15} aria-hidden="true" />
       </button>
-      <button className="fb__btn" type="button" aria-label="没答好" onClick={() => save('down')}>
-        <ThumbsDown size={12} /> 没答好
+      <button className="msg-op" type="button" title="没答好" aria-label="没答好" onClick={() => save('down')}>
+        <ThumbsDown size={15} aria-hidden="true" />
       </button>
     </span>
   )

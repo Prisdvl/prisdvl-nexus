@@ -1,21 +1,16 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useLocation } from 'react-router'
-import {
-  ArrowLeft, Check, FileText, FileSpreadsheet, Loader2, RefreshCw, Search, Trash2, Upload, X,
-} from 'lucide-react'
-import Stepper, { Step } from '@/bits/Stepper/Stepper'
-import Shredder from '@/bits/Shredder/Shredder'
+import { ArrowLeft, FileSpreadsheet, FileText, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import ThoughtLine from '@/bits/ThoughtLine/ThoughtLine'
 import JellyRadio from '@/bits/JellyRadio/JellyRadio'
-import CometDial from '@/bits/CometDial/CometDial'
 import RubberSegment from '@/bits/RubberSegment/RubberSegment'
-import SquishSwitch from '@/bits/SquishSwitch/SquishSwitch'
-import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
 import StatusMark from '@/bits/StatusMark/StatusMark'
 import Modal from '@/components/Modal'
-import DocPreview from '@/components/DocPreview'
+import { StateEmpty } from '@/components/Skeleton'
+import DocPreview, { mockDocContent } from '@/components/DocPreview'
 import Markdown from '@/components/Markdown'
 import { toast } from '@/lib/toast'
+import { download } from '@/lib/download'
 import { DOCS, QA_HISTORY, type DocItem } from '@/data'
 import { api, USE_MOCK, errMessage, type ChunkView, type DocumentLinks, type KnowledgeBase, type RelatedDoc, type SearchHit } from '@/lib/api'
 import { fetchDocs } from '@/lib/backendData'
@@ -66,9 +61,13 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const [tab, setTab] = useState<Tab>('docs')
   const [importOpen, setImportOpen] = useState(false)
   const [docs, setDocs] = useState<DocItem[]>(USE_MOCK ? DOCS : [])
-  const [shredIds, setShredIds] = useState<string[]>([])
   const [cites, setCites] = useState<{ documentName?: string; score?: number }[]>([])
   const [docsLoading, setDocsLoading] = useState(!USE_MOCK)
+  const [docsError, setDocsError] = useState('')
+  /* 文档列表本地过滤（只过滤已加载的真实文档，不做服务端全文检索——那是「高级检索」tab 的事） */
+  const [docFilter, setDocFilter] = useState('')
+  /** 本页本次访问提过的问题（真实记录；后端暂无历史接口，不展示虚构的历史条目） */
+  const [asked, setAsked] = useState<string[]>(USE_MOCK ? QA_HISTORY.map((h) => h.q) : [])
   const [picked, setPicked] = useState<File | null>(null)
   const [searchQ, setSearchQ] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
@@ -80,6 +79,28 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const [indexing, setIndexing] = useState(false)
 
   const MODE_MAP: Record<string, string> = { '向量检索': 'vector', 'BM25': 'bm25', '混合检索': 'hybrid' }
+
+  const uploadDocument = async () => {
+    if (uploading) return
+    if (!picked) { setUploadError('请选择一个文件。'); return }
+    if (USE_MOCK) {
+      setUploadError('离线测试模式不会上传或保存文件。请连接真实后端后重试。')
+      return
+    }
+    setUploadError('')
+    setUploading(true)
+    try {
+      const task = await api.documents.upload(kbId, picked)
+      setImportOpen(false)
+      setPicked(null)
+      toast.task('导入任务已提交', `任务 ${task.id} 已进入解析队列`)
+      setDocs(await fetchDocs(kbId))
+    } catch (error) {
+      setUploadError(errMessage(error))
+    } finally {
+      setUploading(false)
+    }
+  }
 
   /* 高级检索：直接打检索接口（不调用模型），用于验证"到底能不能搜到" */
   const runSearch = async () => {
@@ -122,6 +143,7 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
     }
   }
   const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
 
   /* 按 kbId 拉知识库自身的名称/描述（此前页头是写死的演示名） */
   useEffect(() => {
@@ -145,26 +167,80 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   useEffect(() => { if (tab === 'adv') void loadFirstDocChunks() }, [tab, docs])
 
   /* 真实数据：进入详情页按 kbId 拉文档列表（mock 模式继续用种子数据） */
-  useEffect(() => {
+  const loadDocs = (): void => {
     if (USE_MOCK) return
     let alive = true
     setDocsLoading(true)
+    setDocsError('')
     fetchDocs(kbId)
       .then((rows) => { if (alive) setDocs(rows) })
-      .catch((e) => { if (alive) toast.error('文档列表加载失败', errMessage(e)) })
+      .catch((e) => { if (alive) setDocsError(errMessage(e)) })
       .finally(() => { if (alive) setDocsLoading(false) })
-    return () => { alive = false }
+    docsLoadCancel.current = () => { alive = false }
+  }
+  const docsLoadCancel = useRef<(() => void) | null>(null)
+  useEffect(() => {
+    loadDocs()
+    return () => docsLoadCancel.current?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kbId])
   const [thinking, setThinking] = useState(false)
   const [qa, setQa] = useState('')
   const [answer, setAnswer] = useState<string | null>(null)
-  const [usage, setUsage] = useState({ mode: '混合检索', topK: 6, threshold: 25, rebuild: true })
+  const [usage, setUsage] = useState({ mode: '混合检索', topK: 6 })
   /* 预览抽屉：点文档行打开（.md 渲染正文，PDF/DOCX 给占位 + 下载） */
   const [preview, setPreview] = useState<DocItem | null>(null)
+  const [previewContent, setPreviewContent] = useState<string | null>(null)
+  const [previewChunks, setPreviewChunks] = useState<ChunkView[]>([])
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const previewSeq = useRef(0)
 
+  const openPreview = async (doc: DocItem) => {
+    setPreview(doc)
+    setPreviewContent(null); setPreviewChunks([]); setPreviewError(null)
+    if (USE_MOCK) {
+      // Fixtures are available only in the explicit offline test build.
+      setPreviewContent(mockDocContent(doc))
+      setPreviewChunks(CHUNKS.map((chunk, index) => ({
+        id: `mock-${doc.id}-${index}`,
+        chunkIndex: index,
+        chunkType: 'TEXT',
+        headingPath: chunk.head,
+        content: chunk.text,
+        tokenCount: 0,
+        charCount: chunk.text.length,
+        vectorStatus: 'READY',
+        esStatus: 'READY',
+      })))
+      return
+    }
+    const seq = ++previewSeq.current
+    setPreviewLoading(true)
+    try {
+      const [detail, chunkRows] = await Promise.all([
+        api.documents.get(kbId, doc.id),
+        api.documents.chunks(kbId, doc.id),
+      ])
+      if (seq !== previewSeq.current) return
+      setPreviewContent(detail.content)
+      setPreviewChunks(chunkRows)
+    } catch (e) {
+      if (seq === previewSeq.current) setPreviewError(errMessage(e))
+    } finally {
+      if (seq === previewSeq.current) setPreviewLoading(false)
+    }
+  }
   const C = theme === 'dark'
     ? { chip: '#26262b', active: '#f2f2f5', text: '#a3a3ad', onActive: '#141418' }
     : { chip: '#eef0f3', active: '#ffffff', text: '#6b7280', onActive: '#111111' }
+
+  /* 文档列表仅做本地名称过滤（真实数据；搜索框不冒充全文检索） */
+  const visibleDocs = (() => {
+    const kw = docFilter.trim().toLowerCase()
+    if (!kw) return docs
+    return docs.filter((d) => d.name.toLowerCase().includes(kw))
+  })()
 
   /* 引用跳转落点：切到文档 tab → 滚动定位 → 2.5s 后取消高亮并清掉 URL 参数 */
   useEffect(() => {
@@ -184,10 +260,12 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
 
   const ask = async (e: FormEvent) => {
     e.preventDefault()
-    if (!qa.trim() || thinking) return
+    const question = qa.trim()
+    if (!question || thinking) return
     setThinking(true)
     setAnswer(null)
     setCites([])
+    setAsked((list) => [question, ...list.filter((q) => q !== question)].slice(0, 20))
     if (!USE_MOCK) {
       try {
         const res = await api.rag.ask(kbId, qa.trim(), usage.topK)
@@ -229,8 +307,6 @@ flowchart TD
 \`\`\``)
     }, 2600)
   }
-
-  const shredItems = docs.filter((d) => shredIds.includes(d.id))
 
   return (
     <div className="page">
@@ -280,21 +356,50 @@ flowchart TD
           <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
             <div style={{ position: 'relative', flex: 1 }}>
               <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }} />
-              <input className="input" placeholder="在当前知识库内搜索文档" style={{ paddingLeft: 36 }}  aria-label="在当前知识库内搜索文档" />
+              <input
+                className="input"
+                placeholder="按名称筛选当前知识库的文档"
+                style={{ paddingLeft: 36 }}
+                aria-label="按名称筛选文档"
+                value={docFilter}
+                onChange={(e) => setDocFilter(e.target.value)}
+              />
             </div>
-            <span className="badge">{docs.length} 篇</span>
+            <span className="badge">{visibleDocs.length} / {docs.length} 篇</span>
           </div>
 
           <div className="panel" style={{ padding: 6 }}>
-            {docs.map((d) => (
+            {docsLoading && (
+              <p className="hint" style={{ padding: 18 }} role="status">正在加载文档…</p>
+            )}
+            {!docsLoading && docsError && (
+              <div style={{ padding: 18 }}>
+                <p className="form-error active" role="alert" style={{ marginTop: 0 }}>文档列表加载失败：{docsError}</p>
+                <button className="btn btn-ghost btn-sm" type="button" onClick={loadDocs}><RefreshCw size={13} /> 重试</button>
+              </div>
+            )}
+            {!docsLoading && !docsError && docs.length === 0 && (
+              <div style={{ padding: 12 }}>
+                <StateEmpty
+                  icon={<FileText size={20} />}
+                  title="这个知识库还没有文档"
+                  desc="导入 Markdown、TXT、PDF 或 DOCX，解析切片并建立索引后才能被检索与引用。"
+                  action={<button className="btn btn-primary btn-sm" type="button" onClick={() => setImportOpen(true)}><Upload size={14} /> 导入文档</button>}
+                />
+              </div>
+            )}
+            {!docsLoading && !docsError && docs.length > 0 && visibleDocs.length === 0 && (
+              <p className="hint" style={{ padding: 18 }}>没有名称包含「{docFilter.trim()}」的文档。</p>
+            )}
+            {visibleDocs.map((d) => (
               <div
                 className="list-row doc-row"
                 key={d.id}
                 role="button"
                 tabIndex={0}
                 aria-label={`预览 ${d.name}`}
-                onClick={() => setPreview(d)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPreview(d) } }}
+                onClick={() => void openPreview(d)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void openPreview(d) } }}
                 data-hl={hlActive && highlightDoc && (d.name === highlightDoc || highlightDoc.includes(d.name.replace(/\.[^.]+$/, ''))) ? '' : undefined}
               >
                 <span className="ic">{d.type === 'PDF' ? <FileText size={15} /> : d.type === 'DOCX' ? <FileSpreadsheet size={15} /> : <FileText size={15} />}</span>
@@ -345,33 +450,7 @@ flowchart TD
             ))}
           </div>
 
-          <div className="panel panel-pad" style={{ marginTop: 22 }}>
-            <h2 className="col-title" style={{ margin: 0, marginBottom: 6 }}>碎纸机删除（原型演示）</h2>
-            <p style={{ margin: '0 0 14px', fontSize: 12.5, color: 'var(--text-3)' }}>
-              把文档行拖拽到下方缝隙，即可「粉碎」删除 —— 来自 React Bits 的 Shredder 组件。
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <Shredder
-                key={shredIds.join(',')}
-                items={shredItems}
-                width={440}
-                height={330}
-                fallHeight={120}
-                feedSpeed={160}
-                renderItem={(d: DocItem) => (
-                  <div className="shred-row">
-                    <span className="l"><FileText size={15} /> {d.name}</span>
-                    <span className="r">{d.size}</span>
-                  </div>
-                )}
-                onShred={(d: DocItem) => setShredIds((prev) => prev.filter((id) => id !== d.id))}
-                loopAfterDelete
-              />
-            </div>
-            <p style={{ margin: '10px 0 0', textAlign: 'center', fontSize: 12, color: 'var(--text-3)' }}>
-              已粉碎 {3 - shredIds.length} / 3 篇（loopAfterDelete 自动补回，方便反复演示）
-            </p>
-          </div>
+
         </>
       )}
 
@@ -394,7 +473,12 @@ flowchart TD
               <ThoughtLine
                 working
                 label=""
-                steps={['读取会话上下文', '混合检索 12 个切片', '拼接引用于回答']}
+                /*
+                 * 真实模式：/ask 是一次性请求，没有流式进度事件，
+                 * 只能展示这一条与请求状态相符的步骤，不虚构切片数。
+                 * mock 模式（离线 QA 构建）才展示演示步骤。
+                 */
+                steps={USE_MOCK ? ['读取会话上下文', '混合检索 12 个切片', '拼接引用于回答'] : ['正在检索知识库并生成回答']}
                 showTimer
                 fontSize={13}
               />
@@ -404,33 +488,29 @@ flowchart TD
           {answer && (
             <div className="panel panel-pad" style={{ marginBottom: 16 }}>
               <Markdown text={answer} theme={theme} />
-                {cites.length > 0 && (
-                  <div className="panel panel-pad" style={{ marginTop: 12 }}>
-                    <h3 className="col-title" style={{ marginTop: 0 }}>引用来源（{cites.length}）</h3>
-                    {cites.map((c, i) => (
-                      <div key={i} className="list-row">
-                        <span className="nm" style={{ fontSize: 13 }}>{c.documentName ?? '(未知文档)'}</span>
-                        {typeof c.score === 'number' && <span className="badge">{(c.score * 100).toFixed(0)}%</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              <div className="citation">
-                {['集合框架.md', 'MySQL 索引原理.pdf'].map((c) => (
-                  <button key={c} className="cite-chip" type="button" data-clickable onClick={() => onOpenDoc?.(c)}>
-                    <FileText size={12} /><span>{c}</span>
-                  </button>
-                ))}
-              </div>
+              {/* 引用来源是回答的一部分，不再套一层 .panel —— 卡中卡会把层级搞反 */}
+              {cites.length > 0 && (
+                <div style={{ marginTop: 20 }}>
+                  <h3 className="col-title" style={{ marginTop: 0 }}>引用来源（{cites.length}）</h3>
+                  {cites.map((c, i) => (
+                    <div key={i} className="list-row">
+                      <span className="nm" style={{ fontSize: 13 }}>{c.documentName ?? '(未知文档)'}</span>
+                      {typeof c.score === 'number' && <span className="badge">{(c.score * 100).toFixed(0)}%</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
-          <h2 className="col-title"><Search size={15} style={{ color: 'var(--primary)' }} /> 提问历史</h2>
+          <h2 className="col-title"><Search size={15} style={{ color: 'var(--primary)' }} /> 本次提问</h2>
           <div className="panel" style={{ padding: 6 }}>
-            {QA_HISTORY.map((h) => (
-              <div className="list-row" key={h.q}>
-                <span style={{ fontSize: 13.5 }}>{h.q}</span>
-                <span className="badge" style={{ marginLeft: 'auto' }}>{h.when}</span>
+            {asked.length === 0 && (
+              <p className="hint" style={{ padding: 14 }}>还没有提过问。在上方输入问题，这里会记录本次访问的提问。</p>
+            )}
+            {asked.map((q, i) => (
+              <div className="list-row" key={`${q}-${i}`}>
+                <span style={{ fontSize: 13.5 }}>{q}</span>
               </div>
             ))}
           </div>
@@ -454,41 +534,11 @@ flowchart TD
                 onChange={(v) => setUsage({ ...usage, mode: v })}
               />
             </div>
-            <div className="field">
-              <label>相似度阈值（低于此值的切片不进入上下文）</label>
-              <CometDial
-                defaultValue={usage.threshold}
-                min={0}
-                max={100}
-                step={5}
-                unit="%"
-                label="相似度阈值"
-                size={170}
-                thickness={6}
-                accent="var(--primary)"
-                ink="var(--text-2)"
-                onChange={(v) => setUsage({ ...usage, threshold: v })}
-              />
-              <p className="hint">实测：阈值 60% 时无关提问返回 0 命中；当前 {usage.threshold}%。</p>
-            </div>
+            <p className="hint">检索模式与 topK 将应用于下方的即时切片查询；相似度阈值由服务端配置，当前不提供本页修改。</p>
             <div className="field">
               <label>topK：{usage.topK}（返回切片数）</label>
               <input type="range" min={1} max={20} value={usage.topK} onChange={(e) => setUsage({ ...usage, topK: Number(e.target.value) })} style={{ width: '100%' }} />
             </div>
-            <div className="field" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <SquishSwitch
-                defaultChecked={usage.rebuild}
-                onChange={(v) => setUsage({ ...usage, rebuild: v })}
-                label="保存后自动重建向量与全文索引"
-                trackColor="var(--border-strong)"
-                trackOnColor="var(--primary)"
-                thumbColor="var(--surface)"
-                thumbOnColor="var(--on-primary)"
-                width={64}
-                height={32}
-              />
-            </div>
-            <button className="btn btn-ghost" type="button">保存到本知识库</button>
           </div>
 
           <h2 className="col-title"><Search size={15} style={{ color: 'var(--primary)' }} /> 切片检索</h2>
@@ -564,113 +614,51 @@ flowchart TD
         </>
       )}
 
-      <DocPreview doc={preview} theme={theme} onClose={() => setPreview(null)} />
+      <DocPreview
+        doc={preview}
+        theme={theme}
+        content={previewContent}
+        chunks={previewChunks}
+        loading={previewLoading}
+        error={previewError}
+        onDownload={preview && previewContent && !USE_MOCK ? () => download(preview.name, previewContent, 'text/markdown;charset=utf-8') : undefined}
+        onClose={() => setPreview(null)}
+      />
 
       <Modal
         open={importOpen}
         title="导入文档"
-        onClose={() => setImportOpen(false)}
-        width={580}
-      >
-        <>
-            <Stepper
-              backButtonText="上一步"
-              nextButtonText="下一步"
-              onFinalStepCompleted={async () => {
-                if (USE_MOCK) {
-                  setImportOpen(false)
-                  toast.task('导入任务已入队', '2 个文件正在后台解析与切片')
-                  return
-                }
-                if (!picked) { toast.error('请先选择文件'); return }
-                setUploading(true)
-                try {
-                  const task = await api.documents.upload(kbId, picked)
-                  setImportOpen(false)
-                  setPicked(null)
-                  toast.task('导入任务已入队', `任务 ${task.id} 正在解析与切片`)
-                  setDocs(await fetchDocs(kbId))
-                } catch (e) {
-                  toast.error('导入失败', errMessage(e))
-                } finally {
-                  setUploading(false)
-                }
-              }}
+        onClose={() => { if (!uploading) { setImportOpen(false); setUploadError('') } }}
+        shouldBlockClose={() => uploading}
+        width={520}
+        footer={(
+          <>
+            <button className="btn btn-ghost" type="button" onClick={() => setImportOpen(false)} disabled={uploading}>取消</button>
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={() => { void uploadDocument() }}
+              disabled={uploading || !picked}
             >
-              <Step>
-                <div style={{ padding: '10px 0 6px' }}>
-                  <div style={{ border: '1.5px dashed var(--border-strong)', borderRadius: 14, padding: 26, textAlign: 'center', color: 'var(--text-3)', fontSize: 13.5 }}>
-                    <Upload size={22} style={{ marginBottom: 8 }} />
-                    <div>点击选择文件，或拖拽 Markdown / TXT / PDF / DOCX 到此处</div>
-                    <input aria-label="选择要导入的文件" type="file" style={{ marginTop: 10 }} onChange={(e) => setPicked(e.target.files?.[0] ?? null)} />
-                    {picked && <div style={{ marginTop: 6, fontSize: 12 }}>已选：{picked.name}</div>}
-                    <div style={{ marginTop: 6, fontSize: 12 }}>支持批量上传，单个 ≤ 20 MB</div>
-                  </div>
-                  <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    {['面经整理 v4.md', 'Java 集合寻址.md'].map((f) => (
-                      <span className="chip" key={f}><Check size={12} /> {f}</span>
-                    ))}
-                  </div>
-                </div>
-              </Step>
-              <Step>
-                <div style={{ padding: '10px 0 6px' }}>
-                  <div className="field">
-                    <label>分块策略</label>
-                    <RubberSegment
-                      items={['按标题分块', '自动探测', '固定长度']}
-                      defaultValue="按标题分块"
-                      size="sm"
-                      inset={2}
-                      trackColor="var(--surface-muted)"
-                      thumbColor="var(--primary-strong)"
-                      textColor="var(--text-2)"
-                      activeTextColor="var(--on-primary-strong)"
-                      aria-label="分块策略"
-                    />
-                    <p className="hint">默认 512 字符，重叠 64 字符</p>
-                  </div>
-                  <div className="field">
-                    <label>分块大小</label>
-                    <input className="input" defaultValue={512} style={{ width: 120 }}  aria-label="切片大小（token）" />
-                  </div>
-                  <div className="field">
-                    <SquishSwitch
-                      defaultChecked
-                      label="同步重建向量索引与全文索引"
-                      trackColor="var(--border-strong)"
-                      trackOnColor="var(--primary)"
-                      thumbColor="var(--surface)"
-                      thumbOnColor="var(--on-primary)"
-                      width={64}
-                      height={32}
-                    />
-                  </div>
-                </div>
-              </Step>
-              <Step>
-                <div style={{ padding: '10px 0 6px' }}>
-                  <p style={{ margin: 0 }}>已入队：2 个文件，新建导入任务将异步解析并切片。</p>
-                  <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <LatticeLoader
-                      status="working"
-                      label="解析队列运行中"
-                      pattern="sweep"
-                      grid={3}
-                      cellSize={5}
-                      fontSize={13}
-                      step={80}
-                    />
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                      <StatusMark status="running" progress={0.42} size={16} label="面经整理 v4.md" fontSize={13} />
-                      <StatusMark status="pending" size={16} label="Java 集合寻址.md" fontSize={13} />
-                    </div>
-                    <span style={{ fontSize: 13, color: 'var(--success)' }}><Check size={13} style={{ verticalAlign: -2 }} /> 解析引擎就绪（RabbitMQ 队列在线）</span>
-                  </div>
-                </div>
-              </Step>
-            </Stepper>
-        </>
+              {uploading ? '正在上传…' : '上传并开始解析'}
+            </button>
+          </>
+        )}
+      >
+        <div className="field">
+          <label htmlFor="kb-import-file">选择一个文档</label>
+          <input
+            id="kb-import-file"
+            className="input"
+            type="file"
+            accept=".md,.markdown,.txt,.pdf,.docx"
+            disabled={uploading}
+            onChange={(event) => { setPicked(event.target.files?.[0] ?? null); setUploadError('') }}
+          />
+          <p className="hint">支持 Markdown、TXT、PDF 与 DOCX。每次上传一个文件；最大体积以服务端配置为准。</p>
+          {picked && <p className="hint" aria-live="polite">已选择：{picked.name}</p>}
+          {uploadError && <p className="form-error active" role="alert">{uploadError}</p>}
+        </div>
       </Modal>
     </div>
   )

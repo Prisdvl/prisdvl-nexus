@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Search, X, LogOut, Sparkles, RotateCcw } from 'lucide-react'
-import { SETTINGS_GROUPS, type SectionId } from '@/pages/settings/schema'
+import { Search, X, LogOut, Sparkles } from 'lucide-react'
+import { SETTINGS_GROUPS, GROUP_OF, type SectionId } from '@/pages/settings/schema'
 import { TOUR_START_EVENT } from './OnboardingTour'
-import { sessionStore } from '@/lib/sessions'
-import { toast } from '@/lib/toast'
 import '@/styles/settings-dialog.css'
 
 interface Props {
@@ -65,7 +63,7 @@ export default function SettingsDialog({ open, onClose, onLogout }: Props) {
         className="settings-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="个人设置"
+        aria-label="设置"
         ref={panelRef}
         tabIndex={-1}
       >
@@ -108,18 +106,7 @@ export default function SettingsDialog({ open, onClose, onLogout }: Props) {
           </nav>
 
           <div className="settings-dialog__foot">
-            <button
-              className="settings-dialog__reset"
-              type="button"
-              onClick={() => {
-                /* 会话已持久化，演示/验收后需要能一键回到种子数据 */
-                sessionStore.resetToSeed()
-                onClose()
-                toast.success('已重置演示数据', '会话与归档恢复到初始状态')
-              }}
-            >
-              <RotateCcw size={14} /> 重置演示数据
-            </button>
+
             <button
               className="settings-dialog__replay"
               type="button"
@@ -134,9 +121,15 @@ export default function SettingsDialog({ open, onClose, onLogout }: Props) {
         </aside>
 
         <section className="settings-dialog__body">
-          <button className="settings-dialog__close" type="button" aria-label="关闭设置" onClick={onClose}>
-            <X size={16} />
-          </button>
+          {/* 关闭按钮在内容区顶栏内，不绝对定位 ——
+              绝对定位会迫使内容区额外留出右侧内边距（原本 56px），
+              表现为"设置内容右边空一块、视觉重心偏左"。 */}
+          <div className="settings-dialog__bar">
+            <p className="settings-dialog__bar-title">{current ? GROUP_OF(current.id) ?? '设置' : '设置'}</p>
+            <button className="settings-dialog__close" type="button" aria-label="关闭设置" onClick={onClose}>
+              <X size={16} />
+            </button>
+          </div>
           <div className="settings-dialog__content">{current?.render()}</div>
         </section>
       </div>

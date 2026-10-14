@@ -23,7 +23,8 @@ const login = async (from = '/#/login') => {
   await page.goto(BASE + from, { waitUntil: 'networkidle' })
   await page.waitForTimeout(1500)
   if ((await page.locator('.auth-card').count()) === 0) return
-  await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+  await page.locator('#li-u').fill('qa-runner')
+  await page.locator('#li-p').fill('qa-runner-password')
   await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
   await page.waitForSelector('.shell', { timeout: 8000 })
   await page.waitForTimeout(1200)
@@ -36,7 +37,8 @@ check('未登录访问 /app/chat 被重定向到 /login', (await url()).includes
 check('登录页已渲染', (await page.locator('.auth-card').count()) === 1)
 
 /* ---------- 2. 登录后回到来源页 ---------- */
-await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell', { timeout: 8000 })
 await page.waitForTimeout(1200)
@@ -62,10 +64,20 @@ check('刷新后仍是已登录（未被踢回登录页）', (await page.locator
 check('刷新后账号页内容在', (await page.locator('.page-title').first().innerText()).includes('设置'))
 
 /* ---------- 5. 深链：知识库详情 + 引用定位 ---------- */
-await page.goto(BASE + '/#/app/kb/1?doc=' + encodeURIComponent('集合框架.md'), { waitUntil: 'networkidle' })
-await page.waitForTimeout(1800)
-check('深链直达知识库详情', (await page.locator('.page-title').first().innerText()).includes('Java 笔记'))
+// 动态获取 qa-runner 的知识库 ID（不硬编码）
+const kbListResp = await page.request.get('http://localhost:8080/api/knowledge-bases', {
+  headers: { Authorization: 'Bearer ' + await page.evaluate(() => localStorage.getItem('nx-token')) }
+})
+const kbList = await kbListResp.json()
+const kbId = kbList.data?.list?.[0]?.id ?? kbList.data?.records?.[0]?.id ?? kbList.data?.[0]?.id
+if (!kbId) { console.log('SKIP 深链：qa-runner 无知识库') }
+else {
+await page.goto(BASE + '/#/app/kb/' + kbId + '?doc=' + encodeURIComponent('集合框架.md'), { waitUntil: 'networkidle' })
+await page.waitForSelector('.page-title', { timeout: 10000 })
+await page.waitForTimeout(1200)
+check('深链直达知识库详情', (await page.locator('.page-title').first().innerText()).includes('Java'))
 check('深链带上 doc 参数即高亮目标文档', (await page.locator('.doc-row[data-hl]').count()) > 0)
+}
 
 /* ---------- 6. 知识库详情 tab 为横向橡皮分段且无黑框残留 ---------- */
 const kbTabs = await page.locator('.page .rubber-segment button.rubber-segment__item').count()

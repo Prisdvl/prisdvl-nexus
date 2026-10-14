@@ -22,12 +22,9 @@ const login = async () => {
   await page.goto(BASE + '/#/login', { waitUntil: 'networkidle' })
   await page.waitForTimeout(1400)
   // 上一步的方向键审计可能把 tab 切到了注册，而演示账号按钮只在登录 tab 里
-  const demo = page.getByRole('button', { name: /一键使用演示账号/ })
-  if ((await demo.count()) === 0) {
-    await page.locator('.auth-card .rubber-segment button.rubber-segment__item', { hasText: '登录' }).first().click()
-    await page.waitForTimeout(500)
-  }
-  await demo.click()
+  await page.locator('.auth-card .rubber-segment button.rubber-segment__item', { hasText: '登录' }).first().click()
+  await page.locator('#li-u').fill('qa-runner')
+  await page.locator('#li-p').fill('qa-runner-password')
   await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
   await page.waitForSelector('.shell', { timeout: 8000 })
   await page.waitForTimeout(1200)

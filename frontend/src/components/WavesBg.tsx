@@ -4,23 +4,39 @@ import Threads from '@/bits/Threads/Threads'
 import DotGrid from '@/bits/DotGrid/DotGrid'
 import Ribbons from '@/bits/Ribbons/Ribbons'
 import type { PaletteName, ThemeMode } from '@/lib/types'
+import { isWebGL2Available } from '@/lib/webgl'
 
 /** 各配色 × 主题的取色 */
 const WAVE_COLOR: Record<PaletteName, { light: string; dark: string }> = {
+  prisdvl: { light: '#193FA8', dark: '#3987EC' },
   terracotta: { light: '#8f4a2e', dark: '#e09872' },
   turquoise: { light: '#1f7a8c', dark: '#6fd3de' },
   lime: { light: '#4d7c0f', dark: '#b9e26a' },
+  indigo: { light: '#4338ca', dark: '#a5a0ff' },
+  ocean: { light: '#1d4ed8', dark: '#8ab0ff' },
+  violet: { light: '#a21caf', dark: '#f09ee6' },
+  rose: { light: '#be123c', dark: '#fda4af' },
 }
 const ACCENT_HEX: Record<PaletteName, { light: string; dark: string }> = {
+  prisdvl: { light: '#2457D6', dark: '#2457D6' },
   terracotta: { light: '#b4542a', dark: '#e8a077' },
   turquoise: { light: '#1f7a8c', dark: '#6fd3de' },
   lime: { light: '#5f9c1a', dark: '#b9e26a' },
+  indigo: { light: '#4f46e5', dark: '#9b93ff' },
+  ocean: { light: '#2563eb', dark: '#82a8ff' },
+  violet: { light: '#c026a8', dark: '#f489e0' },
+  rose: { light: '#e11d48', dark: '#fb7185' },
 }
 /** Threads 需要 0–1 归一化 RGB */
 const THREAD_RGB: Record<PaletteName, [number, number, number]> = {
+  prisdvl: [0.14, 0.34, 0.84],
   terracotta: [0.62, 0.32, 0.18],
   turquoise: [0.12, 0.48, 0.55],
   lime: [0.37, 0.61, 0.1],
+  indigo: [0.4, 0.36, 0.92],
+  ocean: [0.25, 0.5, 0.95],
+  violet: [0.82, 0.35, 0.85],
+  rose: [0.95, 0.42, 0.5],
 }
 
 export type BgVariant = 'waves' | 'aurora' | 'threads' | 'dotgrid' | 'ribbons'
@@ -43,6 +59,9 @@ export default function WavesBg({ theme, palette, hero = false, variant = 'waves
   const baseOpacity = hero ? (dark ? 0.9 : 0.8) : dark ? 0.34 : 0.42
 
   let layer: React.ReactNode = null
+  /* dotgrid 是 2D canvas，不依赖 WebGL；其余四种在无 WebGL2 环境整体不挂载，
+     退化为页面纯色底（组件自身的 try/catch 是第二道防线，挡运行时失败） */
+  const glSupported = variant === 'dotgrid' || isWebGL2Available()
   if (variant === 'waves') {
     layer = (
       <PatternWaves
@@ -98,6 +117,8 @@ export default function WavesBg({ theme, palette, hero = false, variant = 'waves
       />
     )
   }
+
+  if (!glSupported) layer = null
 
   return (
     <div

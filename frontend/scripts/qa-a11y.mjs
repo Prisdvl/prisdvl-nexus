@@ -21,12 +21,9 @@ const check = (name, ok, extra = '') => {
 const login = async () => {
   await page.goto(BASE + '/#/login', { waitUntil: 'networkidle' })
   await page.waitForTimeout(1400)
-  const demo = page.getByRole('button', { name: /一键使用演示账号/ })
-  if ((await demo.count()) === 0) {
-    await page.locator('.auth-card .rubber-segment button.rubber-segment__item', { hasText: '登录' }).first().click()
-    await page.waitForTimeout(500)
-  }
-  await demo.click()
+  await page.locator('.auth-card .rubber-segment button.rubber-segment__item', { hasText: '登录' }).first().click()
+  await page.locator('#li-u').fill('qa-runner')
+  await page.locator('#li-p').fill('qa-runner-password')
   await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
   await page.waitForSelector('.shell', { timeout: 8000 })
   await page.waitForTimeout(1200)
@@ -121,7 +118,7 @@ await auditFocus('入口页', 20)
 
 /* 落地页 CTA 不得破坏 hash 路由（曾用 href="#flow"，被路由吃掉且不滚动） */
 const beforeHash = await page.evaluate(() => location.hash)
-await page.locator('button.btn-ghost', { hasText: '看它怎么工作' }).click()
+await page.locator('button.btn-ghost', { hasText: '了解工作流程' }).click()
 await page.waitForTimeout(1200)
 const afterHash = await page.evaluate(() => location.hash)
 const scrolled = await page.evaluate(() => {

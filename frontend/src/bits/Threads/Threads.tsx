@@ -148,8 +148,15 @@ const Threads: React.FC<ThreadsProps> = ({
     if (!containerRef.current) return;
     const container = containerRef.current;
 
-    const renderer = new Renderer({ alpha: true });
+    // 运行时兜底：WebGL 不可用时静默降级为无背景，不能抛错炸掉整页
+    let renderer: Renderer;
+    try {
+      renderer = new Renderer({ alpha: true });
+    } catch {
+      return;
+    }
     const gl = renderer.gl;
+    if (!gl) return;
     gl.clearColor(0, 0, 0, 0);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);

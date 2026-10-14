@@ -15,14 +15,18 @@ page.on('pageerror', (e) => errs.push('pageerror: ' + String(e.message).slice(0,
 
 await page.goto(BASE, { waitUntil: 'networkidle' })
 await page.waitForTimeout(2200)
-console.log('  入口页标题:', (await page.locator('.lp-h1').first().innerText()).slice(0, 30))
-console.log('  入口页角落控件:', (await page.locator('.corner-tools .corner-btn').count()) === 1 ? 'ok' : 'FAIL')
+console.log('  入口页标题:', (await page.locator('.lp-tech-title').innerText()).slice(0, 30))
+console.log('  入口页角落控件:', (await page.locator('.theme-control .theme-control__btn').count()) === 1 ? 'ok' : 'FAIL')
 
-await page.getByRole('button', { name: /一键使用演示账号/ }).click().catch(async () => {
-  await page.locator('.lp-pill .btn').click()
-  await page.waitForTimeout(1200)
-  await page.getByRole('button', { name: /一键使用演示账号/ }).click()
-})
+const username = process.env.NEXUS_TEST_USERNAME
+const password = process.env.NEXUS_TEST_PASSWORD
+if (!username || !password) {
+  console.error('SKIP: set NEXUS_TEST_USERNAME and NEXUS_TEST_PASSWORD to run the live-auth smoke test; no demo credentials are embedded.')
+  await browser.close()
+  process.exit(0)
+}
+await page.locator('#li-u').fill(username)
+await page.locator('#li-p').fill(password)
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell', { timeout: 8000 })
 await page.waitForTimeout(1500)

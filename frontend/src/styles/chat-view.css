@@ -1,0 +1,813 @@
+/* ============================================================
+ * Prisdvl-Nexus — 对话视图（chat view）
+ * ------------------------------------------------------------
+ * 本文件是**对话页唯一的样式来源**。它取代了此前的
+ * chat-solid.css + chatgpt-web-style.css 两个覆盖层：
+ * 那两份文件对同一批选择器（.thread / .msg / .bub / .composer-wrap /
+ * .prompt-bar / .dialog）各写一遍，靠加载顺序互相压制，
+ * 于是同一个元素在不同层拿到不同的宽度、圆角与阴影 ——
+ * "看起来总有一层不对"的根因不是某条规则写错，而是**存在三套真相**。
+ *
+ * 设计基准：ChatGPT 的对话版式 + Codex 的工作台密度
+ *   1. 内容优先：AI 正文是连续排版，不是卡片（无边框 / 无底色 / 无头像槽）
+ *   2. 阅读宽度：消息与输入框共用同一条 768px 阅读列
+ *   3. 层级靠底色与间距，不靠画线 —— 全页唯一的线是表格表头下那一条
+ *   4. 输入区是页面的重心：唯一保留柔和边界的控件
+ *   5. 一切颜色走 token，本文件不出现任何硬编码色值
+ * ============================================================ */
+
+.chat-fixed {
+  /* 阅读列宽度：对话正文与输入框共用，保证左右对齐 */
+  --chat-col: 768px;
+  /* 阅读列的基础左右内边距（不含轨道占位） */
+  --chat-pad: 24px;
+  /*
+   * 消息导航轨道的占位宽度。它必须**左右对称**地计入内边距：
+   * 只在右侧加会把正文的中线推离输入框的中线（实测偏左 26px）。
+   * 对称预留后，正文与输入框共享同一个居中盒，轨道住在右侧留白里。
+   */
+  --chat-rail: 52px;
+  --chat-gutter: calc(var(--chat-pad) + var(--chat-rail));
+
+  height: 100dvh;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* 对话页整页不滚动：只有消息区内部滚 */
+.shell-main:has(.chat-fixed) {
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+}
+.shell-main:has(.chat-fixed) .foot-note { display: none; }
+
+/* ---------- 1. 版面 ---------- */
+.chat-fixed .chat-layout {
+  width: 100%;
+  max-width: none;
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.chat-main,
+.chat-main-col,
+.thread-row { min-width: 0; min-height: 0; }
+
+.chat-main {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  padding: 0;
+  overflow: hidden;
+  /* 对话区与页面同底：不画外框、不加阴影。
+     此前它挂着 .panel（带 --shadow-sm + 16px 圆角），
+     在移动端就成了"屏幕里再套一张卡" —— 截图里的整屏外框就是它。 */
+  border-radius: 0;
+  background: var(--bg);
+  box-shadow: none;
+}
+
+.chat-main-col {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.thread-row {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+}
+
+/* ---------- 2. 顶栏：与内容同底，只有控件边界 ---------- */
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  min-height: 56px;
+  padding: 10px 20px;
+  /* 顶栏与消息区同底色 → 视觉上连续，不产生"色差假线" */
+  background: var(--bg);
+  border: 0;
+  box-shadow: none;
+  /* 换行而不是溢出：窄屏时标题独占一行、控件落到第二行 */
+  flex-wrap: wrap;
+}
+.chat-head__id { min-width: 0; flex: 1 1 180px; }
+.chat-head__title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-head__meta { font-size: 12px; color: var(--text-3); margin-top: 1px; }
+.chat-head__tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+/* 会话配置：右上角一个入口，点开浮层收纳 模式 / Agent / 知识库 */
+.session-config { position: relative; display: inline-flex; }
+.session-config__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.session-config__btn:hover { background: var(--ui-hover); color: var(--text); }
+.session-config__summary { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-config__chev { transition: transform 160ms var(--ease-out); }
+.session-config__chev.is-open { transform: rotate(180deg); }
+
+.session-config__pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 120;
+  width: 300px;
+  max-width: calc(100vw - 28px);
+  padding: 8px;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  animation: sc-pop 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes sc-pop {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.sc-section + .sc-section { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+.sc-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 4px 8px 6px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.sc-hint { font-weight: 400; font-size: 11px; opacity: 0.8; }
+.sc-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.sc-opt:hover:not(:disabled) { background: var(--ui-hover); }
+.sc-opt:disabled { opacity: 0.45; cursor: not-allowed; }
+.sc-check { flex: none; opacity: 0; color: var(--primary-text); }
+.sc-opt[data-on] .sc-check { opacity: 1; }
+.sc-opt-icon { flex: none; color: var(--text-3); }
+.sc-opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 860px) {
+  .chat-head { padding: 10px 14px; gap: 8px; }
+  .chat-head__id { flex: 1 1 100%; }
+  .chat-head__tools { flex: 1 1 100%; }
+}
+
+/* ---------- 3. 消息区：居中阅读列 ---------- */
+/*
+ * 左右内边距必须**对称**且等于 --chat-gutter：消息列与输入框都在这块内容盒里居中，
+ * 任何一侧多留空间都会把正文推离输入框的中线。
+ * 右侧消息导航轨道是绝对定位的，它住在 --chat-rail 那一段留白里（见 msgnav.css）。
+ */
+.chat-main .thread {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 30px;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 28px var(--chat-gutter) 32px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+/* 每条消息统一占满阅读列并居中 */
+.chat-main .thread > .msg {
+  align-self: center;
+  display: flex;
+  flex-direction: column;   /* 子元素（bub / citation / msg-state / msg-ops）纵向堆叠，不再横向挤 */
+  width: min(100%, var(--chat-col));
+  max-width: var(--chat-col);
+  min-width: 0;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+.chat-main .thread .msg > div { min-width: 0; max-width: 100%; }
+
+/* 用户消息：右对齐的克制气泡。
+   用 block + text-align:right + inline-block 气泡，而不是嵌套 flex：
+   嵌套 flex column + width:fit-content 在部分浏览器里会出现循环计算，
+   气泡被压成单字宽。inline-block 天然按内容撑宽、正确换行，更稳。 */
+.chat-main .thread > .msg.user {
+  display: block;        /* 覆盖通用 .msg 的 flex：气泡用 inline-block 排版 */
+  align-items: flex-end;
+  text-align: right;
+}
+.chat-main .thread .msg.user .bub {
+  display: inline-block;
+  box-sizing: border-box;
+  width: auto;
+  max-width: min(86%, 660px);
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.65;
+  text-align: left;
+  white-space: pre-wrap;   /* 用户输入是纯文本，保留换行 */
+  overflow-wrap: break-word;
+  word-break: normal;
+  box-shadow: none;
+}
+/* 用户消息的操作条也靠右，贴在气泡下方（msg-ops 内部是 flex，整体右对齐） */
+.chat-main .thread .msg.user .msg-ops { justify-content: flex-end; text-align: right; }
+
+/* AI 正文：连续排版，不是卡片 —— 无边框、无底色、无内边距 */
+.chat-main .thread .msg:not(.user) .bub,
+.chat-main .thread .msg:not(.user) > div > .bub {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.8;
+  white-space: normal;      /* Markdown 已是块级元素，pre-wrap 会多出空白 */
+  overflow-wrap: anywhere;
+  box-shadow: none;
+}
+
+/* 正文节奏 */
+.chat-main .thread .msg .bub > :first-child { margin-top: 0; }
+.chat-main .thread .msg .bub > :last-child { margin-bottom: 0; }
+.chat-main .thread .msg .bub p { margin: 0 0 16px; }
+.chat-main .thread .msg .bub h1,
+.chat-main .thread .msg .bub h2,
+.chat-main .thread .msg .bub h3,
+.chat-main .thread .msg .bub h4 {
+  margin: 26px 0 12px;
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+}
+.chat-main .thread .msg .bub h1 { font-size: 1.5em; }
+.chat-main .thread .msg .bub h2 { font-size: 1.26em; }
+.chat-main .thread .msg .bub h3 { font-size: 1.12em; }
+.chat-main .thread .msg .bub h4 { font-size: 1em; color: var(--text-2); }
+.chat-main .thread .msg .bub ul,
+.chat-main .thread .msg .bub ol { margin: 10px 0 18px; padding-left: 26px; }
+.chat-main .thread .msg .bub li { padding-left: 3px; margin: 5px 0; }
+.chat-main .thread .msg .bub li > p { margin: 4px 0; }
+.chat-main .thread .msg .bub li::marker { color: var(--text-3); }
+.chat-main .thread .msg .bub blockquote {
+  margin: 16px 0;
+  padding: 2px 0 2px 16px;
+  border-left: 0;
+  background: var(--ui-hover);
+  color: var(--text-2);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.chat-main .thread .msg .bub hr {
+  height: 1px;
+  margin: 24px 0;
+  border: 0;
+  background: var(--border);
+}
+.chat-main .thread .msg .bub a {
+  color: var(--primary-text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, currentColor 34%, transparent);
+  text-underline-offset: 3px;
+}
+.chat-main .thread .msg .bub a:hover { text-decoration-color: currentColor; }
+
+/* 行内代码 / 代码块：只靠底色，不画线 */
+.chat-main .thread .msg .bub :not(pre) > code,
+.chat-main .thread .msg .bub > code {
+  padding: 0.14em 0.36em;
+  border: 0;
+  border-radius: 5px;
+  background: var(--surface-muted);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.88em;
+  overflow-wrap: anywhere;
+}
+.chat-main .thread .msg .bub pre {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 16px 0;
+  padding: 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface-muted);
+  line-height: 1.65;
+  tab-size: 2;
+}
+.chat-main .thread .msg .bub pre code {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 13px;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+/* 表格：唯一保留一条线（表头下），其余靠底色 */
+.chat-main .thread .msg .bub table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 16px 0;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+.chat-main .thread .msg .bub th,
+.chat-main .thread .msg .bub td {
+  padding: 9px 12px;
+  border: 0;
+  text-align: left;
+  white-space: nowrap;
+}
+.chat-main .thread .msg .bub thead th {
+  background: var(--surface-muted);
+  font-weight: 600;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border);   /* ← 全页唯一保留的线 */
+}
+.chat-main .thread .msg .bub tbody tr:nth-child(even) { background: var(--ui-hover); }
+.chat-main .thread .msg .bub img { max-width: 100%; height: auto; border-radius: 12px; }
+
+/* Mermaid 容器 */
+.chat-main .thread .md-mermaid {
+  margin: 16px 0;
+  padding: 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface-muted);
+  overflow-x: auto;
+  text-align: center;
+}
+
+/* ---------- 4. 输入区：页面重心，唯一保留边界的控件 ---------- */
+.chat-main-col > .composer-wrap {
+  position: relative;
+  z-index: 4;
+  box-sizing: border-box;
+  flex: none;
+  align-self: center;
+  /* 与 .thread 用同一套 gutter：两者的居中盒完全一致，正文与输入框左右对齐 */
+  width: min(calc(100% - var(--chat-gutter) * 2), var(--chat-col));
+  max-width: var(--chat-col);
+  margin: 0 auto 8px;
+  padding: 0;
+  border-radius: var(--radius-xl);
+  box-shadow: none;
+}
+
+.chat-main-col .composer-wrap .prompt-bar {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  --pb-w: 100%;
+  border: 0;
+  border-radius: 26px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition:
+    box-shadow 200ms ease,
+    border-radius 220ms ease;
+}
+.chat-main-col .composer-wrap .prompt-bar:focus-within {
+  box-shadow: var(--shadow-md);
+}
+
+/*
+ * 高度策略：**JS 是唯一权威**。
+ * PromptBar 在 useLayoutEffect 里按 scrollHeight 设置 inline height
+ * （删除文本后会正确收缩），CSS 不能再叠一层自动增高 ——
+ * 否则两者会各算一次，删字后高度回不去。
+ * 因此这里不写 height:auto / field-sizing，只给上下限与内边距。
+ */
+.chat-main-col .composer-wrap .prompt-bar__field {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  gap: 8px;
+  padding: 12px 13px 9px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  box-shadow: none;
+  cursor: text;
+}
+.chat-main-col .composer-wrap .prompt-bar__input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  max-height: 190px;
+  /* 右侧留出放大按钮的位置，避免文字被图标盖住；无放大按钮时收窄 */
+  padding: 0 36px 0 1px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  box-shadow: none;
+}
+/* 没有放大入口（≤3 行）时，文字可以一直贴到右边 */
+.chat-main-col .composer-wrap:not([data-can-expand]):not([data-expanded]) .prompt-bar__input {
+  padding-right: 1px;
+}
+.chat-main-col .composer-wrap .prompt-bar__input::placeholder { color: var(--text-3); }
+.chat-main-col .composer-wrap .prompt-bar__input:focus { outline: none; box-shadow: none; }
+
+/* 细滚动条，跟随主题 */
+.chat-main-col .composer-wrap .prompt-bar__input::-webkit-scrollbar { width: 5px; }
+.chat-main-col .composer-wrap .prompt-bar__input::-webkit-scrollbar-thumb {
+  border-radius: 8px;
+  background: var(--border-strong);
+}
+.chat-main-col .composer-wrap .prompt-bar__input::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+
+/* 放大按钮：贴在输入框右上角圆角内，不压文字 */
+.composer-expand {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 6;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.composer-expand:hover { background: var(--ui-hover); color: var(--text); }
+.composer-expand[aria-pressed='true'] { background: var(--ui-selected); color: var(--text); }
+
+/* 底部工具行：左模型/档位，右语音/发送 */
+.chat-main-col .composer-wrap .prompt-bar__bar { gap: 8px; }
+.chat-main-col .composer-wrap .prompt-bar__tool {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--text-2);
+}
+.chat-main-col .composer-wrap .prompt-bar__tool:hover { background: var(--ui-hover); color: var(--text); }
+.chat-main-col .composer-wrap .prompt-bar__pick {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: var(--text-2);
+}
+.chat-main-col .composer-wrap .prompt-bar__pick:hover { background: var(--ui-hover); color: var(--text); }
+
+/* 发送按钮：尺寸/形状统一为 34px 圆钮；
+   配色交给 PromptBar 自带的反白逻辑——暗色下浅底深字、亮色下深底浅字，自动跟随主题。 */
+.chat-main-col .composer-wrap .prompt-bar__send {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+}
+.chat-main-col .composer-wrap .prompt-bar__send[data-armed]:hover { filter: brightness(0.94); }
+
+/* 专注写作模式：固定居中浮层，宽度与未放大时完全一致 */
+.composer-wrap[data-expanded='true'] {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  width: min(calc(100vw - var(--chat-gutter) * 2), var(--chat-col));
+  max-width: var(--chat-col);
+  z-index: 110;
+  margin: 0;
+  animation: composer-expand-in 180ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+/* 放大时卡片加一层浮起阴影，圆角收到 20px */
+.composer-wrap[data-expanded='true'] .prompt-bar {
+  border-radius: 20px;
+  box-shadow: var(--shadow-lg);
+}
+/* 放大时：field 固定高度（用 PromptBar 自己的 data-expanded 空属性），
+   textarea 用 flex:1 撑满，底部 bar 不压缩 —— 不再有中间空白。 */
+.prompt-bar[data-expanded] .prompt-bar__field {
+  height: min(60vh, 480px);
+  min-height: 280px;
+}
+.prompt-bar[data-expanded] .prompt-bar__input {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.prompt-bar[data-expanded] .prompt-bar__bar {
+  flex: none;
+}
+@keyframes composer-expand-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* 窄屏：缩小圆角与内边距 */
+@media (max-width: 640px) {
+  .chat-main-col .composer-wrap .prompt-bar { border-radius: 21px; }
+  .chat-main-col .composer-wrap .prompt-bar__field { padding: 10px 10px 8px; }
+  .chat-main-col .composer-wrap .prompt-bar__input { font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-main-col .composer-wrap .prompt-bar,
+  .composer-expand,
+  .chat-main-col .composer-wrap .prompt-bar__tool,
+  .chat-main-col .composer-wrap .prompt-bar__pick,
+  .chat-main-col .composer-wrap .prompt-bar__send {
+    transition: none !important;
+  }
+}
+
+/* 空对话：欢迎语在上、输入框居中，宽度与有消息时完全一致 */
+.chat-main-col[data-empty='true'] .thread-row,
+.chat-main-col[data-empty='true'] .thread { overflow: hidden; }
+.chat-empty-state {
+  position: absolute;
+  z-index: 1;
+  top: calc(50% - 172px);
+  left: var(--chat-pad);
+  right: var(--chat-pad);
+  text-align: center;
+  pointer-events: none;
+}
+.chat-empty-state h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(22px, 2.4vw, 28px);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.25;
+}
+.chat-empty-state p {
+  margin: 10px auto 0;
+  max-width: 420px;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.chat-main-col[data-empty='true'] > .composer-wrap {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  margin: 0;
+  padding: 0;
+  transform: translate(-50%, -6%);
+}
+
+/* ---------- 5. 消息辅助层：引用 / 状态 / 操作 ---------- */
+.chat-main .thread .citation { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.chat-main .thread .cite-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  min-height: 26px;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.chat-main .thread .cite-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-main .thread .cite-chip:hover {
+  background: var(--ui-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.chat-main .thread .msg-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.chat-main .thread .tool-calls { gap: 6px; margin: 2px 0 12px; }
+.chat-main .thread .tool-calls-label { color: var(--text-3); font-size: 12px; }
+
+/* 消息操作条：悬停/聚焦才出现，触控常驻 */
+.chat-main .thread .msg-ops {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin-top: 10px;
+  opacity: 0;
+  transition: opacity var(--dur-ui) var(--ease-out);
+}
+.chat-main .thread .msg:hover .msg-ops,
+.chat-main .thread .msg:focus-within .msg-ops { opacity: 1; }
+.chat-main .thread .msg-ops .msg-op {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.chat-main .thread .msg-ops .msg-op:hover:not(:disabled),
+.chat-main .thread .msg-ops .msg-op:focus-visible {
+  color: var(--text);
+  background: var(--ui-hover);
+}
+.chat-main .thread .msg-ops .msg-op:disabled { opacity: 0.42; cursor: not-allowed; }
+@media (pointer: coarse) {
+  .chat-main .thread .msg-ops { opacity: 1; }
+}.chat-bind-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 65;
+  width: 280px;
+  padding: 10px;
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-lg);
+}
+.chat-bind-pop h4 { margin: 0 0 8px; font-size: 12.5px; color: var(--text-3); font-weight: 600; }
+.chat-bind-pop .opt {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-bind-pop .opt:hover { background: var(--ui-hover); }
+.chat-bind-pop .opt[data-on] { background: var(--ui-selected); color: var(--primary-text); }
+
+/* ---------- 7. 共享弹窗（对话页内唤起） ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--ui-scrim);
+  backdrop-filter: blur(4px);
+}
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(86dvh, 900px);
+  padding: 24px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--card-bg);
+  box-shadow: var(--shadow-lg);
+}
+.dialog .dhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.dialog .dhead h3 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
+.dialog .close {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.dialog .close:hover { background: var(--ui-hover); color: var(--text); }
+.dialog .dbody { min-height: 0; overflow-y: auto; }
+.dialog .dfoot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+}
+
+/* ---------- 8. 窄屏 ---------- */
+@media (max-width: 767px) {
+  /* 轨道占位随之收窄，但仍左右对称计入 —— 正文与输入框的中线不能因为窄屏而错开 */
+  .chat-fixed { --chat-pad: 14px; --chat-rail: 20px; }
+  .chat-main .thread { gap: 24px; padding: 20px var(--chat-gutter) 26px; }
+  .chat-main .thread > .msg { width: 100%; }
+  .chat-main .thread .msg.user .bub { max-width: 90%; padding: 9px 13px; border-radius: 18px; font-size: 14px; }
+  .chat-main .thread .msg:not(.user) .bub { font-size: 14.5px; line-height: 1.75; }
+  .chat-main .thread .msg .bub pre { padding: 13px; }
+  .chat-main .thread .msg .bub pre code { font-size: 12.5px; }
+  .chat-main-col > .composer-wrap { margin-bottom: 6px; }
+  .chat-main-col .composer-wrap .prompt-bar__input {
+    max-height: 168px;
+    padding: 12px 13px 4px;
+    font-size: 16px;   /* 移动端 <16px 会触发 iOS 聚焦缩放 */
+  }
+  .chat-empty-state { top: calc(50% - 150px); }
+  .chat-empty-state h2 { font-size: clamp(20px, 5.6vw, 26px); }
+  .chat-empty-state p { font-size: 13px; }
+  .dialog { padding: 18px; border-radius: 18px; }
+  .dialog .dfoot { flex-direction: column-reverse; }
+  .dialog .dfoot .btn { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-main .thread { scroll-behavior: auto; }
+  .chat-main .thread .msg-ops { transition: none; }
+}

@@ -28,10 +28,10 @@ check('入口导航是橡皮分段', (await page.locator('.lp-pill .rubber-segme
 const navItems = await page.locator('.lp-pill .rubber-segment button.rubber-segment__item').count()
 check('导航含 4 个区块', navItems === 4, `${navItems} 项`)
 check('导航无 <a> 残留', (await page.locator('.lp-pill-nav a').count()) === 0)
-check('默认高亮第一项', (await page.locator('.lp-pill .rubber-segment__item[aria-checked="true"]').innerText()).includes('它能做什么'))
+check('默认高亮第一项', (await page.locator('.lp-pill .rubber-segment__item[aria-checked="true"]').innerText()).includes('能力'))
 
 /* ---------- 2. 点击跳转 ---------- */
-await page.locator('.lp-pill .rubber-segment button.rubber-segment__item', { hasText: '技术栈' }).click()
+await page.locator('.lp-pill .rubber-segment button.rubber-segment__item', { hasText: '技术' }).click()
 await page.waitForTimeout(1500)
 const stackVisible = await page.evaluate(() => {
   const el = document.getElementById('stack')
@@ -40,13 +40,13 @@ const stackVisible = await page.evaluate(() => {
   return r.top < window.innerHeight * 0.6 && r.bottom > 0
 })
 check('点击导航滚到对应区块', stackVisible)
-check('高亮随之切换', (await page.locator('.lp-pill .rubber-segment__item[aria-checked="true"]').innerText()).includes('技术栈'))
+check('高亮随之切换', (await page.locator('.lp-pill .rubber-segment__item[aria-checked="true"]').innerText()).includes('技术'))
 
 /* ---------- 3. scroll-spy：滚回去高亮要跟着回来 ---------- */
 await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }))
 await page.waitForTimeout(1200)
 const backLabel = await page.locator('.lp-pill .rubber-segment__item[aria-checked="true"]').innerText()
-check('滚动回顶部后高亮回到前面的区块', !backLabel.includes('技术栈'), `当前高亮：${backLabel}`)
+check('滚动回顶部后高亮回到前面的区块', !backLabel.includes('技术'), `当前高亮：${backLabel}`)
 
 /* ---------- 4. 入口页：进度条已移除、版本切换器已移除（锁 A 版） ---------- */
 check('顶部进度条已移除', (await page.locator('.lp-progress').count()) === 0)
@@ -70,28 +70,10 @@ check('登录按钮为胶囊圆角', geo ? parseFloat(geo.btnRadius) >= 100 : fa
 /* ---------- 4.2 按钮尺寸体系统一（三档） ---------- */
 await page.evaluate(() => window.scrollTo({ top: 0 }))
 await page.waitForTimeout(400)
-/* Hero CTA 现在由两种实现组成：主按钮是 SpecularButton(.cta-specular)，次按钮仍是 .btn，
-   选择器必须同时覆盖两者，否则断言会"悄悄变弱"（只测到次按钮） */
-const heroBtns = '.lp-cta-row .btn, .lp-cta-row .cta-specular'
-const heroHeights = await page.locator(heroBtns).evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
-check('Hero 按钮都走大号档（46px）', heroHeights.length >= 2 && heroHeights.every((h) => h === 46), heroHeights.join(' / '))
-check('Hero 主次按钮等高', new Set(heroHeights).size === 1, heroHeights.join(' / '))
-
-/* 主 CTA：SpecularButton（WebGL 边缘高光），颜色全部来自主题 token */
-const cta = await page.evaluate(() => {
-  const spec = document.querySelector('.cta-specular')
-  if (!spec) return null
-  const canvas = spec.querySelector('canvas')
-  return {
-    count: document.querySelectorAll('.cta-specular').length,
-    hasCanvas: !!canvas,
-    canvasW: canvas ? Math.round(canvas.getBoundingClientRect().width) : 0,
-    radius: getComputedStyle(spec).borderTopLeftRadius,
-  }
-})
-check('落地页主 CTA 是 SpecularButton', cta !== null && cta.count >= 1, JSON.stringify(cta))
-check('主 CTA 的 WebGL 高光层已挂载', cta?.hasCanvas === true && cta.canvasW > 0, `canvas ${cta?.canvasW}px`)
-check('主 CTA 圆角与按钮体系一致（12px）', cta?.radius === '12px', String(cta?.radius))
+/* Hero 采用统一的普通按钮档位，不再使用 WebGL 高光层。 */
+const heroHeights = await page.locator('.lp-hero .lp-cta-row .btn').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().height)))
+check('Hero 主次按钮都走大号档（46px）', heroHeights.length === 2 && heroHeights.every((height) => height === 46), heroHeights.join(' / '))
+check('入口页 CTA 不含装饰性 WebGL 光效', (await page.locator('.lp-hero .specular-button, .lp-hero canvas.specular-button__canvas').count()) === 0)
 
 /* ---------- 4.3 eyebrow 与段落标题统一 ---------- */
 const eyebrow = await page.locator('.lp-eyebrow').first().evaluate((el) => getComputedStyle(el).letterSpacing)
@@ -107,7 +89,7 @@ check('橡皮 tab 可切换注册', (await page.locator('#rg-u').count()) === 1)
 check('切换后高亮在注册', (await page.locator('.auth-card .rubber-segment__item[aria-checked="true"]').innerText()).includes('注册'))
 
 /* ---------- 6. 登录前的外观入口在角落（悬浮条已移除；控件细节由 verify:theme 覆盖） ---------- */
-check('登录页有角落外观控件', (await page.locator('.corner-tools .corner-btn').count()) === 1)
+check('登录页有角落外观控件', (await page.locator('.theme-control .theme-control__btn').count()) === 1)
 check('全局悬浮工具条已移除', (await page.locator('.preview-tools').count()) === 0)
 await setTheme(page, 'dark')
 await page.waitForTimeout(500)
@@ -160,16 +142,19 @@ check('按钮过渡走 token（0.13s 档）', btnDur.includes('0.13'), btnDur)
 // 先切回登录 tab（上一步停在注册，演示账号按钮只存在于登录 tab）
 await page.locator('.auth-card .rubber-segment button.rubber-segment__item', { hasText: '登录' }).click()
 await page.waitForTimeout(500)
-await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell', { timeout: 8000 })
 await page.waitForTimeout(1200)
 check('应用内有路由过渡容器', (await page.locator('.shell-main .route-fade').count()) === 1)
 await nav('对话').click()
 await page.waitForTimeout(800)
+await page.locator('.mode-seg button.rubber-segment__item', { hasText: 'Agent' }).click()
+await page.waitForTimeout(350)
 check('切页后过渡容器仍在且内容已换', (await page.locator('.shell-main .route-fade .chat-layout').count()) === 1)
 
-/* ---------- 9. 对话页 Agent 选择：横向橡皮 ---------- */
+/* ---------- 9. AGENT 模式下的 Agent 选择：横向橡皮 ---------- */
 check('Agent 选择是橡皮分段', (await page.locator('.agent-seg .rubber-segment').count()) === 1)
 const agentItems = await page.locator('.agent-seg button.rubber-segment__item').count()
 check('Agent 分段含 4 项', agentItems === 4, `${agentItems} 项`)

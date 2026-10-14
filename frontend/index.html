@@ -1,10 +1,52 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light" data-palette="terracotta">
+<html lang="zh-CN" data-theme="dark" data-palette="prisdvl">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Prisdvl Nexus · 界面原型（React Bits）</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'%3E%3Crect x='1' y='1' width='32' height='32' rx='9' fill='%23b96a3f'/%3E%3Cpath d='M17 8.4l2 4.9 4.9 2-4.9 2-2 4.9-2-4.9-4.9-2 4.9-2z' fill='white'/%3E%3C/svg%3E" />
+    <title>Prisdvl Nexus</title>
+    <!-- favicon 由 719x564 透明底原图整图等比缩放居中（内容占 88%、四周留白），不再中心裁切以免切掉球体；
+         ?v=3 用于在文件名不变的情况下让浏览器放弃缓存的旧满幅/白底图标 -->
+    <link rel="icon" type="image/png" sizes="64x64" href="/img/favicon-64.png?v=3" />
+    <link rel="apple-touch-icon" href="/img/favicon-180.png?v=3" />
+    <!-- 首屏前写入主题，避免 terracotta/light 闪一下；与 lib/theme.ts 键名保持一致 -->
+    <script>
+      (function () {
+        try {
+          var MODE_KEY = 'nx-proto-theme-mode'
+          var LEGACY_KEY = 'nx-proto-theme'
+          var PALETTE_KEY = 'nx-proto-palette'
+          var SCHEMA_KEY = 'nx-theme-schema'
+          var PALETTES = ['prisdvl', 'terracotta', 'turquoise', 'lime', 'indigo', 'ocean', 'violet', 'rose']
+          var root = document.documentElement
+          /* schema 3：强制独立深色深钴蓝 Prisdvl */
+          if (localStorage.getItem(SCHEMA_KEY) !== '3') {
+            localStorage.setItem(PALETTE_KEY, 'prisdvl')
+            localStorage.setItem(MODE_KEY, 'dark')
+            localStorage.removeItem(LEGACY_KEY)
+            localStorage.setItem(SCHEMA_KEY, '3')
+          }
+          var palette = localStorage.getItem(PALETTE_KEY)
+          if (PALETTES.indexOf(palette) < 0) palette = 'prisdvl'
+          var mode = localStorage.getItem(MODE_KEY)
+          if (palette === 'prisdvl') mode = 'dark'
+          else if (mode !== 'light' && mode !== 'dark' && mode !== 'system') {
+            var legacy = localStorage.getItem(LEGACY_KEY)
+            mode = legacy === 'light' || legacy === 'dark' ? legacy : 'dark'
+          }
+          var resolved = mode
+          if (mode === 'system') {
+            resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+          }
+          if (palette === 'prisdvl') resolved = 'dark'
+          root.dataset.theme = resolved
+          root.dataset.palette = palette
+          root.dataset.themeMode = mode
+        } catch (e) {
+          document.documentElement.dataset.theme = 'dark'
+          document.documentElement.dataset.palette = 'prisdvl'
+        }
+      })()
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -12,7 +54,7 @@
       rel="stylesheet"
     />
     <style>
-      html, body { margin: 0; height: 100%; }
+      html, body { margin: 0; height: 100%; background: #080B12; color: #E8EEF8; }
       #root { min-height: 100dvh; }
     </style>
   </head>

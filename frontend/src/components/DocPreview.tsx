@@ -4,6 +4,7 @@ import Markdown from '@/components/Markdown'
 import { toast } from '@/lib/toast'
 import type { ThemeMode } from '@/lib/types'
 import type { DocItem } from '@/data'
+import type { ChunkView } from '@/lib/api'
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select,textarea,[tabindex]:not([tabindex="-1"])'
 
@@ -58,10 +59,15 @@ interface Props {
   doc: DocItem | null
   theme: ThemeMode
   onClose: () => void
+  content?: string | null
+  chunks?: ChunkView[]
+  loading?: boolean
+  error?: string | null
+  onDownload?: () => void
 }
 
 /** 文档预览抽屉：右侧滑出，Esc / 点遮罩关闭，焦点关在抽屉内 */
-export default function DocPreview({ doc, theme, onClose }: Props) {
+export default function DocPreview({ doc, theme, onClose, content, chunks = [], loading = false, error = null, onDownload }: Props) {
   const panelRef = useRef<HTMLDivElement>(null)
   const lastActive = useRef<HTMLElement | null>(null)
   const open = doc !== null
@@ -118,48 +124,38 @@ export default function DocPreview({ doc, theme, onClose }: Props) {
             <h3 className="drawer-title">{doc.name}</h3>
             <p className="drawer-meta">{meta}</p>
           </div>
-          <button className="btn btn-ghost btn-sm" type="button" onClick={() => toast.task('开始下载原文', doc.name)} title="下载原文">
+          <button className="btn btn-ghost btn-sm" type="button" onClick={onDownload} disabled={!onDownload} title={onDownload ? "下载原文" : "当前文件类型暂不支持下载"}>
             <Download size={14} />
           </button>
           <button className="close" type="button" aria-label="关闭" onClick={onClose}><X size={17} /></button>
         </header>
 
         <div className="drawer-body">
+          {loading && <p className="hint" role="status">正在读取文档内容…</p>}
+          {error && <p className="form-error active" role="alert">{error}</p>}
           {isBinary ? (
             <div className="doc-binary">
               <span className="doc-binary-ic"><Icon size={22} /></span>
-              <p className="doc-binary-title">原型不内嵌 {doc.type} 预览</p>
-              <p className="doc-binary-desc">
-                真实实现里这里会嵌 PDF.js 阅读器（或 Office 在线预览）；DOCX 会先转 HTML 再渲染。
-                原型阶段先用占位说明，保证「点击文档有反馈」这条交互是通的。
-              </p>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-                <button className="btn btn-primary btn-sm" type="button" onClick={() => toast.task('开始下载原文', doc.name)}>
-                  <Download size={13} /> 下载原文
-                </button>
-                <button className="btn btn-ghost btn-sm" type="button" onClick={() => toast.info('已在新标签打开（原型示意）', doc.name)}>
-                  <ExternalLink size={13} /> 新标签打开
-                </button>
-              </div>
+              <p className="doc-binary-title">暂不支持内嵌 {doc.type} 预览</p>
+              <p className="doc-binary-desc">当前 API 返回文档元信息与解析切片，不提供 PDF/DOCX 原始文件下载或内嵌预览。</p>
             </div>
-          ) : (
+          ) : content ? (
             <>
-              <Markdown text={mockDocContent(doc)} theme={theme} />
+              <Markdown text={content} theme={theme} />
               <section className="doc-chunks">
-                <h4><Layers size={13} /> 解析出的切片（3）</h4>
-                {[
-                  ['## 摘要', '对应 headingPath：摘要'],
-                  ['## 关键点', '对应 headingPath：关键点'],
-                  ['### 代码示例', '对应 headingPath：代码示例'],
-                ].map(([h, d]) => (
-                  <div className="doc-chunk" key={h}>
-                    <span className="doc-chunk-h">{h}</span>
-                    <span className="doc-chunk-d">{d}</span>
+                <h4><Layers size={13} /> 解析切片（{chunks.length}）</h4>
+                {chunks.map((chunk) => (
+                  <div className="doc-chunk" key={chunk.id}>
+                    <span className="doc-chunk-h">{chunk.headingPath || '切片 ' + (chunk.chunkIndex + 1)}</span>
+                    <span className="doc-chunk-d">{chunk.content}</span>
                   </div>
                 ))}
+                {chunks.length === 0 && !loading && <p className="hint">暂无可显示的切片。</p>}
               </section>
             </>
-          )}
+          ) : !loading && !error ? (
+            <p className="hint">服务端没有返回可预览的原始文本。</p>
+          ) : null}
         </div>
       </aside>
     </>

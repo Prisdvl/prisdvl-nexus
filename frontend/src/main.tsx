@@ -3,12 +3,18 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './styles/tokens.css'
 import './styles/global.css'
-/* 顺序即优先级（同权重时后加载者胜）：tokens → global → chat-solid → chatgpt-web-style */
+/*
+ * 加载顺序即优先级（同权重时后加载者胜）：
+ *   tokens → global → PromptBar → chat-view
+ *
+ * ⚠️ PromptBar.css 原本由组件引入（路由级，加载晚于本文件）→ 会盖掉对话页样式；
+ * 提到入口并放在覆盖层之前，保证 chat-view.css 最后生效。
+ *
+ * ⚠️ 此前还存在 chat-solid.css + chatgpt-web-style.css 两个对话页覆盖层，
+ * 两者对同一批选择器各写一遍，靠顺序互相压制。现已合并为单一的 chat-view.css。
+ */
 import './bits/PromptBar/PromptBar.css';
-/* ⚠️ PromptBar.css 原本由组件引入（路由级，加载晚于本文件）→ 会盖掉覆盖层； */
-/* 提到入口并放在覆盖层之前，保证 chatgpt-web-style.css 仍最后生效。 */
-import './styles/chat-solid.css'
-import './styles/chatgpt-web-style.css'
+import './styles/chat-view.css'
 
 /*
  * 这里**不再**做主题的预渲染初始化。

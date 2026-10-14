@@ -74,11 +74,13 @@ function mapRole(role: string): ChatMsg['role'] {
  *     两套并存会打架，等 P1-2 真实流式接入时统一
  */
 export function toChatMsg(m: BackendMessage): ChatMsg {
+  const citationRefs = (m.citations as ChatMsg['citationRefs'] | undefined) ?? []
   return {
     id: m.id,
     role: mapRole(m.role),
     text: m.content ?? '',
-    cites: (m.citations as { title?: string }[] | undefined)?.map((c) => c?.title ?? '未知来源'),
+    cites: citationRefs.map((citation) => citation.documentTitle ?? '未知来源'),
+    citationRefs,
   }
 }
 

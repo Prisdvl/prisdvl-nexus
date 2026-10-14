@@ -121,7 +121,7 @@ try {
   check('无 console 错误', consoleErrors.length === 0, consoleErrors.slice(0, 2).join(' | '))
 } catch (e) {
   check('异常中断', false, e.message)
-  await page.screenshot({ path: 'D:/develop/Prisma/docs/prototypes/shots/mode-switch-error.png' }).catch(() => {})
+  await page.screenshot({ path: `${process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'}/mode-switch-error.png` }).catch(() => {})
 } finally {
   console.log('\n--- 汇总 ---')
   if (issues.length === 0) {

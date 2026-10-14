@@ -3,7 +3,7 @@ import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -61,7 +61,7 @@ const groups = await page.locator('.sb-section--toggle').allInnerTexts()
 check('分区顺序是「置顶 → 最近」', groups[0]?.includes('置顶') && groups[1]?.includes('最近'), groups.join(' / '))
 
 /* ---------- 3. 操作改为滑动手势（不再有内联按钮） ---------- */
-check('会话行已无内联操作按钮', (await page.locator('.session-item .acts button').count()) === 0)
+check('会话行提供置顶/归档/删除图标操作', (await page.locator('.session-actions .session-action').count()) >= 9)
 check('每行都挂了两侧动作轨', (await page.locator('.session-list .swipe-row').first().locator('.swipe-row__rail--start').count()) === 1)
 
 /* ---------- 4. 选中态底色渐变（非瞬时） ---------- */
@@ -80,13 +80,13 @@ await page.evaluate(() => {
     if (e.animationName === 'chat-swap-in') window.__chatSwap = true
   }, true)
 })
-await page.locator('.session-item').nth(1).click()
+await page.locator('.session-open').nth(1).click()
 await page.waitForTimeout(600)
 check('切到另一会话时触发了进入动画', await page.evaluate(() => window.__chatSwap === true))
 
 /* ---------- 6. 滚动位置各自记忆 ---------- */
 // 回到第一个会话，把它滚到顶部（非默认位置）
-await page.locator('.session-item').first().click()
+await page.locator('.session-open').first().click()
 await page.waitForTimeout(700)
 const scrollable = await page.locator('.thread').evaluate((el) => el.scrollHeight > el.clientHeight + 4)
 check('矮视口下消息区可滚动（用例前提）', scrollable)
@@ -95,15 +95,15 @@ await page.waitForTimeout(200)
 const savedTop = await page.locator('.thread').evaluate((el) => el.scrollTop)
 
 // 切走再切回：应恢复 0，而不是跳到"最新一条"（即底部）
-await page.locator('.session-item').nth(1).click()
+await page.locator('.session-open').nth(1).click()
 await page.waitForTimeout(600)
-await page.locator('.session-item').first().click()
+await page.locator('.session-open').first().click()
 await page.waitForTimeout(700)
 const restored = await page.locator('.thread').evaluate((el) => el.scrollTop)
 check('切回后恢复各自记录的位置', Math.abs(restored - savedTop) <= 2, `记录 ${savedTop} → 恢复 ${restored}`)
 
 // 另一个会话应落在自己的位置（默认底部）
-const otherBottom = await page.locator('.session-item').nth(1).click().then(async () => {
+const otherBottom = await page.locator('.session-open').nth(1).click().then(async () => {
   await page.waitForTimeout(600)
   return page.locator('.thread').evaluate((el) => ({ top: el.scrollTop, max: el.scrollHeight - el.clientHeight }))
 })
@@ -120,7 +120,7 @@ console.log('ok   x2-chat-sessionlist-dark（截图）')
 
 /* ---------- 7.5 消息导航：右侧横线 + Hover 预览（Portal 浮层） ---------- */
 // 需要多轮问答：显式切到"B+ 树"会话
-await page.locator('.session-item', { hasText: 'B+ 树' }).first().click()
+await page.locator('.session-open', { hasText: 'B+ 树' }).first().click()
 await page.waitForTimeout(900)
 
 const nav = await page.evaluate(() => ({
@@ -167,26 +167,37 @@ const pop = await page.evaluate(() => {
   const el = document.querySelector('.msg-preview')
   if (!el) return null
   const r = el.getBoundingClientRect()
+  const items = Array.from(el.querySelectorAll('.msg-preview__item')).map((item) => item.innerText.trim())
+  const list = el.querySelector('.msg-preview__list')
   return {
     inBody: el.parentElement === document.body,
     fixed: getComputedStyle(el).position === 'fixed',
     inside: r.left >= 12 && r.top >= 12 && r.right <= window.innerWidth - 12 && r.bottom <= window.innerHeight - 12,
-    label: el.querySelector('.msg-preview__label')?.textContent?.trim(),
     roleChip: !!el.querySelector('.msg-preview__role'),
-    index: el.querySelector('.msg-preview__index')?.textContent?.trim(),
-    summary: el.querySelector('.msg-preview__body')?.textContent?.trim() ?? '',
-    hint: el.querySelector('.msg-preview__hint')?.textContent?.trim(),
-    hasMd: /[*#`|]/.test(el.querySelector('.msg-preview__body')?.textContent ?? ''),
+    items,
+    scrollable: list ? getComputedStyle(list).overflowY === 'auto' : false,
+    hasHead: !!el.querySelector('.msg-preview__head'),
+    hasHint: !!el.querySelector('.msg-preview__hint'),
+    hasMd: items.some((text) => /[*#`|]/.test(text)),
   }
 })
 check('Hover 弹出预览浮层', pop !== null, JSON.stringify(pop))
 check('浮层由 Portal 挂到 body（不受 overflow 裁剪）', pop?.inBody === true && pop?.fixed === true)
-check('浮层完整落在视口内（12px 留白）', pop?.inside === true, JSON.stringify(pop && { label: pop.label, index: pop.index }))
-check('浮层展示提问序号', /^#\d+$/.test(pop?.index ?? ''), `${pop?.label} ${pop?.index}`)
+check('浮层完整落在视口内（12px 留白）', pop?.inside === true)
+check('浮层列出多条提问并支持滚动', (pop?.items.length ?? 0) >= 3 && pop?.scrollable, `${pop?.items.length} 条 / 滚动 ${pop?.scrollable}`)
 check('浮层不再有「我 / 助手」角色标签', pop?.roleChip === false)
+check('浮层无页眉页脚', pop?.hasHead === false && pop?.hasHint === false)
 check('消息区与浮层都没有「我」字样', await page.evaluate(() => !Array.from(document.querySelectorAll('.thread, .msg-preview')).some((el) => el.textContent.includes('我'))))
-check('浮层展示纯文本摘要（无 Markdown 标记）', pop.summary.length > 0 && pop.hasMd === false, pop.summary.slice(0, 30))
-check('浮层带「点击跳转」提示', pop?.hint === '点击跳转')
+check('多条预览摘要是纯文本（无 Markdown 标记）', (pop?.items.length ?? 0) >= 3 && pop.hasMd === false, (pop?.items[0] ?? '').slice(0, 30))
+/* 浮层列表高亮必须跟阅读位置（轨道 data-active）一致，不能跟悬停横线走 */
+const popAlign = await page.evaluate(() => {
+  const activeRail = Array.from(document.querySelectorAll('.msg-nav__item')).findIndex((el) => el.hasAttribute('data-active'))
+  const activePop = Array.from(document.querySelectorAll('.msg-preview__item')).findIndex((el) => el.hasAttribute('data-active'))
+  const activeCount = document.querySelectorAll('.msg-preview__item[data-active]').length
+  return { activeRail, activePop, activeCount }
+})
+check('浮层只高亮一条提问', popAlign.activeCount === 1, JSON.stringify(popAlign))
+check('浮层高亮 = 轨道阅读位置', popAlign.activePop === popAlign.activeRail, JSON.stringify(popAlign))
 await page.screenshot({ path: `${OUT}/z17-msgnav-preview.png` })
 console.log('ok   z17-msgnav-preview（截图）')
 
@@ -198,7 +209,7 @@ check('鼠标移到浮层上不会闪烁消失', (await page.locator('.msg-previ
 
 // 点击浮层 → 平滑跳转
 const beforeJump = await page.locator('.thread').evaluate((el) => el.scrollTop)
-await page.locator('.msg-preview').click()
+await page.locator('.msg-preview__item').nth(2).click()
 await page.waitForTimeout(1100)
 const afterJump = await page.locator('.thread').evaluate((el) => el.scrollTop)
 check('点击后跳转到对应消息', afterJump !== beforeJump, `scrollTop ${beforeJump} → ${afterJump}`)
@@ -236,8 +247,11 @@ const visibility = await page.evaluate(() => {
   const field = document.querySelector('.prompt-bar__field')
   const panel = document.querySelector('.chat-main')
   const rows = Array.from(document.querySelectorAll('.sb-session'))
-  const sel = rows.find((r) => r.getAttribute('aria-selected') === 'true')
-  const idle = rows.find((r) => r.getAttribute('aria-selected') !== 'true')
+  const sel = rows.find((row) => row.hasAttribute('data-selected'))
+  const idle = rows.find((row) => !row.hasAttribute('data-selected'))
+  const surface = (row) => row?.closest('.swipe-row')?.querySelector('.swipe-row__surface') ?? null
+  const selSurface = surface(sel)
+  const idleSurface = surface(idle)
   const cs = (el, p) => (el ? getComputedStyle(el)[p] : null)
   return {
     fieldBorder: parseFloat(cs(field, 'borderTopWidth')) || 0,
@@ -245,10 +259,10 @@ const visibility = await page.evaluate(() => {
     fieldBorderColor: cs(field, 'borderTopColor'),
     panelBg: cs(panel, 'backgroundColor'),
     shellBg: cs(document.querySelector('.shell-main'), 'backgroundColor'),
-    selBg: cs(sel, 'backgroundColor'),
-    selBorderColor: cs(sel, 'borderTopColor'),
-    idleBg: cs(idle, 'backgroundColor'),
-    idleBorderColor: cs(idle, 'borderTopColor'),
+    selBg: cs(selSurface, 'backgroundColor'),
+    selBorderColor: cs(selSurface, 'borderTopColor'),
+    idleBg: cs(idleSurface, 'backgroundColor'),
+    idleBorderColor: cs(idleSurface, 'borderTopColor'),
   }
 })
 // 暗色下 --surface 与面板同色（实测都是 oklch(0.196)），所以输入框必须靠边框 + 不同填充来辨识
@@ -269,8 +283,8 @@ const hl = await page.evaluate(() => {
     return m ? parseFloat(m[1]) : null
   }
   const rows = Array.from(document.querySelectorAll('.sb-session'))
-  const sel = rows.find((r) => r.getAttribute('aria-selected') === 'true')
-  const surface = sel?.closest('.swipe-row__surface')
+  const sel = rows.find((r) => r.hasAttribute('data-selected'))
+  const surface = sel?.closest('.swipe-row')?.querySelector('.swipe-row__surface')
   const sidebarBg = getComputedStyle(document.querySelector('.sidebar')).backgroundColor
   const selBg = surface ? getComputedStyle(surface).backgroundColor : null
   return { selL: parseL(selBg), bgL: parseL(sidebarBg), selBg, sidebarBg, weight: sel ? getComputedStyle(sel).fontWeight : null }
@@ -381,7 +395,7 @@ check('新建会话弹窗打开', wiz.open === true)
 // 组件自带的 aspect-ratio（4/3、2/1）会把弹窗撑歪 —— 必须被覆盖成 auto
 check('弹窗内的 Stepper 不再受长宽比限制', wiz.aspect === 'auto', String(wiz.aspect))
 check('弹窗内不再嵌套一层容器边框', wiz.circleBorder === '0px', String(wiz.circleBorder))
-check('步骤指示器完整（3 步）', wiz.steps === 3, `${wiz.steps} 个`)
+check('步骤指示器完整（2 步）', wiz.steps === 2, `${wiz.steps} 个`)
 check('「下一步」按钮在视口内', wiz.nextInside === true)
 await page.screenshot({ path: `${OUT}/z23-wizard-fixed.png` })
 console.log('ok   z23-wizard-fixed（截图）')
@@ -410,12 +424,14 @@ check('「我」的消息右对齐', msgStyle.userRight === true)
 const pb = page.locator('.prompt-bar')
 check('输入区已换成 PromptBar', (await pb.count()) === 1)
 
-// 输入 @ 打开数据源菜单（历史 bug：数据源没带图标 → 组件抛错 → 整页被 ErrorBoundary 清空）
+// 数据源只在 RAG 且确有绑定时显示；聊天附件上传尚无服务端契约，不伪造上传项。
+await page.locator('.mode-seg .rubber-segment__item', { hasText: '知识库问答' }).click()
+await page.waitForTimeout(350)
 await page.locator('.prompt-bar__input').fill('@')
-await page.waitForTimeout(600)
+await page.waitForTimeout(500)
 const atRows = await page.locator('.prompt-bar__row-name').allInnerTexts()
-check('输入 @ 弹出数据源菜单', (await page.locator('.prompt-bar__menu[data-kind="at"]').count()) === 1, atRows.join(' / '))
-check('@ 菜单含绑定的知识库与上传项', atRows.some((r) => r.includes('我的 Java 笔记')) && atRows.some((r) => r.includes('上传')), atRows.join(' / '))
+check('RAG 的 @ 菜单只列出真实绑定知识库', (await page.locator('.prompt-bar__menu[data-kind="at"]').count()) === 1 && atRows.some((row) => row.includes('我的 Java 笔记')) && !atRows.some((row) => row.includes('上传')), atRows.join(' / '))
+check('聊天附件没有被伪装成可上传项目', (await page.locator('.prompt-bar__tool').count()) === 1 && (await page.locator('.prompt-bar__row-name', { hasText: '上传' }).count()) === 0)
 check('打开菜单不会把页面打崩', (await page.locator('.prompt-bar__input').count()) === 1 && (await page.locator('.chat-layout').count()) === 1)
 
 // 输入 / 打开命令菜单
@@ -438,13 +454,6 @@ await page.waitForTimeout(400)
 check('档位面板可打开（含滑杆）', (await page.locator('.prompt-bar__effort-track').count()) === 1)
 await page.keyboard.press('Escape')
 await page.waitForTimeout(300)
-
-// 附件 chip
-await page.locator('.prompt-bar__tool').first().click()
-await page.waitForTimeout(400)
-await page.locator('.prompt-bar__row', { hasText: '上传' }).first().click()
-await page.waitForTimeout(600)
-check('选中上传项后出现附件 chip', (await page.locator('.prompt-bar__chip').count()) === 1)
 
 // 发送：Enter 送出且草稿清空
 const msgsBeforeSend = await page.locator('.thread .msg').count()
@@ -528,7 +537,7 @@ check('重试成功后弹出提示', (await page.locator('.toast-host .swipe-toa
 /* ---------- 8. 滑动手势：左滑置顶 / 右滑归档+删除 ---------- */
 await page.evaluate(() => window.__nxTheme.setMode('light'))
 await page.waitForTimeout(500)
-check('会话行不再有内联操作按钮（改为手势）', (await page.locator('.session-item .acts button').count()) === 0)
+check('会话行图标操作与左滑手势同时保留', (await page.locator('.session-actions .session-action').count()) >= 9)
 
 const rowBox = async () => {
   const b = await page.locator('.session-list .swipe-row').first().boundingBox()
@@ -639,17 +648,18 @@ check('删除用例已复原种子会话（不污染后续用例）',
   (await page.locator('.sb-session').count()) >= 4,
   `${await page.locator('.sb-session').count()} 个会话`)
 
-/* 双击标题重命名 */
-const titleEl = page.locator('.session-list .session-item .t').first()
+/* 双击标题 → 居中弹窗重命名（不再在侧栏行内改名） */
+const titleEl = page.locator('.sb-session .session-open').first()
 const oldTitle = (await titleEl.innerText()).trim()
 await titleEl.dblclick()
 await page.waitForTimeout(500)
-check('双击标题出现重命名输入框', (await page.locator('.session-rename').count()) === 1)
-await page.locator('.session-rename').fill('重命名后的会话')
-await page.keyboard.press('Enter')
+const renameDialog = page.locator('.dialog[aria-label="重命名聊天"]')
+check('双击标题出现重命名弹窗', (await renameDialog.count()) === 1)
+await renameDialog.locator('input.input').fill('重命名后的会话')
+await renameDialog.locator('.btn-primary', { hasText: '保存' }).click()
 await page.waitForTimeout(600)
-const newTitle = (await page.locator('.session-list .session-item .t').first().innerText()).trim()
-check('回车后标题已更新', newTitle === '重命名后的会话' && newTitle !== oldTitle, `${oldTitle} → ${newTitle}`)
+const newTitle = (await page.locator('.sb-session .session-open').first().innerText()).trim()
+check('保存后标题已更新', newTitle === '重命名后的会话' && newTitle !== oldTitle, `${oldTitle} → ${newTitle}`)
 
 /* ---------- 12. 对话页固定为视口高度：整页不滚 + 滚动条隐藏 ---------- */
 const chatFixed = async (label) => {

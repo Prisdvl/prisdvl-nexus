@@ -2,8 +2,8 @@
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
-const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const BASE = process.env.QA_BASE ?? 'http://localhost:5175'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -116,24 +116,13 @@ check('撤销后策略被清空', (await page.evaluate(() => localStorage.getIte
 await byItem('密码与登录')
 check('密码与登录有修改密码按钮', (await page.locator('.settings-body button', { hasText: '修改密码' }).count()) === 1)
 await byItem('会话与设备')
-check('会话与设备列出设备', (await page.locator('.settings-body .list-row').count()) >= 2)
+check('会话管理不伪造设备清单', (await page.locator('.settings-body .list-row').count()) === 1 && (await page.locator('.settings-body').innerText()).includes('暂不提供设备会话列表'))
 await byItem('注销账号')
-check('注销账号是两步确认', (await page.locator('.settings-body .danger-steps .btn-danger').count()) === 1)
+check('注销账号无法在后端不支持时执行', (await page.locator('.settings-body .btn-danger[disabled]').count()) === 1)
 check('注销账号面板有危险色边框', (await page.locator('.settings-body .panel-danger').count()) === 1)
 
-// 确认勾选换成 SpringCheck（弹簧勾选 + 删除线），不再是原生 checkbox
-check('注销确认使用 SpringCheck', (await page.locator('.settings-body .spring-check').count()) === 1)
-check('注销确认不再有原生 checkbox', (await page.locator('.settings-body .panel-danger input[type="checkbox"]').count()) === 0)
-const dangerInput = page.locator('.settings-body .panel-danger input').first()
-await dangerInput.fill('demo')
-await page.waitForTimeout(300)
-const continueBtn = page.locator('.settings-body .panel-danger .btn-danger').first()
-check('未勾选时不能继续', await continueBtn.isDisabled())
-await page.locator('.settings-body .spring-check').click()
-await page.waitForTimeout(700)
-check('勾选后 spring-check 状态为已选', (await page.locator('.settings-body .spring-check').getAttribute('aria-checked')) === 'true')
-check('勾选后可以继续注销', !(await continueBtn.isDisabled()))
-
+check('注销账号不显示假流程：服务端无注销接口时按钮必须禁用', (await page.locator('.settings-body .btn-danger[disabled]').count()) === 1)
+check('注销账号明确说明后端暂不支持', (await page.locator('.settings-body').innerText()).includes('服务端目前没有账号注销接口'))
 /* ---------- 4. 设置搜索 ---------- */
 await page.locator('.settings-search input').fill('主题')
 await page.waitForTimeout(420)

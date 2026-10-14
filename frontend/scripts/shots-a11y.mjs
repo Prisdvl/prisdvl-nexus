@@ -1,5 +1,5 @@
 import { chromium } from 'playwright-core'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 const page = await browser.newPage({ viewport: { width: 1100, height: 620 }, deviceScaleFactor: 2 })
 await page.addInitScript(() => {

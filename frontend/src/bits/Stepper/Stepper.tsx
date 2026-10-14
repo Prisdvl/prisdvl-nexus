@@ -18,6 +18,8 @@ interface StepperProps extends HTMLAttributes<HTMLDivElement> {
   nextButtonProps?: React.ButtonHTMLAttributes<HTMLButtonElement>;
   backButtonText?: string;
   nextButtonText?: string;
+  /** 最后一步的完成按钮文案（默认 'Complete'） */
+  finalButtonText?: string;
   disableStepIndicators?: boolean;
   renderStepIndicator?: (props: RenderStepIndicatorProps) => ReactNode;
 }
@@ -41,6 +43,7 @@ export default function Stepper({
   nextButtonProps = {},
   backButtonText = 'Back',
   nextButtonText = 'Continue',
+  finalButtonText = 'Complete',
   disableStepIndicators = false,
   renderStepIndicator,
   ...rest
@@ -140,7 +143,7 @@ export default function Stepper({
                 </button>
               )}
               <button onClick={isLastStep ? handleComplete : handleNext} className="next-button" {...nextButtonProps}>
-                {isLastStep ? 'Complete' : nextButtonText}
+                {isLastStep ? finalButtonText : nextButtonText}
               </button>
             </div>
           </div>

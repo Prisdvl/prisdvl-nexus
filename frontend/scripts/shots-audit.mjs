@@ -1,6 +1,6 @@
-// 审计修复证据：向导按钮已接配色 / 碎纸机亮色可见 / 轮播指示点可见
+// 审计修复证据：文档导入流程与轮播指示点可见
 import { chromium } from 'playwright-core'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 for (const theme of ['light', 'dark']) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1.5 })
@@ -24,12 +24,6 @@ for (const theme of ['light', 'dark']) {
   console.log(`ok  z4-wizard-${theme}`)
   await page.keyboard.press('Escape')
   await page.waitForTimeout(500)
-
-  // 碎纸机（亮色下曾不可见）
-  await page.locator('.shredder').scrollIntoViewIfNeeded()
-  await page.waitForTimeout(700)
-  await page.screenshot({ path: `${OUT}/z4-shredder-${theme}.png` })
-  console.log(`ok  z4-shredder-${theme}`)
 
   // 轮播指示点
   await page.goto('http://localhost:5175/#/app/workbench', { waitUntil: 'networkidle' })

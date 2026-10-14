@@ -34,9 +34,16 @@
   grid-auto-columns: minmax(0, 1fr);
 }
 
+/* 禁用态：保持可读的"不可用"，而不是整块淡到看不清。
+   之前整段 opacity:0.5 叠在 item 的 --rs-idle:0.7 上 ≈ 0.35，
+   顶栏里未启用模式的分段几乎隐形，看着像渲染坏了。 */
 .rubber-segment[aria-disabled='true'] {
-  opacity: 0.5;
   pointer-events: none;
+}
+.rubber-segment[aria-disabled='true'] .rubber-segment__item {
+  opacity: 1;
+  color: var(--text-3);
+  cursor: not-allowed;
 }
 
 .rubber-segment__item {
@@ -136,6 +143,9 @@
   grid-auto-columns: initial;
   grid-auto-rows: auto;
   width: auto;
+  /* 必须与轨道的 gap 完全一致：thumb 里是一份等大的"副本行"，
+     缺了这 2px，副本行会逐行累积偏移，高亮里的文字与底层按钮越往下越错位。 */
+  gap: 2px;
 }
 
 .rubber-segment[data-vertical] .rubber-segment__item {

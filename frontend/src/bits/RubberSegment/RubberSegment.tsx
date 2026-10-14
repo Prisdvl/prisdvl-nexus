@@ -128,6 +128,8 @@ const RubberSegment: React.FC<RubberSegmentProps> = ({
   const handoff = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const drag = useRef<Drag | null>(null);
   const gen = useRef(0);
+  /* travel/land 进行中：禁止 measure() 里 jumpTo，否则跨项滑动会被 ResizeObserver 掐成瞬移 */
+  const moving = useRef(false);
 
   const edgeL = useMotionValue(0);
   const edgeR = useMotionValue(0);
@@ -169,6 +171,7 @@ const RubberSegment: React.FC<RubberSegmentProps> = ({
     if (!s) return;
     clearTimeout(handoff.current);
     gen.current += 1;
+    moving.current = false;
     edgeL.jump(s.l);
     edgeR.jump(s.r);
   };
@@ -187,18 +190,32 @@ const RubberSegment: React.FC<RubberSegmentProps> = ({
         : { l: r.left - rect.left - inset, r: r.right - rect.left - inset };
     });
     innerW.set((vertical ? rect.height : rect.width) - inset * 2);
+    if (drag.current || moving.current) return;
     jumpTo(committed.current);
   };
 
   const listKey = list.map(item => item.value).join('|');
   useLayoutEffect(() => {
-    measure();
-    const observer = new ResizeObserver(measure);
-    if (trackRef.current) observer.observe(trackRef.current);
-    if (typeof document !== 'undefined' && document.fonts) document.fonts.ready.then(measure);
-    return () => observer.disconnect();
+    let alive = true;
+    const update = () => { if (alive) measure(); };
+    update();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    if (trackRef.current) observer?.observe(trackRef.current);
+    itemRefs.current.forEach((item) => { if (item) observer?.observe(item); });
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
+    fonts?.addEventListener?.('loadingdone', update);
+    void fonts?.ready.then(update);
+    window.addEventListener('resize', update);
+    window.visualViewport?.addEventListener('resize', update);
+    return () => {
+      alive = false;
+      observer?.disconnect();
+      fonts?.removeEventListener?.('loadingdone', update);
+      window.removeEventListener('resize', update);
+      window.visualViewport?.removeEventListener('resize', update);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listKey, size, inset, equalSlots]);
+  }, [listKey, size, inset, equalSlots, vertical]);
 
   useEffect(() => {
     if (drag.current || committed.current === index) return;
@@ -228,36 +245,65 @@ const RubberSegment: React.FC<RubberSegmentProps> = ({
     const b = slots.current[to];
     if (!b) return;
     const g = ++gen.current;
+    moving.current = true;
+    const done = () => {
+      if (gen.current === g) moving.current = false;
+    };
     const dir = Math.sign((b.l + b.r) / 2 - (edgeL.get() + edgeR.get()) / 2) || 1;
     const [lead, leadTo, trail, trailTo] = dir > 0 ? [edgeR, b.r, edgeL, b.l] : [edgeL, b.l, edgeR, b.r];
     const velocityFor = (mv: MotionValue<number>) =>
       clamp(v === null ? mv.getVelocity() : v, -MAX_VELOCITY, MAX_VELOCITY);
-    animate(lead, leadTo, {
+    const leadAnim = animate(lead, leadTo, {
       ...(flick ? SPRING_MOMENTUM : SPRING_UI),
       duration: t(flick ? 0.4 : 0.3),
       velocity: velocityFor(lead)
     });
     const trailVelocity = velocityFor(trail);
     if (!withSquash || squash <= 0) {
-      animate(trail, trailTo, { ...SPRING_UI, duration: t(0.3), velocity: trailVelocity });
+      void Promise.all([
+        leadAnim,
+        animate(trail, trailTo, { ...SPRING_UI, duration: t(0.3), velocity: trailVelocity }),
+      ]).then(done);
       return;
     }
-    animate(trail, trailTo + dir * squash, { ...SPRING_UI, duration: t(0.3), velocity: trailVelocity }).then(() => {
-      if (gen.current === g) animate(trail, trailTo, { ...SPRING_RELAX, duration: t(0.16) });
-    });
+    void Promise.all([
+      leadAnim,
+      animate(trail, trailTo + dir * squash, { ...SPRING_UI, duration: t(0.3), velocity: trailVelocity }).then(() => {
+        if (gen.current === g) return animate(trail, trailTo, { ...SPRING_RELAX, duration: t(0.16) });
+      }),
+    ]).then(done);
   };
 
   const travel = (from: number, to: number) => {
     const a = slots.current[from];
     const b = slots.current[to];
-    if (!a || !b) return;
+    if (!a || !b || from === to) return;
     clearTimeout(handoff.current);
     gen.current += 1;
+    edgeL.stop();
+    edgeR.stop();
     if (reduce) {
+      moving.current = false;
       edgeL.jump(b.l);
       edgeR.jump(b.r);
       return;
     }
+    moving.current = true;
+    const gap = Math.abs(to - from);
+    /*
+     * 跨项（隔 1+）：定宽平移扫过中间项。
+     * 若仍用邻项那套「拉满 from↔to 再收回」，整段轨道会闪一下高亮，看起来像没有滑动。
+     */
+    if (gap > 1) {
+      const g = gen.current;
+      const duration = t(0.32 + 0.1 * (gap - 1));
+      const tween = { duration, ease: EASE_OUT };
+      void Promise.all([animate(edgeL, b.l, tween), animate(edgeR, b.r, tween)]).then(() => {
+        if (gen.current === g) moving.current = false;
+      });
+      return;
+    }
+    /* 邻项：橡皮拉伸 → land */
     const u = stretch / 100;
     const tween = { duration: t(DILATE), ease: EASE_OUT };
     animate(edgeL, b.l + (Math.min(a.l, b.l) - b.l) * u, tween);
@@ -268,22 +314,56 @@ const RubberSegment: React.FC<RubberSegmentProps> = ({
   const localX = (e: { clientX: number; clientY: number }) =>
     (vertical ? e.clientY - (box.current ? box.current.top : 0) : e.clientX - (box.current ? box.current.left : 0)) - inset;
 
+  const finishClick = (pointerId: number, clientX: number, clientY: number) => {
+    const d = drag.current;
+    if (!d || d.id !== pointerId || d.live) return;
+    release();
+    const x = localX({ clientX, clientY });
+    if (Math.abs(x - d.x0) > SLOP || d.slot === committed.current) return;
+    const from = committed.current;
+    commit(d.slot);
+    travel(from, d.slot);
+  };
+
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>, i: number) => {
     if (disabled || drag.current || e.button !== 0) return;
     box.current = trackRef.current?.getBoundingClientRect() ?? null;
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
     const x = localX(e);
     const onThumb = draggable && x >= edgeL.get() && x <= edgeR.get();
     drag.current = { id: e.pointerId, x0: x, slot: i, onThumb, live: false, offset: 0, w: 0, hist: [[e.timeStamp, x]] };
+    /*
+     * 只在拖滑块时 capture。点击切换若也 capture，lostpointercapture 会与
+     * 冒泡到轨道的 pointerup 抢跑，把 drag 清掉 → travel 根本进不去，只剩受控
+     * value 更新后的 jump/闪切，跨项看起来「没有滑动」。
+     */
     if (onThumb) {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
       clearTimeout(handoff.current);
       gen.current += 1;
+      moving.current = false;
       edgeL.stop();
       edgeR.stop();
-    } else if (!reduce) {
-      e.currentTarget.dataset.pressed = '';
+    } else {
+      if (!reduce) e.currentTarget.dataset.pressed = '';
+      /* 未 capture：松手可能在轨道外，用 window 收尾保证跨项 travel 一定触发 */
+      const pointerId = e.pointerId;
+      const onWinUp = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        window.removeEventListener('pointerup', onWinUp, true);
+        window.removeEventListener('pointercancel', onWinCancel, true);
+        finishClick(pointerId, ev.clientX, ev.clientY);
+      };
+      const onWinCancel = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        window.removeEventListener('pointerup', onWinUp, true);
+        window.removeEventListener('pointercancel', onWinCancel, true);
+        const d = drag.current;
+        if (d && d.id === pointerId && !d.live) release();
+      };
+      window.addEventListener('pointerup', onWinUp, true);
+      window.addEventListener('pointercancel', onWinCancel, true);
     }
   };
 
@@ -331,16 +411,13 @@ const RubberSegment: React.FC<RubberSegmentProps> = ({
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (!d || e.pointerId !== d.id) return;
-    release();
-    const x = localX(e);
+    /* 非拖动点击由 window pointerup（finishClick）处理，避免与这里双发 travel */
     if (!d.live) {
-      if (Math.abs(x - d.x0) <= SLOP && d.slot !== committed.current) {
-        const from = committed.current;
-        commit(d.slot);
-        travel(from, d.slot);
-      }
+      if (!d.onThumb) return;
+      finishClick(e.pointerId, e.clientX, e.clientY);
       return;
     }
+    release();
     const v = velocityOf(d.hist, e.timeStamp);
     const flick = Math.abs(v) > FLICK;
     let to = nearestSlot(slots.current, (edgeL.get() + edgeR.get()) / 2 + project(v, glide));
@@ -353,8 +430,9 @@ const RubberSegment: React.FC<RubberSegmentProps> = ({
   const handlePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (!d || e.pointerId !== d.id) return;
-    release();
+    /* 未进入拖动的点击交给 pointerup 走 travel；这里只收尾真·拖动中断 */
     if (!d.live) return;
+    release();
     if (reduce) jumpTo(committed.current);
     else land(committed.current, null, false, false);
   };
@@ -370,8 +448,10 @@ const RubberSegment: React.FC<RubberSegmentProps> = ({
     if (next === null) return;
     e.preventDefault();
     if (next === index) return;
+    const from = committed.current;
     commit(next);
-    jumpTo(next);
+    if (reduce) jumpTo(next);
+    else travel(from, next);
     itemRefs.current[next]?.focus();
   };
 

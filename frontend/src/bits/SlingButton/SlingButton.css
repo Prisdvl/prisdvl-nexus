@@ -1,0 +1,171 @@
+.sling-button {
+  --sl-size: 56px;
+  --sl-svg: 200px;
+  --sl-pad: #f5f5f5;
+  --sl-icon: #18181b;
+  --sl-accent: #f5f5f5;
+  --sl-well: #27272a;
+  --sl-band: #52525b;
+  --sl-stroke: 3px;
+  --sl-dot: 8px;
+
+  position: relative;
+  display: inline-block;
+  width: var(--sl-size);
+  height: var(--sl-size);
+  vertical-align: middle;
+}
+
+.sling-button__svg {
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  overflow: visible;
+  width: var(--sl-svg);
+  height: var(--sl-svg);
+  margin: calc(var(--sl-svg) / -2) 0 0 calc(var(--sl-svg) / -2);
+  shape-rendering: geometricPrecision;
+}
+
+.sling-button__tension {
+  opacity: 0;
+}
+
+.sling-button__band,
+.sling-button__hot,
+.sling-button__arc {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: var(--sl-stroke);
+  transition: stroke-width 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.sling-button__band {
+  stroke: var(--sl-band);
+}
+
+.sling-button__hot,
+.sling-button__arc {
+  stroke: var(--sl-accent);
+}
+
+.sling-button__arc {
+  stroke-linecap: butt;
+  opacity: 0;
+}
+
+.sling-button[data-armed] .sling-button__band,
+.sling-button[data-armed] .sling-button__hot,
+.sling-button[data-armed] .sling-button__arc {
+  stroke-width: calc(var(--sl-stroke) * 1.5);
+}
+
+.sling-button__well {
+  fill: var(--sl-well);
+  transition: fill 200ms ease;
+}
+
+.sling-button[data-sent] .sling-button__well {
+  fill: var(--sl-accent);
+}
+
+.sling-button__dot {
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--sl-dot);
+  height: var(--sl-dot);
+  margin: calc(var(--sl-dot) / -2) 0 0 calc(var(--sl-dot) / -2);
+  border-radius: 50%;
+  background: var(--sl-accent);
+  opacity: 0;
+}
+
+.sling-button__motion {
+  position: absolute;
+  inset: 0;
+}
+
+.sling-button__pad {
+  position: relative;
+  display: block;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+.sling-button__pad::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+}
+
+.sling-button__pad[data-held] {
+  cursor: grabbing;
+}
+
+.sling-button__pad[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.sling-button__face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--sl-pad);
+  color: var(--sl-icon);
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.sling-button__pad[data-held] .sling-button__face {
+  transform: scale(0.97);
+}
+
+.sling-button__pad[data-armed] .sling-button__face {
+  transform: scale(1.04);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sling-button__pad:not([data-held]):not([aria-disabled='true']):hover .sling-button__face {
+    transform: scale(1.02);
+  }
+}
+
+.sling-button__icon {
+  display: inline-flex;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sling-button__band,
+  .sling-button__hot,
+  .sling-button__arc,
+  .sling-button__face,
+  .sling-button__well {
+    transition: none;
+  }
+
+  .sling-button__pad:hover .sling-button__face,
+  .sling-button__pad[data-held] .sling-button__face,
+  .sling-button__pad[data-armed] .sling-button__face {
+    transform: none;
+  }
+}

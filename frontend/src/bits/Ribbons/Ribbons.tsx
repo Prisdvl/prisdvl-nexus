@@ -40,8 +40,15 @@ const Ribbons: React.FC<RibbonsProps> = ({
     const container = containerRef.current;
     if (!container) return;
 
-    const renderer = new Renderer({ dpr: window.devicePixelRatio || 2, alpha: true });
+    // 运行时兜底：WebGL 不可用时静默降级为无背景，不能抛错炸掉整页
+    let renderer: Renderer;
+    try {
+      renderer = new Renderer({ dpr: window.devicePixelRatio || 2, alpha: true });
+    } catch {
+      return;
+    }
     const gl = renderer.gl;
+    if (!gl) return;
     if (Array.isArray(backgroundColor) && backgroundColor.length === 4) {
       gl.clearColor(backgroundColor[0], backgroundColor[1], backgroundColor[2], backgroundColor[3]);
     } else {

@@ -1,0 +1,75 @@
+/* ============================================================
+ * FloatingNav —— 居中悬浮胶囊导航
+ * 外层 viewport：fixed 全屏宽 + flex 居中，motion 的 y 位移
+ * 作用在这一层，不会干扰内层居中。
+ * 内层 .floating-nav：真正的胶囊本体。
+ * ============================================================ */
+
+.floating-nav-viewport {
+  position: fixed;
+  top: 18px;
+  left: 0;
+  right: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: center;
+  pointer-events: none; /* 中间空隙不挡页面点击 */
+}
+
+.floating-nav {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 8px 10px 8px 18px;
+  border-radius: 999px;
+  background: oklch(from var(--bg) l c h / 0.72);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid color-mix(in oklch, var(--text) 8%, transparent);
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+  max-width: calc(100vw - 24px);
+}
+
+.floating-nav__logo {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.floating-nav__items {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* RubberSegment：无轨道底，只留滑动高亮块 */
+.floating-nav__segment.rubber-segment {
+  background: transparent;
+  padding: 2px;
+}
+.floating-nav__segment .rubber-segment__item {
+  opacity: 1;
+  font-size: 13.5px;
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.floating-nav__action {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.floating-nav__action .btn {
+  height: 34px;
+  padding: 0 15px;
+  border-radius: var(--radius-pill);
+  font-size: 13.5px;
+}
+
+/* 窄屏：FloatingNav 让位给 CardNav */
+@media (max-width: 767px) {
+  .floating-nav-viewport { display: none; }
+}

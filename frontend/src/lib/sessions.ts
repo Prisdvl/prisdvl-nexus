@@ -24,6 +24,7 @@
  */
 import { useSyncExternalStore } from 'react'
 import { SESSIONS, type ChatMsg, type SessionItem } from '@/data'
+import { USE_MOCK } from '@/lib/api'
 import { TMP_PREFIX, isTempId, isSeedId } from '@/lib/conversations'
 
 type Listener = () => void
@@ -63,16 +64,21 @@ function loadPersisted(): Persisted | null {
 }
 
 const restored = loadPersisted()
+const initialSessions = USE_MOCK
+  ? (restored?.sessions ?? SESSIONS)
+  : (restored?.sessions.filter((session) => !isSeedId(session.id) && !isTempId(session.id)) ?? [])
 
-let sessions: SessionItem[] = restored ? restored.sessions : SESSIONS
-let activeId: string | null = restored ? restored.activeId : (SESSIONS[0]?.id ?? null)
+let sessions: SessionItem[] = initialSessions
+let activeId: string | null = restored?.activeId && initialSessions.some((session) => session.id === restored.activeId)
+  ? restored.activeId
+  : (initialSessions[0]?.id ?? null)
 /**
  * 已归档的会话 id。
  *
  * 决策 3：**归档是纯前端本地标记，不调后端**，所以它必须持久化，
  * 否则刷新后归档状态全丢。后端 `chat_conversation` 表确实没有 archived 列。
  */
-let archived: string[] = restored ? restored.archived : []
+let archived: string[] = USE_MOCK ? (restored?.archived ?? []) : (restored?.archived.filter((id) => !isSeedId(id) && !isTempId(id)) ?? [])
 /**
  * 本地临时 id 计数器。
  *
@@ -83,6 +89,23 @@ let archived: string[] = restored ? restored.archived : []
  */
 let tmpSeq = 0
 const nextTmpId = () => `${TMP_PREFIX}${++tmpSeq}`
+
+/**
+ * 分支命名（P1-3.7）：同一会话第一次分支用「分支」，之后「分支1」「分支2」……
+ *
+ * 命名依据是**当前用户可见的全部会话标题**（含后端列表与本地临时会话），
+ * 真实模式由调用方在调 fork 接口前算出并显式传给后端，因此刷新/重开后名称由库承载，不丢。
+ */
+export function nextBranchTitle(existingTitles: string[]): string {
+  const used = new Set(existingTitles)
+  let index = 0
+  let title = '分支'
+  while (used.has(title)) {
+    index += 1
+    title = `分支${index}`
+  }
+  return title
+}
 /** 侧栏点「新对话」时自增，对话页据此打开新建向导 */
 let createRequests = 0
 
@@ -113,10 +136,10 @@ function persist() {
   }, 300)
 }
 
-/** 清空持久化并回到种子数据（设置里的「重置演示数据」用） */
-function resetToSeed() {
-  sessions = SESSIONS
-  activeId = SESSIONS[0]?.id ?? null
+/** 清除本地会话快照；仅 mock 测试环境恢复种子，真实模式保持空状态。 */
+function clearLocalSessions() {
+  sessions = USE_MOCK ? SESSIONS : []
+  activeId = sessions[0]?.id ?? null
   archived = []
   try { localStorage.removeItem(STORE_KEY) } catch { /* 忽略 */ }
   emit()
@@ -128,7 +151,7 @@ function resetToSeed() {
  * （实测直接把页面打成 ErrorBoundary 的 "Maximum update depth exceeded"）。
  * 因此只在数据真正变更时重建一次快照。
  */
-let cached = { sessions, activeId, archived, createRequests }
+let cached: { sessions: SessionItem[]; activeId: string | null; archived: string[]; createRequests: number } = { sessions, activeId, archived, createRequests }
 const emit = () => {
   cached = { sessions, activeId, archived, createRequests }
   persist()
@@ -186,7 +209,7 @@ export const sessionStore = {
     const id = nextTmpId()
     const copy: SessionItem = {
       id,
-      title: `${cur.title} · 分支`,
+      title: nextBranchTitle(sessions.map((session) => session.title)),
       agentId: cur.agentId,
       kbs: [...cur.kbs],
       updated: '刚刚',
@@ -247,8 +270,8 @@ export const sessionStore = {
     emit()
   },
 
-  /** 回到种子数据（设置弹层里的「重置演示数据」） */
-  resetToSeed,
+  /** 登出时清除本地快照；仅离线测试模式恢复固定 fixture。 */
+  clearLocal: clearLocalSessions,
 
   /**
    * 用后端返回的会话列表整体替换本地列表（P1-1 的验收标准：

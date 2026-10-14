@@ -1,42 +1,55 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type Ref } from 'react'
 
-/** 单条横线的占位高度（与 CSS 里 .msg-nav__item 的 height 保持一致） */
-const ITEM_H = 10
-/** 行距上下限：提问多时自动收紧，保证所有横线都看得见 */
-const GAP_MAX = 7
-const GAP_MIN = 2
+/** 单条横线占位（与 CSS min-height 一致）；压矮以便更密 */
+const ITEM_H = 12
+/** 行距：默认就紧，提问多时再收到下限 */
+const GAP_MAX = 3
+const GAP_MIN = 1
 
 export interface RailItem {
-  /** 消息 id（用于跳转与 active 判定）。字符串雪花 ID，不能转Number */
+  /** 消息 id（仅作辅助；高亮与跳转一律用 index） */
   id: string
-  /** 提问序号（从 1 开始，展示在预览里） */
+  /** 提问序号（从 1 开始） */
   index: number
 }
 
 interface Props {
   items: RailItem[]
-  activeId: string | null
-  onHover: (item: RailItem, el: HTMLElement | null) => void
-  onJump: (id: string) => void
+  /** 当前阅读提问序号（1-based）；null 表示尚未同步 */
+  activeIndex: number | null
+  /** 面板是否打开：驱动轨道「靠近」态与横线入场动画 */
+  open: boolean
+  /** 整条轨道的 DOM（浮层锚点：靠近轨道才出面板，位置固定） */
+  railRef?: Ref<HTMLElement | null>
+  onPanelEnter: () => void
+  onPanelLeave: () => void
+  onJump: (index: number) => void
 }
 
 /**
  * 提问横线轨道（右贴边）。
  *
  * 只对应**我的提问**：一条横线 = 一个问题。
- * （助手回答不占横线，否则条数翻倍、噪音太大，也不是"跳转锚点"的意义所在。）
- * 低存在感：默认只是一条很短的 muted 细线，hover / 当前阅读位置才变长并过渡到强调色。
+ * 面板显隐由整条轨道的靠近触发，不按单根横线开关。
  */
-export default function MessageRail({ items, activeId, onHover, onJump }: Props) {
-  /* 用 ref 记录每个横线的 DOM，hover 时作为浮层定位基准 */
-  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
-  const navRef = useRef<HTMLElement>(null)
+export default function MessageRail({
+  items,
+  activeIndex,
+  open,
+  railRef,
+  onPanelEnter,
+  onPanelLeave,
+  onJump,
+}: Props) {
+  const navRef = useRef<HTMLElement | null>(null)
   const [gap, setGap] = useState(GAP_MAX)
 
-  /*
-   * 提问多的时候自动压缩行距，让全部横线都装进一屏；
-   * 实在装不下（行距已到下限）就交给 CSS 的 overflow-y 滚动。
-   */
+  const setNavRef = (el: HTMLElement | null) => {
+    navRef.current = el
+    if (typeof railRef === 'function') railRef(el)
+    else if (railRef && 'current' in railRef) (railRef as { current: HTMLElement | null }).current = el
+  }
+
   useEffect(() => {
     const nav = navRef.current
     if (!nav) return
@@ -54,27 +67,50 @@ export default function MessageRail({ items, activeId, onHover, onJump }: Props)
   }, [items.length])
 
   return (
-    <nav className="msg-nav" aria-label="提问导航" ref={navRef}>
-      <ol className="msg-nav__list" style={{ '--rail-gap': `${gap}px` } as React.CSSProperties}>
-        {items.map((item, i) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              ref={(el) => { itemRefs.current[i] = el }}
-              className="msg-nav__item"
-              data-active={item.id === activeId ? '' : undefined}
-              aria-label={`第 ${item.index} 个提问`}
-              aria-current={item.id === activeId ? 'true' : undefined}
-              onMouseEnter={(e) => onHover(item, e.currentTarget)}
-              onFocus={(e) => onHover(item, e.currentTarget)}
-              onMouseLeave={() => onHover(item, null)}
-              onBlur={() => onHover(item, null)}
-              onClick={() => onJump(item.id)}
-            >
-              <span className="msg-nav__line" aria-hidden="true" />
-            </button>
-          </li>
-        ))}
+    <nav
+      className={`msg-nav${open ? ' is-open' : ''}`}
+      data-open={open ? '' : undefined}
+      aria-label="提问导航"
+      ref={setNavRef}
+      onMouseEnter={onPanelEnter}
+      onMouseLeave={onPanelLeave}
+      onFocusCapture={onPanelEnter}
+      /*
+       * 不要在 blur 时关面板：点击横线会 blur，relatedTarget 常为 null，
+       * 会误触 leave；指针其实还在轨道上，关完后 mouseenter 不再触发。
+       * 显隐只认指针进出（mouseenter / mouseleave）。
+       */
+    >
+      <ol
+        className="msg-nav__list"
+        style={{
+          '--rail-gap': `${gap}px`,
+          '--rail-n': items.length,
+        } as React.CSSProperties}
+      >
+        {items.map((item, i) => {
+          const isActive = item.index === activeIndex
+          return (
+            <li key={`${item.id}-${item.index}`} style={{ '--i': i } as React.CSSProperties}>
+              <button
+                type="button"
+                className={`msg-nav__item${isActive ? ' is-active' : ''}`}
+                data-active={isActive ? '' : undefined}
+                aria-label={`第 ${item.index} 个提问`}
+                aria-current={isActive ? 'true' : undefined}
+                tabIndex={isActive ? 0 : -1}
+                /* 禁止点击抢焦点：否则 :focus-visible 会留下主色描边，看起来像多根高亮 */
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  onJump(item.index)
+                  ;(e.currentTarget as HTMLButtonElement).blur()
+                }}
+              >
+                <span className="msg-nav__line" aria-hidden="true" />
+              </button>
+            </li>
+          )
+        })}
       </ol>
     </nav>
   )

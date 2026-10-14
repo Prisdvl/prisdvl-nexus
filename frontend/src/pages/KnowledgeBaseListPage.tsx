@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { FileText, MoreHorizontal, Plus, Search, SearchX } from 'lucide-react'
 import PixelCard from '@/bits/PixelCard/PixelCard'
+import Modal from '@/components/Modal'
 import { Skeleton, StateEmpty } from '@/components/Skeleton'
 import { useParticleColors } from '@/lib/palette'
 import { KBS, type KbItem } from '@/data'
@@ -21,6 +22,9 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
   const rows = USE_MOCK ? KBS : (data ?? [])
   const loading = USE_MOCK ? false : remoteLoading
   const [creating, setCreating] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [createError, setCreateError] = useState('')
 
   const q = query.trim().toLowerCase()
   const list = useMemo(
@@ -28,20 +32,40 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
     [q, rows],
   )
 
-  const createKb = async () => {
-    if (USE_MOCK) return
-    const name = window.prompt('新知识库的名称')?.trim()
-    if (!name) return
+  const createKb = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const cleanName = name.trim()
+    if (!cleanName) {
+      setCreateError('请输入知识库名称。')
+      return
+    }
+    if (cleanName.length > 80) {
+      setCreateError('名称不能超过 80 个字符。')
+      return
+    }
+    if (USE_MOCK) {
+      setCreateError('当前为离线测试模式，无法创建服务端知识库。请使用默认的真实 API 模式。')
+      return
+    }
+    setCreateError('')
     setCreating(true)
     try {
-      await api.knowledge.create({ name })
-      toast.success('知识库已创建', name)
-      reload()
+      await api.knowledge.create({ name: cleanName })
+      setCreateOpen(false)
+      setName('')
+      toast.success('知识库已创建', cleanName)
+      await reload()
     } catch (e) {
-      toast.error('创建失败', errMessage(e))
+      setCreateError(errMessage(e))
     } finally {
       setCreating(false)
     }
+  }
+
+  const openCreate = () => {
+    setName('')
+    setCreateError('')
+    setCreateOpen(true)
   }
 
   return (
@@ -63,8 +87,8 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <button className="btn btn-primary" type="button" onClick={createKb} disabled={creating}>
-            <Plus size={16} /> {creating ? '创建中…' : '新建知识库'}
+          <button className="btn btn-primary" type="button" onClick={openCreate}>
+            <Plus size={16} /> 新建知识库
           </button>
         </div>
       </div>
@@ -101,7 +125,7 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
             icon={<SearchX size={20} />}
             title={q ? `没有匹配「${query}」的知识库` : '还没有知识库'}
             desc={q ? '换个关键词，或直接新建一个知识库开始沉淀。' : '新建第一个知识库，然后把笔记导入进来。'}
-            action={<button className="btn btn-primary btn-sm" type="button" onClick={createKb}><Plus size={14} /> 新建知识库</button>}
+            action={<button className="btn btn-primary btn-sm" type="button" onClick={openCreate}><Plus size={14} /> 新建知识库</button>}
           />
         </div>
       )}
@@ -128,6 +152,42 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
           </PixelCard>
         ))}
       </div>}
+
+      <Modal
+        open={createOpen}
+        title="新建知识库"
+        onClose={() => { if (!creating) setCreateOpen(false) }}
+        shouldBlockClose={() => creating}
+        width={440}
+        footer={(
+          <>
+            <button className="btn btn-ghost" type="button" onClick={() => setCreateOpen(false)} disabled={creating}>取消</button>
+            <button className="btn btn-primary" type="submit" form="create-kb-form" disabled={creating}>
+              {creating ? '创建中…' : '创建知识库'}
+            </button>
+          </>
+        )}
+      >
+        <form id="create-kb-form" onSubmit={createKb} noValidate>
+          <div className="field">
+            <label htmlFor="create-kb-name">名称</label>
+            <input
+            id="create-kb-name"
+            className="input"
+            autoComplete="off"
+            maxLength={80}
+            placeholder="例如：产品文档"
+            value={name}
+            onChange={(event) => { setName(event.target.value); setCreateError('') }}
+            aria-invalid={Boolean(createError)}
+            aria-describedby={createError ? 'create-kb-error' : 'create-kb-help'}
+            />
+            {createError
+              ? <p id="create-kb-error" className="form-error active" role="alert">{createError}</p>
+              : <p id="create-kb-help" className="hint">最多 80 个字符。创建后可在知识库详情页导入文档。</p>}
+          </div>
+        </form>
+      </Modal>
     </div>
   )
 }

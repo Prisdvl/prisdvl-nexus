@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import {
-  BookOpen, ChevronDown, ChevronRight, Copy, Download, GitBranch, MessagesSquare, Pencil, Pin, Plus, RefreshCw, Search, Square, Trash2, Wrench, X,
+  BookOpen, Check, ChevronDown, ChevronRight, Copy, Download, GitBranch, Maximize2, MessagesSquare, Minimize2, Pencil, Pin, Plus, RefreshCw, Search, Settings2, Square, Trash2, Wrench, X,
 } from 'lucide-react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Archive02Icon, Delete02Icon } from '@hugeicons/core-free-icons'
@@ -15,7 +15,6 @@ import { toolPolicy } from '@/lib/toolPolicy'
 import '@/styles/reference.css'
 import CallChip from '@/bits/CallChip/CallChip'
 import PromptBar, { type PromptBarSource } from '@/bits/PromptBar/PromptBar'
-import SwipeRow from '@/bits/SwipeRow/SwipeRow'
 import ThoughtLine from '@/bits/ThoughtLine/ThoughtLine'
 import StatusMark from '@/bits/StatusMark/StatusMark'
 import RubberSegment from '@/bits/RubberSegment/RubberSegment'
@@ -141,7 +140,9 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
   const runMeta = useRef(new Map<string, { model?: string; effort?: string; startedAt: number; firstProgressMs?: number; totalMs?: number }>())
   /** 上一条回答是否被用户中断（用来给出「继续生成」） */
   const [interrupted, setInterrupted] = useState(false)
-  const [kbOpen, setKbOpen] = useState(false)
+  /** 右上角「会话配置」浮层：收纳 模式 / Agent / 知识库 三段选择 */
+  const [configOpen, setConfigOpen] = useState(false)
+  const configRef = useRef<HTMLDivElement>(null)
   const [wizard, setWizard] = useState(false)
   /* 点引用不跳页：在右侧面板就地查看；需要原文时再点面板里的跳转 */
   const [refCitation, setRefCitation] = useState<ChatCitationRef | null>(null)
@@ -160,6 +161,10 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
   const [renaming, setRenaming] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
+  /** 输入框"专注写作"放大模式 */
+  const [composerExpanded, setComposerExpanded] = useState(false)
+  /** 当前输入框渲染行数（PromptBar 上报）；未放大时仅在 >3 行才显示放大入口 */
+  const [composerLines, setComposerLines] = useState(1)
   /** 分支请求进行中：防止重复提交 */
   const [branching, setBranching] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
@@ -175,6 +180,33 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createRequests])
+
+  /* Esc 退出输入框放大模式 */
+  useEffect(() => {
+    if (!composerExpanded) return
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setComposerExpanded(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [composerExpanded])
+
+  /* 会话配置浮层：点外部或 Esc 关闭 */
+  useEffect(() => {
+    if (!configOpen) return
+    const onDown = (e: globalThis.PointerEvent) => {
+      if (configRef.current && !configRef.current.contains(e.target as Node)) setConfigOpen(false)
+    }
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setConfigOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [configOpen])
 
   useEffect(() => {
     if (streaming) {
@@ -271,7 +303,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         setMessagesFailed(id)
         toast.error('消息加载失败', errMessage(e))
       })
-      .finally(() => { if (!cancelled) setLoadingMessages(false) })
+      .finally(() => { setLoadingMessages(false) })
     return () => { cancelled = true }
     // active.messages 只作为 mock 分支的初值，不进依赖——它一变就会重发请求
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1063,93 +1095,127 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
       <div className="chat-layout">
 
         {/* ---------- 对话主体 ---------- */}
-        <section className="panel chat-main" style={{ display: 'flex', flexDirection: 'row', padding: 0, overflow: 'hidden' }}>
+        {/*
+          不再挂 .panel：对话区是整屏工作面，不是卡片。
+          .panel 带圆角 + 阴影，在窄屏会变成"屏幕里再套一张卡"，
+          那是截图里那个整屏外框的真实来源。
+        */}
+        <section className="chat-main">
           <div className="chat-main-col" data-empty={!loadingMessages && active.messages.length === 0 && !streaming ? 'true' : undefined}>
-          <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 22px 10px', flexWrap: 'wrap'   /* 去顶栏分隔线（原为内联 borderBottom）；改为底部内边距留白 */ }}>
-            <div style={{ minWidth: 0 }}>
-              <div data-testid="chat-title" style={{ fontSize: 15, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{active.title}</div>
-              <div data-testid="chat-meta" style={{ fontSize: 12, color: 'var(--text-3)' }}>{active.messages.length} 条消息 · {active.updated}</div>
+          <header className="chat-head">
+            <div className="chat-head__id">
+              <div data-testid="chat-title" className="chat-head__title">{active.title}</div>
+              <div data-testid="chat-meta" className="chat-head__meta">{active.messages.length} 条消息 · {active.updated}</div>
             </div>
 
+            <div className="chat-head__tools">
             {/*
               会话模式切换（P1-1任务书要求"新增模式切换控件"）。
 
               放在 Agent 分段**左侧**：模式决定"这条会话怎么跑"，
               是比"用哪个 Agent"更上层的东西，视觉上也该更靠前。
-              `marginLeft: 'auto'` 从 Agent 段移到这里，否则两个都会贴到最右互相挤。
-
               切换语义（后端按目标模式清理不兼容绑定）：
               PLAIN 清两者 / RAG 清 agentId / AGENT 清 kbIds。
               提示只说**响应里确实变了**的东西，见 switchMode 里的 cleaned。
             */}
-            <div className="mode-seg" style={{ marginLeft: 'auto' }}>
-              <RubberSegment
-                items={MODE_OPTIONS.map((o) => o.label)}
-                value={MODE_OPTIONS.find((o) => o.value === (active.mode ?? 'PLAIN'))?.label ?? '普通对话'}
-                animateExternal
-                onChange={(label) => {
-                  const picked = MODE_OPTIONS.find((o) => o.label === label)
-                  if (picked) void switchMode(picked.value)
-                }}
-                size="sm"
-                radius={999}
-                inset={2}
-                trackColor="var(--surface-muted)"
-                thumbColor="var(--primary-container)"
-                textColor="var(--text-2)"
-                activeTextColor="var(--primary-text)"
-                aria-label="会话模式"
-              />
-            </div>
-
-            <div className="agent-seg">
-              <RubberSegment
-                items={agentOptions.map((o) => o.label)}
-                value={agentName}
-                disabled={(active.mode ?? 'PLAIN') !== 'AGENT'}
-                animateExternal
-                onChange={(label) => {
-                  const picked = agentOptions.find((o) => o.label === label)
-                  if (picked) void switchAgent(picked.id)
-                }}
-                size="sm"
-                radius={999}
-                inset={2}
-                trackColor="var(--surface-muted)"
-                thumbColor="var(--primary-container)"
-                textColor="var(--text-2)"
-                activeTextColor="var(--primary-text)"
-                aria-label="会话使用的 Agent"
-              />
-            </div>
-
-            <div style={{ position: 'relative' }}>
+            <div className="session-config" ref={configRef}>
               <button
-                className="btn btn-ghost btn-sm"
+                className="session-config__btn"
                 type="button"
-                onClick={() => setKbOpen((value) => !value)}
-                disabled={(active.mode ?? 'PLAIN') !== 'RAG'}
-                title={(active.mode ?? 'PLAIN') !== 'RAG' ? '仅「知识库问答」模式可以绑定知识库' : '管理当前会话的知识库'}
+                onClick={() => setConfigOpen(v => !v)}
+                aria-expanded={configOpen}
+                aria-haspopup="dialog"
+                title="会话设置：模式 / Agent / 知识库"
               >
-                <BookOpen size={13} /> 知识库 {active.kbs.length} <ChevronDown size={12} />
+                <Settings2 size={13} aria-hidden="true" />
+                <span className="session-config__summary">
+                  {(active.mode ?? 'PLAIN') === 'RAG'
+                    ? `知识库问答 · ${active.kbs.length}`
+                    : (active.mode ?? 'PLAIN') === 'AGENT'
+                      ? agentName
+                      : '普通对话'}
+                </span>
+                <ChevronDown size={12} aria-hidden="true" className={configOpen ? 'session-config__chev is-open' : 'session-config__chev'} />
               </button>
-              {kbOpen && (active.mode ?? 'PLAIN') === 'RAG' && (
-                <div className="chat-bind-pop">
-                  <h4>绑定知识库</h4>
-                  {kbsError && <p className="form-error active" role="alert">{kbsError} <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}>重试</button></p>}
-                  {!kbsLoading && !kbsError && kbOptions.length === 0 && <p className="hint">还没有可绑定的知识库，请先创建知识库并导入资料。</p>}
-                  {kbOptions.map((kb) => (
-                    <button key={kb.id} type="button" className="opt" data-on={active.kbs.includes(kbKey(kb)) ? '' : undefined} aria-pressed={active.kbs.includes(kbKey(kb))} onClick={() => void toggleKb(kb)}>
-                      <BookOpen size={13} /> {kb.name}
-                    </button>
-                  ))}
+
+              {configOpen && (
+                <div className="session-config__pop" role="dialog" aria-label="会话设置">
+                  <div className="sc-section">
+                    <div className="sc-label">模式</div>
+                    {MODE_OPTIONS.map(o => (
+                      <button
+                        key={o.value}
+                        type="button"
+                        className="sc-opt"
+                        data-on={(active.mode ?? 'PLAIN') === o.value ? '' : undefined}
+                        aria-pressed={(active.mode ?? 'PLAIN') === o.value}
+                        onClick={() => void switchMode(o.value)}
+                      >
+                        <Check size={13} className="sc-check" aria-hidden="true" />
+                        <span>{o.label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="sc-section">
+                    <div className="sc-label">
+                      Agent
+                      {(active.mode ?? 'PLAIN') !== 'AGENT' && <span className="sc-hint">需切换到 Agent 模式</span>}
+                    </div>
+                    {agentOptions.map(o => (
+                      <button
+                        key={o.id ?? 'default'}
+                        type="button"
+                        className="sc-opt"
+                        data-on={active.agentId === (o.id ?? null) ? '' : undefined}
+                        disabled={(active.mode ?? 'PLAIN') !== 'AGENT'}
+                        aria-pressed={active.agentId === (o.id ?? null)}
+                        onClick={() => void switchAgent(o.id ?? null)}
+                      >
+                        <Check size={13} className="sc-check" aria-hidden="true" />
+                        <span>{o.label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="sc-section">
+                    <div className="sc-label">
+                      知识库
+                      {(active.mode ?? 'PLAIN') !== 'RAG' && <span className="sc-hint">需切换到知识库问答</span>}
+                    </div>
+                    {kbsLoading && <p className="hint" style={{ margin: '4px 0 0' }}>正在加载…</p>}
+                    {kbsError && (
+                      <p className="form-error active" role="alert" style={{ margin: '4px 0 0' }}>
+                        {kbsError} <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}>重试</button>
+                      </p>
+                    )}
+                    {!kbsLoading && !kbsError && kbOptions.length === 0 && (
+                      <p className="hint" style={{ margin: '4px 0 0' }}>还没有可绑定的知识库。</p>
+                    )}
+                    {!kbsLoading && !kbsError && kbOptions.map(kb => (
+                      <button
+                        key={kb.id}
+                        type="button"
+                        className="sc-opt"
+                        data-on={active.kbs.includes(kbKey(kb)) ? '' : undefined}
+                        disabled={(active.mode ?? 'PLAIN') !== 'RAG'}
+                        aria-pressed={active.kbs.includes(kbKey(kb))}
+                        onClick={() => void toggleKb(kb)}
+                      >
+                        <Check size={13} className="sc-check" aria-hidden="true" />
+                        <BookOpen size={13} className="sc-opt-icon" aria-hidden="true" />
+                        <span className="sc-opt-name">{kb.name}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
 
-            <button className="btn btn-ghost btn-sm" type="button" onClick={exportMd} title="导出为 Markdown">
+            <button className="btn btn-ghost btn-sm" type="button" onClick={exportMd} title="导出为 Markdown" aria-label="导出为 Markdown">
               <Download size={13} />
             </button>
+            </div>
           </header>
 
           {/* 页面需要唯一 h1：用当前会话标题（视觉上由左侧列表承担，这里给辅助技术） */}
@@ -1172,8 +1238,18 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                 <p>回答将保存在当前会话中，可随时继续或切换模式。</p>
               </div>
             )}
-            {active.messages.map((m) => (
-              <div className={`msg ${m.role}`} key={m.id} data-mid={m.id}>
+            {(() => {
+              let qSeq = 0
+              return active.messages.map((m, msgIdx) => {
+              /* 提问序号（1-based）：导航高亮/跳转用它，避免雪花 id 撞车时多根同时亮 */
+              const qidx = m.role === 'user' ? ++qSeq : undefined
+              return (
+              <div
+                className={`msg ${m.role}`}
+                key={`${m.id}-${msgIdx}`}
+                data-mid={m.id}
+                data-qidx={qidx}
+              >
                 <div>
                   {editing?.id === m.id ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1293,7 +1369,9 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                   )}
                 </div>
               </div>
-            ))}
+              )
+              })
+            })()}
             {(streaming || showSettledThought) && (
               <div className="msg bot">
                 <div className="thinking-block" style={{ paddingTop: 8 }}>
@@ -1315,7 +1393,33 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
           </div>
 
           {/* 输入区：PromptBar（@ 数据源 / 命令 / 模型 / 档位 / 附件 / 停止） */}
-          <div className="composer-wrap">
+          <div
+            className="composer-wrap"
+            data-expanded={composerExpanded ? 'true' : undefined}
+            data-can-expand={!composerExpanded && composerLines > 3 ? 'true' : undefined}
+          >
+            {composerExpanded ? (
+              <button
+                type="button"
+                className="composer-expand"
+                aria-label="退出放大"
+                aria-pressed="true"
+                title="退出放大 (Esc)"
+                onClick={() => setComposerExpanded(false)}
+              >
+                <Minimize2 size={15} aria-hidden="true" />
+              </button>
+            ) : composerLines > 3 ? (
+              <button
+                type="button"
+                className="composer-expand"
+                aria-label="放大输入框"
+                title="放大输入框"
+                onClick={() => setComposerExpanded(true)}
+              >
+                <Maximize2 size={15} aria-hidden="true" />
+              </button>
+            ) : null}
             <PromptBar
               placeholder="输入你的问题…"
               sources={promptSources}
@@ -1323,6 +1427,9 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
               models={PROMPT_MODELS}
               efforts={PROMPT_EFFORTS}
               busy={streaming}
+              expanded={composerExpanded}
+              onLineCountChange={setComposerLines}
+              maxRows={8}
               onSend={(t, detail) => sendText(t, detail)}
               onStop={stopRun}
               background="var(--surface)"
@@ -1330,7 +1437,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
               menuBackground="var(--surface-muted)"
               sparkColor={sparkAccent}
               width={9999}
-              radius={16}
+              radius={26}
             />
             <QueueStrip
               items={queue}

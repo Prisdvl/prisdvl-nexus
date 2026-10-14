@@ -151,7 +151,7 @@ try {
   check('无非预期的 console 错误', unexpected.length === 0, unexpected.slice(0, 2).join(' | '))
 } catch (e) {
   check('异常中断', false, e.message)
-  await page.screenshot({ path: 'D:/develop/Prisma/docs/prototypes/shots/mode-switch-real-error.png' }).catch(() => {})
+  await page.screenshot({ path: `${process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'}/mode-switch-real-error.png` }).catch(() => {})
 } finally {
   console.log('\n--- 真实后端路径汇总 ---')
   console.log('API 调用：')

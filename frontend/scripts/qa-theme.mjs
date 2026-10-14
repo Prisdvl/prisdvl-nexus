@@ -3,7 +3,7 @@ import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -30,46 +30,44 @@ const appearance = () => page.evaluate(() => ({
 }))
 const nav = (l) => page.locator('.sb-nav button.rubber-segment__item', { hasText: l }).first()
 
-/* ---------- 1. 入口页：悬浮条已移除 + 角落控件 ---------- */
+/* ---------- 1. 入口页：悬浮条已移除 + 扩散主题控件 ---------- */
 await page.goto(BASE, { waitUntil: 'networkidle' })
 await page.waitForTimeout(2400)
 check('入口页已无全局悬浮工具条', (await page.locator('.preview-tools').count()) === 0)
-check('入口页有角落聚合控件', (await page.locator('.corner-tools .corner-btn').count()) === 1)
-check('面板默认收起', (await page.locator('.corner-panel').count()) === 0)
-
-await page.locator('.corner-btn').click()
+check('入口页有扩散主题控件', (await page.locator('.theme-control .theme-control__btn').count()) === 1)
+const swatchCount = await page.locator('.theme-control__swatch').count()
+check('配色圆点已挂载', swatchCount >= 4, `${swatchCount}`)
+await page.locator('.theme-control__btn').click()
 await page.waitForTimeout(400)
-check('点开后出现外观面板', (await page.locator('.corner-panel').count()) === 1)
-const segs = await page.locator('.corner-panel .rubber-segment').count()
-check('面板含「主题」与「配色」两组', segs === 2, `${segs} 组`)
-const modeItems = await page.locator('.corner-panel .appearance-row').first().locator('button.rubber-segment__item').allInnerTexts()
-check('主题含 亮色/暗色/跟随系统', ['亮色', '暗色', '跟随系统'].every((x) => modeItems.includes(x)), modeItems.join('/'))
-const palItems = await page.locator('.corner-panel .appearance-row').nth(1).locator('button.rubber-segment__item').allInnerTexts()
-check('配色含三种', palItems.length === 3, palItems.join('/'))
+check('点击展开配色环', (await page.locator('.theme-control[data-picker-open]').count()) === 1)
 await page.screenshot({ path: `${OUT}/y2-corner-panel-light.png` })
 console.log('ok   y2-corner-panel-light（截图）')
 
-/* ---------- 2. 切主题/配色生效并持久化 ---------- */
-await page.locator('.corner-panel .appearance-row').first().locator('button.rubber-segment__item', { hasText: '暗色' }).click()
-await page.waitForTimeout(500)
+/* ---------- 2. 切配色 / 主题生效并持久化 ---------- */
+await page.locator('.theme-control__swatch[aria-label="松石青"]').click()
+await page.waitForTimeout(600)
 let st = await appearance()
-check('切暗色生效', st.theme === 'dark', JSON.stringify(st))
-check('模式已持久化', st.stored === 'dark', st.stored || 'null')
-
-await page.locator('.corner-panel .appearance-row').nth(1).locator('button.rubber-segment__item', { hasText: '松石青' }).click()
-await page.waitForTimeout(500)
-st = await appearance()
 check('切配色生效', st.palette === 'turquoise', st.palette)
+check('选定后配色环收起', (await page.locator('.theme-control[data-picker-open]').count()) === 0)
 
-/* ---------- 3. 关闭路径 ---------- */
-await page.keyboard.press('Escape')
+await page.locator('.theme-control__btn').click()
 await page.waitForTimeout(300)
-check('Esc 关闭面板', (await page.locator('.corner-panel').count()) === 0)
-await page.locator('.corner-btn').click()
+await page.locator('.theme-control__btn').click()
+await page.waitForTimeout(600)
+st = await appearance()
+check('展开后点中心可切浅/深色', st.theme === 'light' || st.theme === 'dark', JSON.stringify(st))
+check('模式已持久化', st.stored === 'light' || st.stored === 'dark', st.stored || 'null')
+
+/* 固定到暗色便于后续断言 */
+await page.evaluate(() => window.__nxTheme.setMode('dark'))
 await page.waitForTimeout(300)
-await page.mouse.click(200, 200)
+st = await appearance()
+check('切暗色生效', st.theme === 'dark', JSON.stringify(st))
+
+/* ---------- 3. 离开悬停后控件仍在 ---------- */
+await page.mouse.move(200, 200)
 await page.waitForTimeout(300)
-check('点面板外关闭', (await page.locator('.corner-panel').count()) === 0)
+check('离开后主题按钮仍在', (await page.locator('.theme-control__btn').count()) === 1)
 
 /* ---------- 4. 刷新后保持 ---------- */
 await page.reload({ waitUntil: 'networkidle' })
@@ -93,15 +91,16 @@ await page.waitForTimeout(300)
 /* ---------- 6. 登录页也有角落控件 ---------- */
 await page.goto(BASE + '/#/login', { waitUntil: 'networkidle' })
 await page.waitForTimeout(1600)
-check('登录页有角落控件', (await page.locator('.corner-tools .corner-btn').count()) === 1)
+check('登录页有角落控件', (await page.locator('.theme-control .theme-control__btn').count()) === 1)
 check('登录页无悬浮条', (await page.locator('.preview-tools').count()) === 0)
 
 /* ---------- 7. 应用内：角落控件不出现，改到设置页 ---------- */
-await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell', { timeout: 8000 })
 await page.waitForTimeout(1500)
-check('应用内不再有角落控件（收敛到设置页）', (await page.locator('.corner-tools').count()) === 0)
+check('应用内不再有角落控件（收敛到设置页）', (await page.locator('.theme-control').count()) === 0)
 
 await page.goto('http://localhost:5175/#/app/account', { waitUntil: 'networkidle' })   // 「账号」导航项已移除，直接走路由
   await page.waitForTimeout(900)

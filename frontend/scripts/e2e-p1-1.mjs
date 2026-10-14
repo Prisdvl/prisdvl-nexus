@@ -10,8 +10,12 @@ import { chromium } from 'playwright-core'
 import { writeFileSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const USER = 'p1real'
-const PASS = 'p1real12345'
+const USER = `p1real_${Date.now()}`
+const PASS = process.env.NEXUS_TEST_PASSWORD
+if (!PASS) {
+  console.error('SKIP: set NEXUS_TEST_PASSWORD to run the live backend E2E test.')
+  process.exit(0)
+}
 const OUT = 'C:/Users/LKY/AppData/Local/Temp/p1e2e'
 const results = []
 const log = (ok, name, detail = '') => {
@@ -35,32 +39,20 @@ page.on('response', async (r) => {
 })
 
 try {
-  /* ---------- 1. 注册 + 登录（真实调用后端） ---------- */
+  /* ---------- 1. 注册（真实调用后端；注册契约没有邮箱验证码阶段） ---------- */
   await page.goto(`${BASE}/#/login`, { waitUntil: 'networkidle' })
   await page.locator('.auth-card button.rubber-segment__item', { hasText: '注册' }).click()
-  await page.waitForTimeout(400)
+  await page.waitForTimeout(250)
   await page.locator('#rg-u').fill(USER)
   await page.locator('#rg-p').fill(PASS)
   await page.locator('#rg-p2').fill(PASS)
   await page.locator('#rg-n').fill('端到端探针')
-  /* 必须填邮箱：AuthPage 里「没填邮箱 → 直接完成注册」，
-     那样会跳过邮箱验证步，测不到验证码环节。 */
-  await page.locator('#rg-e').fill('p1real@example.com')
-  await page.locator('form button[type="submit"]', { hasText: '下一步' }).click()
+  await page.locator('#rg-e').fill(`${USER}@example.test`)
+  await page.locator('form button[type="submit"]', { hasText: '创建账号' }).click()
   await page.waitForTimeout(1200)
-  const regOk = await page.locator('.auth-card .code-slots').count()
-  log(regOk === 1, '注册进入邮箱验证步（真实 POST /auth/register）')
-
-  await page.locator('.code-slots__input').click()
-  await page.keyboard.type('123456')
-  await page.waitForTimeout(2000)
-  const regDone = await page.locator('.toast-host .swipe-toast').count()
-  log(regDone > 0, '注册完成提示出现')
-
-  /* 注册后应仍停在注册页（不自动登录、不导航） */
-  const stillOnRegister = await page.locator('#rg-u').count()
-  log(stillOnRegister === 1, '注册后停留在注册页（未自动登录跳转）',
-    `rg-u=${stillOnRegister}`)
+  const registered = (await page.locator('.toast-host .swipe-toast').count()) > 0
+  log(registered, '注册通过真实 POST /auth/register（不展示虚构验证码）')
+  log((await page.locator('.auth-card .code-slots').count()) === 0, '注册流程不伪造邮箱验证码')
 
   /* ---------- 2. 切登录页真实登录 ---------- */
   await page.locator('.auth-card button.rubber-segment__item', { hasText: '登录' }).click()

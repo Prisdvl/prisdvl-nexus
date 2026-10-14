@@ -1,4 +1,4 @@
-// 交互专项 QA：提示撤销 / CodeSlots 验证码 / StatusMark 状态位 / 骨架屏 / 空状态 / 弹窗关闭与焦点
+// 交互专项 QA：提示撤销 / StatusMark 状态位 / 骨架屏 / 空状态 / 弹窗关闭与焦点
 import { chromium } from 'playwright-core'
 
 const BASE = 'http://localhost:5175'
@@ -23,7 +23,8 @@ const nav = (l) => page.locator('.sb-nav button.rubber-segment__item', { hasText
 /* 登录 */
 await page.goto(BASE + '/#/login', { waitUntil: 'networkidle' })
 await page.waitForTimeout(1500)
-await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell', { timeout: 8000 })
 await page.waitForTimeout(1200)
@@ -155,46 +156,13 @@ await page.locator('.toast-host button', { hasText: '撤销' }).first().click()
 await page.waitForTimeout(700)
 check('撤销后 Agent 恢复', (await page.locator('.agent-grid .pixel-card').count()) === agentsBefore)
 
-/* ---------- 9. 账号页：CodeSlots 验证邮箱（错误 → 正确） ---------- */
-await page.goto('http://localhost:5175/#/app/account', { waitUntil: 'networkidle' })   // 「账号」导航项已移除，直接走路由
-  await page.waitForTimeout(900)
-await page.waitForTimeout(1200)
+/* ---------- 9. 邮箱验证：后端无验证码 API 时明确不可用 ---------- */
+await page.goto('http://localhost:5175/#/app/account', { waitUntil: 'networkidle' })
+await page.waitForTimeout(1500)
 await page.locator('.settings-item', { hasText: '邮箱验证' }).first().click()
 await page.waitForTimeout(500)
-check('邮箱验证分区有验证入口', (await page.locator('button', { hasText: '验证邮箱' }).count()) > 0)
-await page.locator('button', { hasText: '验证邮箱' }).first().click()
-await page.waitForTimeout(500)
-check('验证码弹窗打开', (await page.locator('.dialog .code-slots').count()) === 1)
-check('弹窗标注原型演示码', (await page.locator('.dialog').innerText()).includes('123456'))
-
-// 错误码 → error 态
-await page.locator('.code-slots__input').click()
-await page.keyboard.type('000000')
-// 轮询等待 error 态（校验有 700ms 延迟 + 失败态窗口有限，死等会与动画赛跑）
-let sawError = false
-for (let i = 0; i < 20; i++) {
-  if ((await page.locator('.code-slots__row[data-status="error"]').count()) === 1) { sawError = true; break }
-  await page.waitForTimeout(120)
-}
-check('错误码进入 error 态', sawError)
-let backToIdle = false
-for (let i = 0; i < 25; i++) {
-  if ((await page.locator('.code-slots__row[data-status="idle"]').count()) === 1) { backToIdle = true; break }
-  await page.waitForTimeout(120)
-}
-check('错误码回抽清空（回到 idle）', backToIdle)
-
-// 正确码 → success 态
-await page.locator('.code-slots__input').click()
-await page.keyboard.type('123456')
-let successOrClosed = false
-for (let i = 0; i < 25; i++) {
-  if ((await page.locator('.code-slots__row[data-status="success"]').count()) === 1 || (await page.locator('.dialog').count()) === 0) { successOrClosed = true; break }
-  await page.waitForTimeout(120)
-}
-check('正确码进入 success 态或直接关闭', successOrClosed)
-await page.waitForTimeout(900)
-check('验证邮箱后状态位变为已完成', (await page.locator('.status-mark[data-status="done"]').count()) > 0)
+check('无验证码 API 时邮箱验证按钮禁用', await page.locator('.settings-body button[disabled]', { hasText: '暂不可用' }).count() === 1)
+check('邮箱验证明确说明服务端能力限制', (await page.locator('.settings-body').innerText()).includes('没有发送或校验邮箱验证码的接口'))
 
 /* ---------- 10. 保存资料 → 成功提示（「保存」在「公开资料」分区里） ---------- */
 await page.locator('.settings-item', { hasText: '公开资料' }).first().click()
@@ -203,29 +171,22 @@ await page.getByRole('button', { name: /^保存$/ }).click()
 await page.waitForTimeout(500)
 check('保存后弹出成功提示', (await page.locator('.toast-host .swipe-toast').count()) > 0)
 
-/* ---------- 11. 注册：两步 + 验证码 ---------- */
-await page.locator('.sb-row--settings').click()   // 账号入口改为底部「个人设置」弹层
-  await page.waitForTimeout(600)
-await page.waitForTimeout(300)
+/* ---------- 11. 注册：不能以离线 mock 假报成功 ---------- */
+await page.locator('.sb-row--settings').click()
+await page.waitForTimeout(600)
 await page.locator('.settings-dialog__logout').click()
 await page.waitForTimeout(1000)
 await page.goto(BASE + '/#/login', { waitUntil: 'networkidle' })
-await page.waitForTimeout(1200)
+await page.waitForTimeout(800)
 await page.locator('.auth-card .rubber-segment button.rubber-segment__item', { hasText: '注册' }).click()
-await page.waitForTimeout(400)
-await page.locator('#rg-u').fill('newbie_user')
-await page.locator('#rg-u').blur()
+await page.waitForTimeout(300)
+await page.locator('#rg-u').fill('qa_user')
 await page.locator('#rg-p').fill('Password123')
 await page.locator('#rg-p2').fill('Password123')
-await page.locator('#rg-e').fill('newbie@example.com')
-await page.locator('#rg-e').blur()
-await page.locator('form button[type="submit"]', { hasText: '下一步' }).click()
-await page.waitForTimeout(600)
-check('注册进入第二步：验证码', (await page.locator('.auth-card .code-slots').count()) === 1)
-await page.locator('.code-slots__input').click()
-await page.keyboard.type('123456')
-await page.waitForTimeout(1400)
-check('注册验证码通过并提示', (await page.locator('.toast-host .swipe-toast').count()) > 0)
+await page.locator('#rg-e').fill('qa@example.com')
+await page.locator('form button[type="submit"]', { hasText: '创建账号' }).click()
+await page.waitForTimeout(300)
+check('离线测试模式注册不假报成功', (await page.locator('.auth-card [role="alert"]').innerText()).includes('注册需要真实后端'))
 
 /* ---------- 12. 校验时机：未失焦不报错，失焦才报 ---------- */
 await page.locator('.auth-card .rubber-segment button.rubber-segment__item', { hasText: '注册' }).click()

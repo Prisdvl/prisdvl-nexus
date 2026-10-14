@@ -1,25 +1,112 @@
 /* ============================================================
  * 全局侧栏（参照 ChatGPT 的信息架构）
  *
- * 结构：顶部（品牌 + 搜索 + 折叠）→ 新对话 → 导航 → 最近会话 → 底部（账号 + 升级）
- * 视觉：无卡片底、行 hover 微亮、选中用 surface-muted；全部复用现有 token。
+ * 结构：顶部（品牌 + 搜索 + 折叠）→ 新对话 → 导航 → 最近会话 → 底部（个人设置）
+ * 视觉：无卡片底、行 hover 微亮、选中用底色；全部复用现有 token。
+ *
+ * ⚠️ 侧栏是 fixed 定位，必须与 global.css 的 `.shell-main { margin-left }`
+ * 保持同一宽度常量（--sb-w）。改一处就要改两处，所以这里定义变量、由两处共用。
  * ============================================================ */
 
 /* ---------- 顶部行 ---------- */
 .sb-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 10px 6px;
+  padding: 12px 8px 6px;
 }
-.sb-brand-mini { min-width: 0; display: flex; align-items: center; }
-.sb-top-actions { display: flex; align-items: center; gap: 2px; }
+/*
+ * 品牌：图标在上、名字在下，左缘与导航图标对齐。
+ * 侧栏变窄时字标用 ellipsis；再窄或折叠成图标栏时整段卸掉。
+ */
+/*
+ * --sb-soft：0 = 图标栏，1 = 展开。点击折叠与拖拽软过渡带共用。
+ * 拖拽中（data-resizing）关掉子元素 transition，让软量跟手；
+ * 松手 / 点击时再走 --dur-panel 缓动。
+ */
+.sb-brand-mini {
+  /* 展开 66×52（原图 719×564 等比）；折叠视觉约 22 宽。字标相对本区定位。 */
+  --sb-mark-w: 66px;
+  --sb-mark-h: 52px;
+  --sb-mark-collapsed: 22px;
+  --sb-mark-scale-min: 0.3333; /* 22 / 66 */
+  position: relative;
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: flex-start; /* 两端都顶齐，避免折叠时改 center 把标上下甩 */
+  overflow: visible;
+  /* 底 padding 随 --sb-soft 给字标留位；往下收，PNG 顶边不动 */
+  padding: 0 10px calc(var(--sb-soft, 1) * (4px + 1.25em));
+  transition: padding-bottom var(--dur-panel) var(--ease-out);
+}
+.sidebar .sb-brand-mini .brand {
+  position: static; /* 让 .wordmark 锚定到 .sb-brand-mini，才能铺满整段品牌名 */
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+/*
+ * 品牌标由 --sb-soft 插值：66×52 ↔ 22×22，scale 1 ↔ 0.3333，锚在左上。
+ */
+.sidebar .sb-brand-mini .mark {
+  position: relative;
+  flex: none;
+  /* 必须带 px：CSS calc 不能把「无单位数」加到长度上，否则整段 width/height 无效 → 盒塌成 0 → PNG 消失 */
+  width: calc(var(--sb-mark-collapsed) + (var(--sb-mark-w) - var(--sb-mark-collapsed)) * var(--sb-soft, 1));
+  height: calc(var(--sb-mark-collapsed) + (var(--sb-mark-h) - var(--sb-mark-collapsed)) * var(--sb-soft, 1));
+  overflow: hidden;
+  transition:
+    width var(--dur-panel) var(--ease-out),
+    height var(--dur-panel) var(--ease-out);
+}
+.sidebar .sb-brand-mini .mark img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--sb-mark-w) !important;
+  height: var(--sb-mark-h) !important;
+  max-width: none;
+  object-fit: fill;
+  display: block;
+  transform: scale(calc(var(--sb-mark-scale-min) + (1 - var(--sb-mark-scale-min)) * var(--sb-soft, 1)));
+  transform-origin: left top;
+  transition: transform var(--dur-panel) var(--ease-out);
+}
+/*
+ * 字标：完整显示「Prisdvl Nexus」；显隐由 --sb-soft 驱动（点击/拖拽同一套）。
+ */
+.sidebar .sb-brand-mini .brand .wordmark {
+  position: absolute;
+  left: 10px;
+  top: calc(var(--sb-mark-h) + 4px);
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  opacity: var(--sb-soft, 1);
+  transform: translateY(calc((1 - var(--sb-soft, 1)) * 6px));
+  pointer-events: auto;
+  transition:
+    opacity var(--dur-panel) var(--ease-out) 90ms,
+    transform var(--dur-panel) var(--ease-out) 90ms;
+}
+.sb-top-actions { display: flex; align-items: center; gap: 2px; flex: none; }
 .sb-icon-btn {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 30px;
   height: 30px;
+  padding: 0;
   border: 0;
   border-radius: 8px;
   background: none;
@@ -27,8 +114,9 @@
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.sb-icon-btn:hover { background: var(--surface-muted); color: var(--text); }
-.sb-icon-btn[aria-pressed='true'] { background: var(--surface-muted); color: var(--text); }
+.sb-icon-btn:hover { background: var(--ui-hover); color: var(--text); }
+.sb-icon-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.sb-icon-btn[aria-pressed='true'] { background: var(--ui-selected); color: var(--text); }
 
 /* ---------- 通用行（新对话 / 导航项同款外观） ---------- */
 .sb-row {
@@ -37,7 +125,7 @@
   gap: 10px;
   width: calc(100% - 16px);
   margin: 2px 8px;
-  height: 36px;
+  min-height: 36px;
   padding: 0 10px;
   border: 0;
   border-radius: 10px;
@@ -48,8 +136,24 @@
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.sb-row:hover { background: var(--surface-muted); color: var(--text); }
+.sb-row > svg { flex: none; }
+.sb-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: var(--sb-soft, 1);
+  max-width: calc(160px * var(--sb-soft, 1));
+  transform: translateX(calc((1 - var(--sb-soft, 1)) * -4px));
+  transition:
+    opacity var(--dur-panel) var(--ease-out) 70ms,
+    transform var(--dur-panel) var(--ease-out) 70ms,
+    max-width var(--dur-panel) var(--ease-out);
+}
+.sb-row:hover { background: var(--ui-hover); color: var(--text); }
+.sb-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .sb-row--quick { font-weight: 500; color: var(--text); }
+.sb-row[aria-current='true'] { background: var(--ui-selected); color: var(--text); }
 
 /* 侧栏里的搜索框（沿用对话页原有的 .chat-search 结构，样式统一） */
 .sb-search { margin: 2px 8px 4px; }
@@ -57,75 +161,73 @@
 
 /* ---------- 最近会话 ---------- */
 .sb-recent {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 0;
-  /* 横向内边距交给"行容器"，这样分区标题与行内图标都落在同一条 8px 基准线上 */
+  /* 横向内边距交给"行容器"，分区标题与会话行因此落在同一条 8px 基准线上 */
   padding: 4px 0 8px;
   overflow-y: auto;
-  scrollbar-width: none;
-}
-.sb-recent::-webkit-scrollbar { display: none; }
-/*
- * 分区标题是可点击的折叠控件，字号不能按"小标签"来（11.5px 太小、不利点击）。
- * 提到 13px + 36px 行高，命中区域足够大，视觉上也就成了"可操作项"。
- */
-.sb-section {
-  margin: 10px 0 2px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-2);
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
 }
 .sb-group { display: flex; flex-direction: column; }
-/* 可收起的分组标题：整行可点，右侧带箭头 */
+/* 分区标题是可点击的折叠控件：字号按"可操作项"给（13px / 34px 行高），
+   而不是按小标签（11.5px 太小、不利点击）。 */
 .sb-section--toggle {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
+  width: calc(100% - 16px);
+  margin: 8px 8px 2px;
   height: 34px;
   padding: 0 8px;
   border: 0;
   border-radius: 8px;
   background: none;
   font: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
-  color: var(--text-2);
+  letter-spacing: 0.01em;
+  color: var(--text-3);
   text-align: left;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.sb-section--toggle:hover { background: var(--surface-muted); color: var(--text-2); }
+.sb-section--toggle:hover { background: var(--ui-hover); color: var(--text-2); }
+.sb-section--toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .sb-section--toggle > svg { margin-left: auto; color: var(--text-3); transition: transform var(--dur-ui) var(--ease-out); }
 .sb-section--toggle > svg.rot90 { transform: rotate(90deg); }
-/* 会话列表收起时不占位 */
-.sb-recent-list[hidden] { display: none; }
 .sb-recent-list {
   display: flex;
   flex-direction: column;
   gap: 1px;
   padding: 0 8px;
 }
-/* 最近会话行：一行纯文字（ChatGPT 那种），不再是卡片 */
+/*
+ * 最近会话行：一行纯文字（ChatGPT 侧栏），不是卡片。
+ *
+ * 分工明确、互不叠加：
+ *   · 选中底色 → 本文件 .sb-session[data-selected]（整行）
+ *   · 悬停底色 → 本文件（仅未选中行，避免"行里套块"）
+ *   · 文字层级 → 本文件
+ */
 .sidebar .sb-session {
-  /* 用 .sidebar 前缀提权：global.css 后注入的 `.session-item { padding: 9px 12px }`
-     是同权重、且在更后面，不加前缀会被它压回去（实测内边距仍是 12px、仍是 column 居中）。
-     必须显式覆盖 .session-item 的 column + center：否则文本会在行内水平居中，
-     起点随文字长度漂移（实测 13/42/45/40），三层就"没对齐"了 */
+  position: relative;               /* 操作区绝对定位锚点 */
   display: flex;
   flex-direction: row;
   align-items: center;
-  justify-content: flex-start;
-  gap: 0;
+  gap: 2px;
   height: 34px;
-  /* 行盒左边界 25px（SwipeRow 自身留白）+ 5px = 文字标签正好落在 30px 基准线 */
-  padding: 0 5px;
+  min-width: 0;
+  /* 行盒左边界 = 列表内边距 8px + 本行 6px，文字起点与分区标题同基线 */
+  padding: 0 6px;
+  border: 0;
   border-radius: 8px;
+  background: none;                 /* 内层恒透明：底色由整行承担 */
   color: var(--text-2);
   font-size: 13.5px;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .sidebar .sb-session .t {
   display: flex;
@@ -136,85 +238,211 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/*
- * 会话行是"纯文字行"（对齐 ChatGPT 的侧栏）：
- * 原来沿用了对话页里 .session-item 的卡片样式 —— 选中态是 --primary-container 色块 + 1px 描边，
- * 放在侧栏里就变成一排"带边框的按钮"，与整体风格不符。
- */
-/* 用 .sidebar 前缀提高权重：global.css 注入在本文件之后，
-   同权重会被 .session-item[aria-selected] 的 --primary-container 色块压回来（实测选中行仍是暖棕块）。 */
-.sidebar .sb-session,
-.sidebar .sb-session[aria-selected='true'] {
-  border-color: transparent;
-  background: none;
-}
-/*
- * 选中/悬停必须有清楚的层级：
- * 之前选中行用 --surface-muted，而侧栏底色本身就是近似的表面色 ——
- * 实测亮色下亮度差只有 0.016（等于没有高亮）、暗色 0.039，
- * 所以"打开某条对话看不出是哪条"。
- *
- * 这里把 --surface-muted 与会话文字色混合：暗色往亮处走、亮色往暗处走，
- * 一套公式在两种主题下都能拉开约 0.1 的亮度差；悬停仍用更弱的一档。
- */
-/* 内层始终透明：高亮由整行（SwipeRow rowColor）承担，避免"行里套块" */
-.sidebar .sb-session { background: none; transition: background var(--dur-fast) var(--ease-out); }
-/* 悬停只作用于未选中行：否则选中行上会再叠一层，看起来像"行里套块" */
-.sidebar .sb-session:not([aria-selected='true']):hover { background: var(--surface-muted); }
-.sidebar .sb-session[aria-selected='true'] {
-  color: var(--text);
-  font-weight: 600;
-}
-/* 置顶项在选中态下也要能看出"已置顶" */
-.sidebar .sb-session[aria-selected='true'] .pin { color: var(--primary); }
+/* 悬停只作用于未选中行 */
+.sidebar .sb-session:not([data-selected]):hover { background: var(--ui-hover); color: var(--text); }
+.sidebar .sb-session[data-selected] { background: var(--ui-selected); color: var(--text); font-weight: 600; }
+.sidebar .sb-session:focus-within { color: var(--text); }
+/* 置顶图标：常驻但弱，选中时更明确 */
 .sb-session .pin { flex: none; color: var(--text-3); }
+.sidebar .sb-session[data-selected] .pin { color: var(--primary); }
 .sb-empty { margin: 8px 4px; font-size: 12.5px; color: var(--text-3); }
 
-/* ---------- 底部：账号 + 升级 ---------- */
-.sb-upgrade {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  height: 30px;
-  margin: 0 0 0 6px;
-  padding: 0 12px;
-
-  border-radius: var(--radius-pill);
-  background: var(--surface);
-  color: var(--text-2);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+/* ---------- 底部：个人设置入口 ---------- */
+/*
+ * 绝对钉在侧栏左下角：折叠只藏「个人设置」文字，齿轮的 left/bottom 不变。
+ * 不用 flex margin-top:auto —— 折叠时 .sb-recent 卸掉会让脚栏在过渡里晃一下。
+ * 侧栏底部预留脚栏高度，避免会话列表滚到齿轮底下。
+ */
+.sidebar {
+  /* 与 .sb-foot 占位同高：8+36+10 */
+  padding-bottom: 54px;
 }
-.sb-upgrade:hover { border-color: var(--border-strong); color: var(--text); }
-.sb-user-meta { min-width: 0; text-align: left; }
-
-/* 侧栏底部的账号行与升级按钮同一行 */
 .sidebar .sb-foot {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  z-index: 2;
   flex: none;
   display: flex;
   align-items: center;
+  justify-content: flex-start;
+  width: auto;
+  max-width: 100%;
+  margin: 0;
   padding: 8px 8px 10px;
-
+  pointer-events: none;
 }
-.sb-row--settings { width: 100%; margin: 0; }
+.sb-row--settings {
+  pointer-events: auto;
+  width: auto;
+  max-width: 100%;
+  min-width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0 10px;
+  justify-content: flex-start;
+  gap: 10px;
+}
+.sb-row--settings > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+/* 导航项：图标固定宽度居中，文字左对齐，所有行文字起始 x 一致 */
+.sidebar .sb-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.sidebar .sb-item > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
 
 /* ---------- 折叠态：只留图标 ---------- */
-.sidebar[data-collapsed] { width: 68px; }
-.sidebar[data-collapsed] .sb-item > span:last-child,
-.sidebar[data-collapsed] .sb-row > span,
-.sidebar[data-collapsed] .sb-section,
+.sidebar[data-collapsed] { width: var(--sb-w-collapsed); }
+/*
+ * 标签直接卸掉，不要用 max-width:0 —— 68px 栏里文字仍会漏出半个字。
+ * 折叠后整列图标（折叠钮 / 新对话 / 导航 / 齿轮）共一条竖向中轴线。
+ */
+/* 分区/列表整块卸掉（避免半截字漏出）；行内标签改走软淡出 */
+.sidebar[data-collapsed] .sb-section--toggle,
 .sidebar[data-collapsed] .sb-recent,
-.sidebar[data-collapsed] .sb-user-meta,
-.sidebar[data-collapsed] .sb-upgrade { display: none; }
-.sidebar[data-collapsed] .sb-row { width: 36px; margin: 2px auto; justify-content: center; padding: 0; }
-.sidebar[data-collapsed] .sb-brand-mini { display: grid; place-items: center; width: 100%; }
-.sidebar[data-collapsed] .sb-top { flex-direction: column; gap: 4px; }
-.sidebar[data-collapsed] .sb-foot { flex-direction: column; padding: 8px 0 10px; }
-.sidebar[data-collapsed] .sb-user { justify-content: center; }
+.sidebar[data-collapsed] .sb-search {
+  display: none;
+}
+.sidebar[data-collapsed] .sb-brand-mini .wordmark {
+  pointer-events: none;
+  /* 收起时更快（覆盖展开的 90ms delay） */
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+.sidebar[data-collapsed] .sb-row > span,
+.sidebar[data-collapsed] .sb-item > span:last-child {
+  pointer-events: none;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    max-width var(--dur-fast) var(--ease-out);
+}
+.sidebar .sb-item > span:last-child {
+  opacity: var(--sb-soft, 1);
+  max-width: calc(160px * var(--sb-soft, 1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(calc((1 - var(--sb-soft, 1)) * -4px));
+  transition:
+    opacity var(--dur-panel) var(--ease-out) 70ms,
+    transform var(--dur-panel) var(--ease-out) 70ms,
+    max-width var(--dur-panel) var(--ease-out);
+}
+.sidebar[data-collapsed] .sb-row {
+  width: calc(100% - 16px);
+  margin: 2px 8px;
+  padding: 0;
+  justify-content: center;
+  gap: 0; /* 标签仍占 DOM 时 gap 会把图标挤离中线 */
+  overflow: hidden;
+}
+/* 折叠：脚栏拉满宽，齿轮与导航图标同中轴 */
+.sidebar[data-collapsed] .sb-foot {
+  left: 0;
+  right: 0;
+  width: 100%;
+  max-width: none;
+  justify-content: center;
+  padding: 8px 0 10px;
+}
+.sidebar[data-collapsed] .sb-row--settings {
+  width: 36px;
+  min-width: 36px;
+  max-width: 36px;
+  margin: 0;
+  padding: 0;
+  justify-content: center;
+}
+/* 侧栏导航 RubberSegment：显化底槽 + 抬高未选项对比，与上下行对齐 */
+.sb-nav .rubber-segment {
+  --rs-idle: 0.82;
+  --rs-hover: 1;
+  width: 100%;
+  /* 底槽相对侧栏略分一层，避免和透明轨道一样「只有滑块、没有控件感」 */
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--text) 6%, transparent);
+}
+.sb-nav .rubber-segment[data-vertical] .rubber-segment__item {
+  height: 38px;
+  padding: 0 10px;
+  font-size: 13.5px;
+}
+.sidebar[data-collapsed] .rubber-segment[data-vertical] {
+  --rs-min: 0px;
+}
+/*
+ * 折叠：图标落在滑块正中。
+ * 不要 flex-start + 左 padding（会偏出 clip 可见区）；
+ * 也不要留着 .sb-item 的 gap——标签 max-width:0 后 gap 仍占位，会把 16px 图标往左甩约半个 gap。
+ */
+.sidebar[data-collapsed] .rubber-segment[data-vertical] .rubber-segment__item {
+  justify-content: center;
+  padding: 0;
+  min-width: 0;
+}
+.sidebar[data-collapsed] .sb-nav .sb-item {
+  justify-content: center;
+  gap: 0;
+}
+/*
+ * 折叠后顶栏与「新对话 / 导航」同一套居中列：
+ *   行宽 calc(100%-16px) + margin 8，图标 justify center → 中轴 x=34（68 栏）。
+ */
+.sidebar[data-collapsed] .sb-top {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  /* 顶距与展开态同为 12，避免整块品牌区上跳 */
+  padding: 12px 0 4px;
+}
+/*
+ * 折叠品牌：PNG 盒居中到同一中轴；顶对齐保持不变。
+ * PNG 只 scale，布局盒随 --sb-soft 收；折叠视觉约 22 宽。
+ */
+.sidebar[data-collapsed] .sb-brand-mini {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: calc(100% - 16px);
+  margin: 0 8px;
+  padding: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sb-brand-mini,
+  .sidebar .sb-brand-mini .mark,
+  .sidebar .sb-brand-mini .mark img,
+  .sidebar .sb-brand-mini .brand .wordmark,
+  .sidebar .sb-row > span,
+  .sidebar .sb-item > span:last-child {
+    transition: none;
+  }
+}
+.sidebar[data-collapsed] .sb-top-actions {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding: 0;
+}
+.sidebar[data-collapsed] .sb-icon-btn {
+  width: calc(100% - 16px);
+  height: 36px;
+  margin: 2px 8px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 10px;
+}
 
 /* ---------- 项目栏目 ---------- */
 .sb-projects { flex: none; }
@@ -271,56 +499,116 @@
 .sb-project-form { display: flex; gap: 6px; padding: 2px 0 4px; }
 .sb-project-form .input { height: 30px; font-size: 13px; }
 
-/* ------------------------------------------------------------
- * 手动折叠时，内容区必须跟随侧栏宽度
- *
- * ⚠️ `.shell-main` 的基础值是 `margin-left: 236px`（global.css），
- * 而折叠态 `.sidebar[data-collapsed]` 只有 68px。
- * 之前只改了 `.sidebar` 的宽度，没给内容区任何跟随规则 ——
- * 结果折叠后左侧留下 168px 死白，chat-fixed（一屏固定布局）
- * 与所有其它页面都被挤窄。
- *
- * 结构：`.shell > aside.sidebar + main.shell-main`（兄弟），故用 ~ 选择器。
- * 宽度值必须与 `.sidebar[data-collapsed]` 保持一致。
- * ------------------------------------------------------------ */
-/* ⚠️ 必须限定到桌面档位：≤768px 时侧栏是抽屉，
- * global.css 里 `.shell-main { margin-left: 0 }`；
- * 本选择器优先级更高，不加媒体查询会把移动端内容顶开 68px。 */
+/* 手动折叠时，内容区必须跟随侧栏宽度。
+   ⚠️ 必须限定到桌面档位：≤768px 时侧栏是抽屉（global.css 里 margin-left: 0），
+   本选择器优先级更高，不加媒体查询会把移动端内容顶开 68px。 */
 @media (min-width: 769px) {
-  .sidebar[data-collapsed] ~ .shell-main { margin-left: 68px; }
+  .sidebar[data-collapsed] ~ .shell-main { margin-left: var(--sb-w-collapsed); }
 }
 @media (min-width: 769px) and (prefers-reduced-motion: reduce) {
   .sidebar[data-collapsed] ~ .shell-main { transition: none; }
 }
 
-/* 会话行内的轻量图标操作：鼠标悬停/键盘聚焦出现，触控设备常驻。 */
-.sidebar .sb-session { gap: 2px; }
-.sidebar .sb-session[data-selected] { color: var(--text); font-weight: 600; }
+/* 会话行内的轻量图标操作：鼠标悬停/键盘聚焦出现，触控设备常驻。
+ *
+ * 标题右缘与操作键联动（响应式淡化）：
+ *   · 默认不预留右侧 —— 文字铺到行边，MarqueeTitle 只在真溢出时末尾淡化；
+ *   · 悬停/聚焦露出功能键时再缩 padding，淡化跟着收到键左侧；
+ *   · 操作区仍绝对定位，避免进 flex 把行高撑乱。
+ */
 .sidebar .session-open {
-  display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; height: 32px;
-  padding: 0 5px; border: 0; border-radius: 7px; background: transparent; color: inherit;
-  text-align: left; font: inherit; cursor: pointer;
+  --session-actions-w: 78px; /* 3×26px 按钮 + gap */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: padding-right var(--dur-fast) var(--ease-out);
 }
-.sidebar .session-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-.sidebar .session-open .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar .session-pin { flex: none; color: var(--primary-text); }
+.sidebar .sb-session:hover .session-open,
+.sidebar .sb-session:focus-within .session-open {
+  padding-right: var(--session-actions-w);
+}
+.sidebar .session-open:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+/* 操作区：绝对定位浮在行右侧；显隐用 opacity，标题宽度由上面的 padding 联动 */
 .sidebar .session-actions {
-  display: flex; align-items: center; gap: 1px; flex: none;
-  opacity: 0; pointer-events: none; transition: opacity var(--dur-fast) var(--ease-out);
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 .sidebar .sb-session:hover .session-actions,
 .sidebar .sb-session:focus-within .session-actions { opacity: 1; pointer-events: auto; }
 .sidebar .session-action {
-  display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0;
-  border: 0; border-radius: 7px; background: transparent; color: var(--text-3); cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .sidebar .session-action:hover,
-.sidebar .session-action:focus-visible { background: var(--surface-muted); color: var(--primary-text); }
-.sidebar .session-action:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.sidebar .session-action:focus-visible { background: var(--ui-selected); color: var(--text); }
+.sidebar .session-action:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .sidebar .session-action--danger:hover,
 .sidebar .session-action--danger:focus-visible { color: var(--danger); }
 @media (pointer: coarse) {
+  /* 触控常驻操作键：标题始终为键位让出右缘 */
+  .sidebar .session-open {
+    --session-actions-w: 96px; /* 3×32px */
+    padding-right: var(--session-actions-w);
+  }
   .sidebar .session-actions { opacity: 1; pointer-events: auto; }
-  .sidebar .session-action { width: 34px; height: 34px; }
+  .sidebar .session-action { width: 32px; height: 32px; }
 }
-@media (prefers-reduced-motion: reduce) { .sidebar .session-actions { transition: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar .session-actions,
+  .sidebar .session-open { transition: none; }
+}
+
+/* ---------- 右缘拖拽调宽 ---------- */
+.sb-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  z-index: 10;
+  width: 6px;
+  cursor: col-resize;
+  /* 纯命中区，不画任何视觉指示条 */
+  background: transparent;
+}
+/* 拖拽中：宽度 1:1 跟手；品牌/文字 transition 关掉，改由 --sb-soft 跟手插值 */
+.sidebar[data-resizing],
+.sidebar[data-resizing] ~ .shell-main {
+  transition: none !important;
+}
+.sidebar[data-resizing] .sb-brand-mini,
+.sidebar[data-resizing] .sb-brand-mini .mark,
+.sidebar[data-resizing] .sb-brand-mini .mark img,
+.sidebar[data-resizing] .sb-brand-mini .wordmark,
+.sidebar[data-resizing] .sb-row > span,
+.sidebar[data-resizing] .sb-item > span:last-child {
+  transition: none !important;
+}

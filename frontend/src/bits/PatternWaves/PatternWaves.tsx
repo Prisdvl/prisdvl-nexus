@@ -549,8 +549,16 @@ const PatternWaves = ({
     const container = containerRef.current;
     if (!container) return undefined;
 
-    const renderer = new Renderer({ alpha: true, premultipliedAlpha: true, antialias: false, depth: false });
+    // 探测之外的运行时兜底：getContext 在远程桌面/无 GPU/context 达上限时返回 null，
+    // ogl 构造函数会对 null 赋值抛 TypeError。静默降级为无背景，不能让错误冒泡到路由边界。
+    let renderer: Renderer;
+    try {
+      renderer = new Renderer({ alpha: true, premultipliedAlpha: true, antialias: false, depth: false });
+    } catch {
+      return undefined;
+    }
     const gl = renderer.gl;
+    if (!gl) return undefined;
     if (!renderer.isWebgl2) {
       gl.getExtension('WEBGL_lose_context')?.loseContext();
       return undefined;

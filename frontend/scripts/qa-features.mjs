@@ -23,7 +23,8 @@ await page.goto(BASE, { waitUntil: 'networkidle' })
 await page.waitForTimeout(2200)
 await page.locator('.lp-pill button', { hasText: '登录' }).first().click()
 await page.waitForSelector('.auth-card')
-await page.getByRole('button', { name: /一键使用演示账号/ }).click()
+await page.locator('#li-u').fill('qa-runner')
+await page.locator('#li-p').fill('qa-runner-password')
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell')
 await page.waitForTimeout(2000)
@@ -42,16 +43,17 @@ check('点击侧栏可切页', (await page.locator('.page-title').first().innerT
 await page.locator('.sb-nav button.rubber-segment__item', { hasText: '工作台' }).click()
 await page.waitForTimeout(1600)
 const heatCells = await page.locator('.wb-heat span').count()
-check('活力图 12×7 = 84 格', heatCells === 84, `实际 ${heatCells}`)
+check('活跃度图显示真实统计窗口 30 天', heatCells === 30, `实际 ${heatCells}`)
 check('用量趋势图已渲染', (await page.locator('.wb-trend svg path').count()) >= 2)
+const statCards = await page.locator('.stat-grid .stat-card').count()
 const glowCards = await page.locator('.stat-grid .border-glow-card').count()
-check('四张统计卡统一 BorderGlow', glowCards === 4, `实际 ${glowCards}`)
+check('统计卡使用低噪声表面（不含光条组件）', statCards === 4 && glowCards === 0, `卡片 ${statCards} / 光条 ${glowCards}`)
 check('活动时间线 5 条', (await page.locator('.wb-timeline li').count()) === 5)
 check('轮播已渲染内容（功能速览）', (await page.locator('.lp-carousel .carousel-item-title').count()) > 0)
 // Agent 快捷测试
 await page.locator('.wb-quick input').fill('出一道 JVM 调优题')
 await page.locator('.wb-quick button[type="submit"]').click()
-await page.waitForTimeout(700)
+await page.waitForTimeout(220)
 check('快捷测试进入执行态', (await page.locator('.wb-quick .lattice-loader').count()) > 0)
 await page.waitForTimeout(2200)
 check('快捷测试产出结果', (await page.locator('.wb-quick-out').count()) > 0)
@@ -61,7 +63,7 @@ await page.locator('.sb-nav button.rubber-segment__item', { hasText: '对话' })
 await page.waitForTimeout(900)
 const title1 = await page.getByTestId('chat-title').innerText()
 const firstMsg1 = await page.locator('.thread .bub').first().innerText()
-await page.locator('.session-item').nth(1).click()
+await page.locator('.session-open').nth(1).click()
 await page.waitForTimeout(500)
 const title2 = await page.getByTestId('chat-title').innerText()
 const firstMsg2 = await page.locator('.thread .bub').first().innerText()
@@ -110,37 +112,41 @@ await page.waitForTimeout(5200)
 check('发送后生成回答', (await page.locator('.thread .msg').count()) > msgsBeforeSend)
 
 const sessionsBefore = await page.locator('.session-list .swipe-row').count()
-const titleBefore = await page.locator('.session-item[aria-selected="true"] .t').innerText()
+const titleBefore = await page.locator('.session-item[data-selected] .t').innerText()
 await page.locator('.thread .msg').last().hover()
-await page.locator('.thread .msg').last().locator('.msg-ops button', { hasText: '在新对话中分支' }).click()
+await page.locator('.thread .msg').last().getByRole('button', { name: '从此处创建分支' }).click()
 await page.waitForTimeout(1200)
 const sessionsAfter = await page.locator('.session-list .swipe-row').count()
-const titleAfter = await page.locator('.session-item[aria-selected="true"] .t').innerText()
+const titleAfter = await page.locator('.session-item[data-selected] .t').innerText()
 check('分支后多出一个新会话', sessionsAfter === sessionsBefore + 1, `${sessionsBefore} → ${sessionsAfter}`)
-check('新会话标题带「分支」', titleAfter.includes('分支') && titleAfter !== titleBefore, `${titleBefore} → ${titleAfter}`)
+check('新分支使用连续命名「分支」', titleAfter === '分支' && titleAfter !== titleBefore, `${titleBefore} → ${titleAfter}`)
 check('分支复制了原上下文', (await page.locator('.thread .msg').count()) > 0)
 // 分支会话带着"到该条为止"的上下文，后续 Markdown 断言正是在它上面验证
 
 // 消息操作：编辑重发（用户消息）
 await page.locator('.thread .msg.user').last().hover()
-await page.locator('.thread .msg.user').last().locator('.msg-ops button', { hasText: '编辑重发' }).click()
+await page.locator('.thread .msg.user').last().getByRole('button', { name: '编辑并重新发送' }).click()
 await page.waitForTimeout(300)
 check('编辑重发进入编辑态', (await page.locator('.thread textarea').count()) > 0)
 await page.locator('.thread button', { hasText: '取消' }).click()
 await page.waitForTimeout(200)
 
 // 绑定：知识库多选
-const chipsBefore = await page.locator('.chat-layout header .btn-ghost', { hasText: '知识库' }).innerText()
-await page.locator('.chat-layout header .btn-ghost', { hasText: '知识库' }).click()
+await page.locator('.mode-seg .rubber-segment__item', { hasText: '知识库问答' }).click()
+await page.waitForTimeout(350)
+const chipsBefore = await page.locator('.chat-layout header button', { hasText: '知识库' }).innerText()
+await page.locator('.chat-layout header button', { hasText: '知识库' }).click()
 await page.waitForTimeout(300)
 check('知识库绑定弹层打开', (await page.locator('.chat-bind-pop').count()) === 1)
 await page.locator('.chat-bind-pop .opt').nth(3).click()
 await page.waitForTimeout(400)
-const chipsAfter = await page.locator('.chat-layout header .btn-ghost', { hasText: '知识库' }).innerText()
+const chipsAfter = await page.locator('.chat-layout header button', { hasText: '知识库' }).innerText()
 check('知识库绑定数量变化', chipsBefore !== chipsAfter, `${chipsBefore.trim()} → ${chipsAfter.trim()}`)
 await page.keyboard.press('Escape')
 
-// Agent 切换
+// Agent 只在 AGENT 模式可切换
+await page.locator('.mode-seg .rubber-segment__item', { hasText: 'Agent' }).click()
+await page.waitForTimeout(350)
 await page.locator('.agent-seg button.rubber-segment__item').nth(2).click()
 await page.waitForTimeout(400)
 check('Agent 切换生效', (await page.locator('.agent-seg .rubber-segment__item[aria-checked="true"]').innerText()).includes('代码') || (await page.locator('.agent-seg .rubber-segment__item[aria-checked="true"]').innerText()).includes('简历'))
@@ -151,14 +157,12 @@ await page.locator('.chat-layout header button[title="导出为 Markdown"]').cli
 const download = await dl
 check('导出对话触发下载', !!download, download ? await download.suggestedFilename() : '无下载事件')
 
-/* ---------- 4. 新建会话向导 ---------- */
-await page.locator('.sb-row--quick').click()   // 「新对话」已移到全局侧栏
+/* ---------- 4. 新建会话向导：模式驱动的两步表单 ---------- */
+await page.locator('.sb-row--quick').click()
 await page.waitForTimeout(500)
-check('新建会话向导打开', (await page.locator('.dialog .step-indicator').count()) === 3)
-check('第一步可选 Agent', (await page.locator('.dialog .wizard-opts .chip').count()) >= 4)
-await page.locator('.dialog button', { hasText: '下一步' }).click()
-await page.waitForTimeout(500)
-check('第二步可选知识库', (await page.locator('.dialog .wizard-opts .chip').count()) === 6)
+check('新建会话弹窗打开', (await page.locator('.dialog .step-indicator-inner').count()) === 2)
+check('向导先提供三个真实模式', (await page.locator('.dialog .rubber-segment__item').count()) === 3)
+check('普通对话默认不显示虚构绑定项', (await page.locator('.dialog .wizard-chip').count()) === 0)
 await page.locator('.dialog .close').click()
 await page.waitForTimeout(300)
 
@@ -171,7 +175,7 @@ check('登录后背景统一为 aurora', bgVariant === 'aurora', `data-bg=${bgVa
 await page.locator('.sb-nav button.rubber-segment__item', { hasText: '对话' }).click()
 await page.waitForTimeout(900)
 const mdCtx = await page.evaluate(() => ({
-  title: document.querySelector('.session-item[aria-selected="true"] .t')?.textContent,
+  title: document.querySelector('.session-item[data-selected] .t')?.textContent,
   msgs: document.querySelectorAll('.thread .msg').length,
   mdRoots: document.querySelectorAll('.thread .md').length,
   lastBubble: document.querySelector('.thread .msg.bot .bub')?.textContent?.slice(0, 40) ?? '(无)',
@@ -186,26 +190,15 @@ const mermaidSvg = await page.locator('.thread .md-mermaid svg').count()
 check('Mermaid 真渲染为 SVG', mermaidSvg > 0, `svg ${mermaidSvg} 个`)
 check('Mermaid 无渲染报错', (await page.locator('.md-err').count()) === 0)
 
-/* ---------- 3.7 引用点击 → 跳知识库文档并高亮 ---------- */
-// 显式切到引用里含 KB 文档名的会话，避免依赖列表顺序（置顶/归档会改变顺序）
-await page.locator('.session-item', { hasText: 'B+ 树' }).first().click()
-await page.waitForTimeout(900)
-const cite = page.locator('.thread .cite-chip[data-clickable]').filter({ hasText: /\.(md|pdf|docx)$/i }).first()
-await cite.click()
-/* 点引用现在先开右侧面板（不跳页）；要跳知识库详情得点面板里的按钮 */
-await page.waitForTimeout(800)
-check('点引用先弹出右侧引用面板', (await page.locator('.ref-panel').count()) === 1)
-await page.locator('.ref-panel button', { hasText: '在知识库中打开' }).click()
-await page.waitForTimeout(1200)
-const kbTitle = await page.locator('.page-title').first().innerText()
-check('从面板跳转到知识库详情', kbTitle.includes('Java 笔记'), kbTitle)
-const hlInfo = await page.evaluate(() => ({
-  url: location.hash.slice(0, 70),
-  hl: document.querySelectorAll('.doc-row[data-hl]').length,
-  rows: document.querySelectorAll('.doc-row').length,
-  tab: document.querySelector('.page .rubber-segment__item[aria-checked="true"]')?.textContent,
-}))
-check('目标文档被高亮定位', hlInfo.hl > 0, JSON.stringify(hlInfo))
+/* ---------- 3.7 引用预览：缺少服务端引用 ID 时不伪造正文或跳转 ---------- */
+await page.locator('.session-open', { hasText: 'B+ 树' }).first().click()
+await page.waitForTimeout(700)
+await page.locator('.thread .cite-chip[data-clickable]').first().click()
+await page.waitForTimeout(350)
+check('点引用打开侧栏面板', (await page.locator('.ref-panel').count()) === 1)
+check('缺少真实来源 ID 时预览明确提示且跳转禁用',
+  (await page.locator('.ref-panel [role="alert"]').innerText()).includes('未包含知识库与文档 ID') && await page.locator('.ref-panel .ref-head button[disabled]').count() === 1)
+await page.locator('.ref-panel button[aria-label="关闭引用面板"]').click()
 
 /* ---------- 3.8 用量趋势动画与数字动画 ---------- */
 await page.locator('.sb-nav button.rubber-segment__item', { hasText: '工作台' }).click()
@@ -215,82 +208,36 @@ check('趋势面积带淡入类', (await page.locator('.wb-trend .trend-area').c
 const legendCounters = await page.locator('.wb-trend-legend .counter-container').count()
 check('图例数字使用滚动数字(Counter)', legendCounters === 3, `counter ${legendCounters} 个`)
 
-/* ---------- 3.9 注销账号：两步确认 ---------- */
-/* 「账号」导航项已移除（设置收在底部「个人设置」弹层），这里直接走路由 */
-  await page.goto(BASE + '/#/app/account', { waitUntil: 'networkidle' })
+/* ---------- 3.9 注销账号：后端无注销接口时不显示虚构确认流程 ---------- */
+await page.goto(BASE + '/#/app/account', { waitUntil: 'networkidle' })
 await page.waitForTimeout(900)
-// 设置页改版为多级：危险操作在「注销账号」分区里，先切过去
 await page.locator('.settings-item', { hasText: '注销账号' }).first().click()
-await page.waitForTimeout(500)
-const step1Btn = page.locator('.danger-steps .btn-danger').first()
-check('未确认时注销不可点', await step1Btn.isDisabled())
-await page.locator('.danger-steps input:not([type="checkbox"])').fill('demo')
-// 确认勾选已换成 SpringCheck（不再是原生 checkbox）
-await page.locator('.danger-steps .spring-check').click()
-await page.waitForTimeout(300)
-check('输入用户名并勾选后可继续', !(await step1Btn.isDisabled()))
-await step1Btn.click()
-await page.waitForTimeout(500)
-check('第二步展示将删除的数据清单', (await page.locator('.danger-list li').count()) === 4, `li ${await page.locator('.danger-list li').count()} 条`)
-check('第二步有最终红色按钮', (await page.locator('.danger-final + div .btn-danger').count()) === 1)
-await page.locator('.danger-final + div .btn-ghost').click()
 await page.waitForTimeout(400)
-check('取消后回到第一步', (await page.locator('.danger-steps .spring-check').count()) === 1)
+check('无账号注销 API 时危险操作保持禁用', (await page.locator('.settings-body .btn-danger[disabled]').count()) === 1)
+check('明确说明服务端暂不支持注销', (await page.locator('.settings-body').innerText()).includes('服务端目前没有账号注销接口'))
 
-/* ---------- 4.4 新建会话向导：Agent 单选 / 知识库多选必须真的能选 ---------- */
+/* ---------- 4.4 新会话：真实模式/知识库选择，创建后不插入虚构欢迎消息 ---------- */
 await page.locator('.sb-row--quick').click()
-await page.waitForTimeout(900)
-const wizAgent = await page.evaluate(() => {
-  const chips = Array.from(document.querySelectorAll('.wizard-chip'))
-  return { n: chips.length, on: chips.map((c) => c.hasAttribute('data-on')) }
-})
-check('向导第 1 步列出 Agent', wizAgent.n >= 3, `${wizAgent.n} 个`)
-check('向导默认选中第一个 Agent', wizAgent.on.filter(Boolean).length === 1, JSON.stringify(wizAgent.on))
-
-await page.locator('.wizard-chip').nth(2).click()
-await page.waitForTimeout(350)
-const picked = await page.evaluate(() => {
-  const chips = Array.from(document.querySelectorAll('.wizard-chip'))
-  const on = chips.filter((c) => c.hasAttribute('data-on'))
-  return { count: on.length, name: on[0]?.textContent?.trim(), pressed: on[0]?.getAttribute('aria-pressed') }
-})
-check('点 Agent 能切换选择（单选）', picked.count === 1 && picked.pressed === 'true', `${picked.name}`)
-
-/* 步骤圆应是"轮廓式"，不是实心色块 */
-const stepStyle = await page.evaluate(() => {
-  const el = document.querySelector('.dialog .step-indicator-inner')
-  const cs = el ? getComputedStyle(el) : null
-  return cs ? { bg: cs.backgroundColor, border: cs.borderTopWidth } : null
-})
-check('步骤圆用轮廓而非实心', stepStyle !== null && String(stepStyle.bg).includes('rgba(0, 0, 0, 0)') && parseFloat(stepStyle.border) >= 1,
-  `${stepStyle?.bg} / ${stepStyle?.border}`)
-
-await page.locator('.next-button').click()
-await page.waitForTimeout(800)
-const kbBefore = await page.evaluate(() => Array.from(document.querySelectorAll('.wizard-chip')).filter((c) => c.hasAttribute('data-on')).length)
-await page.locator('.wizard-chip').nth(2).click()
-await page.locator('.wizard-chip').nth(4).click()
+await page.waitForTimeout(500)
+await page.locator('.dialog .rubber-segment__item', { hasText: '知识库问答' }).click()
 await page.waitForTimeout(400)
-const kbAfter = await page.evaluate(() => ({
-  on: Array.from(document.querySelectorAll('.wizard-chip')).filter((c) => c.hasAttribute('data-on')).length,
-  names: Array.from(document.querySelectorAll('.wizard-chip')).filter((c) => c.hasAttribute('data-on')).map((c) => c.textContent.trim()),
-}))
-check('知识库可多选（数量变化）', kbBefore !== kbAfter.on, `${kbBefore} → ${kbAfter.on}`)
-check('多选后选中项可读', kbAfter.names.length === kbAfter.on && kbAfter.names.every(Boolean), kbAfter.names.join(' / '))
-
-await page.locator('.next-button').click()
-await page.waitForTimeout(700)
-await page.locator('.next-button').click()
-await page.waitForTimeout(1200)
+const kbChips = page.locator('.dialog .wizard-chip')
+check('知识库问答模式列出当前测试知识库', await kbChips.count() >= 2, `实际 ${await kbChips.count()} 个`)
+await kbChips.nth(0).click()
+await kbChips.nth(1).click()
+await page.getByRole('button', { name: '继续' }).click()
+await page.waitForTimeout(300)
+check('确认页反映选择的两个知识库', (await page.locator('.dialog').innerText()).includes('绑定 2 个知识库'))
+await page.getByRole('button', { name: 'Complete' }).click()
+await page.waitForTimeout(900)
 const createdSession = await page.evaluate(() => ({
   dialog: document.querySelectorAll('.dialog').length,
   title: document.querySelector('[data-testid=chat-title]')?.textContent,
-  welcome: document.querySelector('.thread .msg.bot .bub')?.textContent ?? '',
+  kbButton: document.querySelector('.chat-layout header button[title="管理当前会话的知识库"]')?.textContent,
+  messages: document.querySelectorAll('.thread .msg').length,
 }))
-check('走完向导会真的创建会话', createdSession.dialog === 0 && createdSession.title === '新会话', String(createdSession.title))
-check('创建的会话带上所选的 Agent', createdSession.welcome.includes(picked.name ?? '\u0000'), createdSession.welcome.slice(0, 30))
-
-await page.locator('.thread .msg.user, .thread .msg.bot').first().waitFor({ timeout: 4000 }).catch(() => {})
+check('完成向导后创建会话并绑定资料', createdSession.dialog === 0 && createdSession.title === '新会话' && createdSession.kbButton?.includes('2'), JSON.stringify(createdSession))
+check('新会话不插入虚构欢迎消息', createdSession.messages === 0, `消息数 ${createdSession.messages}`)
 
 /* ---------- 4.5 退出登录收进头像菜单 ---------- */
 await page.locator('.sb-row--settings').click()   // 账号入口改为底部「个人设置」弹层
@@ -341,7 +288,7 @@ check('Agent 卡片底部按钮未被裁切', clipped === false, clipped === nul
   check('渲染异常落到我们自己的错误页', eb.ours === true && eb.routerDefault === false, JSON.stringify(eb))
   check('错误页提供恢复动作（重新加载 / 回工作台）', eb.reloadBtn && eb.homeLink)
   check('错误页说明会话数据不会丢 + 可展开技术细节', eb.keepsData && eb.details)
-  await crashPage.screenshot({ path: 'D:/develop/Prisma/docs/prototypes/shots/z39-error-boundary.png' })
+  await crashPage.screenshot({ path: `${process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'}/z39-error-boundary.png` })
   console.log('ok   z39-error-boundary（截图）')
   await crashPage.close()
 }

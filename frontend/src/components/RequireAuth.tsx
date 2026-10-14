@@ -6,6 +6,7 @@
 import type { ReactElement } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router'
 import { useAuth } from '@/lib/auth'
+import { preferredLandingPath } from '@/lib/preferences'
 
 export function RequireAuth(): ReactElement {
   const { isAuthed } = useAuth()
@@ -24,5 +25,5 @@ export function RedirectIfAuthenticated({ children }: { children: ReactElement }
   const location = useLocation()
   if (!isAuthed) return children
   const from = (location.state as { from?: string } | null)?.from
-  return <Navigate to={from && !from.startsWith('/login') ? from : '/app/workbench'} replace />
+  return <Navigate to={from && !from.startsWith('/login') ? from : preferredLandingPath()} replace />
 }
