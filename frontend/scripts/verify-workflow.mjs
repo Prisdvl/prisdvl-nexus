@@ -1,6 +1,6 @@
-// 工作流设计器专项验证（真实后端）：创建 → 加节点 → 连线 → 保存 → 校验 → 发布 → 运行 → 轨迹
+// 工作流设计器专项验证（真实后端）：创建 → 加节点 → 连线 → 保存 → 校验 → 发布 → 运行 → 轨迹 → 运行历史
 //
-// 前置（⚠️ 本轮未执行，脚本已按新契约改写但标记 NOT VERIFIED）：
+// 前置（已实测：standalone 后端 + vite dev 上 ALL OK 36/36，见 README §8）：
 //   1) 后端在 8080（可用零外部依赖形态：java -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=standalone）
 //   2) 前端 dev server 在 5175（cd frontend && npm run dev），/api 由 Vite 代理到 8080
 //   3) 一个可用账号。注意：注册接口已强制要求 email（RegisterRequest:30-33），
@@ -8,8 +8,16 @@
 //      因此 scripts/seed-demo.mjs 与 scripts/smoke.ps1 目前的注册调用（不含 email）已过期，不能用来造这个账号。
 //      用 NEXUS_USER / NEXUS_PASS 传入一个已创建的账号。
 //
-// 用例图刻意只用 START → TEMPLATE → END：TEMPLATE 只做模板渲染，不调模型，
-// 所以在没有模型 API Key 的环境里也能真正跑通一次 SUCCEEDED。
+// 退出码契约：全部通过 → 0；有断言失败 → 1；前置不满足（登录失败等）→ 2。
+// ⚠️ Windows 取值方式必须对，否则会「脚本失败但外层回显 0」：
+//     ✓ PowerShell：cmd /c "npm run verify:workflow > out.log 2>&1"   然后读 $LASTEXITCODE
+//     ✓ CMD（.cmd 文件内）：命令与 echo 分成两行
+//     ✗ 不要写：cmd /c "npm run verify:workflow & echo %ERRORLEVEL%"
+//       —— 命令行形式下 %VAR% 在整行解析时一次性展开，回显的是上一条命令的旧值（实测：报 ISSUES 却回显 0）
+//     脚本自身还会打印一行 EXIT_CODE=<n>，与取到的退出码对照即可发现包装层误报。
+//
+// 用例图覆盖 START → TEMPLATE → LLM：前两段保证有一条不依赖模型的可成功路径；
+// LLM 节点在本机未配模型时必报 4006（映射为 502），用来验证「失败运行也留痕、也能读回轨迹」。
 import { chromium } from 'playwright-core'
 
 const BASE = process.env.NEXUS_WEB ?? 'http://localhost:5175'
@@ -89,6 +97,7 @@ await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 const loggedIn = await page.waitForSelector('.shell', { timeout: 12000 }).then(() => true).catch(() => false)
 if (!loggedIn) {
   console.log(`ABORT 登录失败：请先按脚本头部说明准备账号 ${USER}（注册需 email + 邮箱验证，旧 seed 脚本已过期）`)
+  console.log('EXIT_CODE=2')
   await browser.close()
   process.exit(2)
 }
@@ -295,6 +304,9 @@ await page.setViewportSize({ width: 390, height: 844 })
 await page.waitForTimeout(600)
 check('手机端工作流无横向溢出', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
 
+const exitCode = issues.length ? 1 : 0
 console.log(issues.length === 0 ? 'ALL OK' : `ISSUES: ${issues.join(' | ')}`)
+// 显式打印退出码：即使外层包装把码取错，日志里也留有真值可对照
+console.log(`EXIT_CODE=${exitCode}`)
 await browser.close()
-process.exit(issues.length ? 1 : 0)
+process.exit(exitCode)
