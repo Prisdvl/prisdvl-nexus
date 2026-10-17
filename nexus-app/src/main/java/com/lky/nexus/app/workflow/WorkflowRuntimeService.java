@@ -1,6 +1,7 @@
 package com.lky.nexus.app.workflow;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lky.nexus.app.workflow.mapper.WorkflowNodeRunMapper;
 import com.lky.nexus.app.workflow.mapper.WorkflowRunMapper;
 import com.lky.nexus.app.workflow.model.WorkflowEdge;
@@ -13,6 +14,8 @@ import com.lky.nexus.app.workflow.model.entity.WorkflowNodeRunPO;
 import com.lky.nexus.app.workflow.model.entity.WorkflowPO;
 import com.lky.nexus.app.workflow.model.entity.WorkflowRunPO;
 import com.lky.nexus.common.api.ErrorCode;
+import com.lky.nexus.common.api.PageQuery;
+import com.lky.nexus.common.api.PageResult;
 import com.lky.nexus.common.exception.BusinessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,7 +60,17 @@ public class WorkflowRuntimeService {
         this.jsonMapper = jsonMapper;
     }
 
-    @Transactional
+    /**
+     * 运行一次工作流（同步执行，返回即终态）。
+     *
+     * <p><b>为什么是 {@code noRollbackFor = BusinessException.class}</b>：
+     * 节点失败时这里先把运行与节点轨迹标成 FAILED，再把异常抛出去；
+     * 而 {@code BusinessException} 是 {@code RuntimeException}，默认事务规则会回滚整个方法，
+     * 于是「已落库的失败运行 + 失败节点轨迹」全被丢弃——失败运行根本不留痕
+     * （实测：失败后按 workflowId 查运行列表 total=0，拿不到 runId 也就读不回轨迹）。
+     * 审计要的恰好相反：成功失败都要留痕，所以显式声明业务异常不回滚。
+     */
+    @Transactional(noRollbackFor = BusinessException.class)
     public WorkflowRunResponse run(Long userId, Long workflowId, RunWorkflowRequest request, String triggerType) {
         WorkflowPO workflow = definitionService.requireOwned(userId, workflowId);
         Long versionId = "DEBUG".equals(triggerType)
@@ -105,6 +118,29 @@ public class WorkflowRuntimeService {
                         .eq(WorkflowNodeRunPO::getRunId, runId)
                         .orderByAsc(WorkflowNodeRunPO::getId))
                 .stream().map(this::toNodeRunResponse).toList();
+    }
+
+    /**
+     * 某工作流的运行历史（分页，按时间倒序）。
+     *
+     * <p>存在的理由：运行是同步执行的，失败时 {@code POST /runs} 直接抛异常，
+     * 调用方拿不到 runId，于是那次 FAILED 运行的节点轨迹虽然已落库却读不回来。
+     * 有了列表接口，失败运行可以按 workflowId 找回，再走 {@code /runs/{runId}/nodes} 读轨迹。
+     *
+     * <p>归属：先按工作流归属校验（越权返回 6005/404），查询条件同时带上 userId，
+     * 与 {@code /runs/{runId}} 的隔离口径一致。
+     */
+    public PageResult<WorkflowRunResponse> list(Long userId, Long workflowId, int pageNum, int pageSize) {
+        definitionService.requireOwned(userId, workflowId);
+        int safePageNum = PageQuery.normalizePageNum(pageNum);
+        int safePageSize = PageQuery.normalizePageSize(pageSize);
+        Page<WorkflowRunPO> page = new Page<>(safePageNum, safePageSize);
+        Page<WorkflowRunPO> result = runMapper.selectPage(page, Wrappers.<WorkflowRunPO>lambdaQuery()
+                .eq(WorkflowRunPO::getWorkflowId, workflowId)
+                .eq(WorkflowRunPO::getUserId, userId)
+                .orderByDesc(WorkflowRunPO::getId));
+        return PageResult.of(result.getRecords().stream().map(this::toRunResponse).toList(),
+                result.getTotal(), safePageNum, safePageSize);
     }
 
     public WorkflowRunResponse cancel(Long userId, Long runId) {

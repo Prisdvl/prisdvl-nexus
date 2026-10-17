@@ -19,6 +19,7 @@
     "verify:doc": "node scripts/qa-doc.mjs",
     "verify:chat": "node scripts/qa-chat.mjs",
     "verify:approval": "node scripts/verify-approval-chain.mjs",
+    "verify:workflow": "node scripts/verify-workflow.mjs",
     "verify:mode-switch": "node scripts/qa-mode-switch.mjs",
     "verify:mode-switch-real": "node scripts/qa-mode-switch-real.mjs",
     "verify:theme": "node scripts/qa-theme.mjs",

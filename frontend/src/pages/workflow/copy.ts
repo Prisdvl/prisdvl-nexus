@@ -1,0 +1,113 @@
+/**
+ * 工作流设计器的双语文案。
+ *
+ * `en` 显式标注为 `typeof zh`，语言键不一致时编译期就会报错，
+ * 避免只加中文文案、英文页回落成空白。
+ */
+import type { WfNodeType } from '@/lib/workflowGraph'
+
+const zh = {
+  eyebrow: 'Workflows', title: '工作流', sub: '把知识检索、模型、Agent 与条件分支编排成可发布、可运行的流程。',
+  pickerLabel: '工作流', createPh: '新工作流名称', create: '新建', creating: '创建中…',
+  emptyList: '还没有工作流', emptyListDesc: '新建一个后，画布会自动落一张 START → END 的最小可运行图。',
+  pickHint: '从上方选择一个工作流开始编辑。',
+  loadFailed: '加载失败', loadListFailed: '工作流列表加载失败', retry: '重试', loading: '加载中…',
+  save: '保存草稿', saving: '保存中…', saved: '草稿已保存', savedDesc: '已生成一个新版本快照。', saveFailed: '保存失败',
+  validate: '校验', validating: '校验中…', validOk: '校验通过', validFail: '校验未通过',
+  validationTitle: '校验结果', noValidation: '尚未校验。校验针对已保存的草稿，保存后会自动带上当前改动。',
+  publish: '发布', publishing: '发布中…', published: '已发布', publishedDesc: '正式运行将使用该版本。', publishFailed: '发布失败',
+  debugRun: '试跑草稿', run: '正式运行', running: '执行中…',
+  runTitle: '运行', inputs: '输入（JSON）', inputsHint: '变量用 {{ input.question }} 引用这里的字段。',
+  inputsInvalid: '输入不是合法的 JSON 对象',
+  runDone: '运行完成', debugDone: '试跑完成', runFailed: '运行失败',
+  traceTitle: '节点轨迹', noRun: '选择一条运行记录查看节点轨迹。',
+  historyTitle: '运行历史', historyEmpty: '还没有运行记录，运行一次就会出现在这里。',
+  historyCount: '条记录', prevPage: '上一页', nextPage: '下一页',
+  historyError: '运行历史加载失败', traceError: '节点轨迹加载失败',
+  runFailedIsNotHttp: '这是运行本身失败（请求已成功返回），轨迹里能看到是哪个节点失败的。',
+  httpFailedNote: '请求失败，拿不到 runId。失败运行已落库，已自动选中最新的那条，可在「运行历史」里切换。',
+  runMeta: '状态', duration: '耗时', trigger: '触发方式',
+  palette: '节点', inspector: '配置', canvasHint: '点击节点编辑；「连线」后点目标节点即建立连接。',
+  link: '连线', linkTrue: '连 true', linkFalse: '连 false', linking: '正在连线：点目标节点完成，Esc 取消',
+  cancelLink: '取消连线', selfLoop: '不能连接自己', duplicateEdge: '该连接已存在',
+  edgesTitle: '连线', noEdges: '此节点还没有出线。', deleteEdge: '删除连线', deleteNode: '删除节点',
+  removeNodeConfirm: '删除该节点会同时删掉它的连线。',
+  branchBothHint: '条件分支必须同时连 true 与 false 端口，否则校验不通过。',
+  fields: {
+    nodeId: '节点 ID', type: '类型', agent: 'Agent', kb: '知识库', topK: 'Top-K',
+    query: '检索查询', mode: '检索模式', userPrompt: '提示词', temperature: '温度',
+    template: '模板', operator: '操作符', left: '左值', right: '右值', endTemplate: '收尾模板（可选）',
+    noConfig: '该类型没有必填配置。',
+  },
+  missing: '（未配置）', pickNone: '未选择', kbEmpty: '还没有知识库', agentEmpty: '还没有 Agent',
+  dirty: '有未保存改动', clean: '已保存', publishedAs: '已发布版本', draftAs: '草稿版本', noVersion: '无版本',
+  startTaken: 'START 节点只能有一个', nodesCount: '节点', edgesCount: '连线',
+  statuses: {
+    QUEUED: '排队', RUNNING: '执行中', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消',
+    PENDING: '待执行', SKIPPED: '已跳过',
+  } as Record<string, string>,
+  types: {
+    START: { title: '开始', desc: '接收运行时输入' },
+    KNOWLEDGE_RETRIEVAL: { title: '知识检索', desc: '多库混合检索切片' },
+    LLM: { title: '模型', desc: '按提示词调用对话模型' },
+    AGENT: { title: 'Agent', desc: '调用已配置的 Agent' },
+    IF_ELSE: { title: '条件分支', desc: '按受限操作符走 true / false' },
+    TEMPLATE: { title: '模板', desc: '模板渲染出文本' },
+    END: { title: '结束', desc: '输出结果' },
+  } as Record<WfNodeType, { title: string; desc: string }>,
+}
+
+const en: typeof zh = {
+  eyebrow: 'Workflows', title: 'Workflows', sub: 'Compose retrieval, models, agents and branches into a publishable, runnable flow.',
+  pickerLabel: 'Workflow', createPh: 'New workflow name', create: 'New', creating: 'Creating…',
+  emptyList: 'No workflows yet', emptyListDesc: 'Create one and the canvas seeds a minimal START → END graph you can run immediately.',
+  pickHint: 'Pick a workflow above to start editing.',
+  loadFailed: 'Load failed', loadListFailed: 'Could not load workflows', retry: 'Retry', loading: 'Loading…',
+  save: 'Save draft', saving: 'Saving…', saved: 'Draft saved', savedDesc: 'A new version snapshot was created.', saveFailed: 'Save failed',
+  validate: 'Validate', validating: 'Validating…', validOk: 'Validation passed', validFail: 'Validation failed',
+  validationTitle: 'Validation', noValidation: 'Not validated yet. Validation runs against the saved draft, so your current edits are saved first.',
+  publish: 'Publish', publishing: 'Publishing…', published: 'Published', publishedDesc: 'Run will use this version.', publishFailed: 'Publish failed',
+  debugRun: 'Debug draft', run: 'Run', running: 'Running…',
+  runTitle: 'Run', inputs: 'Inputs (JSON)', inputsHint: 'Reference these fields as {{ input.question }}.',
+  inputsInvalid: 'Inputs must be a JSON object',
+  runDone: 'Run finished', debugDone: 'Debug finished', runFailed: 'Run failed',
+  traceTitle: 'Node trace', noRun: 'Select a run to see its node trace.',
+  historyTitle: 'Run history', historyEmpty: 'No runs yet — run the workflow and it will show up here.',
+  historyCount: 'runs', prevPage: 'Prev', nextPage: 'Next',
+  historyError: 'Could not load run history', traceError: 'Could not load node trace',
+  runFailedIsNotHttp: 'The run itself failed (the request returned successfully); the trace shows which node failed.',
+  httpFailedNote: 'The request failed, so there is no runId. The failed run is persisted — the newest one is selected automatically and you can switch in “Run history”.',
+  runMeta: 'Status', duration: 'Duration', trigger: 'Trigger',
+  palette: 'Nodes', inspector: 'Inspector', canvasHint: 'Click a node to edit; after “Connect”, click a target node to link.',
+  link: 'Connect', linkTrue: 'Link true', linkFalse: 'Link false', linking: 'Linking: click a target node, Esc to cancel',
+  cancelLink: 'Cancel link', selfLoop: 'Cannot link a node to itself', duplicateEdge: 'That link already exists',
+  edgesTitle: 'Links', noEdges: 'No outgoing links yet.', deleteEdge: 'Delete link', deleteNode: 'Delete node',
+  removeNodeConfirm: 'Deleting this node also removes its links.',
+  branchBothHint: 'A condition must link both the true and false ports, otherwise validation fails.',
+  fields: {
+    nodeId: 'Node ID', type: 'Type', agent: 'Agent', kb: 'Knowledge base', topK: 'Top-K',
+    query: 'Query', mode: 'Mode', userPrompt: 'Prompt', temperature: 'Temperature',
+    template: 'Template', operator: 'Operator', left: 'Left', right: 'Right', endTemplate: 'End template (optional)',
+    noConfig: 'This type has no required configuration.',
+  },
+  missing: '(not set)', pickNone: 'None', kbEmpty: 'No knowledge bases', agentEmpty: 'No agents',
+  dirty: 'Unsaved changes', clean: 'Saved', publishedAs: 'Published version', draftAs: 'Draft version', noVersion: 'no version',
+  startTaken: 'Only one START node is allowed', nodesCount: 'nodes', edgesCount: 'links',
+  statuses: {
+    QUEUED: 'Queued', RUNNING: 'Running', SUCCEEDED: 'Succeeded', FAILED: 'Failed', CANCELLED: 'Cancelled',
+    PENDING: 'Pending', SKIPPED: 'Skipped',
+  } as Record<string, string>,
+  types: {
+    START: { title: 'Start', desc: 'Receives run inputs' },
+    KNOWLEDGE_RETRIEVAL: { title: 'Knowledge', desc: 'Hybrid search across bases' },
+    LLM: { title: 'Model', desc: 'Call the chat model with a prompt' },
+    AGENT: { title: 'Agent', desc: 'Invoke a configured agent' },
+    IF_ELSE: { title: 'Condition', desc: 'Branch true / false on a limited operator' },
+    TEMPLATE: { title: 'Template', desc: 'Render text from a template' },
+    END: { title: 'End', desc: 'Emit the result' },
+  } as Record<WfNodeType, { title: string; desc: string }>,
+}
+
+export const WORKFLOW_COPY = { zh, en }
+
+export type WorkflowCopy = typeof zh

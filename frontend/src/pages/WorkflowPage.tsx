@@ -1,72 +1,430 @@
-import { useMemo, useState } from 'react'
-import { BookOpen, Bot, CheckCircle2, Circle, GitBranch, Maximize2, Play, Plus, Save, Sparkles, Terminal, ZoomIn, ZoomOut } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  AlertTriangle, BookOpen, Bot, CheckCircle2, Cpu, Flag, GitBranch, Maximize2, Play, Plus,
+  RefreshCw, Rocket, Save, ShieldCheck, Sparkles, Terminal, ZoomIn, ZoomOut,
+} from 'lucide-react'
 import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
 import { StateEmpty } from '@/components/Skeleton'
 import { toast } from '@/lib/toast'
 import { useLocale } from '@/lib/locale'
+import {
+  api, errMessage,
+  type BackendAgent, type KnowledgeBase, type Workflow, type WorkflowEdge,
+  type WorkflowNode, type WorkflowNodeRun, type WorkflowRun, type WorkflowValidation,
+} from '@/lib/api'
+import {
+  WF_NODE_TYPES, WF_UNARY_OPERATORS, canLink, defaultConfig, nextEdgeId, nextNodeId,
+  nextPosition, positionOf, runState, seedGraph, withoutNode, type WfNodeType,
+} from '@/lib/workflowGraph'
+import Inspector from '@/pages/workflow/Inspector'
+import RunPanels from '@/pages/workflow/RunPanels'
+import { WORKFLOW_COPY } from '@/pages/workflow/copy'
 import '@/styles/plugins.css'
 import '@/styles/workflow.css'
 
-type NodeType = 'trigger' | 'knowledge' | 'agent' | 'tool' | 'condition' | 'output'
-interface FlowNode { id: string; type: NodeType; title: string; desc: string; x: number; y: number }
+const ICONS: Record<WfNodeType, typeof Bot> = {
+  START: Sparkles,
+  KNOWLEDGE_RETRIEVAL: BookOpen,
+  LLM: Cpu,
+  AGENT: Bot,
+  IF_ELSE: GitBranch,
+  TEMPLATE: Terminal,
+  END: Flag,
+}
 
-const COPY = {
-  zh: {
-    eyebrow: 'Workflows', title: '工作流', sub: '把触发器、知识检索、Agent、工具与输出编排成可复用流程。',
-    save: '保存', run: '运行', running: '运行中…', palette: '节点', inspector: '配置', empty: '从左侧添加一个节点开始编排。',
-    types: {
-      trigger: { title: '触发器', desc: '手动、定时或事件触发' }, knowledge: { title: '知识检索', desc: '按问题检索知识库切片' },
-      agent: { title: 'Agent', desc: '调用配置好的 Agent' }, tool: { title: '工具', desc: '执行搜索、代码、表格等工具' },
-      condition: { title: '条件分支', desc: '按结果决定后续路径' }, output: { title: '输出', desc: '生成回答、报告或文件' },
-    } as Record<NodeType, { title: string; desc: string }>,
-    fields: { name: '节点名称', schedule: '触发方式', kb: '知识库', topK: 'Top-K', model: '模型', instructions: '指令', tool: '工具', expression: '条件表达式', format: '输出格式' },
-    log: '运行日志', saved: '工作流已保存', runDone: '运行完成', step: (n: string) => `执行 ${n}`,
-  },
-  en: {
-    eyebrow: 'Workflows', title: 'Workflows', sub: 'Compose triggers, retrieval, agents, tools and outputs into reusable flows.',
-    save: 'Save', run: 'Run', running: 'Running…', palette: 'Nodes', inspector: 'Inspector', empty: 'Add a node from the left to start building.',
-    types: {
-      trigger: { title: 'Trigger', desc: 'Manual, scheduled or event based' }, knowledge: { title: 'Knowledge', desc: 'Retrieve chunks for a question' },
-      agent: { title: 'Agent', desc: 'Call a configured agent' }, tool: { title: 'Tool', desc: 'Run search, code, sheets and more' },
-      condition: { title: 'Condition', desc: 'Branch on the result' }, output: { title: 'Output', desc: 'Produce an answer, report or file' },
-    } as Record<NodeType, { title: string; desc: string }>,
-    fields: { name: 'Node name', schedule: 'Trigger', kb: 'Knowledge base', topK: 'Top-K', model: 'Model', instructions: 'Instructions', tool: 'Tool', expression: 'Expression', format: 'Output format' },
-    log: 'Run log', saved: 'Workflow saved', runDone: 'Run finished', step: (n: string) => `Running ${n}`,
-  },
-} as const
+type Busy = '' | 'list' | 'load' | 'create' | 'save' | 'validate' | 'publish' | 'run' | 'debug'
+type LinkFrom = { source: string; handle: string | null }
 
-const ICONS: Record<NodeType, typeof Bot> = { trigger: Sparkles, knowledge: BookOpen, agent: Bot, tool: Terminal, condition: GitBranch, output: CheckCircle2 }
-const INITIAL: FlowNode[] = [
-  { id: 'n1', type: 'trigger', title: '手动触发', desc: '点击运行', x: 60, y: 150 },
-  { id: 'n2', type: 'knowledge', title: '知识检索', desc: 'Top-K 6', x: 280, y: 70 },
-  { id: 'n3', type: 'agent', title: '面试助手', desc: 'deepseek-v4-flash', x: 500, y: 150 },
-  { id: 'n4', type: 'tool', title: '计算器', desc: '复杂度评估', x: 720, y: 60 },
-  { id: 'n5', type: 'condition', title: '命中充分？', desc: 'score > 0.7', x: 720, y: 250 },
-  { id: 'n6', type: 'output', title: '回答', desc: 'Markdown', x: 930, y: 150 },
-]
-const EDGES = [['n1', 'n2'], ['n2', 'n3'], ['n3', 'n4'], ['n3', 'n5'], ['n4', 'n6'], ['n5', 'n6']] as const
+/** 运行历史每页条数：面板不宽，10 条够看且不用滚动太久。 */
+const RUNS_PAGE_SIZE = 10
 
 export default function WorkflowPage() {
   const { locale } = useLocale()
-  const c = COPY[locale]
-  const [nodes, setNodes] = useState<FlowNode[]>(INITIAL)
-  const [selected, setSelected] = useState('n3')
-  const [zoom, setZoom] = useState(1)
-  const [running, setRunning] = useState(false)
-  const [done, setDone] = useState<string[]>([])
-  const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
-  const selectedNode = nodes.find((n) => n.id === selected)
+  const c = WORKFLOW_COPY[locale]
 
-  const addNode = (type: NodeType) => {
-    const id = `n${Date.now()}`
-    setNodes((list) => [...list, { id, type, title: c.types[type].title, desc: c.types[type].desc, x: 80 + (list.length % 4) * 200, y: 330 }])
+  const [workflows, setWorkflows] = useState<Workflow[]>([])
+  const [listState, setListState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [listError, setListError] = useState('')
+  const [current, setCurrent] = useState<Workflow | null>(null)
+  const [nodes, setNodes] = useState<WorkflowNode[]>([])
+  const [edges, setEdges] = useState<WorkflowEdge[]>([])
+  const [selected, setSelected] = useState<string | null>(null)
+  const [dirty, setDirty] = useState(false)
+  const [busy, setBusy] = useState<Busy>('')
+  const [validation, setValidation] = useState<WorkflowValidation | null>(null)
+  const [run, setRun] = useState<WorkflowRun | null>(null)
+  const [nodeRuns, setNodeRuns] = useState<WorkflowNodeRun[]>([])
+  const [runError, setRunError] = useState('')
+  /* 运行历史（真实接口）与「被选中那次运行」的轨迹 */
+  const [runs, setRuns] = useState<WorkflowRun[]>([])
+  const [runsTotal, setRunsTotal] = useState(0)
+  const [runsPage, setRunsPage] = useState(1)
+  const [runsLoading, setRunsLoading] = useState(false)
+  const [runsError, setRunsError] = useState('')
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [nodeRunsLoading, setNodeRunsLoading] = useState(false)
+  const [traceError, setTraceError] = useState('')
+  const [inputsText, setInputsText] = useState('{\n  "question": ""\n}')
+  const [linkFrom, setLinkFrom] = useState<LinkFrom | null>(null)
+  const [zoom, setZoom] = useState(1)
+  const [kbs, setKbs] = useState<KnowledgeBase[]>([])
+  const [agents, setAgents] = useState<BackendAgent[]>([])
+  const [newName, setNewName] = useState('')
+
+  /** 把服务端返回的图灌进画布。 */
+  const hydrate = useCallback((wf: Workflow) => {
+    setCurrent(wf)
+    setNodes(wf.nodes ?? [])
+    setEdges(wf.edges ?? [])
+    setSelected((wf.nodes ?? [])[0]?.id ?? null)
+    setDirty(false)
+    setValidation(null)
+    setRun(null)
+    setNodeRuns([])
+    setRunError('')
+    setLinkFrom(null)
+  }, [])
+
+  const open = useCallback(async (id: string) => {
+    setBusy('load')
+    try {
+      hydrate(await api.workflows.get(id))
+    } catch (e) {
+      toast.error(c.loadFailed, errMessage(e))
+    } finally {
+      setBusy('')
+    }
+  }, [c.loadFailed, hydrate])
+
+  /* 首屏：拉列表并自动打开最近更新的一个 */
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const page = await api.workflows.list(1, 50)
+        if (!alive) return
+        setWorkflows(page.list)
+        setListState('ready')
+        if (page.list.length > 0) {
+          const wf = await api.workflows.get(page.list[0].id)
+          if (alive) hydrate(wf)
+        }
+      } catch (e) {
+        if (!alive) return
+        setListError(errMessage(e))
+        setListState('error')
+      }
+    })()
+    return () => { alive = false }
+  }, [hydrate])
+
+  /* 检查器下拉需要真实可选项；拉不到不阻塞画布 */
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const page = await api.knowledge.list(1, 100)
+        if (alive) setKbs(page.list)
+      } catch { /* 知识库不可用时检索节点仍可后配 */ }
+      try {
+        const page = await api.agents.list(1, 100)
+        if (alive) setAgents(page.list)
+      } catch { /* Agent 不可用时节点会显示未配置 */ }
+    })()
+    return () => { alive = false }
+  }, [])
+
+  /* 连线模式：Esc 退出 */
+  useEffect(() => {
+    if (!linkFrom) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLinkFrom(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [linkFrom])
+
+  /** 运行历史。返回本次取到的列表，便于「请求失败」后自动选中最新的那条。 */
+  const loadRuns = useCallback(async (workflowId: string, page: number): Promise<WorkflowRun[]> => {
+    setRunsLoading(true)
+    setRunsError('')
+    try {
+      const data = await api.workflowRuns.list(workflowId, page, RUNS_PAGE_SIZE)
+      setRuns(data.list)
+      setRunsTotal(data.total)
+      setRunsPage(data.pageNum)
+      return data.list
+    } catch (e) {
+      // 列表拉不到是「请求失败」，与「运行失败」是两件事，单独报错、不冒充运行状态
+      setRuns([])
+      setRunsTotal(0)
+      setRunsError(errMessage(e))
+      return []
+    } finally {
+      setRunsLoading(false)
+    }
+  }, [])
+
+  /** 读取某次运行的节点轨迹：成功与失败的运行都落库了，都能读。 */
+  const loadTrace = useCallback(async (runId: string) => {
+    setSelectedRunId(runId)
+    setNodeRunsLoading(true)
+    setTraceError('')
+    try {
+      setNodeRuns(await api.workflowRuns.nodes(runId))
+    } catch (e) {
+      setNodeRuns([])
+      setTraceError(errMessage(e))
+    } finally {
+      setNodeRunsLoading(false)
+    }
+  }, [])
+
+  /* 切换工作流：清掉上一个工作流的运行历史与轨迹，再拉第 1 页 */
+  useEffect(() => {
+    setRuns([])
+    setRunsTotal(0)
+    setRunsPage(1)
+    setRunsError('')
+    setSelectedRunId(null)
+    setNodeRuns([])
+    setTraceError('')
+    if (current) void loadRuns(current.id, 1)
+  }, [current?.id, loadRuns])
+
+  const selectedNode = useMemo(() => nodes.find((n) => n.id === selected) ?? null, [nodes, selected])
+  const runByNode = useMemo(() => {
+    const map = new Map<string, WorkflowNodeRun>()
+    nodeRuns.forEach((nr) => map.set(nr.nodeId, nr))
+    return map
+  }, [nodeRuns])
+  const hasStart = nodes.some((n) => n.type === 'START')
+  const executing = busy === 'run' || busy === 'debug'
+
+  const agentName = useCallback((id: unknown) => {
+    const found = agents.find((a) => a.id === String(id))
+    return found ? found.name : String(id ?? '')
+  }, [agents])
+
+  /** 画布副标题：从 config 派生——数据模型里没有节点名字段，所以不伪造一个。 */
+  const summaryOf = (node: WorkflowNode): string => {
+    const cfg = node.config ?? {}
+    const clip = (v: unknown, n = 34) => {
+      const s = String(v ?? '').trim()
+      return s.length > n ? `${s.slice(0, n)}…` : s
+    }
+    switch (node.type) {
+      case 'START':
+        return c.types.START.desc
+      case 'END':
+        return cfg.template ? clip(cfg.template) : c.types.END.desc
+      case 'LLM':
+        return cfg.userPrompt ? clip(cfg.userPrompt) : c.missing
+      case 'AGENT':
+        return cfg.agentId ? agentName(cfg.agentId) : c.missing
+      case 'TEMPLATE':
+        return cfg.template ? clip(cfg.template) : c.missing
+      case 'KNOWLEDGE_RETRIEVAL': {
+        const ids = Array.isArray(cfg.kbIds) ? cfg.kbIds : []
+        const topK = cfg.topK == null ? '5' : String(cfg.topK)
+        return ids.length === 0 ? c.missing : `${ids.length} ${c.fields.kb} · topK ${topK}`
+      }
+      case 'IF_ELSE': {
+        const left = clip(cfg.left, 12)
+        const right = WF_UNARY_OPERATORS.includes(cfg.operator as never) ? '' : ` ${clip(cfg.right, 10)}`
+        return `${left} ${String(cfg.operator ?? '')}${right}`.trim() || c.missing
+      }
+      default:
+        return ''
+    }
+  }
+
+  /* ---------------- 画布编辑（纯本地，保存时才落库） ---------------- */
+
+  const touch = () => { setDirty(true); setValidation(null) }
+
+  const addNode = (type: WfNodeType) => {
+    if (type === 'START' && hasStart) { toast.info(c.startTaken); return }
+    const id = nextNodeId(nodes, type)
+    setNodes((list) => [...list, { id, type, version: 1, position: nextPosition(list), config: defaultConfig(type) }])
+    setSelected(id)
+    touch()
+  }
+
+  const removeNode = (id: string) => {
+    const next = withoutNode(nodes, edges, id)
+    setNodes(next.nodes)
+    setEdges(next.edges)
+    if (selected === id) setSelected(next.nodes[0]?.id ?? null)
+    setLinkFrom(null)
+    touch()
+  }
+
+  const patchConfig = (id: string, patch: Record<string, unknown>) => {
+    setNodes((list) => list.map((n) => (n.id === id ? { ...n, config: { ...n.config, ...patch } } : n)))
+    touch()
+  }
+
+  const removeEdge = (id: string) => {
+    setEdges((list) => list.filter((e) => e.id !== id))
+    touch()
+  }
+
+  const completeLink = (target: string) => {
+    if (!linkFrom) return
+    const verdict = canLink(edges, linkFrom.source, target, linkFrom.handle)
+    if (verdict === 'self') { toast.error(c.selfLoop); return }
+    if (verdict === 'duplicate') { toast.error(c.duplicateEdge); return }
+    setEdges((list) => [...list, {
+      id: nextEdgeId(list), source: linkFrom.source, target, sourceHandle: linkFrom.handle,
+    }])
+    setLinkFrom(null)
+    touch()
+  }
+
+  const onNodeClick = (id: string) => {
+    if (linkFrom) { completeLink(id); return }
     setSelected(id)
   }
-  const run = () => {
-    if (running) return
-    setRunning(true); setDone([])
-    nodes.forEach((n, i) => window.setTimeout(() => setDone((prev) => [...prev, n.id]), 240 * (i + 1)))
-    window.setTimeout(() => { setRunning(false); toast.success(c.runDone, c.title) }, 240 * (nodes.length + 1))
+
+  /* ---------------- 服务端动作 ---------------- */
+
+  const saveDraft = async (): Promise<Workflow | null> => {
+    if (!current) return null
+    setBusy('save')
+    try {
+      const wf = await api.workflows.saveDraft(current.id, { nodes, edges })
+      setCurrent(wf)
+      setDirty(false)
+      setWorkflows((list) => list.map((w) => (w.id === wf.id ? { ...w, ...wf } : w)))
+      toast.success(c.saved, c.savedDesc)
+      return wf
+    } catch (e) {
+      toast.error(c.saveFailed, errMessage(e))
+      return null
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const doValidate = async () => {
+    if (!current) return
+    if (dirty && !(await saveDraft())) return
+    setBusy('validate')
+    try {
+      const v = await api.workflows.validate(current.id)
+      setValidation(v)
+      if (v.valid) toast.success(c.validOk)
+      else toast.error(c.validFail, v.errors[0])
+    } catch (e) {
+      toast.error(c.validFail, errMessage(e))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const doPublish = async () => {
+    if (!current) return
+    if (dirty && !(await saveDraft())) return
+    setBusy('publish')
+    try {
+      const wf = await api.workflows.publish(current.id)
+      setCurrent(wf)
+      setWorkflows((list) => list.map((w) => (w.id === wf.id ? { ...w, ...wf } : w)))
+      setDirty(false)
+      toast.success(c.published, c.publishedDesc)
+    } catch (e) {
+      toast.error(c.publishFailed, errMessage(e))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  /** debug 跑草稿、run 跑已发布（versionId 选择在 WorkflowRuntimeService:63）。 */
+  const doRun = async (mode: 'debug' | 'run') => {
+    if (!current) return
+    if (dirty && !(await saveDraft())) return
+    let inputs: Record<string, unknown>
+    try {
+      const parsed: unknown = JSON.parse(inputsText || '{}')
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        toast.error(c.inputsInvalid)
+        return
+      }
+      inputs = parsed as Record<string, unknown>
+    } catch {
+      toast.error(c.inputsInvalid)
+      return
+    }
+    setBusy(mode)
+    setRunError('')
+    setRun(null)
+    setTraceError('')
+    setSelectedRunId(null)
+    setNodeRuns([])
+    try {
+      const r = mode === 'debug'
+        ? await api.workflows.debug(current.id, inputs)
+        : await api.workflows.run(current.id, inputs)
+      // 请求成功：同步执行，返回即终态，直接展示这次运行并读它的轨迹
+      setRun(r)
+      await loadRuns(current.id, 1)
+      void loadTrace(r.id)
+      toast.success(mode === 'debug' ? c.debugDone : c.runDone, `${c.runMeta}: ${c.statuses[r.status] ?? r.status}`)
+    } catch (e) {
+      // 请求失败：错误体里没有 runId。但失败运行已落库，所以刷新历史并自动选中最新的那条，
+      // 让用户仍然能读到失败轨迹（这是运行历史接口存在的意义）。
+      setRunError(errMessage(e))
+      const list = await loadRuns(current.id, 1)
+      if (list.length > 0) void loadTrace(list[0].id)
+      toast.error(c.runFailed, errMessage(e))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const runsPages = Math.max(1, Math.ceil(runsTotal / RUNS_PAGE_SIZE))
+  const goRunsPage = (page: number) => {
+    if (!current || page < 1 || page > runsPages) return
+    void loadRuns(current.id, page)
+  }
+
+  const doCreate = async () => {
+    const name = newName.trim()
+    if (!name) return
+    setBusy('create')
+    try {
+      const wf = await api.workflows.create({ name })
+      const saved = await api.workflows.saveDraft(wf.id, seedGraph())
+      setWorkflows((list) => [saved, ...list])
+      hydrate(saved)
+      setNewName('')
+      setListState('ready')
+      toast.success(c.create, name)
+    } catch (e) {
+      toast.error(c.create, errMessage(e))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  /* ---------------- 渲染 ---------------- */
+
+  if (listState === 'error') {
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div>
+            <p className="eyebrow" style={{ margin: 0 }}>{c.eyebrow}</p>
+            <h1 className="page-title">{c.title}</h1>
+          </div>
+        </div>
+        <StateEmpty
+          icon={<AlertTriangle size={20} />}
+          title={c.loadListFailed}
+          desc={listError}
+          action={<button className="btn btn-ghost" type="button" onClick={() => window.location.reload()}><RefreshCw size={14} /> {c.retry}</button>}
+        />
+      </div>
+    )
   }
 
   return (
@@ -78,86 +436,201 @@ export default function WorkflowPage() {
           <p className="page-sub">{c.sub}</p>
         </div>
         <div className="wf-head-actions">
-          <button className="btn btn-ghost" type="button" onClick={() => toast.success(c.saved, c.title)}><Save size={15} /> {c.save}</button>
-          <button className="btn btn-primary" type="button" onClick={run} disabled={running}>
-            {running ? <LatticeLoader status="working" label="" pattern="sweep" grid={3} cellSize={3.5} gap={1.5} showTimer={false} /> : <Play size={15} />}
-            {running ? c.running : c.run}
+          <button className="btn btn-ghost" type="button" onClick={saveDraft} disabled={!current || busy !== ''}>
+            {busy === 'save' ? <LatticeLoader status="working" label="" pattern="sweep" grid={3} cellSize={3.5} gap={1.5} showTimer={false} /> : <Save size={15} />}
+            {busy === 'save' ? c.saving : c.save}
+          </button>
+          <button className="btn btn-ghost" type="button" onClick={doValidate} disabled={!current || busy !== ''}>
+            <ShieldCheck size={15} /> {busy === 'validate' ? c.validating : c.validate}
+          </button>
+          <button className="btn btn-ghost" type="button" onClick={doPublish} disabled={!current || busy !== ''}>
+            <Rocket size={15} /> {busy === 'publish' ? c.publishing : c.publish}
+          </button>
+          <button className="btn btn-ghost" type="button" onClick={() => doRun('debug')} disabled={!current || busy !== ''}>
+            {busy === 'debug' ? <LatticeLoader status="working" label="" pattern="sweep" grid={3} cellSize={3.5} gap={1.5} showTimer={false} /> : <Play size={15} />}
+            {c.debugRun}
+          </button>
+          <button
+            className="btn btn-primary"
+            type="button"
+            onClick={() => doRun('run')}
+            disabled={!current || busy !== '' || !current.publishedVersionId}
+          >
+            {busy === 'run' ? <LatticeLoader status="working" label="" pattern="sweep" grid={3} cellSize={3.5} gap={1.5} showTimer={false} /> : <Play size={15} />}
+            {busy === 'run' ? c.running : c.run}
           </button>
         </div>
       </div>
-      <div className="wf-layout">
-        <aside className="wf-palette">
-          <h2 className="wf-panel-title">{c.palette}</h2>
-          {(Object.keys(c.types) as NodeType[]).map((type) => {
-            const Icon = ICONS[type]
-            return (
-              <button className="wf-palette-item" type="button" key={type} onClick={() => addNode(type)}>
-                <span className="wf-palette-item__icon"><Icon size={15} aria-hidden="true" /></span>
-                <span className="wf-palette-item__text"><b>{c.types[type].title}</b><small>{c.types[type].desc}</small></span>
-                <Plus size={13} className="wf-palette-item__plus" aria-hidden="true" />
-              </button>
-            )
-          })}
-        </aside>
-        <section className="wf-canvas-wrap">
-          <div className="wf-canvas-toolbar">
-            <button className="plugin-icon-btn" type="button" aria-label="zoom out" onClick={() => setZoom((z) => Math.max(0.6, +(z - 0.1).toFixed(2)))}><ZoomOut size={15} /></button>
-            <span className="wf-zoom">{Math.round(zoom * 100)}%</span>
-            <button className="plugin-icon-btn" type="button" aria-label="zoom in" onClick={() => setZoom((z) => Math.min(1.4, +(z + 0.1).toFixed(2)))}><ZoomIn size={15} /></button>
-            <button className="plugin-icon-btn" type="button" aria-label="reset zoom" onClick={() => setZoom(1)}><Maximize2 size={14} /></button>
-          </div>
-          <div className="wf-canvas" role="application" aria-label={c.title}>
-            <div className="wf-canvas__inner" style={{ transform: `scale(${zoom})` }}>
-              <svg className="wf-edges" width={1060} height={420} aria-hidden="true">
-                {EDGES.map(([from, to], i) => {
-                  const a = byId.get(from); const b = byId.get(to)
-                  if (!a || !b) return null
-                  const x1 = a.x + 170; const y1 = a.y + 34; const x2 = b.x; const y2 = b.y + 34
-                  return <path key={i} d={`M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`} className="wf-edge" />
-                })}
-              </svg>
-              {nodes.map((node) => {
-                const Icon = ICONS[node.type]
-                const state = running ? (done.includes(node.id) ? 'done' : 'running') : 'idle'
+
+      <div className="wf-bar">
+        <label className="wf-bar__label" htmlFor="wf-pick">{c.pickerLabel}</label>
+        <select
+          id="wf-pick"
+          className="input wf-bar__select"
+          value={current?.id ?? ''}
+          onChange={(e) => { if (e.target.value) void open(e.target.value) }}
+          disabled={busy !== '' || workflows.length === 0}
+        >
+          {workflows.length === 0 && <option value="">{c.emptyList}</option>}
+          {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </select>
+        <span className="wf-chip" data-tone={current?.status === 'PUBLISHED' ? 'ok' : 'draft'}>
+          {current ? (current.status === 'PUBLISHED' ? c.published : 'DRAFT') : '—'}
+        </span>
+        {current && (
+          <span className="wf-bar__meta">
+            {`${c.publishedAs}: ${current.publishedVersionNo ?? c.noVersion} · ${c.draftAs}: ${current.draftVersionNo ?? c.noVersion}`}
+          </span>
+        )}
+        {current && <span className="wf-bar__meta">{nodes.length} {c.nodesCount} · {edges.length} {c.edgesCount}</span>}
+        {current && <span className="wf-chip" data-tone={dirty ? 'warn' : 'muted'}>{dirty ? c.dirty : c.clean}</span>}
+        <span className="wf-bar__spacer" />
+        <input
+          className="input wf-bar__new"
+          placeholder={c.createPh}
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void doCreate() }}
+          disabled={busy !== ''}
+        />
+        <button className="btn btn-ghost" type="button" onClick={doCreate} disabled={busy !== '' || !newName.trim()}>
+          <Plus size={15} /> {busy === 'create' ? c.creating : c.create}
+        </button>
+      </div>
+
+      {!current ? (
+        <StateEmpty icon={<GitBranch size={20} />} title={c.emptyList} desc={c.emptyListDesc} />
+      ) : (
+        <>
+          <div className="wf-layout">
+            <aside className="wf-palette">
+              <h2 className="wf-panel-title">{c.palette}</h2>
+              {WF_NODE_TYPES.map((type) => {
+                const Icon = ICONS[type]
+                const disabled = type === 'START' && hasStart
                 return (
-                  <button className="wf-node" type="button" key={node.id} data-type={node.type} data-state={state} data-on={selected === node.id ? '' : undefined} style={{ left: node.x, top: node.y }} onClick={() => setSelected(node.id)}>
-                    <span className="wf-node__icon"><Icon size={14} aria-hidden="true" /></span>
-                    <span className="wf-node__text"><b>{node.title}</b><small>{node.desc}</small></span>
-                    {state === 'running' && <LatticeLoader status="working" label="" pattern="sweep" grid={3} cellSize={3} gap={1} showTimer={false} />}
-                    {state === 'done' && <CheckCircle2 size={13} className="wf-node__done" aria-hidden="true" />}
+                  <button
+                    className="wf-palette-item"
+                    type="button"
+                    key={type}
+                    onClick={() => addNode(type)}
+                    disabled={disabled}
+                    title={disabled ? c.startTaken : undefined}
+                  >
+                    <span className="wf-palette-item__icon"><Icon size={15} aria-hidden="true" /></span>
+                    <span className="wf-palette-item__text"><b>{c.types[type].title}</b><small>{c.types[type].desc}</small></span>
+                    <Plus size={13} className="wf-palette-item__plus" aria-hidden="true" />
                   </button>
                 )
               })}
-            </div>
-            {nodes.length === 0 && <StateEmpty icon={<GitBranch size={20} />} title={c.title} desc={c.empty} />}
-          </div>
-        </section>
-        <aside className="wf-inspector">
-          <h2 className="wf-panel-title">{c.inspector}</h2>
-          {selectedNode ? (
-            <>
-              <div className="field"><label htmlFor="wf-name">{c.fields.name}</label>
-                <input id="wf-name" className="input" value={selectedNode.title} onChange={(e) => setNodes((list) => list.map((n) => n.id === selectedNode.id ? { ...n, title: e.target.value } : n))} />
+            </aside>
+
+            <section className="wf-canvas-wrap">
+              <div className="wf-canvas-toolbar">
+                <button className="plugin-icon-btn" type="button" aria-label="zoom out" onClick={() => setZoom((z) => Math.max(0.6, +(z - 0.1).toFixed(2)))}><ZoomOut size={15} /></button>
+                <span className="wf-zoom">{Math.round(zoom * 100)}%</span>
+                <button className="plugin-icon-btn" type="button" aria-label="zoom in" onClick={() => setZoom((z) => Math.min(1.4, +(z + 0.1).toFixed(2)))}><ZoomIn size={15} /></button>
+                <button className="plugin-icon-btn" type="button" aria-label="reset zoom" onClick={() => setZoom(1)}><Maximize2 size={14} /></button>
               </div>
-              {selectedNode.type === 'trigger' && <div className="field"><label htmlFor="wf-trigger">{c.fields.schedule}</label><select id="wf-trigger" className="input"><option>手动</option><option>定时</option><option>事件</option></select></div>}
-              {selectedNode.type === 'knowledge' && <><div className="field"><label htmlFor="wf-kb">{c.fields.kb}</label><select id="wf-kb" className="input"><option>我的 Java 笔记</option><option>面试八股合集</option></select></div><div className="field"><label htmlFor="wf-topk">{c.fields.topK}</label><input id="wf-topk" className="input" type="number" defaultValue={6} /></div></>}
-              {selectedNode.type === 'agent' && <><div className="field"><label htmlFor="wf-model">{c.fields.model}</label><select id="wf-model" className="input"><option>deepseek-v4-flash</option><option>glm-5.3</option><option>kimi-k2.6</option></select></div><div className="field"><label htmlFor="wf-instr">{c.fields.instructions}</label><textarea id="wf-instr" className="input" rows={3} defaultValue="先检索知识库，再给出要点回答。" /></div></>}
-              {selectedNode.type === 'tool' && <div className="field"><label htmlFor="wf-tool">{c.fields.tool}</label><select id="wf-tool" className="input"><option>knowledge_search</option><option>calculator</option><option>code_runner</option></select></div>}
-              {selectedNode.type === 'condition' && <div className="field"><label htmlFor="wf-expr">{c.fields.expression}</label><input id="wf-expr" className="input" defaultValue="score > 0.7" /></div>}
-              {selectedNode.type === 'output' && <div className="field"><label htmlFor="wf-format">{c.fields.format}</label><select id="wf-format" className="input"><option>Markdown</option><option>JSON</option><option>CSV</option></select></div>}
-            </>
-          ) : <p className="hint">{c.empty}</p>}
-          <h2 className="wf-panel-title" style={{ marginTop: 18 }}>{c.log}</h2>
-          <ol className="wf-log">
-            {nodes.map((n) => (
-              <li key={n.id} data-state={running ? (done.includes(n.id) ? 'done' : 'running') : 'idle'}>
-                {done.includes(n.id) ? <CheckCircle2 size={13} aria-hidden="true" /> : <Circle size={11} aria-hidden="true" />}
-                {c.step(n.title)}
-              </li>
-            ))}
-          </ol>
-        </aside>
-      </div>
+              {(linkFrom || executing) && (
+                <p className="wf-link-hint">
+                  {executing ? c.running : c.linking}
+                  {linkFrom && (
+                    <button className="btn btn-ghost wf-link-hint__btn" type="button" onClick={() => setLinkFrom(null)}>{c.cancelLink}</button>
+                  )}
+                </p>
+              )}
+              <div className="wf-canvas" role="application" aria-label={c.title}>
+                <div className="wf-canvas__inner" style={{ transform: `scale(${zoom})` }}>
+                  <svg className="wf-edges" width={1140} height={460} aria-hidden="true">
+                    {edges.map((edge) => {
+                      const from = nodes.findIndex((n) => n.id === edge.source)
+                      const to = nodes.findIndex((n) => n.id === edge.target)
+                      if (from < 0 || to < 0) return null
+                      const a = positionOf(nodes[from], from)
+                      const b = positionOf(nodes[to], to)
+                      const x1 = a.x + 170
+                      const y1 = a.y + 34
+                      const x2 = b.x
+                      const y2 = b.y + 34
+                      const branch = edge.sourceHandle === 'true' || edge.sourceHandle === 'false'
+                      return (
+                        <path
+                          key={edge.id}
+                          d={`M ${x1} ${y1} C ${x1 + 60} ${y1}, ${x2 - 60} ${y2}, ${x2} ${y2}`}
+                          className="wf-edge"
+                          data-branch={branch ? edge.sourceHandle : undefined}
+                        />
+                      )
+                    })}
+                  </svg>
+                  {nodes.map((node, index) => {
+                    const Icon = ICONS[node.type] ?? Bot
+                    const pos = positionOf(node, index)
+                    const state = executing ? 'running' : runState(runByNode.get(node.id)?.status)
+                    return (
+                      <button
+                        className="wf-node"
+                        type="button"
+                        key={node.id}
+                        data-type={node.type}
+                        data-state={state}
+                        data-on={selected === node.id ? '' : undefined}
+                        data-link={linkFrom?.source === node.id ? '' : undefined}
+                        style={{ left: pos.x, top: pos.y }}
+                        onClick={() => onNodeClick(node.id)}
+                      >
+                        <span className="wf-node__icon"><Icon size={14} aria-hidden="true" /></span>
+                        <span className="wf-node__text"><b>{node.id}</b><small>{summaryOf(node)}</small></span>
+                        {state === 'done' && <CheckCircle2 size={13} className="wf-node__done" aria-hidden="true" />}
+                        {state === 'failed' && <AlertTriangle size={13} className="wf-node__failed" aria-hidden="true" />}
+                      </button>
+                    )
+                  })}
+                </div>
+                {nodes.length === 0 && <StateEmpty icon={<GitBranch size={20} />} title={c.palette} desc={c.canvasHint} />}
+              </div>
+              <p className="hint wf-canvas-note">{c.canvasHint}</p>
+            </section>
+
+            <Inspector
+              c={c}
+              node={selectedNode}
+              edges={edges}
+              kbs={kbs}
+              agents={agents}
+              linking={!!linkFrom}
+              typeTitle={c.types}
+              onPatchConfig={patchConfig}
+              onRemoveNode={removeNode}
+              onRemoveEdge={removeEdge}
+              onStartLink={(source, handle) => setLinkFrom({ source, handle })}
+            />
+          </div>
+
+          <RunPanels
+            c={c}
+            validation={validation}
+            inputsText={inputsText}
+            onInputsChange={setInputsText}
+            run={run}
+            runError={runError}
+            runs={runs}
+            runsTotal={runsTotal}
+            runsPage={runsPage}
+            runsPages={runsPages}
+            runsLoading={runsLoading}
+            runsError={runsError}
+            selectedRunId={selectedRunId}
+            onSelectRun={loadTrace}
+            onGoRunsPage={goRunsPage}
+            onReloadRuns={() => goRunsPage(runsPage)}
+            nodeRuns={nodeRuns}
+            nodeRunsLoading={nodeRunsLoading}
+            traceError={traceError}
+          />
+        </>
+      )}
     </div>
   )
 }

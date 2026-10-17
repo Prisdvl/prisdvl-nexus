@@ -150,10 +150,11 @@ MCP 端点留在 nexus-app 进程内复用鉴权与 Spring 上下文，**不存�
 | RAG | 同步 + SSE 流式问答、`[n]` 引用解析、引用随消息落库、多知识库并行检索与失败点名 | ✅ |
 | Agent | 配置化（落库 `agent` 表）、工具白名单、温度、回答策略（`KB_PREFERRED` / `KB_ONLY`）、多知识库绑定、Tool Trace 落库、流式 + 停止；**运行状态机 + 工具人工审批（`READ`/`WRITE`/`DANGEROUS` + `once`/`always`/`deny` + 授权撤销 + 调用审计）** | ✅ |
 | MCP | 进程内 `POST /mcp`（initialize / ping / tools/list / tools/call），JWT 鉴权，遵守用户工具启停 | ✅ |
+| 工作流 | 可编排 DAG：7 种节点（START / KNOWLEDGE_RETRIEVAL / LLM / AGENT / IF_ELSE / TEMPLATE / END）、草稿与发布两套版本（每次保存生成版本快照）、静态图校验（唯一 START、无环、START 可达、变量引用受限）、`debug` 跑草稿 / `runs` 跑已发布、**运行历史 `GET /api/workflow-runs?workflowId=`（倒序分页，失败运行也能找回）**、节点轨迹落库（成功与失败都留痕）；**前端设计器已接真实 API**（列表 / 画布增删节点与连线 / 逐类型配置 / 保存 / 校验 / 发布 / 运行 / 轨迹 / 运行历史） | ✅ 后端 17 用例全绿；前端 `npm run build` 通过；**端到端已在 standalone 上实测**（浏览器 E2E **36/36** + 独立 API 闭环，含失败运行与运行历史翻页），覆盖 START / TEMPLATE / LLM 三类节点（见 §8） |
 | 用户与安全 | 注册（邮箱必填）/ 登录 / JWT（HS256）/ BCrypt / RBAC；**Refresh Token 轮转 + 服务端 logout（设备会话）**；邮箱验证 / 重置密码；令牌版本吊销、登录冻结、限流、每日配额 | ✅ |
 | 可观测 | 自建计数器 + Micrometer（`/actuator/metrics`）；无 Prometheus / 时间序列 | ◐ |
 | 部署 | 7 服务 docker compose、nginx 唯一对外入口、健康检查、数据卷持久化 | ✅ |
-| 前端 | React 19 + Vite + TS：落地页 / 登录注册 / 知识库与文档 / 对话（RAG + Agent）/ Agent 管理 / 账号设置；主题与引导 | ✅ |
+| 前端 | React 19 + Vite + TS：落地页 / 登录注册 / 知识库与文档 / 对话（RAG + Agent）/ Agent 管理 / **工作流设计器** / 账号设置；主题与引导 | ✅ |
 
 ---
 
@@ -163,7 +164,7 @@ MCP 端点留在 nexus-app 进程内复用鉴权与 Spring 上下文，**不存�
 | --- | --- |
 | 语言 / 构建 | Java 21、Maven 3.9+（4 模块 reactor） |
 | 框架 | Spring Boot 4.1.1、Spring AI 2.0.1（BOM） |
-| 业务库 | MySQL 8.4 + MyBatis-Plus 3.5.17 + Flyway（迁移 V1–V21，无 V11） |
+| 业务库 | MySQL 8.4 + MyBatis-Plus 3.5.17 + Flyway（迁移 V1–V23，无 V11；V22 = 工具授权与 Agent 运行，V23 = 工作流定义与运行） |
 | 向量库 | PostgreSQL 18 + pgvector 0.8.6（HNSW，`vector(1024)`） |
 | 关键词检索 | Elasticsearch 9.4.5 + analysis-ik 9.4.5 |
 | 缓存 / 队列 | Redis 8.10、RabbitMQ 4.3 |
@@ -216,10 +217,11 @@ prisdvl-nexus/
 
 | 口径 | 结果 |
 | --- | --- |
-| 后端 `mvn -B test`（默认，无 LIVE 开关） | **810** 个用例：**0** 失败 / **0** 错误 / **33** 跳过，BUILD SUCCESS（4 模块，2026-10-15；common 19 / ai 76 / knowledge 174 / app 541——较上轮 +46 个用例，全部是 P0 工具授权与人工审批） |
-| 前端 `npm run build`（`tsc --noEmit && vite build`） | exit 0（2026-10-14；仅有既存的 chunk 体积警告） |
+| 后端 `mvn -B test`（默认，无 LIVE 开关） | **824** 个用例：**0** 失败 / **0** 错误 / **33** 跳过，BUILD SUCCESS（分模块实测合计，2026-10-17：common 19 / ai 76 / knowledge 174 于波次 1–3；app **555** 于本次——app 较上轮 541 +14，其中 +11 是恢复提交新增的 workflow 测试、+3 是本次运行历史接口新增用例） |
+| 前端 `npm run build`（`tsc --noEmit && vite build`） | exit 0（2026-10-17；仅有既存的 chunk 体积警告） |
+| 工作流端到端（真浏览器 + 真后端） | `npm run verify:workflow`（= `node scripts/verify-workflow.mjs`）→ **ALL OK 36/36**（2026-10-17；`--spring.profiles.active=standalone` 起后端 + `npm run dev` 起前端，全程未启动 Docker、未设任何 LIVE 变量、未连外部模型）。覆盖：创建/种子图、节点增删、连线、保存、校验、发布、运行、节点轨迹，**运行历史**（空态、累积、点历史行切换为该次的轨迹、浏览器内翻到第 2 页、首/末页按钮禁用），以及**失败运行**（断言 `POST /runs` 返回 502 + `code=4006`，失败运行仍落库、自动选中、轨迹里能看到失败节点与错误消息）。另有两条独立取证：① 脱离 UI 的纯 API 闭环（成功运行 200/SUCCEEDED、失败运行 502/4006、历史查询 200、两条轨迹分别为 `llm=FAILED, end=PENDING` 与全 SUCCEEDED）；② 失败留痕回归 `WorkflowResourceTest.listsFailedRunSoTraceIsReadable`。运行图范围仅本机可跑的节点类型（START / TEMPLATE / LLM），KNOWLEDGE_RETRIEVAL 与 AGENT 需要真实基础设施或模型 |
 | compose 配置校验 | `docker compose config --quiet` 通过（缺 3 个必填变量时拒绝启动，2026-10-14 复验） |
-| 前端 QA | `verify:all` 等浏览器 QA 脚本：**NOT VERIFIED**（本轮未跑完整 QA 集；截图见 §1） |
+| 前端其他 QA | 除 `verify-workflow.mjs` 外的 `verify:*` / `qa-*.mjs`：**NOT VERIFIED**（截图见 §1） |
 
 默认 `mvn test` 跳过的用例是需要真实基础设施 / 真实模型的 **LIVE 测试**（Testcontainers 自起 ES/PG 的检索类、
 连真实模型的嵌入/对话类），由环境变量门控（如 `AI_SEARCH_LIVE=true`、`AI_VECTOR_LIVE=true`、
@@ -246,6 +248,7 @@ cd frontend && npm run build   # 前端类型检查 + 生产构建（tsc --noEmi
 4. **前端首包体积** —— `elk`（约 1.46 MB / gzip 456 KB）与主 chunk（约 1.18 MB / gzip 392 KB，2026-10-14 `npm run build`）偏大，来自 mermaid/elk 与 markdown 渲染链。
 5. **取消注册表与审批等待注册表仅内存**（进程重启后 `WAITING_APPROVAL` 的运行被标为 `FAILED`，而不是被恢复）、**观测无时间序列、无物理外键、单机部署** 等工程边界。
 6. **审批的两条未做边界**：`GET /api/tool-invocations`（审计数据已落库，查询接口未开）与 `POST /api/agent/runs` 自身的流式形态（`approval_required` 事件走 `/api/chat/stream` 的工具拦截点）。
+7. **工作流运行是同步的；失败留痕已补齐** —— `POST /api/workflows/{id}/debug` 与 `/{id}/runs` 在一次 HTTP 内跑完整张图（`WorkflowRuntimeService:63`），所以前端没有「停止」入口（取消了也没有意义）。**原先失败运行完全不留痕**：`run()` 上的 `@Transactional` 会把已落库的运行与节点轨迹随 `BusinessException` 一起回滚（实测：失败后按 workflowId 查运行列表 `total=0`）——所以只加查询接口并不能让失败轨迹可读。现已一并修：`run()` 改为 `@Transactional(noRollbackFor = BusinessException.class)`，并新增 `GET /api/workflow-runs?workflowId=`（倒序分页）运行历史，失败运行可找回 `runId` 再读节点轨迹（回归测试 `WorkflowResourceTest.listsFailedRunSoTraceIsReadable`）。
 
 ---
 

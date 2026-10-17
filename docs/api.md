@@ -941,8 +941,17 @@ curl -s -X POST localhost:8080/mcp \
 | POST | `/api/workflows/{id}/runs` | 触发执行 → `runId` |
 | GET | `/api/workflow-runs/{runId}` | 运行状态与当前节点 |
 | GET | `/api/workflow-runs/{runId}/nodes` | 各节点执行明细（输入/输出/耗时/重试次数） |
+| GET | `/api/workflow-runs?workflowId=` | 某工作流的运行历史（按 id 倒序分页；失败运行靠它找回 runId） |
 | POST | `/api/workflow-runs/{runId}/approval` | 人工确认节点放行 |
 | POST | `/api/workflow-runs/{runId}/retry` | 从失败节点重试 |
+
+> ⚠️ **本表是 Phase 8 的设计意图，不是已实现清单**（与 `architecture.md` §0 同规矩）。
+> 实际实现以上表为准的部分只有：`POST/GET /api/workflows`、`GET /api/workflows/{id}`、
+> `PUT /api/workflows/{id}/draft`（草稿）、`POST .../validate`、`POST .../publish`、`GET .../versions`、
+> `POST .../debug`（跑草稿）、`POST .../runs`（跑已发布）、`DELETE /api/workflows/{id}`，
+> 以及 `/api/workflow-runs` 的列表 / 详情 / 节点轨迹 / 取消。
+> **本表未实现的**：`PUT /api/workflows/{id}`（改名更新）、`/approval`、`/retry`，
+> 以及表的「预置工作流」三项；对不上时以代码与 README §5 为准。
 
 **预置工作流**：`knowledge-gap-analysis`（知识分析）、`study-plan-7d`（7 天学习计划）、`knowledge-report`（知识报告生成）。
 

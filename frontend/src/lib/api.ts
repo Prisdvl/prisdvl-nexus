@@ -551,6 +551,11 @@ export const api = {
       http.post<Result<WorkflowRun>>(`/workflows/${id}/runs`, { inputs }).then((r) => r.data.data),
   },
   workflowRuns: {
+    /** 某工作流的运行历史（按 id 倒序分页）。
+     *  运行是同步的，失败时 POST 直接抛错、拿不到 runId，所以失败运行要靠这里找回再读轨迹。 */
+    list: (workflowId: string, pageNum = 1, pageSize = 20) =>
+      http.get<Result<PageResult<WorkflowRun>>>('/workflow-runs', { params: { workflowId, pageNum, pageSize } })
+        .then((r) => r.data.data),
     get: (runId: string) => http.get<Result<WorkflowRun>>(`/workflow-runs/${runId}`).then((r) => r.data.data),
     nodes: (runId: string) =>
       http.get<Result<WorkflowNodeRun[]>>(`/workflow-runs/${runId}/nodes`).then((r) => r.data.data),
