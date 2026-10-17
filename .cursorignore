@@ -1,0 +1,48 @@
+# AI 可见性边界（AI Visibility Boundary）
+#
+# 目的：把「AI 无法有效利用、且会制造检索噪声」的内容挡在索引与搜索之外。
+# 与 .gitignore 的分工：.gitignore 管版本控制，本文件管 AI 索引/搜索可见性。
+# 修改原则：只排除「读了也没用」的东西；不要排除源码、文档、测试、记忆——那是 AI 的工作对象。
+
+# ---------- 依赖与构建产物（约 766 MB，永远不该被 AI 读）----------
+node_modules/
+target/
+dist/
+dist-ssr/
+.vite/
+coverage/
+*.map
+*.class
+*.jar
+*.war
+
+# ---------- 版本控制与工具元数据 ----------
+.git/
+.idea/
+.claude/
+.mvn/wrapper/maven-wrapper.jar
+
+# ---------- 已被取代的历史源码：防止误当现行实现 ----------
+# 见 docs/archive/README.md：web-vue / web-react 已被 frontend/（React 19）取代。
+# 只排除这两份源码副本；docs/archive/reports 等文档仍可查阅。
+# 本项目已因误读废弃代码发生过返工，故此处从严。
+docs/archive/web-vue/
+docs/archive/web-react/
+
+# ---------- 密钥与本机痕迹 ----------
+.secrets/
+.env
+.env.*
+*.key.txt
+
+# ---------- 纯二进制数据（无文本语义，读取只消耗额度）----------
+*.bin
+*.pdf
+*.zip
+*.docx
+*.pptx
+*.xlsx
+
+# 不排除项及原因：
+#   *.png / *.svg —— 视觉验证需要 AI 实际查看截图，属有效读取
+#   .workbuddy/  —— 存放 AI 的项目记忆，必须保持可读，否则记忆机制失效

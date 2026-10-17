@@ -2,7 +2,9 @@ package com.lky.nexus.app.agent;
 
 import com.lky.nexus.app.agent.model.dto.ToolResponse;
 import com.lky.nexus.app.agent.model.dto.UpdateToolRequest;
+import com.lky.nexus.app.agent.model.entity.ToolRegistryPO;
 import com.lky.nexus.app.agent.tool.ToolRegistry;
+import com.lky.nexus.app.agent.tool.ToolRegistrationService;
 import com.lky.nexus.app.auth.security.CurrentUser;
 import com.lky.nexus.common.api.Result;
 import jakarta.validation.Valid;
@@ -37,16 +39,27 @@ import java.util.List;
 public class ToolController {
 
     private final ToolRegistry toolRegistry;
+    private final ToolRegistrationService registrationService;
 
-    public ToolController(ToolRegistry toolRegistry) {
+    public ToolController(ToolRegistry toolRegistry, ToolRegistrationService registrationService) {
         this.toolRegistry = toolRegistry;
+        this.registrationService = registrationService;
     }
 
-    /** 该用户的工具目录（没有覆盖行的工具 enabled=true，即"默认开着"）。 */
+    /**
+     * 该用户的工具目录（没有覆盖行的工具 enabled=true，即"默认开着"）。
+     *
+     * <p>{@code permission} 取的是<b>数据库里实际生效的值</b>（代码声明只是首次注册的默认），
+     * 这样界面上看到的风险等级与执行拦截用的是同一个来源。
+     */
     @GetMapping
     public Result<List<ToolResponse>> list() {
-        return Result.ok(toolRegistry.catalogOf(CurrentUser.requireId()).stream()
-                .map(ToolResponse::of)
+        Long userId = CurrentUser.requireId();
+        return Result.ok(toolRegistry.catalogOf(userId).stream()
+                .map(definition -> ToolResponse.of(definition,
+                        registrationService.findByCode(definition.code())
+                                .map(ToolRegistryPO::getPermission)
+                                .orElse(null)))
                 .toList());
     }
 

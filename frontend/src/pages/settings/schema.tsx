@@ -14,6 +14,7 @@ import {
   AppearanceSection, DangerSection, EmailSection, ExportSection, ModelKeySection, NotifySection,
   PrefsSection, ProfileSection, SecuritySection, SessionsSection, UsageSection,
 } from './sections'
+import { appCopy } from '@/lib/appCopy'
 
 export type SectionId =
   | 'profile' | 'model' | 'prefs' | 'appearance'
@@ -31,45 +32,60 @@ export interface SettingsItem {
   render: () => ReactNode
 }
 
-export const SETTINGS_GROUPS: { title: string; items: SettingsItem[] }[] = [
+export interface SettingsGroup {
+  title: string
+  items: SettingsItem[]
+}
+
+/**
+ * 分组 / 分区标题随语言生成。
+ *
+ * 为什么做成函数而不是模块级常量：label 是要显示给用户的文案，
+ * 写成常量就等于把语言焊死在模块加载那一刻，切换语言后设置页仍是旧文案。
+ * alias（搜索别名）保留中英关键词，两种语言下都能搜到。
+ */
+export function buildSettingsGroups(t: ReturnType<typeof appCopy>['settings']): SettingsGroup[] {
+  return [
   {
-    title: '个人',
+    title: t.groupPersonal,
     items: [
-      { id: 'profile', label: '公开资料', icon: UserRound, alias: '用户名 昵称 邮箱 头像 资料', render: () => <ProfileSection /> },
-      { id: 'model', label: '模型 Key', icon: Cpu, alias: '大模型 key api key 自定义 模型 网关 base url deepseek', render: () => <ModelKeySection /> },
-      { id: 'prefs', label: '账号偏好', icon: SlidersHorizontal, alias: '语言 时区 默认 落地页', render: () => <PrefsSection /> },
-      { id: 'appearance', label: '外观', icon: Palette, alias: '主题 配色 暗色 浅色 亮色 跟随系统 颜色', render: () => <AppearanceSection /> },
+      { id: 'profile', label: t.itemProfile, icon: UserRound, alias: 'profile username nickname email 用户名 昵称 邮箱 头像 资料', render: () => <ProfileSection /> },
+      { id: 'model', label: t.itemModel, icon: Cpu, alias: 'model key api 大模型 key api key 自定义 模型 网关 base url deepseek', render: () => <ModelKeySection /> },
+      { id: 'prefs', label: t.itemPrefs, icon: SlidersHorizontal, alias: 'preferences language timezone landing 语言 时区 默认 落地页', render: () => <PrefsSection /> },
+      { id: 'appearance', label: t.itemAppearance, icon: Palette, alias: 'appearance theme palette dark light 主题 配色 暗色 浅色 亮色 跟随系统 颜色', render: () => <AppearanceSection /> },
     ],
   },
   {
-    title: '访问与安全',
+    title: t.groupAccess,
     items: [
-      { id: 'security', label: '密码与登录', icon: KeyRound, alias: '修改密码 两步验证 二次验证 登录', render: () => <SecuritySection /> },
-      { id: 'email', label: '邮箱验证', icon: MailCheck, alias: '验证码 邮箱 找回密码', render: () => <EmailSection /> },
-      { id: 'sessions', label: '会话与设备', icon: Laptop, alias: '登录设备 退出 会话 安全', render: () => <SessionsSection /> },
+      { id: 'security', label: t.itemSecurity, icon: KeyRound, alias: 'password 2fa security 修改密码 两步验证 二次验证 登录', render: () => <SecuritySection /> },
+      { id: 'email', label: t.itemEmail, icon: MailCheck, alias: 'email verify code 验证码 邮箱 找回密码', render: () => <EmailSection /> },
+      { id: 'sessions', label: t.itemSessions, icon: Laptop, alias: 'sessions devices logout 登录设备 退出 会话 安全', render: () => <SessionsSection /> },
     ],
   },
   {
-    title: '通知',
+    title: t.groupNotify,
     items: [
-      { id: 'notify', label: '通知偏好', icon: BellRing, alias: '提醒 邮件 每周摘要 通知', render: () => <NotifySection /> },
+      { id: 'notify', label: t.itemNotify, icon: BellRing, alias: 'notifications email digest 提醒 邮件 每周摘要 通知', render: () => <NotifySection /> },
     ],
   },
   {
-    title: '数据与用量',
+    title: t.groupData,
     items: [
-      { id: 'usage', label: '用量配额', icon: Gauge, alias: '存储 调用 配额 额度 统计', render: () => <UsageSection /> },
-      { id: 'export', label: '数据导出', icon: Download, alias: '导出 备份 迁移 json markdown csv', render: () => <ExportSection /> },
+      { id: 'usage', label: t.itemUsage, icon: Gauge, alias: 'usage quota storage calls 存储 调用 配额 额度 统计', render: () => <UsageSection /> },
+      { id: 'export', label: t.itemExport, icon: Download, alias: 'export backup json markdown csv 导出 备份 迁移', render: () => <ExportSection /> },
     ],
   },
   {
-    title: '危险区',
+    title: t.groupDanger,
     items: [
-      { id: 'danger', label: '注销账号', icon: ShieldAlert, alias: '删除 注销 清空 危险', render: () => <DangerSection /> },
+      { id: 'danger', label: t.itemDanger, icon: ShieldAlert, alias: 'delete account danger 删除 注销 清空 危险', render: () => <DangerSection /> },
     ],
   },
-]
+  ]
+}
 
 /** 分区 → 所属分组标题（弹层顶栏显示"个人 / 公开资料"这样的定位信息） */
-export const GROUP_OF = (id: SectionId): string | undefined =>
-  SETTINGS_GROUPS.find((g) => g.items.some((it) => it.id === id))?.title
+export function groupOf(groups: SettingsGroup[], id: SectionId): string | undefined {
+  return groups.find((g) => g.items.some((it) => it.id === id))?.title
+}

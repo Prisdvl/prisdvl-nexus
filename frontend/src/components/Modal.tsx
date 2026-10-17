@@ -1,5 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { X } from 'lucide-react'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
 
 interface ModalProps {
   open: boolean
@@ -23,6 +25,7 @@ const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select,t
  * 3. **焦点归还**：关闭后把焦点还给打开它的那个元素（键盘用户不会"丢位置"）。
  */
 export default function Modal({ open, title, onClose, children, footer, width = 560, shouldBlockClose }: ModalProps) {
+  const closeAria = appCopy(useLocale().locale).common.close
   const panelRef = useRef<HTMLDivElement>(null)
   const lastActive = useRef<HTMLElement | null>(null)
 
@@ -87,7 +90,7 @@ export default function Modal({ open, title, onClose, children, footer, width = 
       >
         <div className="dhead">
           <h3>{title}</h3>
-          <button className="close" type="button" aria-label="关闭" onClick={requestClose}>
+          <button className="close" type="button" aria-label={closeAria} onClick={requestClose}>
             <X size={17} />
           </button>
         </div>

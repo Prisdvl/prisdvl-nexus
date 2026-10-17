@@ -31,6 +31,9 @@ interface FloatingNavProps {
   activeName?: string;
   /** 滚动超过这个距离才开始响应方向（px） */
   offset?: number;
+  /** nav 与分段控件的无障碍名（调用方按语言传入） */
+  navAria?: string;
+  segmentAria?: string;
   className?: string;
 }
 
@@ -40,6 +43,8 @@ export function FloatingNav({
   action,
   activeName,
   offset = 80,
+  navAria,
+  segmentAria,
   className = '',
 }: FloatingNavProps) {
   const [visible, setVisible] = useState(true);
@@ -88,7 +93,7 @@ export function FloatingNav({
           <div className="floating-nav">
             {logo && <div className="floating-nav__logo">{logo}</div>}
 
-            <nav className="floating-nav__items" aria-label="页面导航">
+            <nav className="floating-nav__items" aria-label={navAria}>
               <RubberSegment
                 className="floating-nav__segment"
                 items={navItems.map((item) => item.name)}
@@ -103,7 +108,7 @@ export function FloatingNav({
                 textColor="var(--text-2)"
                 activeTextColor="var(--primary-text)"
                 draggable={!reduce}
-                aria-label="页面分区"
+                aria-label={segmentAria}
                 onChange={(name) => {
                   if (name === current) return;
                   const hit = navItems.find((i) => i.name === name);

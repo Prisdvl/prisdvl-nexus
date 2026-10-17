@@ -531,8 +531,9 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
    而 `tool` 表的行是可以不存在的覆盖行，用 id 引用会立刻悬空。code 稳定，行被删/重建都不影响绑定；
 3. **`agent_tool.enabled` 没建**（设计稿有）：白名单的"在不在里面"已经表达了用不用这个工具；
    一个恒为 1、没有任何写入点的标志位只会让后来的人以为它能关。
-   `permission` / `approval_required` / `timeout_ms` / `rate_limit` 同样不建——今天没有任何一处会读它们，
-   它们与 P1 的 Tool Permission / Approval 一起落地。
+   当时同样不建的 `permission` 已在 **6.0.4（P0，V22）** 以独立的 `ai_tool_registry` 落地——
+   它的值是工具固有的属性、与用户无关，混进按用户的 `tool` 表会产生"同一工具 A 说 WRITE、B 没有行"的歧义；
+   `timeout_ms` / `rate_limit` 仍不建（今天没有任何一处会读它们）。
 
 ### 6.0.2 已实现：`agent.answer_policy`（平台化 Phase 4.4，迁移 V14）
 
@@ -575,17 +576,55 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 > 那两个被拒是因为**没有任何机制会读它们**；temperature 落地时就带着读它的那一行，
 > 所以它不是假旋钮。加配置时必须连同"谁读它"一起落地。
 
+### 6.0.4 已实现：工具授权与 Agent 审批（P0，迁移 V22）
+
+六张新表，全部是**只增不改**（不动 V1–V21 的任何表/列）：
+
+| 表 | 关键列 | 说明 |
+| --- | --- | --- |
+| `ai_tool_registry` | `id`、`code`(唯一)、`name`、`description`、`source`、`category`、`permission`、`enabled`、时间列 | **工具注册元数据**：每个工具一行，`permission`(`READ`/`WRITE`/`DANGEROUS`) 是**运行时权威** |
+| `ai_agent_run` | `id`、`user_id`、`conversation_id`、`agent_id`、`question`、`status`、`max_iterations`、`iteration_count`、`model_role`、`answer`、`error_code`、`error_msg`、`created_at`/`started_at`/`finished_at`/`updated_at` | 一次 Agent 运行（状态机，可挂起等审批） |
+| `ai_agent_run_step` | `id`、`run_id`、`seq`、`step_type`(`THINK`/`TOOL_CALL`/`OBSERVATION`/`ANSWER`)、`tool_code`、`input_digest`、`output_digest`、`status`(`OK`/`FAILED`/`DENIED`/`CANCELLED`)、`created_at` | 运行轨迹；唯一键 `(run_id, seq)` 保证顺序 |
+| `ai_tool_approval` | `id`、`run_id`、`user_id`、`invocation_id`、`tool_code`、`arguments_digest`、`reason`、`status`(`PENDING`/`APPROVED`/`DENIED`/`CANCELLED`/`EXPIRED`)、`decision_scope`(`once`/`always`/`deny`)、`decision_reason`、`created_at`/`decided_at` | 人工审批记录 |
+| `ai_tool_invocation` | `id`、`run_id`、`step_id`、`user_id`、`tool_code`、`permission`、`arguments_digest`、`approval_id`、`status`(`PENDING_APPROVAL`/`SUCCEEDED`/`FAILED`/`DENIED`/`CANCELLED`)、`result_digest`、`error_code`、`started_at`/`finished_at` | 工具调用审计（**被拒/被取消/等待超时同样落一行**） |
+| `ai_tool_grant` | `id`、`user_id`、`tool_code`、`scope`(恒 `ALWAYS`)、`created_at`/`updated_at` | 用户级长期授权；唯一键 `(user_id, tool_code)` |
+
+四个与设计稿不同的决定，都写在这里免得以后被"补回设计稿"：
+
+1. **权限单独一张注册表，不进 `tool` 表**。`tool` 是按用户的覆盖行（"这个用户关了哪些工具"），
+   `permission` 是工具固有的风险等级、与用户无关。混在一起会立刻产生歧义：同一个工具，
+   A 的覆盖行说 `WRITE`、B 没有行时听谁的？所以另建 `ai_tool_registry`，每个 code 恰好一行。
+2. **同步只在首次创建时写默认权限**。启动时（`ApplicationReadyEvent`）从代码声明幂等同步
+   `name`/`description`/`source`/`category`，但**不覆盖已存在的 `permission` 与 `enabled`**——
+   否则管理员把某个工具降级为 `DANGEROUS` 的动作会在下一次重启时被悄悄改回 `READ`，
+   而且没有任何日志。行不存在时才用代码声明的默认值插入。
+3. **不建 `input_schema` / `requires_approval` 列**。入参 schema 的唯一真源仍是代码里的 `@Tool` 方法
+   （反射生成，MCP 的 `tools/list` 直接读它）；"要不要审批"不需要独立开关，
+   `permission != READ && 无 always 授权` 就是全部判定——多一个可以从两处推出的字段，
+   迟早会出现两处不一致。
+4. **不做逻辑删除**。这几张是**只追加的执行轨迹**，没有"逻辑删除"这个业务动作；
+   建 `deleted` 只会让"这条记录为什么查不到"多一种解释。撤销授权是物理删（幂等）。
+
+运行状态与审批决策都用**条件更新**落定：
+`ai_agent_run` 用 `UPDATE … WHERE id=? AND status=?`（只有一次合法转换能成功）、
+`ai_tool_approval` 用 `UPDATE … WHERE id=? AND status='PENDING'`（重复/并发提交只有一个能生效）。
+
+> **已知边界**：等待审批的 future 注册表在**内存里**（`ToolApprovalService.pendingById`）。
+> 进程重启后 `WAITING_APPROVAL` 的行仍然存在（刷新页面能看到待审批，这是持久化的价值），
+> 但那条运行上下文已经没了——此时提交审批会落定审批记录、同时把运行标成 `FAILED`
+> （"运行上下文已丢失"），**不会**假装恢复执行。
+
 ### 6.1 设计稿（未实现的部分）
 
 | 表 | 关键列 | 说明 |
 | --- | --- | --- |
 | `ai_prompt_template` | `id`、`code`(如 `rag.answer`)、`name`、`description`、`scene` | 逻辑提示词 |
 | `ai_prompt_version` | `id`、`template_id`、`version`、`content`、`variables`(JSON)、`temperature`、`max_tokens`、`top_p`、`status`(`DRAFT`/`PUBLISHED`/`ARCHIVED`)、`published_at`、`created_by` | 唯一键 `(template_id, version)`；**每次 AI 调用都记录 `prompt_version_id`**，评测才能对比版本 |
-| `ai_tool_registry` | `id`、`code`、`name`、`description`、`source`(`BUILTIN`/`MCP`)、`mcp_server_id`、`permission`(`READ`/`WRITE`/`DANGEROUS`)、`input_schema`(JSON)、`requires_approval`、`enabled` | 工具元数据（不仅是代码里的 `@Tool`）。**内置工具这一半已按 6.0.1 的形态实现**（`tool` 表只存用户态）；本行剩下的部分是"外部工具"落地时的样子——那时 name/description/schema 才第一次成为数据库里的真源 |
-| `ai_agent_tool` | `id`、`agent_id`、`tool_id`、`enabled`、`requires_approval` | **Agent 权限矩阵**：默认只挂 `READ`。已按 6.0.1 实现为 `agent_tool`（无 `enabled`、按 code 引用）；`requires_approval` 属 P1 |
-| `ai_tool_invocation` | `id`、`agent_run_id`、`message_id`、`tool_code`、`arguments`(JSON)、`result_digest`、`success`、`duration_ms`、`permission`、`approval_status`(`NOT_REQUIRED`/`PENDING`/`APPROVED`/`REJECTED`)、`approved_by`、`error_msg` | **审计表**，任何工具执行可追溯 |
-| `ai_agent_run` | `id`、`user_id`、`conversation_id`、`agent_id`、`goal`、`status`(`RUNNING`/`WAITING_APPROVAL`/`DONE`/`FAILED`/`MAX_ITERATIONS`/`CANCELLED`)、`step_count`、`total_tokens`、`started_at`、`finished_at`、`error_msg` | 一次 Agent 任务 |
-| `ai_agent_run_step` | `id`、`run_id`、`step_index`、`type`(`THINK`/`TOOL_CALL`/`OBSERVATION`/`ANSWER`)、`content`、`tool_code`、`model`、`tokens`、`duration_ms`、`created_at` | 完整思维链轨迹（前端可回放，也是评测素材） |
+| `ai_tool_registry` | 见 6.0.4 | **已实现**（V22）。与设计稿的差异：不建 `mcp_server_id` / `input_schema` / `requires_approval`（理由见 6.0.4） |
+| `ai_agent_tool` | `id`、`agent_id`、`tool_id`、`enabled`、`requires_approval` | **Agent 权限矩阵**：已按 6.0.1 实现为 `agent_tool`（无 `enabled`、按 code 引用）；`requires_approval` **不再打算建**——审批与否由 `ai_tool_registry.permission` + `ai_tool_grant` 推出 |
+| `ai_tool_invocation` | 见 6.0.4 | **已实现**（V22）。与设计稿的差异：不存 `message_id` / `duration_ms` / `approved_by`（审批人就是 run 的 owner；时间差由 `started_at`/`finished_at` 得出），入参与结果存**脱敏摘要**而不是原始 JSON |
+| `ai_agent_run` | 见 6.0.4 | **已实现**（V22）。与设计稿的差异：用 `question`/`answer` 而不是 `goal`/`step_count`/`total_tokens`（token 记账仍归 `chat_message` 与配额） |
+| `ai_agent_run_step` | 见 6.0.4 | **已实现**（V22）。**刻意不存模型完整思维链**：`THINK` 只是阶段标记，这一点与设计稿"完整思维链轨迹"的表述相反，以本节为准 |
 
 ---
 
@@ -764,3 +803,6 @@ CREATE INDEX IF NOT EXISTS idx_vector_store_meta
 7. 平台化 5.6：`sys_user.token_version`（V18）——只增一列 + 一条预检，没有新表。
 8. 平台化 5.5 / 5.5.1（多知识库 RAG）：**零迁移**。绑定表复用 V12 的 `agent_knowledge_base`，
    会话侧复用 V2 的 `chat_conversation.kb_ids`；并行化与失败隔离都是纯读路径的改动。
+9. P0（工具授权与人工审批，V22）：`ai_tool_registry` / `ai_agent_run` / `ai_agent_run_step` /
+   `ai_tool_approval` / `ai_tool_invocation` / `ai_tool_grant` ——六张新表，见 6.0.4。
+   权限与审批状态都靠**条件更新**落定，不引入乐观锁列。

@@ -26,6 +26,8 @@ export default defineConfig(({ mode }) => {
       port: 5175,
       strictPort: false,
       host: true,
+      // cloudflared / ngrok 等公网隧道会改 Host，默认会 403
+      allowedHosts: true,
       proxy: {
         // 上下文是 api：baseURL 默认 '/api'，所以 /api/xxx → target + /api/xxx
         '/api': { target, changeOrigin: true },

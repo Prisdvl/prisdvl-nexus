@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type Ref } from 'react'
+import { pagesCopy } from '@/lib/pagesCopy'
+import { useLocale } from '@/lib/locale'
 
 /** 单条横线占位（与 CSS min-height 一致）；压矮以便更密 */
 const ITEM_H = 12
@@ -41,6 +43,8 @@ export default function MessageRail({
   onPanelLeave,
   onJump,
 }: Props) {
+  /* 字典取名 c：本文件的 props 名为 items，刻意避开同名 */
+  const c = pagesCopy(useLocale().locale).chat
   const navRef = useRef<HTMLElement | null>(null)
   const [gap, setGap] = useState(GAP_MAX)
 
@@ -70,7 +74,7 @@ export default function MessageRail({
     <nav
       className={`msg-nav${open ? ' is-open' : ''}`}
       data-open={open ? '' : undefined}
-      aria-label="提问导航"
+      aria-label={c.railAria}
       ref={setNavRef}
       onMouseEnter={onPanelEnter}
       onMouseLeave={onPanelLeave}
@@ -96,7 +100,7 @@ export default function MessageRail({
                 type="button"
                 className={`msg-nav__item${isActive ? ' is-active' : ''}`}
                 data-active={isActive ? '' : undefined}
-                aria-label={`第 ${item.index} 个提问`}
+                aria-label={c.railItemAria(item.index)}
                 aria-current={isActive ? 'true' : undefined}
                 tabIndex={isActive ? 0 : -1}
                 /* 禁止点击抢焦点：否则 :focus-visible 会留下主色描边，看起来像多根高亮 */

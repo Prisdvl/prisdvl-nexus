@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Search, X, LogOut, Sparkles } from 'lucide-react'
-import { SETTINGS_GROUPS, GROUP_OF, type SectionId } from '@/pages/settings/schema'
+import { buildSettingsGroups, groupOf, type SectionId } from '@/pages/settings/schema'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
+import Loc from './Loc'
 import { TOUR_START_EVENT } from './OnboardingTour'
 import '@/styles/settings-dialog.css'
 
@@ -19,6 +22,9 @@ interface Props {
  * 挂到 body + `position: fixed` 后与任何祖先的 overflow / transform 无关。
  */
 export default function SettingsDialog({ open, onClose, onLogout }: Props) {
+  const { locale } = useLocale()
+  const st = appCopy(locale).settings
+  const SETTINGS_GROUPS = useMemo(() => buildSettingsGroups(st), [st])
   const [active, setActive] = useState<SectionId>('profile')
   const [query, setQuery] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
@@ -47,7 +53,7 @@ export default function SettingsDialog({ open, onClose, onLogout }: Props) {
     return SETTINGS_GROUPS
       .map((g) => ({ ...g, items: g.items.filter((it) => it.label.toLowerCase().includes(q) || it.alias.includes(q)) }))
       .filter((g) => g.items.length > 0)
-  }, [query])
+  }, [query, SETTINGS_GROUPS])
 
   const flat = groups.flatMap((g) => g.items)
   const current = flat.find((it) => it.id === active) ?? flat[0] ?? SETTINGS_GROUPS[0].items[0]
@@ -63,7 +69,7 @@ export default function SettingsDialog({ open, onClose, onLogout }: Props) {
         className="settings-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="设置"
+        aria-label={st.dialogAria}
         ref={panelRef}
         tabIndex={-1}
       >
@@ -74,20 +80,20 @@ export default function SettingsDialog({ open, onClose, onLogout }: Props) {
               className="input"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索设置"
-              aria-label="搜索设置"
+              placeholder={st.dialogSearchPh}
+              aria-label={st.dialogSearchAria}
             />
             {query && (
-              <button className="settings-dialog__clear" type="button" aria-label="清除搜索" onClick={() => setQuery('')}>
+              <button className="settings-dialog__clear" type="button" aria-label={st.dialogClearAria} onClick={() => setQuery('')}>
                 <X size={13} />
               </button>
             )}
           </div>
 
-          <nav className="settings-dialog__list" aria-label="设置分类">
+          <nav className="settings-dialog__list" aria-label={st.dialogListAria}>
             {groups.map((g) => (
               <div className="settings-dialog__group" key={g.title}>
-                <p className="settings-dialog__group-title">{g.title}</p>
+                <p className="settings-dialog__group-title"><Loc>{g.title}</Loc></p>
                 {g.items.map((it) => (
                   <button
                     key={it.id}
@@ -97,12 +103,12 @@ export default function SettingsDialog({ open, onClose, onLogout }: Props) {
                     onClick={() => setActive(it.id)}
                   >
                     <it.icon size={15} aria-hidden="true" />
-                    <span>{it.label}</span>
+                    <span><Loc>{it.label}</Loc></span>
                   </button>
                 ))}
               </div>
             ))}
-            {flat.length === 0 && <p className="settings-dialog__empty">没有匹配「{query}」的设置</p>}
+            {flat.length === 0 && <p className="settings-dialog__empty">{st.dialogNoMatch(query)}</p>}
           </nav>
 
           <div className="settings-dialog__foot">
@@ -112,10 +118,10 @@ export default function SettingsDialog({ open, onClose, onLogout }: Props) {
               type="button"
               onClick={() => { onClose(); window.dispatchEvent(new Event(TOUR_START_EVENT)) }}
             >
-              <Sparkles size={14} /> 重新查看新手引导
+              <Sparkles size={14} /> <Loc>{st.replayTour}</Loc>
             </button>
             <button className="settings-dialog__logout" type="button" onClick={onLogout}>
-              <LogOut size={14} /> 退出登录
+              <LogOut size={14} /> <Loc>{st.logout}</Loc>
             </button>
           </div>
         </aside>
@@ -125,8 +131,8 @@ export default function SettingsDialog({ open, onClose, onLogout }: Props) {
               绝对定位会迫使内容区额外留出右侧内边距（原本 56px），
               表现为"设置内容右边空一块、视觉重心偏左"。 */}
           <div className="settings-dialog__bar">
-            <p className="settings-dialog__bar-title">{current ? GROUP_OF(current.id) ?? '设置' : '设置'}</p>
-            <button className="settings-dialog__close" type="button" aria-label="关闭设置" onClick={onClose}>
+            <p className="settings-dialog__bar-title">{current ? groupOf(SETTINGS_GROUPS, current.id) ?? st.barTitleFallback : st.barTitleFallback}</p>
+            <button className="settings-dialog__close" type="button" aria-label={st.closeAria} onClick={onClose}>
               <X size={16} />
             </button>
           </div>

@@ -21,7 +21,7 @@ const check = (name, ok, extra = '') => {
 
 await page.goto(BASE, { waitUntil: 'networkidle' })
 await page.waitForTimeout(2200)
-await page.locator('.lp-pill button', { hasText: '登录' }).first().click()
+await page.locator('.floating-nav button', { hasText: '登录' }).first().click()
 await page.waitForSelector('.auth-card')
 await page.locator('#li-u').fill('qa-runner')
 await page.locator('#li-p').fill('qa-runner-password')
@@ -31,10 +31,10 @@ await page.waitForTimeout(2000)
 
 /* ---------- 1. 侧栏：竖向橡皮导航 ---------- */
 const navItems = await page.locator('.sb-nav button.rubber-segment__item').count()
-/* 「账号」导航项已移除（设置收在底部「个人设置」弹层里），现在是 4 项 */
-check('侧栏有 4 个导航项', navItems === 4, `实际 ${navItems}`)
-const isVertical = await page.locator('.sb-nav .rubber-segment[data-vertical]').count()
-check('侧栏为竖排橡皮导航', isVertical === 1)
+/* 工作台 / 知识库 / 对话 / Agent / 自动化 / 工作流 / 插件 / Agent 社区，共 8 项 */
+check('侧栏有 8 个导航项', navItems === 8, `实际 ${navItems}`)
+const isVerticalList = await page.locator('.sb-nav .rubber-segment[data-vertical]').count()
+check('侧栏为极简竖向 RubberSegment', isVerticalList === 1)
 await page.locator('.sb-nav button.rubber-segment__item', { hasText: '知识库' }).click()
 await page.waitForTimeout(700)
 check('点击侧栏可切页', (await page.locator('.page-title').first().innerText()).includes('知识库'))
@@ -43,20 +43,12 @@ check('点击侧栏可切页', (await page.locator('.page-title').first().innerT
 await page.locator('.sb-nav button.rubber-segment__item', { hasText: '工作台' }).click()
 await page.waitForTimeout(1600)
 const heatCells = await page.locator('.wb-heat span').count()
-check('活跃度图显示真实统计窗口 30 天', heatCells === 30, `实际 ${heatCells}`)
+check('活跃度图渲染 12 周热力格', heatCells === 84, `实际 ${heatCells}`)
 check('用量趋势图已渲染', (await page.locator('.wb-trend svg path').count()) >= 2)
 const statCards = await page.locator('.stat-grid .stat-card').count()
 const glowCards = await page.locator('.stat-grid .border-glow-card').count()
 check('统计卡使用低噪声表面（不含光条组件）', statCards === 4 && glowCards === 0, `卡片 ${statCards} / 光条 ${glowCards}`)
 check('活动时间线 5 条', (await page.locator('.wb-timeline li').count()) === 5)
-check('轮播已渲染内容（功能速览）', (await page.locator('.lp-carousel .carousel-item-title').count()) > 0)
-// Agent 快捷测试
-await page.locator('.wb-quick input').fill('出一道 JVM 调优题')
-await page.locator('.wb-quick button[type="submit"]').click()
-await page.waitForTimeout(220)
-check('快捷测试进入执行态', (await page.locator('.wb-quick .lattice-loader').count()) > 0)
-await page.waitForTimeout(2200)
-check('快捷测试产出结果', (await page.locator('.wb-quick-out').count()) > 0)
 
 /* ---------- 3. 对话页：会话切换 / 管理 / 消息操作 / 绑定 ---------- */
 await page.locator('.sb-nav button.rubber-segment__item', { hasText: '对话' }).click()
@@ -79,27 +71,21 @@ check('会话搜索生效', (await page.locator('.session-item').count()) === 1)
 await page.locator('.chat-search input').fill('')
 await page.waitForTimeout(300)
 
-// 置顶：改为滑动手势（左滑露出「置顶」，点它）
-const firstBefore = await page.locator('.session-item .t').first().innerText()
-const redisRow = page.locator('.session-list .swipe-row').filter({ hasText: 'Redis' }).first()
+// 置顶：直接点会话行里的「置顶」操作
+const firstBefore = await page.locator('.session-item .session-open').first().innerText()
+const redisRow = page.locator('.session-list .session-item').filter({ hasText: 'Redis' }).first()
 await redisRow.scrollIntoViewIfNeeded()   // 短视口下该行可能在可视区外，鼠标坐标会落到侧栏上
 await page.waitForTimeout(400)
-const rb = await redisRow.boundingBox()
-await page.mouse.move(rb.x + rb.width - 40, rb.y + rb.height / 2)
-await page.mouse.down()
-await page.mouse.move(rb.x + rb.width - 150, rb.y + rb.height / 2, { steps: 12 })
-await page.mouse.up()
-await page.waitForTimeout(700)
-// 只点主轨里的按钮：反方向轨的按钮虽然被裁掉，但 boundingBox 不计裁切，
-// 直接 .first() 会命中它并算出落在侧栏上的点击点（导致"被侧栏拦截"的假失败）
-await page.locator('.swipe-row[data-open-side="main"] .swipe-row__rail:not(.swipe-row__rail--start) .swipe-row__action').first().click()
+await redisRow.hover()
+await page.waitForTimeout(250)
+await redisRow.locator('.session-action').first().click({ force: true })
 await page.waitForTimeout(600)
 /* 置顶不再用行内 pin 图标（那会把文字起点顶偏、三层对不齐），
    改为验证它确实进入了「置顶」分组 */
 const pinnedGroup = await page.evaluate(() => {
   const group = Array.from(document.querySelectorAll('.sb-group'))
     .find((g) => g.querySelector('.sb-section--toggle')?.textContent.includes('置顶'))
-  return Array.from(group?.querySelectorAll('.sb-session .t') ?? []).map((e) => e.textContent.trim())
+  return Array.from(group?.querySelectorAll('.sb-session') ?? []).map((e) => e.textContent?.trim() ?? '')
 })
 check('滑动置顶后该会话进入「置顶」分组', pinnedGroup.some((x) => x.includes('Redis')), pinnedGroup.join(' / '))
 
@@ -111,13 +97,13 @@ await page.locator('.prompt-bar__input').press('Enter')
 await page.waitForTimeout(5200)
 check('发送后生成回答', (await page.locator('.thread .msg').count()) > msgsBeforeSend)
 
-const sessionsBefore = await page.locator('.session-list .swipe-row').count()
-const titleBefore = await page.locator('.session-item[data-selected] .t').innerText()
+const sessionsBefore = await page.locator('.session-list .session-item').count()
+const titleBefore = await page.locator('.session-item[data-selected] .session-open').innerText()
 await page.locator('.thread .msg').last().hover()
 await page.locator('.thread .msg').last().getByRole('button', { name: '从此处创建分支' }).click()
 await page.waitForTimeout(1200)
-const sessionsAfter = await page.locator('.session-list .swipe-row').count()
-const titleAfter = await page.locator('.session-item[data-selected] .t').innerText()
+const sessionsAfter = await page.locator('.session-list .session-item').count()
+const titleAfter = await page.locator('.session-item[data-selected] .session-open').innerText()
 check('分支后多出一个新会话', sessionsAfter === sessionsBefore + 1, `${sessionsBefore} → ${sessionsAfter}`)
 check('新分支使用连续命名「分支」', titleAfter === '分支' && titleAfter !== titleBefore, `${titleBefore} → ${titleAfter}`)
 check('分支复制了原上下文', (await page.locator('.thread .msg').count()) > 0)
@@ -131,25 +117,31 @@ check('编辑重发进入编辑态', (await page.locator('.thread textarea').cou
 await page.locator('.thread button', { hasText: '取消' }).click()
 await page.waitForTimeout(200)
 
-// 绑定：知识库多选
-await page.locator('.mode-seg .rubber-segment__item', { hasText: '知识库问答' }).click()
-await page.waitForTimeout(350)
-const chipsBefore = await page.locator('.chat-layout header button', { hasText: '知识库' }).innerText()
-await page.locator('.chat-layout header button', { hasText: '知识库' }).click()
-await page.waitForTimeout(300)
-check('知识库绑定弹层打开', (await page.locator('.chat-bind-pop').count()) === 1)
-await page.locator('.chat-bind-pop .opt').nth(3).click()
+// 绑定：会话配置弹层里切换模式并绑定知识库
+await page.locator('.session-config__summary').click()
 await page.waitForTimeout(400)
-const chipsAfter = await page.locator('.chat-layout header button', { hasText: '知识库' }).innerText()
+check('会话配置弹层打开', (await page.locator('.session-config__pop').count()) === 1)
+await page.locator('.session-config__pop .sc-opt', { hasText: '知识库问答' }).click()
+await page.waitForTimeout(400)
+await page.locator('.session-config__summary').click()
+await page.waitForTimeout(250)
+const chipsBefore = await page.locator('.session-config__summary').innerText()
+await page.locator('.session-config__summary').click()
+await page.waitForTimeout(300)
+await page.locator('.session-config__pop .sc-opt', { hasText: '我的 Java' }).first().click()
+await page.waitForTimeout(450)
+const chipsAfter = await page.locator('.session-config__summary').innerText()
 check('知识库绑定数量变化', chipsBefore !== chipsAfter, `${chipsBefore.trim()} → ${chipsAfter.trim()}`)
-await page.keyboard.press('Escape')
 
 // Agent 只在 AGENT 模式可切换
-await page.locator('.mode-seg .rubber-segment__item', { hasText: 'Agent' }).click()
-await page.waitForTimeout(350)
-await page.locator('.agent-seg button.rubber-segment__item').nth(2).click()
+await page.locator('.session-config__pop .sc-opt', { hasText: 'Agent' }).click()
 await page.waitForTimeout(400)
-check('Agent 切换生效', (await page.locator('.agent-seg .rubber-segment__item[aria-checked="true"]').innerText()).includes('代码') || (await page.locator('.agent-seg .rubber-segment__item[aria-checked="true"]').innerText()).includes('简历'))
+await page.locator('.session-config__pop .sc-opt', { hasText: '代码审查员' }).click()
+await page.waitForTimeout(450)
+const agentSummary = await page.locator('.session-config__summary').innerText()
+check('Agent 切换生效', agentSummary.includes('代码审查员'), agentSummary)
+await page.locator('.session-config__summary').click()
+await page.waitForTimeout(200)
 
 // 导出下载
 const dl = page.waitForEvent('download', { timeout: 6000 }).catch(() => null)
@@ -161,7 +153,7 @@ check('导出对话触发下载', !!download, download ? await download.suggeste
 await page.locator('.sb-row--quick').click()
 await page.waitForTimeout(500)
 check('新建会话弹窗打开', (await page.locator('.dialog .step-indicator-inner').count()) === 2)
-check('向导先提供三个真实模式', (await page.locator('.dialog .rubber-segment__item').count()) === 3)
+check('向导先提供三个真实模式', (await page.locator('.dialog button.rubber-segment__item').count()) === 3)
 check('普通对话默认不显示虚构绑定项', (await page.locator('.dialog .wizard-chip').count()) === 0)
 await page.locator('.dialog .close').click()
 await page.waitForTimeout(300)
@@ -175,7 +167,7 @@ check('登录后背景统一为 aurora', bgVariant === 'aurora', `data-bg=${bgVa
 await page.locator('.sb-nav button.rubber-segment__item', { hasText: '对话' }).click()
 await page.waitForTimeout(900)
 const mdCtx = await page.evaluate(() => ({
-  title: document.querySelector('.session-item[data-selected] .t')?.textContent,
+  title: document.querySelector('.session-item[data-selected] .session-open')?.textContent,
   msgs: document.querySelectorAll('.thread .msg').length,
   mdRoots: document.querySelectorAll('.thread .md').length,
   lastBubble: document.querySelector('.thread .msg.bot .bub')?.textContent?.slice(0, 40) ?? '(无)',
@@ -219,7 +211,7 @@ check('明确说明服务端暂不支持注销', (await page.locator('.settings-
 /* ---------- 4.4 新会话：真实模式/知识库选择，创建后不插入虚构欢迎消息 ---------- */
 await page.locator('.sb-row--quick').click()
 await page.waitForTimeout(500)
-await page.locator('.dialog .rubber-segment__item', { hasText: '知识库问答' }).click()
+await page.locator('.dialog button.rubber-segment__item', { hasText: '知识库问答' }).click()
 await page.waitForTimeout(400)
 const kbChips = page.locator('.dialog .wizard-chip')
 check('知识库问答模式列出当前测试知识库', await kbChips.count() >= 2, `实际 ${await kbChips.count()} 个`)
@@ -228,15 +220,15 @@ await kbChips.nth(1).click()
 await page.getByRole('button', { name: '继续' }).click()
 await page.waitForTimeout(300)
 check('确认页反映选择的两个知识库', (await page.locator('.dialog').innerText()).includes('绑定 2 个知识库'))
-await page.getByRole('button', { name: 'Complete' }).click()
+await page.getByRole('button', { name: /创建会话|Complete/ }).click()
 await page.waitForTimeout(900)
 const createdSession = await page.evaluate(() => ({
   dialog: document.querySelectorAll('.dialog').length,
   title: document.querySelector('[data-testid=chat-title]')?.textContent,
-  kbButton: document.querySelector('.chat-layout header button[title="管理当前会话的知识库"]')?.textContent,
+  kbButton: document.querySelector('.session-config__summary')?.textContent,
   messages: document.querySelectorAll('.thread .msg').length,
 }))
-check('完成向导后创建会话并绑定资料', createdSession.dialog === 0 && createdSession.title === '新会话' && createdSession.kbButton?.includes('2'), JSON.stringify(createdSession))
+check('完成向导后创建会话并绑定资料', createdSession.dialog === 0 && createdSession.title === '新会话' && (createdSession.kbButton ?? '').includes('2'), JSON.stringify(createdSession))
 check('新会话不插入虚构欢迎消息', createdSession.messages === 0, `消息数 ${createdSession.messages}`)
 
 /* ---------- 4.5 退出登录收进头像菜单 ---------- */
@@ -245,7 +237,7 @@ await page.waitForTimeout(700)
 await page.waitForTimeout(400)
 check('个人设置弹层已打开', (await page.locator('.settings-dialog').count()) === 1)
 const menuItems = await page.locator('.settings-dialog__item').count()
-check('设置弹层列出全部分区', menuItems === 10, `实际 ${menuItems} 项`)
+check('设置弹层列出全部分区', menuItems === 11, `实际 ${menuItems} 项`)
 check('设置弹层含退出登录', (await page.locator('.settings-dialog__logout').count()) === 1)
 check('设置弹层含搜索', (await page.locator('.settings-dialog__search input').count()) === 1)
 check('侧栏不再常驻账号信息（无头像/无升级）', (await page.locator('.sb-avatar, .sb-upgrade, .sb-user').count()) === 0)
@@ -253,7 +245,7 @@ await page.keyboard.press('Escape')
 await page.waitForTimeout(300)
 
 /* ---------- 5. Agent 页卡片不再裁切 ---------- */
-await page.locator('.sb-nav button.rubber-segment__item', { hasText: 'Agent' }).click()
+await page.locator('.sb-nav button.rubber-segment__item', { hasText: /^Agent$/ }).click()
 await page.waitForTimeout(1200)
 const clipped = await page.evaluate(() => {
   const acts = document.querySelector('.agent-inner .acts')

@@ -2,6 +2,9 @@ import { useState } from 'react'
 import { BarChart3, Braces, Check, Copy, Download, Table2 } from 'lucide-react'
 import type { ResultPayload } from '@/data'
 import { copyText, download, toCSV } from '@/lib/download'
+import { pagesCopy } from '@/lib/pagesCopy'
+import { useLocale } from '@/lib/locale'
+import Loc from '@/components/Loc'
 import '@/styles/result.css'
 
 interface Props {
@@ -18,19 +21,22 @@ interface Props {
  * 取舍：不引图表库（只为几根柱子加一个几百 KB 的依赖不值当），用 CSS 画条形图。
  */
 export default function ResultCard({ result }: Props) {
+  const { locale } = useLocale()
+  /* 字典取名 c：本文件表头 map 的形参原为 `c`，会遮蔽字典 —— 已改名为 col */
+  const c = pagesCopy(locale).chat
   const [copied, setCopied] = useState(false)
 
   const kindMeta = {
-    table: { icon: <Table2 size={13} />, label: '表格' },
-    json: { icon: <Braces size={13} />, label: 'JSON' },
-    chart: { icon: <BarChart3 size={13} />, label: '图表' },
+    table: { icon: <Table2 size={13} />, label: c.kindTable },
+    json: { icon: <Braces size={13} />, label: c.kindJson },
+    chart: { icon: <BarChart3 size={13} />, label: c.kindChart },
   }[result.kind]
 
   /* 三种结果都能"变成文本"：表格→CSV、图表→CSV、JSON→JSON */
   const asText = () => {
     if (result.kind === 'json') return JSON.stringify(result.json, null, 2)
     if (result.kind === 'table') return toCSV(result.columns ?? [], result.rows ?? [])
-    return toCSV(['标签', '数值'], result.series.map((s) => [s.label, s.value]))
+    return toCSV([c.csvLabelCol, c.csvValueCol], result.series.map((s) => [s.label, s.value]))
   }
   const ext = result.kind === 'json' ? 'json' : 'csv'
   const fileName = `${result.title.replace(/[\s/\\]+/g, '-')}.${ext}`
@@ -44,15 +50,15 @@ export default function ResultCard({ result }: Props) {
   const max = Math.max(...(result.kind === 'chart' ? result.series.map((s) => s.value) : [1]), 1)
 
   return (
-    <figure className="result" aria-label={`结果：${result.title}（${kindMeta.label}）`}>
+    <figure className="result" aria-label={c.resultAria(result.title, kindMeta.label)}>
       <figcaption className="result__head">
         <span className="result__kind">{kindMeta.icon} {kindMeta.label}</span>
         <span className="result__title">{result.title}</span>
-        <button className="result__btn" type="button" aria-label="复制结果" onClick={onCopy}>
-          {copied ? <><Check size={12} /> 已复制</> : <><Copy size={12} /> 复制</>}
+        <button className="result__btn" type="button" aria-label={c.copyResultAria} onClick={onCopy}>
+          {copied ? <><Check size={12} /> <Loc>{c.copiedBtn}</Loc></> : <><Copy size={12} /> <Loc>{c.copyBtn}</Loc></>}
         </button>
-        <button className="result__btn" type="button" aria-label="下载结果" onClick={() => download(fileName, asText(), result.kind === 'json' ? 'application/json' : 'text/csv')}>
-          <Download size={12} /> 下载
+        <button className="result__btn" type="button" aria-label={c.downloadResultAria} onClick={() => download(fileName, asText(), result.kind === 'json' ? 'application/json' : 'text/csv')}>
+          <Download size={12} /> <Loc>{c.downloadBtn}</Loc>
         </button>
       </figcaption>
 
@@ -60,7 +66,8 @@ export default function ResultCard({ result }: Props) {
         <div className="result__scroll">
           <table className="result__table">
             <thead>
-              <tr>{(result.columns ?? []).map((c) => <th key={c}>{c}</th>)}</tr>
+              {/* 形参原为 `c`，会遮蔽文案字典 c，改名 col */}
+              <tr>{(result.columns ?? []).map((col) => <th key={col}>{col}</th>)}</tr>
             </thead>
             <tbody>
               {(result.rows ?? []).map((row, i) => (

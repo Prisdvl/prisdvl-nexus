@@ -30,6 +30,8 @@ import {
   SparklesIcon,
   Tick02Icon
 } from '@hugeicons/core-free-icons';
+import { appCopy } from '@/lib/appCopy';
+import { useLocale } from '@/lib/locale';
 
 export interface PromptBarSource {
   key: string;
@@ -51,6 +53,12 @@ export interface PromptBarModel {
   tag?: string;
 }
 
+export interface PromptBarEffort {
+  /** 规范值：进入 onSend detail.effort / onEffortChange，供 topK 映射与持久化使用 */
+  value: string;
+  label: string;
+}
+
 export interface PromptBarSendDetail {
   attachments: string[];
   model?: PromptBarModel;
@@ -63,7 +71,7 @@ export interface PromptBarProps {
   commands?: PromptBarCommand[];
   models?: PromptBarModel[];
   defaultModel?: string;
-  efforts?: string[];
+  efforts?: (string | PromptBarEffort)[];
   defaultEffort?: string;
   onEffortChange?: (effort: string) => void;
   busy?: boolean;
@@ -250,6 +258,14 @@ const PromptBar: React.FC<PromptBarProps> = ({
   className = ''
 }) => {
   const reduce = useReducedMotion();
+  const { locale } = useLocale();
+  const pt = appCopy(locale).prompt;
+  const common = appCopy(locale).common;
+  /* efforts 兼容 string 与 {value,label}：显示用 label，回传用规范 value */
+  const effortList = useMemo<PromptBarEffort[]>(
+    () => efforts.map(e => (typeof e === 'string' ? { value: e, label: e } : e)),
+    [efforts],
+  );
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const glowRef = useRef<HTMLSpanElement>(null);
@@ -274,8 +290,8 @@ const PromptBar: React.FC<PromptBarProps> = ({
   const [modelOpen, setModelOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
   const [effortIndex, setEffortIndex] = useState(() => {
-    const i = efforts.indexOf(defaultEffort);
-    return i >= 0 ? i : Math.max(0, Math.floor((efforts.length - 1) / 2));
+    const i = effortList.findIndex(e => e.value === defaultEffort);
+    return i >= 0 ? i : Math.max(0, Math.floor((effortList.length - 1) / 2));
   });
   const [dismissed, setDismissed] = useState(false);
   const [active, setActive] = useState(0);
@@ -295,8 +311,9 @@ const PromptBar: React.FC<PromptBarProps> = ({
   const cursor = Math.min(active, Math.max(0, list.length - 1));
   const canSend = draft.trim().length > 0 || attachments.length > 0;
   const armed = busy || canSend;
-  const level = efforts[effortIndex] ?? '';
-  const maxed = efforts.length > 1 && effortIndex === efforts.length - 1;
+  const level = effortList[effortIndex]?.label ?? '';
+  const levelValue = effortList[effortIndex]?.value ?? '';
+  const maxed = effortList.length > 1 && effortIndex === effortList.length - 1;
 
   const focusInput = () => inputRef.current?.focus({ preventScroll: true });
   const closeMenus = useCallback(() => {
@@ -494,15 +511,15 @@ const PromptBar: React.FC<PromptBarProps> = ({
   }, [maxed, reduce, sparkColor]);
 
   const setEffort = (i: number) => {
-    const next = Math.max(0, Math.min(efforts.length - 1, i));
+    const next = Math.max(0, Math.min(effortList.length - 1, i));
     if (next === effortIndex) return;
     setEffortIndex(next);
-    latest.current.onEffortChange?.(efforts[next]);
+    latest.current.onEffortChange?.(effortList[next]?.value ?? '');
   };
   const effortFromPointer = (e: PointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const k = (e.clientX - rect.left - EDGE) / Math.max(1, rect.width - 2 * EDGE);
-    setEffort(Math.round(k * (efforts.length - 1)));
+    setEffort(Math.round(k * (effortList.length - 1)));
   };
   const onEffortKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const step =
@@ -515,14 +532,14 @@ const PromptBar: React.FC<PromptBarProps> = ({
       setEffort(0);
     } else if (e.key === 'End') {
       e.preventDefault();
-      setEffort(efforts.length - 1);
+      setEffort(effortList.length - 1);
     } else if (e.key === 'Escape') {
       setEffortOpen(false);
       focusInput();
     }
   };
-  const stepAt = (i: number) => `calc(${EDGE}px + (100% - ${EDGE * 2}px) * ${i / Math.max(1, efforts.length - 1)})`;
-  const fillAt = (i: number) => (i === efforts.length - 1 ? '100%' : `calc(${stepAt(i)} + 7px)`);
+  const stepAt = (i: number) => `calc(${EDGE}px + (100% - ${EDGE * 2}px) * ${i / Math.max(1, effortList.length - 1)})`;
+  const fillAt = (i: number) => (i === effortList.length - 1 ? '100%' : `calc(${stepAt(i)} + 7px)`);
 
   const pick = (row: Row) => {
     if (open === 'model') {
@@ -554,7 +571,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
      * busy 时**不再直接丢弃**：交给父组件决定（本项目里是"收进待发送队列"）。
      * 组件不该替产品决定"忙的时候能不能提交"——那是使用方的策略。
      */
-    latest.current.onSend?.(draft.trim(), { attachments, model, effort: level });
+    latest.current.onSend?.(draft.trim(), { attachments, model, effort: levelValue });
     setDraft('');
     setAttachments([]);
     setDismissed(false);
@@ -640,28 +657,28 @@ const PromptBar: React.FC<PromptBarProps> = ({
           className="prompt-bar__menu"
           role={open === 'effort' ? 'dialog' : 'listbox'}
           aria-label={
-            open === 'at' ? 'Sources' : open === 'slash' ? 'Commands' : open === 'model' ? 'Models' : 'Effort'
+            open === 'at' ? pt.menuSources : open === 'slash' ? pt.menuCommands : open === 'model' ? pt.menuModels : pt.menuEffort
           }
           data-kind={open}
         >
           {open === 'effort' ? (
             <>
               <div className="prompt-bar__effort-head">
-                <span className="prompt-bar__effort-title">Effort</span>
+                <span className="prompt-bar__effort-title">{pt.effortTitle}</span>
                 <span className="prompt-bar__effort-level">{level}</span>
-                <span className="prompt-bar__effort-help" title="Higher effort thinks longer before answering">
+                <span className="prompt-bar__effort-help" title={pt.effortHelp}>
                   <HugeiconsIcon icon={HelpCircleIcon} size={14} strokeWidth={1.8} />
                 </span>
               </div>
               <div className="prompt-bar__effort-ends">
-                <span>Faster</span>
-                <span>Smarter</span>
+                <span>{pt.faster}</span>
+                <span>{pt.smarter}</span>
               </div>
               <div
                 className="prompt-bar__effort-track"
                 role="slider"
                 tabIndex={0}
-                aria-label="Effort"
+                aria-label={pt.effortAria}
                 aria-valuemin={0}
                 aria-valuemax={efforts.length - 1}
                 aria-valuenow={effortIndex}
@@ -683,8 +700,8 @@ const PromptBar: React.FC<PromptBarProps> = ({
                 onKeyDown={onEffortKey}
               >
                 <span className="prompt-bar__effort-fill" />
-                {efforts.map((label, i) => (
-                  <i key={label} className="prompt-bar__effort-dot" style={{ left: stepAt(i) }} />
+                {effortList.map((e, i) => (
+                  <i key={e.value} className="prompt-bar__effort-dot" style={{ left: stepAt(i) }} />
                 ))}
                 <span className="prompt-bar__effort-thumb" />
               </div>
@@ -719,7 +736,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
                   ) : null}
                 </button>
               ))}
-              {list.length === 0 ? <div className="prompt-bar__empty">No matches for “{query}”</div> : null}
+              {list.length === 0 ? <div className="prompt-bar__empty">{pt.noMatches(query)}</div> : null}
             </>
           )}
         </div>
@@ -744,7 +761,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
                 <button
                   type="button"
                   className="prompt-bar__chip-x"
-                  aria-label={`Remove ${file}`}
+                  aria-label={pt.removeFile(file)}
                   onClick={() => setAttachments(a => a.filter((_, j) => j !== i))}
                 >
                   <HugeiconsIcon icon={Cancel01Icon} size={10} strokeWidth={2.5} />
@@ -759,8 +776,8 @@ const PromptBar: React.FC<PromptBarProps> = ({
           className="prompt-bar__input"
           rows={1}
           value={draft}
-          placeholder={listening ? 'Listening…' : placeholder}
-          aria-label="Prompt"
+          placeholder={listening ? pt.listening : placeholder}
+          aria-label={pt.inputAria}
           onChange={e => {
             setDraft(e.target.value);
             typing.current.energy = Math.min(1.6, typing.current.energy + 0.22);
@@ -778,7 +795,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
             <button
               type="button"
               className="prompt-bar__tool"
-              aria-label="添加数据源"
+              aria-label={common.addSource}
               aria-expanded={plusOpen}
               data-on={plusOpen ? '' : undefined}
               onMouseDown={e => e.preventDefault()}
@@ -797,7 +814,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
             <button
               type="button"
               className="prompt-bar__pick"
-              aria-label="Choose model"
+              aria-label={pt.chooseModel}
               aria-expanded={modelOpen}
               data-on={modelOpen ? '' : undefined}
               onMouseDown={e => e.preventDefault()}
@@ -817,7 +834,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
             <button
               type="button"
               className="prompt-bar__pick"
-              aria-label="Choose effort"
+              aria-label={pt.chooseEffort}
               aria-expanded={effortOpen}
               data-on={effortOpen ? '' : undefined}
               data-max={maxed ? '' : undefined}
@@ -838,7 +855,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
             <button
               type="button"
               className="prompt-bar__tool"
-              aria-label={listening ? 'Stop dictation' : 'Dictate'}
+              aria-label={listening ? pt.stopDictation : pt.dictate}
               aria-pressed={listening}
               data-on={listening ? '' : undefined}
               onMouseDown={e => e.preventDefault()}
@@ -859,7 +876,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
             type="button"
             className="prompt-bar__send"
             disabled={!armed}
-            aria-label={busy ? 'Stop' : 'Send'}
+            aria-label={busy ? pt.stop : pt.send}
             data-armed={armed ? '' : undefined}
             data-pressed={pressed ? '' : undefined}
             onMouseDown={e => e.preventDefault()}

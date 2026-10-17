@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark" data-palette="prisdvl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Prisdvl Nexus · Design System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --font: "Space Grotesk", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --bg: #080B12;
+    --surface: #101522;
+    --surface-2: #171F31;
+    --border: #273349;
+    --border-strong: #334663;
+    --text: #E8EEF8;
+    --text-2: #A3B1C7;
+    --text-3: #71809A;
+    --primary: #2457D6;
+    --primary-hover: #3978F6;
+    --primary-strong: #193FA8;
+    --ice: #75C8FF;
+    --deep: #071747;
+    --danger: #f07178;
+    --success: #7fd99a;
+    --warning: #e6b450;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 18px;
+    --radius-cta: 12px;
+    --shadow-md: 0 2px 8px rgba(0,0,0,.5), 0 12px 32px rgba(7,23,71,.4);
+    --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: var(--font);
+    color: var(--text);
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(36,87,214,.16), transparent 55%),
+      var(--bg);
+    line-height: 1.5;
+  }
+  a { color: var(--ice); }
+  .wrap { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 48px 0 80px; }
+  .top {
+    display: flex; flex-wrap: wrap; gap: 16px 28px;
+    align-items: flex-end; justify-content: space-between;
+    margin-bottom: 40px; padding-bottom: 28px;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand-mark {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: linear-gradient(135deg, #193FA8, #2457D6 45%, #3987EC);
+    box-shadow: 0 0 24px rgba(36,87,214,.28);
+  }
+  .eyebrow {
+    margin: 0 0 8px; font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--text-3);
+  }
+  h1 { margin: 0; font-size: clamp(28px, 4vw, 40px); letter-spacing: -.04em; font-weight: 600; }
+  .lead { margin: 10px 0 0; max-width: 42rem; color: var(--text-2); font-size: 15px; }
+  .meta { font-size: 12px; color: var(--text-3); text-align: right; }
+  .meta code { color: var(--ice); font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+  nav.toc {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 36px;
+  }
+  nav.toc a {
+    text-decoration: none; color: var(--text-2);
+    font-size: 12.5px; padding: 6px 12px;
+    border: 1px solid var(--border); border-radius: 999px;
+    background: color-mix(in oklab, var(--surface) 80%, transparent);
+    transition: color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease);
+  }
+  nav.toc a:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
+
+  section { margin: 0 0 52px; }
+  h2 {
+    margin: 0 0 6px; font-size: 22px; letter-spacing: -.03em; font-weight: 600;
+  }
+  .sec-sub { margin: 0 0 20px; color: var(--text-3); font-size: 13.5px; }
+
+  .panel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: color-mix(in oklab, var(--surface) 92%, transparent);
+    box-shadow: var(--shadow-md);
+    padding: 22px;
+  }
+  .grid { display: grid; gap: 14px; }
+  .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .grid-8 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  @media (max-width: 860px) {
+    .grid-2, .grid-3, .grid-4, .grid-8 { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 520px) {
+    .grid-2, .grid-3, .grid-4, .grid-8 { grid-template-columns: 1fr; }
+  }
+
+  .swatch {
+    border-radius: var(--radius-lg); overflow: hidden;
+    border: 1px solid var(--border); background: var(--surface);
+  }
+  .swatch__chip { height: 72px; }
+  .swatch__meta { padding: 10px 12px; font-size: 12px; }
+  .swatch__name { font-weight: 600; color: var(--text); }
+  .swatch__hex { color: var(--text-3); font-family: ui-monospace, Menlo, Consolas, monospace; margin-top: 2px; }
+
+  .type-row {
+    display: grid; grid-template-columns: 120px 1fr;
+    gap: 16px; align-items: baseline;
+    padding: 14px 0; border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  }
+  .type-row:last-child { border-bottom: 0; }
+  .type-label { font-size: 12px; color: var(--text-3); }
+  .t-display { font-size: 40px; letter-spacing: -.05em; font-weight: 600; line-height: 1.1; }
+  .t-h1 { font-size: 28px; letter-spacing: -.04em; font-weight: 600; }
+  .t-h2 { font-size: 22px; letter-spacing: -.03em; font-weight: 600; }
+  .t-body { font-size: 15px; color: var(--text-2); }
+  .t-small { font-size: 13px; color: var(--text-3); }
+  .t-mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; color: var(--ice); }
+
+  .radius-card {
+    display: grid; place-items: center; height: 88px;
+    border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text-2); font-size: 12px;
+  }
+  .space-bar {
+    height: 28px; border-radius: 4px;
+    background: color-mix(in oklab, var(--primary) 35%, var(--surface-2));
+    border: 1px solid color-mix(in oklab, var(--primary) 40%, var(--border));
+  }
+  .space-item { display: grid; gap: 8px; font-size: 12px; color: var(--text-3); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    height: 40px; padding: 0 18px; border-radius: var(--radius-cta);
+    border: 1px solid transparent; font: inherit; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: background .2s var(--ease), border-color .2s var(--ease), transform .18s var(--ease);
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: var(--primary); color: var(--text); }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-ghost {
+    background: transparent; color: var(--text);
+    border-color: var(--border); background: color-mix(in oklab, var(--surface) 70%, transparent);
+  }
+  .btn-ghost:hover { border-color: var(--border-strong); background: var(--surface-2); }
+  .btn-danger { background: color-mix(in oklab, var(--danger) 18%, var(--surface)); color: var(--danger); border-color: color-mix(in oklab, var(--danger) 35%, var(--border)); }
+  .btn-sm { height: 32px; padding: 0 12px; font-size: 12.5px; border-radius: var(--radius-md); }
+  .btn-lg { height: 46px; padding: 0 22px; font-size: 15px; }
+
+  .ihb {
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    height: 46px; padding: 0 24px; overflow: hidden;
+    border: 1px solid var(--border); border-radius: var(--radius-cta);
+    background: var(--surface); color: var(--text); font: inherit; font-size: 15px; font-weight: 600;
+    cursor: pointer;
+  }
+  .ihb__idle { display: flex; align-items: center; gap: 8px; transition: opacity .3s var(--ease), transform .3s var(--ease); }
+  .ihb__dot { width: 8px; height: 8px; border-radius: 999px; background: var(--ice); transition: transform .3s var(--ease); }
+  .ihb__hover {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
+    color: var(--text); opacity: 0; transform: translateX(24px); transition: opacity .3s var(--ease), transform .3s var(--ease);
+  }
+  .ihb:hover .ihb__dot { transform: scale(18); }
+  .ihb:hover .ihb__idle { opacity: 0; transform: translateX(20px); }
+  .ihb:hover .ihb__hover { opacity: 1; transform: translateX(0); }
+
+  .field { display: grid; gap: 6px; }
+  .field label { font-size: 13px; color: var(--text-2); font-weight: 500; }
+  .input {
+    height: 40px; padding: 0 12px; border-radius: var(--radius-md);
+    border: 1px solid var(--border); background: #0A0E16; color: var(--text);
+    font: inherit; font-size: 14px;
+  }
+  .input:focus {
+    outline: none; border-color: color-mix(in oklab, var(--primary) 55%, var(--border));
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 22%, transparent);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 10px; border-radius: 999px;
+    border: 1px solid var(--border); font-size: 12px; color: var(--text-2);
+    background: var(--surface-2);
+  }
+  .chip[data-on] {
+    color: var(--ice); border-color: color-mix(in oklab, var(--primary) 45%, var(--border));
+    background: color-mix(in oklab, var(--primary) 16%, var(--surface));
+  }
+  .badge {
+    display: inline-flex; padding: 2px 8px; border-radius: 6px;
+    font-size: 11.5px; font-weight: 600;
+  }
+  .badge-ok { background: color-mix(in oklab, var(--success) 16%, var(--surface)); color: var(--success); }
+  .badge-warn { background: color-mix(in oklab, var(--warning) 14%, var(--surface)); color: var(--warning); }
+  .badge-bad { background: color-mix(in oklab, var(--danger) 16%, var(--surface)); color: var(--danger); }
+
+  .theme-demo {
+    width: 42px; height: 42px; border-radius: 999px; border: 0;
+    background: var(--surface); color: var(--text);
+    box-shadow: 0 4px 14px rgba(0,0,0,.25);
+    display: grid; place-items: center; cursor: default;
+  }
+
+  .do-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .do-grid { grid-template-columns: 1fr; } }
+  .do, .dont {
+    border-radius: var(--radius-lg); padding: 16px; border: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .do { border-color: color-mix(in oklab, var(--success) 35%, var(--border)); }
+  .dont { border-color: color-mix(in oklab, var(--danger) 35%, var(--border)); }
+  .do h3, .dont h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+  .do h3 { color: var(--success); }
+  .dont h3 { color: var(--danger); }
+  .do p, .dont p { margin: 0; font-size: 13.5px; color: var(--text-2); }
+
+  footer {
+    margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--text-3);
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <div class="brand-mark" aria-hidden="true"></div>
+        <p class="eyebrow" style="margin-top:14px">Prisdvl Nexus · Design System</p>
+        <h1>当前实现的设计文件</h1>
+        <p class="lead">从 <code>frontend/src/styles/tokens.css</code> 与落地页/认证/工作台界面抽出的视觉规范。默认品牌主题为独立深色深钴蓝 Prisdvl。</p>
+      </div>
+      <div class="meta">
+        <div>默认 <code>dark</code> · <code>prisdvl</code></div>
+        <div>更新 2026-10-14</div>
+        <div>HTML UI Kit · 非 Figma</div>
+      </div>
+    </header>
+
+    <nav class="toc" aria-label="章节">
+      <a href="#brand">品牌</a>
+      <a href="#color">色彩</a>
+      <a href="#type">字体</a>
+      <a href="#space">间距圆角</a>
+      <a href="#controls">控件</a>
+      <a href="#motion">动效</a>
+      <a href="#rules">约束</a>
+    </nav>
+
+    <section id="brand">
+      <h2>品牌与气质</h2>
+      <p class="sec-sub">极简现代 · 沉浸式大背景 · 醒目但克制 · 冷黑基座 + 钴蓝交互</p>
+      <div class="panel grid grid-3">
+        <div>
+          <p class="eyebrow">Primary</p>
+          <div style="font-size:28px;font-weight:600;letter-spacing:-.04em;color:var(--ice)">#2457D6</div>
+          <p class="t-small" style="margin-top:8px">深钴蓝 · 主按钮 / 焦点 / Agent 强调</p>
+        </div>
+        <div>
+          <p class="eyebrow">Hover / Ice</p>
+          <div style="display:flex;gap:10px;align-items:center;margin-top:4px">
+            <span style="width:28px;height:28px;border-radius:8px;background:#3978F6"></span>
+            <span style="width:28px;height:28px;border-radius:8px;background:#75C8FF"></span>
+          </div>
+          <p class="t-small" style="margin-top:8px">电光蓝仅 hover · 冰蓝仅文字高光</p>
+        </div>
+        <div>
+          <p class="eyebrow">Surface</p>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <span style="flex:1;height:28px;border-radius:8px;background:#080B12;border:1px solid var(--border)"></span>
+            <span style="flex:1;height:28px;border-radius:8px;background:#101522;border:1px solid var(--border)"></span>
+            <span style="flex:1;height:28px;border-radius:8px;background:#171F31;border:1px solid var(--border)"></span>
+          </div>
+          <p class="t-small" style="margin-top:8px">#080B12 / #101522 / #171F31</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="color">
+      <h2>色彩</h2>
+      <p class="sec-sub">品牌强制深色一套；其余为全配色或仅强调色 Accent</p>
+      <div class="grid grid-4" style="margin-bottom:16px">
+        <div class="swatch"><div class="swatch__chip" style="background:#2457D6"></div><div class="swatch__meta"><div class="swatch__name">Primary</div><div class="swatch__hex">#2457D6</div></div></div>
+        <div class="swatch"><div class="swatch__chip" style="background:#3978F6"></div><div class="swatch__meta"><div class="swatch__name">Hover</div><div class="swatch__hex">#3978F6</div></div></div>
+        <div class="swatch"><div class="swatch__chip" style="background:#75C8FF"></div><div class="swatch__meta"><div class="swatch__name">Ice text</div><div class="swatch__hex">#75C8FF</div></div></div>
+        <div class="swatch"><div class="swatch__chip" style="background:#193FA8"></div><div class="swatch__meta"><div class="swatch__name">Active</div><div class="swatch__hex">#193FA8</div></div></div>
+      </div>
+      <div class="panel">
+        <p class="eyebrow">Palette swatches（角落主题环）</p>
+        <div class="grid grid-8" style="margin-top:12px">
+          <div title="Prisdvl" style="aspect-ratio:1;border-radius:999px;background:#2457D6;border:2px solid #E8EEF8;box-shadow:0 0 0 2px #2457D6"></div>
+          <div title="Ocean" style="aspect-ratio:1;border-radius:999px;background:#8aacc4;border:1px solid rgba(255,255,255,.35)"></div>
+          <div title="Terracotta" style="aspect-ratio:1;border-radius:999px;background:#e8a077;border:1px solid rgba(255,255,255,.35)"></div>
+          <div title="Turquoise" style="aspect-ratio:1;border-radius:999px;background:#6fd3de;border:1px solid rgba(255,255,255,.35)"></div>
+          <div title="Lime" style="aspect-ratio:1;border-radius:999px;background:#b9e26a;border:1px solid rgba(255,255,255,.35)"></div>
+          <div title="Indigo" style="aspect-ratio:1;border-radius:999px;background:#9b93ff;border:1px solid rgba(255,255,255,.35)"></div>
+          <div title="Violet" style="aspect-ratio:1;border-radius:999px;background:#f489e0;border:1px solid rgba(255,255,255,.35)"></div>
+          <div title="Rose" style="aspect-ratio:1;border-radius:999px;background:#fb7185;border:1px solid rgba(255,255,255,.35)"></div>
+        </div>
+        <p class="t-small" style="margin:14px 0 0">状态色：success <span style="color:var(--success)">#7fd99a</span> · warning <span style="color:var(--warning)">#e6b450</span> · danger <span style="color:var(--danger)">#f07178</span></p>
+      </div>
+    </section>
+
+    <section id="type">
+      <h2>字体</h2>
+      <p class="sec-sub">--font-display：Space Grotesk + 系统中文栈</p>
+      <div class="panel">
+        <div class="type-row"><div class="type-label">Display</div><div class="t-display">Prisdvl Nexus</div></div>
+        <div class="type-row"><div class="type-label">Page title</div><div class="t-h1">我的 Agent</div></div>
+        <div class="type-row"><div class="type-label">Section</div><div class="t-h2">登录后进入工作台</div></div>
+        <div class="type-row"><div class="type-label">Body</div><div class="t-body">上传文档建成知识库，提问可引用原文；需要时 Agent 可调用工具。</div></div>
+        <div class="type-row"><div class="type-label">Caption</div><div class="t-small">冷却与限流由服务端强制执行。</div></div>
+        <div class="type-row"><div class="type-label">Code</div><div class="t-mono">POST /api/auth/login</div></div>
+      </div>
+    </section>
+
+    <section id="space">
+      <h2>间距 · 圆角 · 阴影</h2>
+      <p class="sec-sub">间距 4 倍数；圆角 6/10/14/18；落地页 CTA 行统一 12</p>
+      <div class="grid grid-2">
+        <div class="panel">
+          <p class="eyebrow">Radius</p>
+          <div class="grid grid-4" style="margin-top:12px">
+            <div class="radius-card" style="border-radius:6px">sm 6</div>
+            <div class="radius-card" style="border-radius:10px">md 10</div>
+            <div class="radius-card" style="border-radius:14px">lg 14</div>
+            <div class="radius-card" style="border-radius:18px">xl 18</div>
+          </div>
+          <div class="radius-card" style="border-radius:12px;margin-top:12px">CTA / IHButton 12</div>
+        </div>
+        <div class="panel">
+          <p class="eyebrow">Space scale</p>
+          <div class="grid" style="margin-top:12px;gap:10px">
+            <div class="space-item"><div class="space-bar" style="width:4px"></div>1 · 4</div>
+            <div class="space-item"><div class="space-bar" style="width:8px"></div>2 · 8</div>
+            <div class="space-item"><div class="space-bar" style="width:12px"></div>3 · 12</div>
+            <div class="space-item"><div class="space-bar" style="width:16px"></div>4 · 16</div>
+            <div class="space-item"><div class="space-bar" style="width:24px"></div>6 · 24</div>
+            <div class="space-item"><div class="space-bar" style="width:32px"></div>8 · 32</div>
+            <div class="space-item"><div class="space-bar" style="width:40px"></div>10 · 40</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="controls">
+      <h2>控件</h2>
+      <p class="sec-sub">按钮高度 32 / 40 / 46；主按钮用品牌色（Prisdvl）</p>
+      <div class="panel" style="display:grid;gap:22px">
+        <div>
+          <p class="eyebrow">Buttons</p>
+          <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px;align-items:center">
+            <button class="btn btn-primary btn-sm" type="button">小</button>
+            <button class="btn btn-primary" type="button">默认</button>
+            <button class="btn btn-primary btn-lg" type="button">大</button>
+            <button class="btn btn-ghost btn-lg" type="button">了解工作流程</button>
+            <button class="btn btn-danger" type="button">删除</button>
+            <button class="ihb" type="button">
+              <span class="ihb__idle"><span class="ihb__dot"></span><span>开始</span></span>
+              <span class="ihb__hover"><span>开始</span><span>→</span></span>
+            </button>
+          </div>
+        </div>
+        <div class="grid grid-2">
+          <div class="field">
+            <label>邮箱</label>
+            <input class="input" placeholder="请输入已验证的邮箱" />
+          </div>
+          <div class="field">
+            <label>密码</label>
+            <input class="input" type="password" value="••••••••" />
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <span class="chip" data-on>● knowledge_search</span>
+          <span class="chip">calculator</span>
+          <span class="badge badge-ok">执行完成</span>
+          <span class="badge badge-warn">草稿</span>
+          <span class="badge badge-bad">失败</span>
+          <span class="theme-demo" title="角落主题钮" aria-hidden>◐</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="motion">
+      <h2>动效</h2>
+      <p class="sec-sub">颜色/透明度最快；控件次之；弹层最慢。主题切换用 View Transition 圆形扩散。</p>
+      <div class="panel grid grid-3">
+        <div>
+          <div class="t-mono">--dur-fast 130ms</div>
+          <p class="t-small">hover · 颜色 · 透明度</p>
+        </div>
+        <div>
+          <div class="t-mono">--dur-ui 200ms</div>
+          <p class="t-small">按钮 · 输入 · 列表项</p>
+        </div>
+        <div>
+          <div class="t-mono">--dur-panel 280ms</div>
+          <p class="t-small">弹窗 · 抽屉 · 大面积</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="rules">
+      <h2>约束</h2>
+      <div class="do-grid">
+        <div class="do">
+          <h3>Do</h3>
+          <p>改视觉先改 <code>tokens.css</code>。同组 CTA 圆角一致。暗色用冷黑基座，强调色只做点缀。拉丁数字用 Space Grotesk。</p>
+        </div>
+        <div class="dont">
+          <h3>Don’t</h3>
+          <p>不要紫粉渐变万能皮肤。不要 Inter/Roboto 当品牌字体。不要在暗色主题把整页染成强调色。不要为一次性样式发明新 token。</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      源码真相：<code>frontend/src/styles/tokens.css</code> ·
+      机器摘要：<code>docs/design/tokens.json</code> ·
+      本文件可离线打开，不依赖前端构建。
+    </footer>
+  </div>
+</body>
+</html>

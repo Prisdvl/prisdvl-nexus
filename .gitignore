@@ -66,6 +66,10 @@ nexus-app/data/
 # docs/prototypes/shots/ 是 frontend/scripts 的 QA / 截图脚本按绝对路径写入的 PNG。
 # 它们是"当前界面长什么样"的临时证据，可随时重跑生成；入库会让每次跑门禁都产生二进制 diff。
 docs/prototypes/shots/
+# 同一批 QA / 探针脚本还会写入 verify / probe / matrix（72 PNG + 1 md），同为可再生产物，不入库。
+docs/prototypes/verify/
+docs/prototypes/probe/
+docs/prototypes/matrix/
 
 # ---------- 设计工具过程材料（本机草稿，不入库）----------
 # .ui-craft/ 是设计工具的过程材料（brief / tokens 草稿），不是产品源码或正式设计规范。
@@ -109,3 +113,12 @@ build.log
 # ---- 密钥文件（绝不入库）----
 .secrets/
 *.key.txt
+
+# ---------- 仓库根目录临时产物（一次性生成，不入库）----------
+# 根目录下划线前缀 = 助手/工具产出的一次性提取脚本、验证输出、测试日志快照。
+# 既不是源码也不是文档，散落在根目录只会污染 git status。规则限定在根目录，
+# 不影响子目录（如 docs/ 下）以 _ 开头的正式文件。
+/_*
+# 手工调试用的 HTTP 请求体（msg-body.json 曾含明文演示凭据）
+/msg-body.json
+/embed-body.json

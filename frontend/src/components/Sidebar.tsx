@@ -1,17 +1,18 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import {
-  Bot, ChevronRight, Folder, FolderOpen, LayoutDashboard, Library, MessageSquare,
-  PanelLeftClose, PanelLeftOpen, Pin, Plus, Search, Settings, Trash2,
+  Bot, CalendarClock, ChevronRight, Folder, FolderOpen, LayoutDashboard, Library,
+  MessageSquare, PanelLeftClose, PanelLeftOpen, Pin, Plus, Puzzle, Search, Settings, Trash2, Users, Workflow,
 } from 'lucide-react'
-import RubberSegment from '@/bits/RubberSegment/RubberSegment'
 import MarqueeTitle from '@/bits/MarqueeTitle/MarqueeTitle'
 import '@/bits/MarqueeTitle/MarqueeTitle.css'
+import RubberSegment from '@/bits/RubberSegment/RubberSegment'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Archive02Icon, Delete02Icon } from '@hugeicons/core-free-icons'
 import BrandMark from './BrandMark'
 import Modal from './Modal'
 import SettingsDialog from './SettingsDialog'
+import Loc from './Loc'
 import { useAuth } from '@/lib/auth'
 import { sessionStore, useSessions } from '@/lib/sessions'
 import { projectStore, useProjects } from '@/lib/projects'
@@ -19,15 +20,21 @@ import { toast } from '@/lib/toast'
 import { api, errMessage, USE_MOCK } from '@/lib/api'
 import { isTempId } from '@/lib/conversations'
 import { agentStore } from '@/lib/agents'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
 import { PAGE_PATH, type PageKey } from '@/lib/types'
 import type { SessionItem } from '@/data'
 import '@/styles/sidebar.css'
 
-const NAV: { key: PageKey; label: string; icon: typeof Library }[] = [
-  { key: 'workbench', label: '工作台', icon: LayoutDashboard },
-  { key: 'kb', label: '知识库', icon: Library },
-  { key: 'chat', label: '对话', icon: MessageSquare },
-  { key: 'agents', label: 'Agent', icon: Bot },
+const NAV: { key: PageKey; labelKey: 'workbench' | 'kb' | 'chat' | 'agents' | 'plugins' | 'community' | 'automations' | 'workflows'; icon: typeof Library }[] = [
+  { key: 'workbench', labelKey: 'workbench', icon: LayoutDashboard },
+  { key: 'kb', labelKey: 'kb', icon: Library },
+  { key: 'chat', labelKey: 'chat', icon: MessageSquare },
+  { key: 'agents', labelKey: 'agents', icon: Bot },
+  { key: 'automations', labelKey: 'automations', icon: CalendarClock },
+  { key: 'workflows', labelKey: 'workflows', icon: Workflow },
+  { key: 'plugins', labelKey: 'plugins', icon: Puzzle },
+  { key: 'community', labelKey: 'community', icon: Users },
   /* 「账号」不再作为导航项：它是冗余入口（设置已收在底部「个人设置」弹层里） */
 ]
 
@@ -49,6 +56,8 @@ interface SidebarProps {
 export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
   const navigate = useNavigate()
   const { logout } = useAuth()
+  const { locale } = useLocale()
+  const t = appCopy(locale)
   const { sessions, activeId, archived, setId, patch, archive: archiveSession, restore: restoreSession, remove: removeSessionStore } = useSessions()
   const { projects, activeProjectId } = useProjects()
 
@@ -251,7 +260,7 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
         setRenaming(null)
         setDraft('')
       } catch (e) {
-        toast.error('重命名失败', errMessage(e))
+        toast.error(t.nav.renameFail, errMessage(e))
       }
     } finally {
       setRenamingBusy(false)
@@ -266,7 +275,7 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
     if (pinPending.current.has(s.id)) return
     if (USE_MOCK || isTempId(s.id)) {
       patch(s.id, (x) => ({ ...x, pinned: !x.pinned }))
-      toast.success(s.pinned ? '已取消置顶' : '已置顶会话', s.title)
+      toast.success(s.pinned ? t.nav.unpinOk : t.nav.pinOk, s.title)
       return
     }
     const next = !s.pinned
@@ -274,10 +283,10 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
     try {
       await api.conversations.update(s.id, { pinned: next })
       patch(s.id, (x) => ({ ...x, pinned: next }))
-      toast.success(next ? '已置顶会话' : '已取消置顶', s.title)
+      toast.success(next ? t.nav.pinOk : t.nav.unpinOk, s.title)
     } catch (e) {
       /* 失败不本地翻转，保持与后端一致 */
-      toast.error(next ? '置顶失败' : '取消置顶失败', errMessage(e))
+      toast.error(next ? t.nav.pinFail : t.nav.unpinFail, errMessage(e))
     } finally {
       pinPending.current.delete(s.id)
     }
@@ -310,13 +319,13 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
         try {
           await api.conversations.remove(target.id)
         } catch (e) {
-          toast.error('删除失败', errMessage(e))
+          toast.error(t.nav.deleteFail, errMessage(e))
           return // 本地保持不动，与后端保持一致；弹窗保留以便重试
         }
       }
       removeSessionStore(target.id)
       setConfirmDelete(null)
-      toast.success('会话已删除', '消息与对话记忆已一并清除')
+      toast.success(t.nav.deleteOk)
     } finally {
       setDeleting(false)
     }
@@ -335,34 +344,34 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
         className="session-open"
         type="button"
         aria-current={s.id === activeId ? 'true' : undefined}
-        title="双击重命名"
+        title={t.nav.renameTitle}
         onClick={() => openSession(s.id)}
         onDoubleClick={(e) => { e.stopPropagation(); openRename(s) }}
       >
         <MarqueeTitle text={s.title} />
       </button>
-      <div className="session-actions" role="group" aria-label={`${s.title} 操作`}>
+      <div className="session-actions" role="group" aria-label={`${s.title} ·`}>
         <button
           className="session-action"
           type="button"
-          title={s.pinned ? '取消置顶' : '置顶'}
-          aria-label={s.pinned ? `取消置顶：${s.title}` : `置顶：${s.title}`}
+          title={s.pinned ? t.nav.unpin : t.nav.pin}
+          aria-label={`${s.pinned ? t.nav.unpin : t.nav.pin}: ${s.title}`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); void togglePin(s) }}
         ><Pin size={14} aria-hidden="true" /></button>
         <button
           className="session-action"
           type="button"
-          title="归档"
-          aria-label={`归档：${s.title}`}
+          title={t.nav.archive}
+          aria-label={`${t.nav.archive}: ${s.title}`}
           onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => { e.stopPropagation(); archiveSession(s.id); toast.info('会话已归档', '可在「已归档」中找回') }}
+          onClick={(e) => { e.stopPropagation(); archiveSession(s.id); toast.info(t.nav.archivedToast) }}
         ><HugeiconsIcon icon={Archive02Icon} size={14} aria-hidden="true" /></button>
         <button
           className="session-action session-action--danger"
           type="button"
-          title="删除"
-          aria-label={`删除：${s.title}`}
+          title={t.common.delete}
+          aria-label={`${t.common.delete}: ${s.title}`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); setConfirmDelete(s) }}
         ><Trash2 size={14} aria-hidden="true" /></button>
@@ -373,14 +382,14 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
   return (
     <>
       {open && <div className="sb-scrim" onClick={onClose} aria-hidden="true" />}
-      <aside className="sidebar" data-open={open ? '' : undefined} data-collapsed={iconRail ? '' : undefined} data-resizing={resizing ? '' : undefined} aria-label="侧栏导航">
+      <aside className="sidebar" data-open={open ? '' : undefined} data-collapsed={iconRail ? '' : undefined} data-resizing={resizing ? '' : undefined} aria-label={t.shell.sidebarAria}>
         {/* 右缘拖拽手柄：展开态调宽，折叠态往右拖即展开（手机抽屉态不显示） */}
         {!open && (
           <div
             className="sb-resizer"
             role="separator"
             aria-orientation="vertical"
-            aria-label="拖拽调整侧栏宽度"
+            aria-label={t.shell.resizeAria}
             onPointerDown={(e) => {
               dragging.current = true
               setResizing(true)
@@ -399,7 +408,7 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
               <button
                 className="sb-icon-btn"
                 type="button"
-                aria-label="搜索会话"
+                aria-label={t.nav.searchSessions}
                 aria-pressed={searchOpen}
                 onClick={() => setSearchOpen((v) => !v)}
               >
@@ -410,7 +419,7 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
               <button
                 className="sb-icon-btn"
                 type="button"
-                aria-label={collapsed ? '展开侧栏' : '折叠侧栏'}
+                aria-label={collapsed ? t.nav.expand : t.nav.collapse}
                 onClick={() => setCollapsed((v) => !v)}
               >
                 {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
@@ -427,8 +436,8 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
               className="input"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索会话"
-              aria-label="搜索会话"
+              placeholder={t.nav.searchSessions}
+              aria-label={t.nav.searchSessions}
             />
           </div>
         )}
@@ -436,11 +445,11 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
         {/* 快捷：新对话 */}
         <button className="sb-row sb-row--quick" type="button" onClick={() => { sessionStore.requestCreate(); go('chat') }}>
           <Plus size={16} aria-hidden="true" />
-          <span>新对话</span>
+          <span><Loc>{t.nav.newChat}</Loc></span>
         </button>
 
         {/* 导航 */}
-        <nav className="sb-nav" aria-label="主导航">
+        <nav className="sb-nav" aria-label={t.shell.navAria}>
           <RubberSegment
             direction="vertical"
             items={NAV.map((n) => ({
@@ -448,24 +457,22 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
               label: (
                 <span className="sb-item">
                   <n.icon size={16} aria-hidden="true" />
-                  <span>{n.label}</span>
+                  <span><Loc>{t.nav[n.labelKey]}</Loc></span>
                 </span>
               ),
             }))}
             value={page}
             onChange={(v) => go(v as PageKey)}
             size="lg"
-            radius={12}
-            inset={4}
+            radius={10}
+            inset={2}
             equalSlots
-            /* 路由/受控 value 变化（含跨多项）也走橡皮滑动，不瞬移 */
             animateExternal
-            /* 轨道显化为底槽（相对侧栏 --surface-muted 略抬/压一档），滑块仍用 primary-container */
-            trackColor="var(--surface)"
-            thumbColor="var(--primary-container)"
-            textColor="var(--text-2)"
-            activeTextColor="var(--primary-text)"
-            aria-label="主导航"
+            trackColor="transparent"
+            thumbColor="color-mix(in oklab, var(--primary) 13%, transparent)"
+            textColor="var(--text-3)"
+            activeTextColor="var(--text)"
+            aria-label={t.shell.navAria}
           />
         </nav>
 
@@ -486,7 +493,7 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
               aria-expanded={projectsOpen}
               onClick={() => setProjectsOpen((v) => !v)}
             >
-              <span>项目</span>
+              <span><Loc>{t.nav.projectGroup}</Loc></span>
               <ChevronRight size={14} className={projectsOpen ? 'rot90' : ''} />
             </button>
 
@@ -502,24 +509,24 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
                       projectStore.add(name)
                       setNewName('')
                       setCreating(false)
-                      toast.success('项目已创建', name)
+                      toast.success(t.nav.projectCreated, name)
                     }}
                   >
                     <input
                       className="input"
                       autoFocus
                       value={newName}
-                      placeholder="项目名称"
-                      aria-label="项目名称"
+                      placeholder={t.nav.projectName}
+                      aria-label={t.nav.projectNameAria}
                       onChange={(e) => setNewName(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Escape') { setCreating(false); setNewName('') } }}
                     />
-                    <button className="btn btn-primary btn-sm" type="submit">创建</button>
+                    <button className="btn btn-primary btn-sm" type="submit"><Loc>{t.nav.createProjectBtn}</Loc></button>
                   </form>
                 ) : (
                   <button className="sb-project sb-project--new" type="button" onClick={() => setCreating(true)}>
                     <Plus size={14} aria-hidden="true" />
-                    <span>创建项目</span>
+                    <span><Loc>{t.nav.createProject}</Loc></span>
                   </button>
                 )}
 
@@ -530,7 +537,7 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
                   onClick={() => projectStore.setActive(null)}
                 >
                   <FolderOpen size={14} aria-hidden="true" />
-                  <span>全部会话</span>
+                  <span><Loc>{t.nav.allSessions}</Loc></span>
                   <span className="sb-project-count">{sessions.length}</span>
                 </button>
 
@@ -553,10 +560,10 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
                       <button
                         className="sb-project-del"
                         type="button"
-                        aria-label={`删除项目 ${p.name}`}
+                        aria-label={t.nav.deleteProjectAria(p.name)}
                         onClick={() => {
                           projectStore.remove(p.id)
-                          toast.info('项目已删除', p.name)
+                          toast.info(t.nav.projectDeleted, p.name)
                         }}
                       >
                         <Trash2 size={13} />
@@ -575,15 +582,15 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
             {archived.length > 0 && (
               <div className="session-arch">
                 <button className="session-arch-toggle" type="button" aria-expanded={showArchived} onClick={() => setShowArchived((v) => !v)}>
-                  <HugeiconsIcon icon={Archive02Icon} size={14} /> 已归档（{archived.length}）
+                  <HugeiconsIcon icon={Archive02Icon} size={14} /> <Loc>{t.nav.archived(archived.length)}</Loc>
                 </button>
                 {showArchived && (
                   <div className="session-arch-list">
                     {sessions.filter((s) => archived.includes(s.id)).map((s) => (
                       <div className="list-row session-arch-row" key={s.id}>
                         <span className="t">{s.title}</span>
-                        <button className="btn btn-ghost btn-sm" type="button" onClick={() => { restoreSession(s.id); toast.success('会话已恢复', s.title) }}>恢复</button>
-                        <button className="btn btn-ghost btn-sm" type="button" aria-label={`删除 ${s.title}`} onClick={() => setConfirmDelete(s)}>
+                        <button className="btn btn-ghost btn-sm" type="button" onClick={() => { restoreSession(s.id); toast.success(t.nav.restored, s.title) }}>{t.nav.restore}</button>
+                        <button className="btn btn-ghost btn-sm" type="button" aria-label={`${t.common.delete} ${s.title}`} onClick={() => setConfirmDelete(s)}>
                           <Trash2 size={13} />
                         </button>
                       </div>
@@ -601,7 +608,7 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
                   aria-expanded={pinnedOpen}
                   onClick={() => setPinnedOpen((v) => !v)}
                 >
-                  <span>置顶</span>
+                  <span><Loc>{t.nav.pinned}</Loc></span>
                   <ChevronRight size={14} className={pinnedOpen ? 'rot90' : ''} />
                 </button>
                 {pinnedOpen && <div className="session-list sb-recent-list">{pinned.map(renderSession)}</div>}
@@ -610,19 +617,19 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
 
             <section className="sb-group">
               <button
-                className="sb-section sb-section--toggle"
-                type="button"
-                aria-expanded={recentOpen}
-                onClick={() => setRecentOpen((v) => !v)}
-              >
-                <span>最近</span>
-                <ChevronRight size={14} className={recentOpen ? 'rot90' : ''} />
-              </button>
+                  className="sb-section sb-section--toggle"
+                  type="button"
+                  aria-expanded={recentOpen}
+                  onClick={() => setRecentOpen((v) => !v)}
+                >
+                  <span><Loc>{t.nav.recent}</Loc></span>
+                  <ChevronRight size={14} className={recentOpen ? 'rot90' : ''} />
+                </button>
               {recentOpen && <div className="session-list sb-recent-list">{recent.map(renderSession)}</div>}
             </section>
 
             {visibleAll.length === 0 && (
-              <p className="sb-empty">{query ? `没有匹配「${query}」的会话` : '还没有会话'}</p>
+              <p className="sb-empty">{query ? t.nav.noMatch(query) : t.nav.noSessions}</p>
             )}
           </div>
         )}
@@ -632,42 +639,42 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
           <button
             className="sb-row sb-row--settings"
             type="button"
-            aria-label="设置"
-            title="设置"
+            aria-label={t.nav.settingsAria}
+            title={t.nav.settingsAria}
             onClick={() => setSettingsOpen(true)}
           >
             <Settings size={16} aria-hidden="true" />
-            <span>设置</span>
+            <span><Loc>{t.nav.settings}</Loc></span>
           </button>
         </div>
       </aside>
 
       <Modal
         open={renaming !== null}
-        title="重命名聊天"
+        title={t.nav.renameTitle}
         width={420}
         onClose={closeRename}
         shouldBlockClose={() => renamingBusy}
         footer={
           <>
             <span style={{ flex: 1 }} />
-            <button className="btn btn-ghost" type="button" disabled={renamingBusy} onClick={closeRename}>取消</button>
+            <button className="btn btn-ghost" type="button" disabled={renamingBusy} onClick={closeRename}>{t.common.cancel}</button>
             <button
               className="btn btn-primary"
               type="button"
               disabled={renamingBusy || !draft.trim()}
               onClick={() => void commitRename()}
             >
-              {renamingBusy ? '保存中…' : '保存'}
+              {renamingBusy ? t.nav.savingShort : t.common.save}
             </button>
           </>
         }
       >
-        <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--text-3)' }}>保持简短且易于识别</p>
+        <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--text-3)' }}>{t.nav.renameHint}</p>
         <input
           className="input"
           value={draft}
-          aria-label="会话名称"
+          aria-label={t.nav.renameAria}
           autoFocus
           disabled={renamingBusy}
           onChange={(e) => setDraft(e.target.value)}
@@ -682,7 +689,7 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
 
       <Modal
         open={confirmDelete !== null}
-        title="删除会话"
+        title={t.nav.deleteTitle}
         width={440}
         onClose={() => { if (!deleting) setConfirmDelete(null) }}
         footer={
@@ -692,24 +699,24 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
                 className="btn btn-ghost"
                 type="button"
                 disabled={deleting}
-                onClick={() => { archiveSession(confirmDelete.id); setConfirmDelete(null); toast.info('会话已归档', '可在「已归档」中找回') }}
+                onClick={() => { archiveSession(confirmDelete.id); setConfirmDelete(null); toast.info(t.nav.archivedToast) }}
               >
-                改为归档
+                {t.nav.useArchive}
               </button>
             )}
             <span style={{ flex: 1 }} />
-            <button className="btn btn-ghost" type="button" disabled={deleting} onClick={() => setConfirmDelete(null)}>取消</button>
+            <button className="btn btn-ghost" type="button" disabled={deleting} onClick={() => setConfirmDelete(null)}>{t.common.cancel}</button>
             <button className="btn btn-danger" type="button" disabled={deleting} onClick={() => void performDelete()}>
-              {deleting ? '删除中…' : '删除'}
+              {deleting ? t.nav.deleting : t.common.delete}
             </button>
           </>
         }
       >
         <p style={{ margin: 0 }}>
-          确定删除会话「<strong>{confirmDelete?.title}</strong>」吗？
+          {confirmDelete && t.nav.deleteBody(confirmDelete.title)}
         </p>
         <p className="hint" style={{ marginBottom: 0 }}>
-          消息与对话记忆会被一并清除，无法恢复。只是想暂时收起的话，可以改用「归档」，归档后可随时找回。
+          {t.nav.deleteBodyHint}
         </p>
       </Modal>
 

@@ -1,6 +1,8 @@
 package com.lky.nexus.app.agent.tool;
 
 import com.lky.nexus.ai.agent.AgentDefinition;
+import com.lky.nexus.app.agent.approval.ToolApprovalService;
+import com.lky.nexus.app.agent.approval.ToolInvocationAuditService;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,17 +39,30 @@ public class AgentToolFactory {
 
     private final ToolRegistry registry;
     private final ObservabilityRegistry observability;
+    private final ToolAuthorizationService authorization;
+    private final ToolApprovalService approvalService;
+    private final ToolInvocationAuditService auditService;
 
-    public AgentToolFactory(ToolRegistry registry, ObservabilityRegistry observability) {
+    public AgentToolFactory(ToolRegistry registry,
+                            ObservabilityRegistry observability,
+                            ToolAuthorizationService authorization,
+                            ToolApprovalService approvalService,
+                            ToolInvocationAuditService auditService) {
         this.registry = registry;
         this.observability = observability;
+        this.authorization = authorization;
+        this.approvalService = approvalService;
+        this.auditService = auditService;
     }
 
     /** 装配出带执行壳的回调数组；顺序即工具登记顺序（提示词里给模型的顺序稳定，行为才可复现）。 */
     public ToolCallback[] assemble(Long userId, AgentDefinition definition) {
         List<ToolCatalog.Registered> tools = registry.resolveFor(userId, definition);
         ToolCallback[] callbacks = tools.stream()
-                .map(tool -> (ToolCallback) new ExecutingToolCallback(tool, observability))
+                // 装配点永远带上授权闸门（P0）：模型的每一次工具调用都经过统一执行入口，
+                // 不存在"某个 provider 的工具绕过审批"这条路——因为回调是这里造出来的
+                .map(tool -> (ToolCallback) new ExecutingToolCallback(
+                        tool, observability, authorization, approvalService, auditService))
                 .toArray(ToolCallback[]::new);
         log.info("为 Agent {} 装配 {} 个工具：{}", definition.describe(), callbacks.length,
                 tools.isEmpty() ? "（无）" : tools.stream().map(ToolCatalog.Registered::code).toList());

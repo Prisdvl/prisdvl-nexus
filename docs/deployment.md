@@ -27,28 +27,27 @@ export AI_CHAT_API_KEY=<OpenCode Zen 的 oc_ 开头 key>   # 只有问答/Agent/
 mvn clean package -DskipTests
 java -Xmx512m -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=standalone
 
-# 2. 前端：Node 18+
+# 2. 前端：Node 20+（Dockerfile 用 node:22）
 cd frontend
-npm install
+npm ci
 npm run dev            # http://localhost:5175
 ```
 
-- 注册任意账号即可用；演示数据见第 4 节。
+- 注册账号需提供**用户名 / 密码 / 邮箱**（邮箱必填；standalone 默认 console 邮件通道，验证码进后端日志）；演示数据见第 4 节。
 - **H2 是内存库：后端每次重启，数据都会清空**，需要重新导入笔记。
-- standalone 下「检索 / 问答」两个页签与 Agent 的检索会**如实降级**（关键词匹配），
-  而不是报错——这是刻意设计（见 decisions.md B.29）。
+- standalone 下检索会**如实降级**（SQL 关键词匹配）而不是报错——这是刻意设计（见 decisions.md B.29）。
 
 ### 方式 B：完整栈（开发形态）—— compose 起基础设施 + 本机 `java -jar`
 
 ```bash
 cd deploy
-cp .env.example .env          # 填上模型 key
-docker compose up -d mysql postgres elasticsearch redis rabbitmq ollama
+cp .env.example .env          # 填上 JWT_SECRET / AI_CHAT_API_KEY / AI_EMBEDDING_API_KEY
+docker compose up -d mysql postgres elasticsearch redis rabbitmq
 cd .. && mvn clean package -DskipTests
 java -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=local
 ```
 
-后端在**宿主机**上跑，容器只提供基础设施；前端用 `npm run dev`（Vite，5173）。
+后端在**宿主机**上跑，容器只提供基础设施；前端用 `npm run dev`（Vite，5175）。
 适合改代码后热重启——但**这不是部署形态**：没有 nginx、没有镜像、宿主机要装 JDK。
 启动后首次导入的笔记需要两步显式操作（默认 profile 关闭了自动嵌入/建索引，刻意让失败原因独立可查）：
 知识库详情页 → 「向量化」→ 「建索引」。
@@ -56,12 +55,15 @@ java -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active
 ### 方式 C：整栈容器化（Phase 5.7）—— 一条命令得到完整系统
 
 ```bash
+# 在仓库根目录先用 JDK 21 产出 fat jar（后端镜像只运行、不构建）
+mvn -B package -DskipTests             # Windows PowerShell: $env:JAVA_HOME='<JDK21 路径>'; mvn -B package -DskipTests
+
 cd deploy
-cp .env.example .env                    # 只需填两个值：JWT_SECRET、AI_CHAT_API_KEY
-JAVA_HOME=/d/develop/jdk-21 mvn -B package -DskipTests   # 在仓库根目录，先产出 jar
+cp .env.example .env                    # 必填三个值：JWT_SECRET、AI_CHAT_API_KEY、AI_EMBEDDING_API_KEY
+#   AI_EMBEDDING_API_KEY = 阿里云百炼 API-KEY（云端 text-embedding-v4，无需本地模型）
 docker compose build                    # 构建 backend / frontend（首次含 ES+IK 镜像）
 docker compose up -d
-docker compose ps                       # 等到 8 个服务全部 (healthy)
+docker compose ps                       # 等到 7 个服务全部 (healthy)
 # 浏览器打开 http://localhost:8088
 ```
 
@@ -100,7 +102,7 @@ mvn -pl nexus-app -am spring-boot:run -Dspring-boot.run.profiles=standalone
 
 ```bash
 # 1) 宿主机构建 fat jar（先停掉占着 jar 的 java 进程——Windows 上文件会被锁）
-JAVA_HOME=/d/develop/jdk-21 mvn -B package -DskipTests
+JAVA_HOME=<JDK21 安装路径> mvn -B package -DskipTests
 # 2) 构建镜像（上下文=仓库根，靠根目录 .dockerignore 排除无关文件）
 docker compose -f deploy/docker-compose.yml build backend
 # 3) 用新镜像替换运行中的实例
@@ -114,10 +116,17 @@ docker compose -f deploy/docker-compose.yml exec backend curl -fsS localhost:808
 
 ## 2. 容器化部署（Phase 5.7）
 
+> **2026-10-14 现状更新**：当前编排为 **7 个服务**（mysql / postgres / redis /
+> elasticsearch / rabbitmq / backend / frontend），**Ollama 已下线**，嵌入改走云端
+> 阿里云百炼 `text-embedding-v4`（无需本地下载模型）；backend 端口绑 `127.0.0.1:8080`
+> （非"不发布"）；前端目录为 `frontend/`（React + Vite）。下文的**操作说明已按现状更新**；
+> 带日期的实测/观察表（§2.7、§2.13、§8 等）是 2026-10-02 八服务（含 Ollama）时期的
+> **历史验收记录**，数字与拓扑不再代表当前环境，保留作为证据，勿当当前指标。
+>
 > 本节所有"实测/观察"结论都来自 **REAL ENVIRONMENT** 层：2026-10-02 在本机 Docker Desktop
 > （29.5.2 / Compose v5.1.3，WSL2，容器可用内存 7.569 GiB）上真实执行。
 
-### 2.1 Docker 架构：为什么是"三个自建镜像 + 五个官方镜像"
+### 2.1 Docker 架构：为什么是"三个自建镜像 + 四个官方镜像"
 
 ```mermaid
 flowchart TB
@@ -125,22 +134,22 @@ flowchart TB
     user["浏览器"]
     dev["开发者（可选）"]
   end
-
   subgraph net["nexus-net（自定义 bridge 网络）"]
     fe["nexus-frontend<br/>nginx:1.29-alpine<br/>0.0.0.0:8088"]
-    be["nexus-backend<br/>eclipse-temurin JRE 21<br/>java -jar（**不发布端口**）"]
+    be["nexus-backend<br/>eclipse-temurin JRE 21<br/>java -jar（127.0.0.1:8080）"]
     mysql["nexus-mysql"]
     pg["nexus-postgres + pgvector"]
     es["nexus-elasticsearch + IK"]
     redis["nexus-redis"]
     mq["nexus-rabbitmq"]
-    ollama["nexus-ollama"]
+    cloud["云端百炼 text-embedding-v4<br/>（容器外 HTTPS）"]
   end
 
   user -->|"HTTP :8088"| fe
-  fe -->|"/ → Vue 静态资源"| fe
+  fe -->|"/ → React 静态资源"| fe
   fe -->|"/api、/mcp → backend:8080"| be
-  be --> mysql & pg & es & redis & mq & ollama
+  be --> mysql & pg & es & redis & mq
+  be -.->|"HTTPS 嵌入请求"| cloud
   dev -.->|"127.0.0.1:3307/5433/9200/… 仅本机"| mysql & pg & es
 ```
 
@@ -148,14 +157,15 @@ flowchart TB
 
 1. **应用镜像自己构建，基础设施用官方镜像**。只有两个应用镜像（backend / frontend）需要写
    Dockerfile；ES 因为要装 IK 中文分词插件、且插件版本必须与 ES 完全一致，也用了一个很薄的
-   Dockerfile（`deploy/elasticsearch/`）。其余五个用官方镜像 + 环境变量配置，
-   **不自己维护基础镜像**。
+   Dockerfile（`deploy/elasticsearch/`）。其余四个（MySQL / PostgreSQL / Redis / RabbitMQ）
+   用官方镜像 + 环境变量配置，**不自己维护基础镜像**。
 2. **业务代码没有为 Docker 改**。打包仍然是 `mvn package` 产出的那个 fat jar，
    容器里就是 `java -jar`（§2.4）。容器化没有换掉任何构建方式。
    （本期唯一一处业务代码改动**不是**为了容器化：是容器化后延迟变化暴露出的一个前端竞态，
    见 §2.12 缺陷③。）
-3. **只有前端发布端口**。基础设施全部绑 `127.0.0.1`（只给宿主机开发用），
-   backend **完全不发布端口**——只有 nginx 需要访问它。这既是攻击面收敛，
+3. **只有前端监听 0.0.0.0**。基础设施全部绑 `127.0.0.1`（只给宿主机开发用），
+   backend 的 8080 也只绑 `127.0.0.1`——容器间只有 nginx 需要访问它，
+   宿主机仍可直连 `127.0.0.1:8080` 调试。这既是攻击面收敛，
    也让"部署形态"和"某台机器上有没有 JDK"解耦。
 
 ### 2.2 服务拓扑
@@ -163,13 +173,16 @@ flowchart TB
 | 服务 | 镜像 | 宿主机映射 | 容器内地址 | 健康检查 | 依赖 |
 | --- | --- | --- | --- | --- | --- |
 | `nexus-frontend` | 自建（nginx + dist） | `0.0.0.0:8088 → 80` | `frontend:80` | `wget /healthz` | 无 |
-| `nexus-backend` | 自建（JRE 21 + jar） | **不发布** | `backend:8080` | `curl /actuator/health` | 下面 6 个全部 `service_healthy` |
+| `nexus-backend` | 自建（JRE 21 + jar） | `127.0.0.1:8080 → 8080` | `backend:8080` | `curl /actuator/health` | 下面 5 个全部 `service_healthy` |
 | `nexus-mysql` | `mysql:8.4.11` | `127.0.0.1:3307 → 3306` | `mysql:3306` | `mysqladmin ping` | — |
 | `nexus-postgres` | `pgvector/pgvector:0.8.6-pg18-trixie` | `127.0.0.1:5433 → 5432` | `postgres:5432` | `pg_isready` | — |
 | `nexus-elasticsearch` | 自建（`elasticsearch:9.4.5` + IK） | `127.0.0.1:9200 → 9200` | `elasticsearch:9200` | `curl /_cluster/health` | — |
 | `nexus-redis` | `redis:8.10.2` | `127.0.0.1:6379 → 6379` | `redis:6379` | `redis-cli ping` | — |
 | `nexus-rabbitmq` | `rabbitmq:4.3.6-management` | `127.0.0.1:5672 / 15672` | `rabbitmq:5672` | `rabbitmq-diagnostics ping` | — |
-| `nexus-ollama` | `ollama/ollama:latest` | `127.0.0.1:11434 → 11434` | `ollama:11434` | `ollama list` | — |
+
+> 嵌入不依赖本地容器：backend 经 HTTPS 调云端阿里云百炼 `text-embedding-v4`（密钥为
+> 必填的 `AI_EMBEDDING_API_KEY`，见 §2.3），**无需 `ollama pull` 任何模型**。
+> （历史：2026-10-02 前编排中曾有第 8 个服务 `nexus-ollama` + 本地 `bge-m3`。）
 
 **`depends_on` 用的是 `condition: service_healthy`，不是默认的 `service_started`。**
 默认那个只保证容器**进程**起了——MySQL 进程在跑但还没接受连接是常态，那样后端会在
@@ -186,10 +199,10 @@ cp deploy/.env.example deploy/.env
 
 | 类别 | 变量 | 缺失时的行为 |
 | --- | --- | --- |
-| **必须自己填** | `JWT_SECRET`、`AI_CHAT_API_KEY` | **`docker compose config` 直接报错退出**，连容器都不会创建 |
+| **必须自己填** | `JWT_SECRET`、`AI_CHAT_API_KEY`、`AI_EMBEDDING_API_KEY` | **`docker compose config` 直接报错退出**，连容器都不会创建 |
 | 端口 | `NEXUS_FRONTEND_PORT` 等 | 有开发默认值 |
 | 开发口令 | `NEXUS_MYSQL_PASSWORD`、`NEXUS_PG_PASSWORD`、`NEXUS_RABBITMQ_PASSWORD`、`NEXUS_MYSQL_ROOT_PASSWORD` | 有默认值（与 `application-local.yml` 一致，**仅限本机**） |
-| 模型网关 | `AI_CHAT_BASE_URL`、`AI_CHAT_MODEL`、`AI_JUDGE_MODEL` | 有默认值 |
+| 模型网关 | `AI_CHAT_BASE_URL`、`AI_CHAT_MODEL`、`AI_JUDGE_MODEL`、`AI_EMBEDDING_BASE_URL`、`AI_EMBEDDING_MODEL`、`AI_EMBEDDING_DIM` | 有默认值（嵌入默认指向百炼 `text-embedding-v4` / 1024 维） |
 
 `JWT_SECRET` 用的是 compose 的 `${JWT_SECRET:?...}` 语法。这一条是把后端
 `nexus.jwt.secret` 的 **fail-closed** 语义**前移到了编排层**：如果只依赖应用侧校验，
@@ -199,12 +212,16 @@ cp deploy/.env.example deploy/.env
 **REAL ENVIRONMENT 实测**：
 
 ```bash
-$ JWT_SECRET= AI_CHAT_API_KEY= docker compose config
+$ JWT_SECRET= AI_CHAT_API_KEY= AI_EMBEDDING_API_KEY= docker compose config
 error while interpolating services.backend.environment.JWT_SECRET:
   required variable JWT_SECRET is missing a value: JWT_SECRET 未配置：请复制 deploy/.env.example ...
 $ echo $?
 1
 ```
+
+> 三个必填项（`JWT_SECRET` / `AI_CHAT_API_KEY` / `AI_EMBEDDING_API_KEY`）逐个 fail-closed：
+> 2026-10-14 用三个非生产占位值复验 `docker compose config --quiet` 退出码为 0；
+> 缺任意一个即退出码 1。
 
 - **`.env` 在 `.gitignore` 里**（`deploy/.env` 同理）——真实 secret 不进版本库。
   Dockerfile / docker-compose.yml / README 里**没有任何真实密钥**，只有占位与说明。
@@ -229,8 +246,8 @@ $ echo $?
   （OOM 立刻退出交给 `restart` 策略，而不是留一个堆已坏、还在对外 500 的进程）。
 - 镜像里装 `curl` **只为健康检查**（`-f` 语义比 wget 直接：非 2xx/3xx 即非零退出）。
 
-**`web/Dockerfile`**（多阶段）：`node:22-alpine` 里 `npm ci && npm run build`（这一步会跑
-`vue-tsc --noEmit` 类型检查，**类型错误会让镜像构建失败**）→ 产物拷进 `nginx:1.29-alpine`。
+**`frontend/Dockerfile`**（多阶段）：`node:22-alpine` 里 `npm ci && npm run build`（build 脚本为
+`tsc --noEmit && vite build`，**类型错误会让镜像构建失败**）→ 产物拷进 `nginx:1.29-alpine`。
 与后端相反，**前端的构建放在镜像里**：`npm ci` 严格按 lock 文件装、在 Linux 里产出与运行平台一致的
 构建产物（宿主机是 Windows，本地构建出的 esbuild 二进制与 Linux 镜像不兼容），
 且先只拷 `package.json` / `package-lock.json` 让依赖层走缓存。
@@ -243,27 +260,28 @@ $ echo $?
 
 ```bash
 cd deploy
-cp .env.example .env                  # ① 填 JWT_SECRET / AI_CHAT_API_KEY
+cp .env.example .env                  # ① 填 JWT_SECRET / AI_CHAT_API_KEY / AI_EMBEDDING_API_KEY
 docker compose config                 # ② 校验配置与变量替换（缺 secret 即失败）
-docker compose build                  # ③ 三个镜像
-docker compose up -d                  # ④ 起 8 个服务
+docker compose build                  # ③ 三个镜像（backend / frontend / elasticsearch）
+docker compose up -d                  # ④ 起 7 个服务
 docker compose ps                     # ⑤ 等到全部 (healthy)，不是仅 Up
 docker compose logs -f backend        # ⑥ 看启动日志 / 排查
 ```
 
 首次导入的笔记同样需要两步显式操作：知识库详情页 → 「向量化」→ 「建索引」。
-Ollama 的 `bge-m3` 若不在卷里，`docker compose exec ollama ollama pull bge-m3`。
+嵌入由云端百炼 `text-embedding-v4` 完成，**不需要在本机或容器内下载任何模型**。
 
-**实测（2026-10-02，冷启动）**：`docker compose up -d` 返回耗时 **21s**，
-自 `up` 开始到 **8 个服务全部 healthy 共 33s**（backend 因为等 6 个依赖健康检查通过，
-比其余服务晚 20s 左右启动）。
-> **观察值，不作为性能指标**——机器状态、镜像是否已在本地、内存压力都会影响它。
+**历史实测（2026-10-02，冷启动，当时为含 Ollama 的 8 服务拓扑）**：`docker compose up -d`
+返回耗时 **21s**，自 `up` 开始到 **8 个服务全部 healthy 共 33s**（backend 因为等依赖健康
+检查通过，比其余服务晚 20s 左右启动）。
+> **观察值，不作为性能指标**——机器状态、镜像是否已在本地、内存压力都会影响它；
+> 当前 7 服务拓扑的冷启动耗时本轮未实测，**NOT VERIFIED**。
 
 ### 2.6 停止步骤
 
 ```bash
 docker compose stop            # 只停容器，保留容器与卷
-docker compose restart         # 重启（实测：3s 返回，29s 后 8 个服务全部 healthy）
+docker compose restart         # 重启（2026-10-02 八服务时期实测：3s 返回，29s 后全部 healthy）
 docker compose down            # 停止并**删除容器/网络**，保留数据卷 ← 推荐
 docker compose down -v         # 连数据卷一起删（清库，慎用）
 ```
@@ -272,7 +290,7 @@ docker compose down -v         # 连数据卷一起删（清库，慎用）
 
 ### 2.7 数据持久化（REAL ENVIRONMENT：`down` 之后 `up -d` 逐项核对）
 
-七个具名卷：
+当前编排声明 **6 个具名卷**：
 
 | 卷 | 挂载点 | 装什么 |
 | --- | --- | --- |
@@ -281,13 +299,15 @@ docker compose down -v         # 连数据卷一起删（清库，慎用）
 | `nexus_es-data` | `/usr/share/elasticsearch/data` | 倒排索引（`nexus_chunk_*`） |
 | `nexus_redis-data` | `/data` | 令牌版本 / 登录失败计数 / 限流 / 当日配额 |
 | `nexus_rabbitmq-data` | `/var/lib/rabbitmq` | 队列与持久消息定义 |
-| `nexus_ollama-data` | `/root/.ollama` | 嵌入模型（`bge-m3`，约 1.1 GB） |
 | `nexus_backend-data` | `/app/data` | **上传的原始文件**（增量同步要重新解析原文） |
+
+> 历史（八服务时期）曾有第 7 个卷 `nexus_ollama-data`（`/root/.ollama`，本地 `bge-m3`
+> 约 1.1 GB）；Ollama 下线后该卷不再声明。下表为 2026-10-02 七卷时期的实测记录。
 
 > `backend-data` 不挂卷的话，`down` 会把上传的原文一起带走，而 MySQL 里还留着指向它们的记录
 > ——表现是"文档存在但打不开"。
 
-**实测（`down` → `up -d` 全周期）**，前后逐项一致：
+**历史实测（2026-10-02，七卷八服务时期；`down` → `up -d` 全周期）**，前后逐项一致：
 
 | 项目 | `down` 前 | `up -d` 后 |
 | --- | --- | --- |
@@ -310,7 +330,6 @@ docker compose down -v         # 连数据卷一起删（清库，慎用）
 | `postgres` | `pg_isready` | 能建立会话 |
 | `es` | `GET /_cluster/health` | 集群可服务 |
 | `rabbitmq` | `rabbitmq-diagnostics ping` | Erlang 节点在跑 |
-| `ollama` | `ollama list` | daemon 真的在（比 curl `/api/tags` 更能说明，且不需要镜像里有 curl） |
 | `backend` | `curl -fs /actuator/health` | 进程活着 **且 MySQL 连得上**（默认含 DataSource 探针） |
 | `frontend` | `wget /healthz` | nginx 在服务 |
 
@@ -329,7 +348,7 @@ docker compose down -v         # 连数据卷一起删（清库，慎用）
 | 位置 | 作用 |
 | --- | --- |
 | `resolver 127.0.0.11` + 变量 `$backend_upstream` | 用 Docker 内置 DNS，**每次请求重新解析** backend 地址 |
-| `location /` | Vue 静态资源 + `try_files $uri $uri/ /index.html`（SPA 回退） |
+| `location /` | React 静态资源 + `try_files $uri $uri/ /index.html`（SPA 回退，由 React Router 解析） |
 | `location /api/` | `proxy_pass $backend_upstream$request_uri` → `backend:8080` |
 | `location /api/chat/stream`（SSE） | `proxy_buffering off`、`gzip off`、`proxy_read_timeout 3600s` |
 | `location /mcp` | MCP JSON-RPC，同样反代到后端 |
@@ -362,16 +381,20 @@ docker compose down -v         # 连数据卷一起删（清库，慎用）
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `docker compose up` 后 backend 反复重启 | 依赖服务虽 `Up` 但未就绪 | 确认用了 `condition: service_healthy`；`docker compose logs backend` 看 Flyway 报错 |
-| `error while interpolating … required variable JWT_SECRET is missing` | `.env` 没填 | `cp .env.example .env` 并填两个必填项（这是**设计行为**，不是 bug） |
-| `class file version 65.0`（或反过来 61.0） | 打包用了错误的 JDK | 用 JDK **21** 打包：`JAVA_HOME=/d/develop/jdk-21 mvn -B package -DskipTests` |
+| `error while interpolating … required variable JWT_SECRET is missing` | `.env` 没填 | `cp .env.example .env` 并填三个必填项（`JWT_SECRET` / `AI_CHAT_API_KEY` / `AI_EMBEDDING_API_KEY`；这是**设计行为**，不是 bug） |
+| `class file version 65.0`（或反过来 61.0） | 打包用了错误的 JDK | 用 JDK **21** 打包：`JAVA_HOME=<JDK21 安装路径> mvn -B package -DskipTests` |
 | 前端 502 | backend 尚未启动/正在重启 | 等 healthy；nginx 会自愈（§2.9），无需重启 nginx |
-| 前端一直白屏、`/api` 全 404 | 用了 dev 端口 5173 或后端直连 8080 | 换 **`http://localhost:8088`**；backend 不发布端口 |
+| 前端一直白屏、`/api` 全 404 | 用了错误的入口（容器化入口是 8088；Vite dev 才是 5175） | 容器化部署用 **`http://localhost:8088`**；本机 dev 形态用 `http://localhost:5175`（backend 8080 只绑回环，仅供宿主机调试） |
 | 改了 `.env` 不生效 | compose 在容器创建时注入变量 | `docker compose up -d`（会重建受影响的容器） |
 | 检索返回空 / 4005 | 笔记导入后没做「向量化」「建索引」 | 知识库详情页两步操作；或见 §2.12 的失败库排查 |
 | ES 里 `_count` 为 0 但向量能召回 | BM25 那条腿没数据（例如重建索引中途失败） | `POST /{kbId}/index/recreate` 再 `POST /{kbId}/index`，两次之间**间隔 ≥ 1 秒**（见 §2.12 已知缺陷） |
 | `resource_already_exists_exception` | 同一秒内两次重建索引，物理索引名撞车 | 同上：两次之间 `sleep 1`；记录为 **Known Gap**（§2.12） |
 
 ### 2.12 多库 RAG 的真机验收（phase 5.7 §九 / §十 / §十一）
+
+> 本节为 2026-10-02 的历史验收记录。当时的 E2E 脚本随 Vue 版前端一起归档到
+> `docs/archive/web-vue/scripts/`（React 版当前 QA 脚本在 `frontend/scripts/`，
+> 如 `qa-shots.mjs`），下文的 `web/scripts/...` 路径只在归档目录中存在，**当前不可直接运行**。
 
 **脚本**：`web/scripts/verify-multi-kb-failure.mjs`（新增）。它把 §九、§十要求的东西逐条钉住：
 
@@ -436,7 +459,8 @@ docker compose down -v         # 连数据卷一起删（清库，慎用）
 
 ### 2.13 数据持久化 / 资源 / 启动耗时的**观察值**
 
-> **以下全部是观察值，不作为性能指标。**
+> **以下全部是 2026-10-02 八服务（含 Ollama）拓扑下的历史观察值，不作为当前性能指标。**
+> 当前为 7 服务（无 Ollama，嵌入走云端），内存占用与启动耗时本轮未重新实测。
 
 单次 `up -d` 稳定后的容器内存（`docker stats`）：
 
@@ -538,19 +562,25 @@ curl -s -X POST localhost:8080/mcp \
 
 ## 6. 简历 / 面试讲解大纲（3 分钟讲法）
 
-1. **一句话**：个人知识库 AI 助手——导入 Obsidian 笔记，混合检索 + 带引用的流式问答 + 会自己查资料的 Agent。
+1. **一句话**：自托管的**多用户** AI 知识库与 Agent 平台——导入 Markdown / PDF / DOCX / TXT / LOG
+   或 Obsidian Vault 压缩包，混合检索 + 带引用的流式问答 + 会自己查资料的 Agent，
+   用户/工作区/权限隔离齐备。
+   （历史定位：项目早期是"个人 Obsidian 笔记助手"，平台化后定位已扩展，勿再以个人助手概括。）
 2. **架构**：Maven 多模块 modulular monolith（common → ai → knowledge → app），
    "能拆要是微服务，但不拆"的理由：数据都在一个库、一个进程内方法调用，
    逻辑边界靠模块依赖方向保证。
 3. **三个技术亮点（各讲 30 秒）**：
-   - **检索**：BM25（ES+IK 中文分词）+ bge-m3 向量 + **RRF 融合**，模型无关（可换供应商）；
+   - **检索**：BM25（ES+IK 中文分词）+ 向量（云端百炼 `text-embedding-v4`，1024 维）
+     + **RRF 融合**，模型无关（可换供应商；历史方案为本地 Ollama `bge-m3`）；
    - **RAG**：重排（失败自动降级）+ 上下文预算 + **引用可核对**（区分"用到的资料"与"召回到的"），
      资料为空**不调用模型**——从根上防幻觉；流式输出解决长延迟体感；
    - **Agent**：用户可控三要素 = 痕迹可见 + 轮数有界 + 降级如实；再往上
      **MCP Server** 把知识库暴露成标准工具给外部客户端。
-4. **工程素养（讲 30 秒）**：`mvn test` **598/0/0/21**（基线口径，111 个类；那 21 个"依赖基础设施所以跳过"
-   的 live 测试**在整栈起来并打开 live 开关后全部真跑并通过**——5.7 那轮的口径是 **567/0/0/0**，
-   见 §8 的第 1 与 1b 行）；
+4. **工程素养（讲 30 秒）**：最近一次全量（2026-10-14，四模块 134 个类）`mvn -B test`
+   **764 / 0 失败 / 0 错误 / 33 跳过**——跳过的 33 个是依赖真实 ES / pgvector / 模型网关的
+   live 门控测试（`AI_SEARCH_LIVE` / `AI_VECTOR_LIVE` / `AI_EMBEDDING_LIVE` / `AI_CHAT_API_KEY`，
+   默认不起容器、不花钱）。历史口径：5.9 收口为 **598/0/0/21**（111 个类），5.7 整栈开门控后
+   **567/0/0/0**，见 §8 的第 1 与 1b 行；引用历史数字时必须带日期，不能当现状。
    容器化后 **11 个 `verify-*.mjs` 全部退出码 0**，另有 5.8 的全链路冒烟 `verify-full-product.mjs` 一次通过；
    **每轮交付都 live 验证**（5.6 那期用 `standalone` + 本机原生 Redis 避开 Docker；
    5.5.1 用桩 SSE 帧验界面层，**5.7 把那条桩腿换成了"真 ES + 一个真挂掉的库"**，见 §2.12）；
@@ -560,12 +590,17 @@ curl -s -X POST localhost:8080/mcp \
 ## 7. 模型与环境事实
 
 - 模型网关：OpenCode Zen（`https://opencode.ai/zen/go/v1`，模型 `deepseek-v4-flash`），
-  已用守卫测试验证其**支持函数调用**（AgentLoopTest）。
-- 嵌入：Ollama `bge-m3`（1024 维），维度在知识库创建时冻结（ADR-008）。
+  已用守卫测试验证其**支持函数调用**（AgentLoopTest）。对话供应商可经 `AI_CHAT_BASE_URL` /
+  `AI_CHAT_MODEL` 换成任意 OpenAI 兼容网关。
+- 嵌入（2026-10-14 现状）：**阿里云百炼 DashScope** `text-embedding-v4`（1024 维，
+  `AI_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`），
+  经 HTTPS 调用、无需本地模型，密钥为必填的 `AI_EMBEDDING_API_KEY`；
+  维度仍在知识库创建时冻结（ADR-008）。历史方案：本地 Ollama `bge-m3`（同名 1024 维，
+  2026-10 前下线，编排里保留了恢复注释）。
 - 环境坑速查：Docker Desktop 常未启动 → 依赖容器的能力都有降级路径；
   **打包前必须先杀 java**（jar 文件锁会让 repackage 失败）。
 - **跑 `mvn test` 前先把整栈停掉**（`cd deploy && docker compose stop`）：Mockito 通过 ByteBuddy
-  自附加时会再 fork 一个 JVM，而 surefire 本身也在 fork；整栈 8 个容器占着内存时，
+  自附加时会再 fork 一个 JVM，而 surefire 本身也在 fork；整栈 7 个容器占着内存时，
   自附加会失败并报 `Could not self-attach to current VM using external process` /
   `does not supply a working agent attachment mechanism`——**这个报错指向 JDK，实际是内存不足**，
   很容易误判成 JDK 装错了（5.8 实测：可用内存 2.0/15.6 GB、339 进程时必现；停栈后全绿）。
@@ -573,6 +608,11 @@ curl -s -X POST localhost:8080/mcp \
 
 ## 8. Phase 5.7 真机验收结果（证据表）
 
+> **历史记录（2026-10-02 / Phase 5.7–5.9，八服务含 Ollama 拓扑）**：下表是当时真机验收的
+> 原始证据，**原样保留**——包括 `vue-tsc`、567/598 等历史数字、个人 JDK 路径与 8 服务表述；
+> 它们只证明"当时那一轮真的跑过"，**不代表 2026-10-14 的现状**。当前数字以 README 测试摘要
+> （2026-10-14，764/0/0/33）与本节上方各章为准。
+>
 > 口径见文首那五类标签。**这张表只写真实执行过的**；
 > 没执行的条目一律列出并标 **NOT VERIFIED**，不写"全部正常"。
 

@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import {
-  ArrowRight, BookOpen, Bot, Clock, Database, FileText, MessagesSquare, Plus, Search, Sparkles, Upload, Wand2, Zap,
+  ArrowRight, BookOpen, Bot, Clock, Database, FileText, MessagesSquare, Plus, Search, Upload, Wand2, Zap,
 } from 'lucide-react'
-import Carousel from '@/bits/Carousel/Carousel'
 import Counter from '@/bits/Counter/Counter'
 import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
 import StatusMark from '@/bits/StatusMark/StatusMark'
+import Loc from '@/components/Loc'
 import { SkeletonRows } from '@/components/Skeleton'
 import { SESSIONS, ACTIVITY as SEED_ACTIVITY, HEAT as SEED_HEAT, TREND as SEED_TREND, type ActivityKind } from '@/data'
 import { fetchRecentImports, relTime, useLoad } from '@/lib/backendData'
+import { useLocale } from '@/lib/locale'
+import { pagesCopy } from '@/lib/pagesCopy'
+import { appCopy } from '@/lib/appCopy'
 import type { PaletteName, ThemeMode } from '@/lib/types'
 import { api, errMessage, USE_MOCK } from '@/lib/api'
 
@@ -17,15 +20,10 @@ interface Props {
   palette: PaletteName
   goChat: () => void
   goKb: () => void
+  goAgents: () => void
+  goAutomations: () => void
   onOpenConversation: (id: string) => void
 }
-
-const CAROUSEL_ITEMS = [
-  { id: 1, title: '多知识库聚合', description: '向量 + BM25 + RRF 混合检索，一次提问横跨全部笔记。', icon: <BookOpen className="carousel-icon" /> },
-  { id: 2, title: '流式对话', description: '边生成边输出，可随时停止；引用自动标注来源文档。', icon: <MessagesSquare className="carousel-icon" /> },
-  { id: 3, title: '自定义 Agent', description: '绑定知识库与工具，让 Agent 带着你的上下文干活。', icon: <Wand2 className="carousel-icon" /> },
-  { id: 4, title: '自有部署', description: '连接本地或自建的数据服务；模型角色由应用配置管理。', icon: <Sparkles className="carousel-icon" /> },
-]
 
 const KIND_ICON: Record<ActivityKind, typeof Upload> = {
   import: Upload,
@@ -34,7 +32,10 @@ const KIND_ICON: Record<ActivityKind, typeof Upload> = {
   chat: MessagesSquare,
 }
 
-export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConversation }: Props) {
+export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, goAutomations, onOpenConversation }: Props) {
+  const { locale } = useLocale()
+  const t = appCopy(locale)
+  const w = pagesCopy(locale).workbench
   const { data: currentUser } = useLoad(() => api.users.me())
   const { data: importRows, loading: importsLoading, error: importsError } = useLoad(() => fetchRecentImports())
   /* 真实数据：四个计数来自后端列表接口；mock 模式保留原演示数字 */
@@ -65,7 +66,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
     ? SESSIONS.slice(0, 3)
     : (convPage?.list ?? []).map((c) => ({
         id: c.id,
-        title: c.title ?? '未命名会话',
+        title: c.title ?? w.untitledConv,
         updated: relTime(c.lastMessageAt ?? c.updatedAt),
       }))
   /* 工作台聚合：趋势(14) / 热力(30) / 最近活动(8)，来自 GET /api/stats/summary */
@@ -98,15 +99,15 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
     ? SEED_ACTIVITY
     : (summary?.activity ?? []).map((a) => ({
         kind: (a.type === 'IMPORT' ? 'import' : 'chat') as ActivityKind,
-        title: a.type === 'IMPORT' ? `导入 ${a.label ?? ''}` : `会话「${a.label ?? '未命名'}」`,
-        detail: a.type === 'IMPORT' ? '导入任务' : '对话',
+        title: a.type === 'IMPORT' ? w.activityImport(a.label ?? '') : w.activityChat(a.label ?? w.untitledConv),
+        detail: a.type === 'IMPORT' ? w.activityImportDetail : w.activityChatDetail,
         time: relTime(a.at),
       }))
   const stats: { label: string; value: number; sub: string; accent?: boolean }[] = [
-    { label: '知识库', value: counts.kb, sub: `共 ${counts.docs} 篇文档`, accent: true },
-    { label: '文档', value: counts.docs, sub: '已入库切片可检索' },
-    { label: '会话', value: counts.conv, sub: '含历史对话' },
-    { label: 'Agent', value: counts.agent, sub: '含默认助手' },
+    { label: w.statKb, value: counts.kb, sub: w.statKbSub(counts.docs), accent: true },
+    { label: w.statDocs, value: counts.docs, sub: w.statDocsSub },
+    { label: w.statConv, value: counts.conv, sub: w.statConvSub },
+    { label: w.statAgent, value: counts.agent, sub: w.statAgentSub },
   ]
 
   // 趋势折线（14 天）：平滑连续实线 + 轴标注
@@ -157,14 +158,37 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
     <div className="page" data-palette={palette} data-theme={theme}>
       <div className="page-head">
         <div>
-          <p className="eyebrow" style={{ margin: 0 }}>工作台</p>
-          <h1 className="page-title">{currentUser?.nickname || currentUser?.username ? `下午好，${currentUser.nickname || currentUser.username}` : '工作台'}</h1>
-          <p className="page-sub">沉淀知识，与 AI 对话，构建你的 Agent —— 今天也继续推进吧。</p>
+          <p className="eyebrow" style={{ margin: 0 }}><Loc>{w.eyebrow}</Loc></p>
+          <h1 className="page-title">{currentUser?.nickname || currentUser?.username ? w.greeting(currentUser.nickname || currentUser.username) : <Loc>{w.title}</Loc>}</h1>
+          <p className="page-sub"><Loc>{w.sub}</Loc></p>
         </div>
         <button className="btn btn-primary" type="button" onClick={goChat}>
-          <MessagesSquare size={16} /> 开始对话
+          <MessagesSquare size={16} /> <Loc>{w.startChat}</Loc>
         </button>
       </div>
+
+      <section className="wb-quick-actions" aria-label={w.quickTitle}>
+        <button className="wb-quick" type="button" onClick={goChat}>
+          <span className="wb-quick__icon"><MessagesSquare size={16} aria-hidden="true" /></span>
+          <span className="wb-quick__text"><b><Loc>{w.quickChat}</Loc></b><small><Loc>{w.quickChatDesc}</Loc></small></span>
+          <ArrowRight size={14} className="wb-quick__arrow" aria-hidden="true" />
+        </button>
+        <button className="wb-quick" type="button" onClick={goKb}>
+          <span className="wb-quick__icon"><Upload size={16} aria-hidden="true" /></span>
+          <span className="wb-quick__text"><b><Loc>{w.quickKb}</Loc></b><small><Loc>{w.quickKbDesc}</Loc></small></span>
+          <ArrowRight size={14} className="wb-quick__arrow" aria-hidden="true" />
+        </button>
+        <button className="wb-quick" type="button" onClick={goAgents}>
+          <span className="wb-quick__icon"><Bot size={16} aria-hidden="true" /></span>
+          <span className="wb-quick__text"><b><Loc>{w.quickAgent}</Loc></b><small><Loc>{w.quickAgentDesc}</Loc></small></span>
+          <ArrowRight size={14} className="wb-quick__arrow" aria-hidden="true" />
+        </button>
+        <button className="wb-quick" type="button" onClick={goAutomations}>
+          <span className="wb-quick__icon"><Zap size={16} aria-hidden="true" /></span>
+          <span className="wb-quick__text"><b><Loc>{w.quickAutomation}</Loc></b><small><Loc>{w.quickAutomationDesc}</Loc></small></span>
+          <ArrowRight size={14} className="wb-quick__arrow" aria-hidden="true" />
+        </button>
+      </section>
 
       <div className="stat-grid" aria-busy={countsLoading}>
         {stats.map((s, i) => (
@@ -183,17 +207,17 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
           </div>
         ))}
       </div>
-      {countsError && <p className="hint" role="status">统计暂时不可用：{countsError}</p>}
+      {countsError && <p className="hint" role="status">{w.countsUnavailable} {countsError}</p>}
 
       <div className="wb-layout">
         {/* ---------- 主区 ---------- */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <section className="panel wb-card">
             <div className="wb-card-head">
-              <h2 className="wb-card-title"><Zap size={16} /> 用量趋势</h2>
-              <span className="wb-sub">近 14 天</span>
+              <h2 className="wb-card-title"><Zap size={16} /> <Loc>{w.trendTitle}</Loc></h2>
+              <span className="wb-sub"><Loc>{w.trendRange}</Loc></span>
             </div>
-            {statsLoading ? <SkeletonRows rows={2} /> : statsError ? <p className="form-error active" role="alert">{statsError}</p> : trendPoints.length === 0 ? <p className="hint">近 14 天暂无可展示的调用数据。</p> : (
+            {statsLoading ? <SkeletonRows rows={2} /> : statsError ? <p className="form-error active" role="alert">{statsError}</p> : trendPoints.length === 0 ? <p className="hint">{w.trendEmpty}</p> : (
               <>
                 <div className="wb-trend" key={trendKey} onMouseLeave={() => setTrendHover(null)}>
                   <div className="wb-trend-y" aria-hidden="true">
@@ -202,7 +226,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
                     <span>0</span>
                   </div>
                   <div className="wb-trend-plot">
-                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="近 14 天调用次数趋势">
+                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={w.trendAria}>
                       <defs>
                         <linearGradient id="wbArea" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.2" />
@@ -248,7 +272,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
                           type="button"
                           className={`wb-trend-hit${trendHover === i ? ' is-active' : ''}`}
                           style={{ left: `${p.x}%`, top: `${p.y}%` }}
-                          aria-label={`${p.label}：${p.count} 次调用`}
+                          aria-label={w.trendHitAria(p.label, p.count)}
                           onMouseEnter={() => setTrendHover(i)}
                           onFocus={() => setTrendHover(i)}
                         />
@@ -286,10 +310,10 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
                         gradientFrom="transparent"
                       />
                     </b>
-                    次调用
+                    <Loc>{w.metricCalls}</Loc>
                   </span>
                   <span className="wb-trend-metric">
-                    日均
+                    <Loc>{w.metricAvg}</Loc>
                     <b>
                       <Counter
                         value={Math.round(totalCalls / Math.max(1, trendPoints.length))}
@@ -305,7 +329,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
                     </b>
                   </span>
                   <span className="wb-trend-metric">
-                    峰值
+                    <Loc>{w.metricPeak}</Loc>
                     <b>
                       <Counter
                         value={max}
@@ -325,44 +349,45 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
             )}
           </section>
 
+          <div className="wb-duo">
           <section className="panel wb-card">
             <div className="wb-card-head">
-              <h2 className="wb-card-title"><Upload size={16} /> 最近文档处理</h2>
-              {!USE_MOCK && <span className="wb-sub">{importsLoading ? '加载中…' : `${importRows?.length ?? 0} 条`}</span>}
+              <h2 className="wb-card-title"><Upload size={16} /> <Loc>{w.importsTitle}</Loc></h2>
+              {!USE_MOCK && <span className="wb-sub">{importsLoading ? t.common.loading : w.importCount(importRows?.length ?? 0)}</span>}
             </div>
             {USE_MOCK ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <div className="task-row wb-data-in" style={{ '--wb-i': 0 } as CSSProperties}><StatusMark status="running" progress={0.62} size={18} /><span className="names"><span className="t">面经整理 v4.md</span><span className="d">解析中 · 62%（42 / 68 切片）</span></span><LatticeLoader status="working" label="" pattern="sweep" cellSize={4} fontSize={12} showTimer /></div>
-                <div className="task-row wb-data-in" style={{ '--wb-i': 1 } as CSSProperties}><StatusMark status="done" size={18} label="并发编程要点.md" fontSize={13} strike={false} /><span className="names"><span className="d">已完成 · 61 切片</span></span></div>
-                <p className="hint">离线演示模式：以下为示例数据，连接后端后显示真实处理状态</p>
+                <div className="task-row wb-data-in" style={{ '--wb-i': 0 } as CSSProperties}><StatusMark status="running" progress={0.62} size={18} /><span className="names"><span className="t">面经整理 v4.md</span><span className="d">{w.mockParsing(62, 42, 68)}</span></span><LatticeLoader status="working" label="" pattern="sweep" cellSize={4} fontSize={12} showTimer /></div>
+                <div className="task-row wb-data-in" style={{ '--wb-i': 1 } as CSSProperties}><StatusMark status="done" size={18} label="并发编程要点.md" fontSize={13} strike={false} /><span className="names"><span className="d">{w.mockDone(61)}</span></span></div>
+                <p className="hint">{w.mockDemoHint}</p>
               </div>
             ) : importsLoading ? (
               <SkeletonRows rows={3} />
             ) : importsError ? (
               <p className="form-error active" role="alert">{importsError}</p>
             ) : !importRows?.length ? (
-              <p className="hint">还没有导入文档。新建知识库并上传文件后，处理状态会显示在这里。</p>
+              <p className="hint">{w.importsEmpty}</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {importRows.map((item, i) => (
                   <div className="task-row wb-data-in" key={item.id} style={{ '--wb-i': i } as CSSProperties}>
-                    <StatusMark status={item.status} size={18} label={item.status === 'done' ? '已就绪' : item.status === 'failed' ? '失败' : '处理中'} fontSize={12} strike={false} />
+                    <StatusMark status={item.status} size={18} label={item.status === 'done' ? w.statusReady : item.status === 'failed' ? w.statusFailed : w.statusProcessing} fontSize={12} strike={false} />
                     <span className="names"><span className="t">{item.name}</span><span className="d">{item.detail} · {item.updated}</span></span>
                   </div>
                 ))}
-                <button className="btn btn-ghost btn-sm" type="button" onClick={goKb}>打开知识库</button>
+                <button className="btn btn-ghost btn-sm" type="button" onClick={goKb}>{w.openKb}</button>
               </div>
             )}
           </section>
 
           <section className="panel wb-card">
             <div className="wb-card-head">
-              <h2 className="wb-card-title"><Clock size={16} /> 活动时间线</h2>
-              <span className="wb-sub">最近 5 条</span>
+              <h2 className="wb-card-title"><Clock size={16} /> <Loc>{w.timelineTitle}</Loc></h2>
+              <span className="wb-sub"><Loc>{w.timelineRange}</Loc></span>
             </div>
             <ul className="wb-timeline">
               {activity.length === 0 && !statsLoading && !statsError && (
-                <p className="hint" style={{ padding: '4px 0' }}>最近没有活动，发起对话或导入文档后会显示在这里。</p>
+                <p className="hint" style={{ padding: '4px 0' }}>{w.timelineEmpty}</p>
               )}
               {activity.map((a, i) => {
                 const Icon = KIND_ICON[a.kind]
@@ -379,53 +404,46 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
               })}
             </ul>
           </section>
+          </div>
 
-          <section className="panel wb-card">
-            <div className="wb-card-head">
-              <h2 className="wb-card-title"><Sparkles size={16} /> 功能速览</h2>
-            </div>
-            <div className="lp-carousel">
-              <Carousel items={CAROUSEL_ITEMS} baseWidth={300} autoplay autoplayDelay={3200} pauseOnHover loop />
-            </div>
-          </section>
         </div>
 
         {/* ---------- 右侧栏 ---------- */}
         <aside className="wb-rail">
           <section className="panel wb-card">
             <div className="wb-card-head">
-              <h2 className="wb-card-title"><Database size={16} /> 活跃度</h2>
-              <span className="wb-sub">近 30 天</span>
+              <h2 className="wb-card-title"><Database size={16} /> <Loc>{w.heatTitle}</Loc></h2>
+              <span className="wb-sub"><Loc>{w.heatRange}</Loc></span>
             </div>
-            <div className="wb-heat" aria-label="近 12 周活跃度">
+            <div className="wb-heat" aria-label={w.heatAria}>
               {heat.map((v, i) => (
                 <span key={i} data-lv={v} className="wb-heat-cell" style={{ '--wb-i': i } as CSSProperties} />
               ))}
             </div>
             <div className="wb-heat-foot wb-data-in" style={{ '--wb-i': 2 } as CSSProperties}>
-              <span>共 {heat.length} 天 · 活跃 <b className="wb-heat-active">{activeDays}</b> 天</span>
+              <span>{w.heatTotal(heat.length)} · <Loc>{w.heatActive(activeDays)}</Loc></span>
               <span className="wb-heat-scale">
-                少
+                <Loc>{w.heatLess}</Loc>
                 <i style={{ background: 'var(--surface-muted)' }} />
                 <i style={{ background: 'color-mix(in oklab, var(--primary) 26%, var(--surface-muted))' }} />
                 <i style={{ background: 'color-mix(in oklab, var(--primary) 50%, var(--surface-muted))' }} />
                 <i style={{ background: 'var(--primary-strong)' }} />
-                多
+                <Loc>{w.heatMore}</Loc>
               </span>
             </div>
           </section>
 
           <section className="panel wb-card">
             <div className="wb-card-head">
-              <h2 className="wb-card-title"><MessagesSquare size={16} /> 最近会话</h2>
+              <h2 className="wb-card-title"><MessagesSquare size={16} /> <Loc>{w.recentTitle}</Loc></h2>
               <button className="btn btn-ghost btn-sm" type="button" onClick={goChat}>
-                全部 <ArrowRight size={13} />
+                <Loc>{w.recentAll}</Loc> <ArrowRight size={13} />
               </button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {convLoading && <SkeletonRows rows={3} />}
               {convError && <p className="form-error active" role="alert">{convError}</p>}
-              {!convLoading && !convError && recent.length === 0 && <p className="hint">还没有会话，开始对话后会显示在这里。</p>}
+              {!convLoading && !convError && recent.length === 0 && <p className="hint">{w.recentEmpty}</p>}
               {!convLoading && !convError && recent.map((s, i) => (
                 <button
                   className="list-row wb-data-in"
@@ -446,10 +464,10 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, onOpenConv
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
               <button className="btn btn-ghost btn-sm" type="button" style={{ flex: 1 }} onClick={goKb}>
-                <Plus size={13} /> 管理知识库
+                <Plus size={13} /> <Loc>{w.manageKb}</Loc>
               </button>
               <button className="btn btn-ghost btn-sm" type="button" style={{ flex: 1 }} onClick={goKb}>
-                <FileText size={13} /> 浏览文档
+                <FileText size={13} /> <Loc>{w.browseDocs}</Loc>
               </button>
             </div>
           </section>

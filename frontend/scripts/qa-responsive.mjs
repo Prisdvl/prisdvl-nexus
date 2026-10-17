@@ -101,7 +101,7 @@ const navMode = await page.evaluate(() => {
   const disp = (sel) => { const el = document.querySelector(sel); return el ? getComputedStyle(el).display : null }
   return { pill: disp('.lp-pill'), card: disp('.lp-cardnav'), cardNav: disp('.card-nav') }
 })
-check('手机：整个胶囊导航隐藏（不只是章节项）', navMode.pill === 'none', `display=${navMode.pill}`)
+check('手机：桌面胶囊导航整个不存在', navMode.pill === null || navMode.pill === 'none', `display=${navMode.pill}`)
 check('手机：换成 CardNav 导航', navMode.card !== 'none' && navMode.cardNav !== 'none', JSON.stringify(navMode))
 
 // 汉堡展开三张卡片
@@ -113,11 +113,11 @@ const expanded = await page.evaluate(() => ({
   links: Array.from(document.querySelectorAll('.nav-card-link')).map((l) => l.textContent.trim()),
 }))
 check('汉堡展开出 3 张卡片', expanded.open === true && expanded.cards === 3, `${expanded.cards} 张`)
-check('卡片里含章节锚点（导航未丢失）', ['能力', '流程', '模式', '技术'].every((s) => expanded.links.includes(s)), expanded.links.slice(0, 4).join(' / '))
+check('卡片里含章节锚点（导航未丢失）', ['首页', '产品', '提问', '智能体'].every((s) => expanded.links.includes(s)), expanded.links.slice(0, 4).join(' / '))
 
 // 卡片链接必须走滚动，不能被 hash 路由吃掉
 const hashBefore = await page.evaluate(() => location.hash)
-await page.locator('.nav-card-link', { hasText: '流程' }).first().click()
+await page.locator('.nav-card-link', { hasText: '提问' }).first().click()
 await page.waitForTimeout(1300)
 const afterJump = await page.evaluate(() => ({ y: Math.round(window.scrollY), hash: location.hash }))
 check('点卡片里的章节会滚动过去', afterJump.y > 400, `scrollY=${afterJump.y}`)
@@ -134,9 +134,9 @@ await page.setViewportSize({ width: 1440, height: 900 })
 await page.waitForTimeout(900)
 const deskMode = await page.evaluate(() => {
   const disp = (sel) => { const el = document.querySelector(sel); return el ? getComputedStyle(el).display : null }
-  return { pill: disp('.lp-pill'), card: disp('.lp-cardnav'), rubber: !!document.querySelector('.lp-pill .rubber-segment') }
+  return { pill: disp('.lp-pill'), floating: disp('.floating-nav'), card: disp('.lp-cardnav') }
 })
-check('桌面：胶囊导航回来', deskMode.pill !== 'none' && deskMode.rubber === true, JSON.stringify(deskMode))
+check('桌面：浮动导航回来', deskMode.floating === 'flex', JSON.stringify(deskMode))
 check('桌面：CardNav 隐藏', deskMode.card === 'none', `display=${deskMode.card}`)
 await page.setViewportSize({ width: 390, height: 844 })
 await page.waitForTimeout(600)
@@ -182,7 +182,7 @@ await page.waitForTimeout(600)
   // 弹窗宽度不超出视口
   await page.goto(BASE + '/#/app/kb/1', { waitUntil: 'networkidle' })
   await page.waitForTimeout(1500)
-  await page.getByRole('button', { name: /导入文档/ }).click()
+  await page.getByRole('button', { name: /导入/ }).first().click()
   await page.waitForTimeout(600)
   const fits = await page.locator('.dialog').evaluate((el) => {
     const r = el.getBoundingClientRect()

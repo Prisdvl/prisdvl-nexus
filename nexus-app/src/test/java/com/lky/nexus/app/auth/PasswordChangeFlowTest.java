@@ -197,7 +197,7 @@ class PasswordChangeFlowTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"username":"%s","password":"%s","nickname":"%s","email":"%s@example.com"}
-                                """.formatted(username, OLD_PASSWORD, username)))
+                                """.formatted(username, OLD_PASSWORD, username, username)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
     }

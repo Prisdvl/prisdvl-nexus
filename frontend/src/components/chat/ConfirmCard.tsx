@@ -1,4 +1,7 @@
 import { ShieldAlert, Check, X, Infinity as InfinityIcon } from 'lucide-react'
+import { pagesCopy } from '@/lib/pagesCopy'
+import { useLocale } from '@/lib/locale'
+import Loc from '@/components/Loc'
 import '@/styles/confirm.css'
 
 export interface ConfirmRequest {
@@ -34,28 +37,31 @@ interface Props {
  * - Esc = 拒绝（把最安全的行为绑在 Esc 上）。
  */
 export default function ConfirmCard({ request, onAllowOnce, onAllowAlways, onDeny }: Props) {
+  const { locale } = useLocale()
+  const c = pagesCopy(locale).chat
+
   return (
     <div
       className="confirm-card"
       role="alertdialog"
-      aria-label={`需要确认：${request.name}`}
+      aria-label={c.confirmAria(request.name)}
       onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onDeny() } }}
     >
       <span className="confirm-card__ic" aria-hidden="true"><ShieldAlert size={15} /></span>
       <div className="confirm-card__body">
-        <p className="confirm-card__title">这一步需要你确认</p>
+        <p className="confirm-card__title"><Loc>{c.confirmTitle}</Loc></p>
         <p className="confirm-card__desc">{request.explain}</p>
         <code className="confirm-card__cmd">{request.name} · {request.argument}</code>
       </div>
       <div className="confirm-card__actions">
         <button className="btn btn-primary btn-sm" type="button" autoFocus onClick={onAllowOnce}>
-          <Check size={13} /> 允许一次
+          <Check size={13} /> <Loc>{c.confirmAllowOnce}</Loc>
         </button>
         <button className="btn btn-ghost btn-sm" type="button" onClick={onAllowAlways}>
-          <InfinityIcon size={13} /> 始终允许
+          <InfinityIcon size={13} /> <Loc>{c.confirmAllowAlways}</Loc>
         </button>
         <button className="btn btn-ghost btn-sm" type="button" onClick={onDeny}>
-          <X size={13} /> 拒绝
+          <X size={13} /> <Loc>{c.confirmDeny}</Loc>
         </button>
       </div>
     </div>

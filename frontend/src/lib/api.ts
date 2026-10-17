@@ -467,6 +467,18 @@ export const api = {
     stop: (requestId: string) =>
       http.post<Result<{ requestId: string; cancelled: boolean }>>(`/chat/stream/${requestId}/stop`)
         .then((r) => r.data.data),
+  },
+  /**
+   * Agent 运行的人工审批（P0 §六）。工具被权限闸门拦下时后端推 `approval_required`，
+   * 前端拿事件里的 `runId` 提交决定：once 只放行这一次、always 写长期授权、deny 回灌模型。
+   * 提交后**同一条 SSE 流会继续**（后端在 await 上被唤醒），不需要重开流。
+   */
+  agentRuns: {
+    decide: (runId: string, decision: 'allow' | 'always' | 'deny') =>
+      http.post<Result<unknown>>(`/agent/runs/${runId}/approval`, {
+        approved: decision !== 'deny',
+        scope: decision === 'allow' ? 'once' : decision,
+      }).then((r) => r.data.data),
   },  knowledge: {
     list: (pageNum = 1, pageSize = 100) =>
       http.get<Result<PageResult<KnowledgeBase>>>('/knowledge-bases', { params: { pageNum, pageSize } })
@@ -474,6 +486,9 @@ export const api = {
     get: (id: string) => http.get<Result<KnowledgeBase>>(`/knowledge-bases/${id}`).then((r) => r.data.data),
     create: (body: { name: string; description?: string }) =>
       http.post<Result<KnowledgeBase>>('/knowledge-bases', body).then((r) => r.data.data),
+    /** 局部更新：传了的字段才改；description 可传空串清空 */
+    update: (id: string, body: { name?: string; description?: string | null }) =>
+      http.put<Result<KnowledgeBase>>(`/knowledge-bases/${id}`, body).then((r) => r.data.data),
     remove: (id: string) => http.delete<Result<null>>(`/knowledge-bases/${id}`).then((r) => r.data.data),
     /** 检索：mode=bm25|vector|hybrid（三种都开放，便于对照融合效果）。 */
     search: (kbId: string, q: string, mode = 'hybrid', topK?: number) =>
@@ -515,6 +530,31 @@ export const api = {
     /** 工作台汇总：趋势(14) + 热力(30) + 最近活动(8)。
      *  用户维度由服务端从令牌解析，前端不传 userId。 */
     summary: () => http.get<Result<StatsSummary>>('/stats/summary').then((r) => r.data.data),
+  },
+  workflows: {
+    list: (pageNum = 1, pageSize = 50) =>
+      http.get<Result<PageResult<Workflow>>>('/workflows', { params: { pageNum, pageSize } })
+        .then((r) => r.data.data),
+    create: (body: { name: string; description?: string }) =>
+      http.post<Result<Workflow>>('/workflows', body).then((r) => r.data.data),
+    get: (id: string) => http.get<Result<Workflow>>(`/workflows/${id}`).then((r) => r.data.data),
+    saveDraft: (id: string, body: { nodes: WorkflowNode[]; edges: WorkflowEdge[] }) =>
+      http.put<Result<Workflow>>(`/workflows/${id}/draft`, body).then((r) => r.data.data),
+    validate: (id: string) =>
+      http.post<Result<WorkflowValidation>>(`/workflows/${id}/validate`).then((r) => r.data.data),
+    publish: (id: string) => http.post<Result<Workflow>>(`/workflows/${id}/publish`).then((r) => r.data.data),
+    versions: (id: string) =>
+      http.get<Result<WorkflowVersion[]>>(`/workflows/${id}/versions`).then((r) => r.data.data),
+    debug: (id: string, inputs: Record<string, unknown>) =>
+      http.post<Result<WorkflowRun>>(`/workflows/${id}/debug`, { inputs }).then((r) => r.data.data),
+    run: (id: string, inputs: Record<string, unknown>) =>
+      http.post<Result<WorkflowRun>>(`/workflows/${id}/runs`, { inputs }).then((r) => r.data.data),
+  },
+  workflowRuns: {
+    get: (runId: string) => http.get<Result<WorkflowRun>>(`/workflow-runs/${runId}`).then((r) => r.data.data),
+    nodes: (runId: string) =>
+      http.get<Result<WorkflowNodeRun[]>>(`/workflow-runs/${runId}/nodes`).then((r) => r.data.data),
+    cancel: (runId: string) => http.post<Result<WorkflowRun>>(`/workflow-runs/${runId}/cancel`).then((r) => r.data.data),
   },
   rag: {
     ask: (kbId: string, question: string, topK = 5) =>
@@ -574,6 +614,79 @@ export interface KnowledgeBase {
   embeddingModel?: string
   createdAt: string
   updatedAt: string
+}
+
+export interface WorkflowNodePosition { x: number; y: number }
+
+export interface WorkflowNode {
+  id: string
+  type: 'START' | 'END' | 'KNOWLEDGE_RETRIEVAL' | 'LLM' | 'AGENT' | 'IF_ELSE' | 'TEMPLATE'
+  version: number
+  position?: WorkflowNodePosition | null
+  config: Record<string, unknown>
+}
+
+export interface WorkflowEdge {
+  id: string
+  source: string
+  target: string
+  sourceHandle?: string | null
+}
+
+export interface Workflow {
+  id: string
+  name: string
+  description: string | null
+  status: string
+  draftVersionId: string | null
+  publishedVersionId: string | null
+  draftVersionNo: number | null
+  publishedVersionNo: number | null
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface WorkflowValidation { valid: boolean; errors: string[] }
+
+export interface WorkflowVersion {
+  id: string
+  versionNo: number
+  status: string
+  graphHash: string | null
+  createdAt: string
+  publishedAt: string | null
+}
+
+export interface WorkflowRun {
+  id: string
+  workflowId: string
+  versionId: string
+  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
+  triggerType: string
+  input: Record<string, unknown> | null
+  output: unknown
+  errorCode: number | null
+  errorMessage: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  durationMs: number | null
+}
+
+export interface WorkflowNodeRun {
+  id: string
+  nodeId: string
+  nodeType: string
+  status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED'
+  attempt: number
+  input: Record<string, unknown> | null
+  output: unknown
+  errorCode: number | null
+  errorMessage: string | null
+  latencyMs: number | null
+  startedAt: string | null
+  finishedAt: string | null
 }
 
 export interface KbDocument {

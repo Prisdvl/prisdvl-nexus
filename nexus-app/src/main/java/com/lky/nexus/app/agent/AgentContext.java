@@ -40,6 +40,14 @@ public final class AgentContext {
     /** 过程监听器在 ToolContext 里的键（流式对话用它把"正在检索…"实时推给前端）。 */
     public static final String LISTENER = "nexus.toolCallListener";
 
+    /**
+     * 运行 ID 在 ToolContext 里的键（P0）。
+     *
+     * <p>审批必须知道"当前是哪一次运行在等"——没有它就无法把审批决策挂回正确的运行上下文，
+     * 也无法在并发运行之间隔离（同一个人同时开两个会话，批准的是哪一个？）。
+     */
+    public static final String RUN_ID = "nexus.runId";
+
     private AgentContext() {
     }
 
@@ -60,6 +68,11 @@ public final class AgentContext {
 
     /** 带用户、知识库范围与过程监听器的上下文（空 kbIds = 不限制）。 */
     public static Map<String, Object> of(Long userId, List<Long> kbIds, ToolCallListener listener) {
+        return of(userId, kbIds, listener, null);
+    }
+
+    /** 带运行 ID 的上下文（P0）：审批链路用它把工具调用挂回具体的 run。 */
+    public static Map<String, Object> of(Long userId, List<Long> kbIds, ToolCallListener listener, Long runId) {
         Map<String, Object> context = new HashMap<>();
         context.put(USER_ID, userId);
         if (kbIds != null && !kbIds.isEmpty()) {
@@ -67,6 +80,9 @@ public final class AgentContext {
         }
         if (listener != null) {
             context.put(LISTENER, listener);
+        }
+        if (runId != null) {
+            context.put(RUN_ID, runId);
         }
         return context;
     }
@@ -162,13 +178,61 @@ public final class AgentContext {
         };
     }
 
-    private static ToolCallListener listener(ToolContext toolContext) {
+    /**
+     * 取当前上下文里的过程监听器（没有监听器时返回 null）。
+     *
+     * <p>P0 起它同时对执行壳可见：审批事件必须发给<b>发起这次运行的</b>那条链路
+     * （流式对话的 SSE、或运行状态机的落库监听器），而不是发到一个全局通道。
+     */
+    public static ToolCallListener listener(ToolContext toolContext) {
         Object value = toolContext == null ? null : toolContext.getContext().get(LISTENER);
         return value instanceof ToolCallListener listener ? listener : null;
     }
 
+    /** 当前工具调用所属的运行 ID（没有运行上下文时返回 null）。 */
+    public static Long runId(ToolContext toolContext) {
+        Object value = toolContext == null ? null : toolContext.getContext().get(RUN_ID);
+        if (value instanceof Long id) {
+            return id;
+        }
+        ToolCallListener listener = listener(toolContext);
+        return listener == null ? null : listener.runId();
+    }
+
+    /**
+     * 工具需要人工确认：把审批事件交给监听器（没有监听器时返回 false，调用方据此走默认拒绝）。
+     *
+     * <p>返回 {@code true} 表示"事件已经交给一条真实链路"，调用方可以进入等待；
+     * 返回 {@code false} 表示这条路径根本没有可用的审批通道（例如 MCP 直调），
+     * 此时<b>不能阻塞等待</b>，只能默认拒绝。
+     */
+    public static boolean requestApproval(ToolContext toolContext, ApprovalRequired event) {
+        ToolCallListener listener = listener(toolContext);
+        if (listener == null) {
+            return false;
+        }
+        listener.onApprovalRequired(event);
+        return true;
+    }
+
     /** 一次工具调用的痕迹（"用户可控"的透明性来源：每一步做了什么都要让用户看得见）。 */
-    public record ToolCallRecord(String tool, String input, String resultSummary) {
+    public record ToolCallRecord(String tool, String input, String resultSummary, String status) {
+
+        /** 默认 OK：绝大多数既有调用点不关心状态，不强迫它们多传一个参数。 */
+        public ToolCallRecord(String tool, String input, String resultSummary) {
+            this(tool, input, resultSummary, "OK");
+        }
+    }
+
+    /**
+     * 需要人工确认的一次工具调用（P0）。
+     *
+     * @param runId     所属运行（可能为 null = 没有运行上下文的直调路径）
+     * @param approvalId 审批记录 ID；审批接口用它定位待决策记录
+     * @param arguments 已脱敏的入参（真实入参只存在于本次调用栈里，不随事件外泄）
+     */
+    public record ApprovalRequired(Long runId, Long approvalId, String toolCode,
+                                   String arguments, String reason) {
     }
 
     /** 工具过程事件：流式对话把它转成 SSE 事件；一次性调用只需收痕迹。 */
@@ -188,6 +252,27 @@ public final class AgentContext {
          * 那和默认空实现在行为上完全一样，只是多了一处噪声。
          */
         default void onRetrieval(String tool, List<ChunkSearchService.SearchHit> hits) {
+        }
+
+        /**
+         * 当前监听器对应的运行 ID（默认 null = 这条链路不支持审批等待）。
+         *
+         * <p>默认值刻意是 null 而不是抛异常：一次性收集器（评测、MCP）用不到运行 ID，
+         * 强迫它们实现只会得到一堆空方法。
+         */
+        default Long runId() {
+            return null;
+        }
+
+        /**
+         * 需要人工确认：流式对话把它转成 {@code approval_required} SSE 事件，
+         * 运行状态机把它落成一条等待记录。
+         *
+         * <p>默认空实现（不抛异常）的原因与 {@link #onRetrieval} 相同；
+         * 但"没有实现"与"没有等待机制"是两件事——调用方通过
+         * {@link AgentContext#requestApproval} 的返回值判断通道是否存在。
+         */
+        default void onApprovalRequired(ApprovalRequired event) {
         }
     }
 }

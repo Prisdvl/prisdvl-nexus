@@ -8,6 +8,10 @@ import { errMessage } from '@/lib/api'
 import { useLocation, useNavigate } from 'react-router'
 import BrandMark from '@/components/BrandMark'
 import WavesBg from '@/components/WavesBg'
+import LangToggle from '@/components/LangToggle'
+import Loc from '@/components/Loc'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
 import type { PaletteName, ThemeMode } from '@/lib/types'
 
 interface AuthPageProps {
@@ -41,6 +45,9 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
   const navigate = useNavigate()
   const from = (location.state as { from?: string } | null)?.from
   const reduceMotion = useReducedMotion()
+  const { locale } = useLocale()
+  const t = appCopy(locale)
+  const a = t.auth
   const [tab, setTab] = useState<'login' | 'register'>('login')
   /** 1 = 切到注册（内容从右弹入），-1 = 切到登录（从左弹入） */
   const tabDir = useRef(1)
@@ -107,7 +114,7 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
     const next = live
     setSubmitted(true)
     if (Object.values(next).some(Boolean)) {
-      toast.error('表单还有问题', '请按提示修正后再继续')
+      toast.error(a.formInvalidTitle, a.formInvalidBody)
       return
     }
     void finishRegister()
@@ -129,7 +136,7 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
          来不及确认"注册成功"，而且后端 register 只建号、不返令牌，
          下一步必然是回登录页输密码 —— 留在本页最符合流程预期。
          导航由 `onRegister` 的实现方决定（当前不导航）。 */
-      toast.success('注册成功', '账号已创建，切到「登录」标签用刚才的密码登录')
+      toast.success(a.registerOkTitle, a.registerOkBody)
       setReg({ username: '', password: '', password2: '', nickname: '', email: '' })
       setRegTouched({})
       setSubmitted(false)
@@ -140,8 +147,9 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
     }
   }
 
+  /** 传稳定 id 而不是文案，避免切换语言后判断失效 */
   const switchTab = (label: string) => {
-    const id = label === '注册' ? 'register' : 'login'
+    const id = label === 'register' ? 'register' : 'login'
     if (id === tab) return
     tabDir.current = id === 'register' ? 1 : -1
     setTab(id)
@@ -177,7 +185,7 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
       <main id="main-content" tabIndex={-1} className="auth-main">
         <motion.section
           className="auth-card"
-          aria-label="登录或注册"
+          aria-label={a.tabsAria}
           layout
           initial={reduceMotion ? false : { opacity: 0, y: 22, scale: 0.985 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -196,10 +204,10 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
             whileHover={reduceMotion ? undefined : { x: -2 }}
             whileTap={reduceMotion ? undefined : { scale: 0.97 }}
           >
-            <ArrowLeft size={14} /> 返回
+            <ArrowLeft size={14} /> <Loc>{a.back}</Loc>
           </motion.button>
 
-          <h1 className="sr-only">{tab === 'login' ? '登录 Prisdvl Nexus' : '注册 Prisdvl Nexus 账号'}</h1>
+          <h1 className="sr-only">{tab === 'login' ? a.h1Login : a.h1Register}</h1>
 
           <motion.div
             className="auth-brand"
@@ -217,8 +225,8 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
             transition={{ ...soft, delay: reduceMotion ? 0 : 0.16 }}
           >
             <RubberSegment
-              items={['登录', '注册']}
-              value={tab === 'login' ? '登录' : '注册'}
+              items={[a.loginTab, a.registerTab]}
+              value={tab === 'login' ? a.loginTab : a.registerTab}
               animateExternal
               onChange={switchTab}
               size="md"
@@ -229,7 +237,7 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
               thumbColor="var(--primary-container)"
               textColor="var(--text-2)"
               activeTextColor="var(--primary-text)"
-              aria-label="登录或注册"
+              aria-label={a.tabsAria}
             />
           </motion.div>
 
@@ -245,38 +253,38 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
                 >
                   <div className={`form-error ${formMsg ? 'active' : ''}`} role="alert">{formMsg}</div>
                   <div className={`field ${showLoginErr('username') ? 'has-error' : ''}`}>
-                    <label htmlFor="li-u">用户名</label>
+                    <label htmlFor="li-u">{a.username}</label>
                     <input
                       id="li-u"
                       className="input"
                       value={login.username}
-                      placeholder="请输入用户名"
+                      placeholder={a.usernamePh}
                       autoComplete="username"
                       aria-invalid={showLoginErr('username')}
                       aria-describedby={showLoginErr('username') ? 'li-u-err' : undefined}
                       onBlur={() => setLoginTouched((s) => ({ ...s, username: true }))}
                       onChange={(e) => setLogin({ ...login, username: e.target.value })}
                     />
-                    <p className="err" id="li-u-err">请输入用户名</p>
+                    <p className="err" id="li-u-err">{a.errUsername}</p>
                   </div>
                   <div className={`field ${showLoginErr('password') ? 'has-error' : ''}`}>
-                    <label htmlFor="li-p">密码</label>
+                    <label htmlFor="li-p">{a.password}</label>
                     <input
                       id="li-p"
                       className="input"
                       type="password"
                       value={login.password}
-                      placeholder="请输入密码"
+                      placeholder={a.passwordPh}
                       autoComplete="current-password"
                       aria-invalid={showLoginErr('password')}
                       aria-describedby={showLoginErr('password') ? 'li-p-err' : undefined}
                       onBlur={() => setLoginTouched((s) => ({ ...s, password: true }))}
                       onChange={(e) => setLogin({ ...login, password: e.target.value })}
                     />
-                    <p className="err" id="li-p-err">请输入密码</p>
+                    <p className="err" id="li-p-err">{a.errPassword}</p>
                   </div>
                   <p className="switch-line" style={{ margin: '0 0 14px', textAlign: 'right' }}>
-                    <button type="button" onClick={() => navigate('/forgot')}>忘记密码？</button>
+                    <button type="button" onClick={() => navigate('/forgot')}>{a.forgot}</button>
                   </p>
                   <motion.button
                     className="btn btn-primary btn-block"
@@ -286,11 +294,11 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
                     whileTap={reduceMotion || busy ? undefined : { scale: 0.985 }}
                     transition={{ duration: 0.18, ease: EASE }}
                   >
-                    <LogIn size={16} /> {busy ? '登录中…' : '登录'}
+                    <LogIn size={16} /> {busy ? a.loggingIn : a.loginTab}
                   </motion.button>
                   <p className="switch-line">
-                    还没有账号？
-                    <button type="button" onClick={() => switchTab('注册')}>创建账号</button>
+                    {a.noAccount}
+                    <button type="button" onClick={() => switchTab('register')}>{a.createAccount}</button>
                   </p>
                 </motion.form>
               ) : (
@@ -303,78 +311,78 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
                 >
                   <div className={`form-error ${formMsg ? 'active' : ''}`} role="alert">{formMsg}</div>
                   <div className={`field ${show('username', live.username) ? 'has-error' : ''}`}>
-                    <label htmlFor="rg-u">用户名</label>
+                    <label htmlFor="rg-u">{a.username}</label>
                     <input
                       id="rg-u"
                       className="input"
                       value={reg.username}
-                      placeholder="3–32 位字母、数字、下划线或连字符"
+                      placeholder={a.regUsernamePh}
                       autoComplete="username"
                       aria-invalid={show('username', live.username)}
                       onBlur={() => setRegTouched((s) => ({ ...s, username: true }))}
                       onChange={(e) => setReg({ ...reg, username: e.target.value })}
                     />
-                    <p className="err">用户名为 3–32 位字母、数字、下划线或连字符</p>
+                    <p className="err">{a.regUsernamePh}</p>
                   </div>
                   <div className={`field ${show('password', live.password) ? 'has-error' : ''}`}>
-                    <label htmlFor="rg-p">密码</label>
+                    <label htmlFor="rg-p">{a.password}</label>
                     <input
                       id="rg-p"
                       className="input"
                       type="password"
                       value={reg.password}
-                      placeholder="8–64 位"
+                      placeholder={a.regPasswordPh}
                       autoComplete="new-password"
                       aria-invalid={show('password', live.password)}
                       onBlur={() => setRegTouched((s) => ({ ...s, password: true }))}
                       onChange={(e) => setReg({ ...reg, password: e.target.value })}
                     />
-                    <p className="err">密码长度需在 8–64 位之间</p>
+                    <p className="err">{a.errPassword}</p>
                   </div>
                   <div className={`field ${show('password2', live.password2) ? 'has-error' : ''}`}>
-                    <label htmlFor="rg-p2">确认密码</label>
+                    <label htmlFor="rg-p2">{a.confirmPassword}</label>
                     <input
                       id="rg-p2"
                       className="input"
                       type="password"
                       value={reg.password2}
-                      placeholder="再次输入密码"
+                      placeholder={a.regConfirmPh}
                       autoComplete="new-password"
                       aria-invalid={show('password2', live.password2)}
                       onBlur={() => setRegTouched((s) => ({ ...s, password2: true }))}
                       onChange={(e) => setReg({ ...reg, password2: e.target.value })}
                     />
-                    <p className="err">两次输入的密码不一致</p>
+                    <p className="err">{a.errConfirm}</p>
                   </div>
                   <div className={`field ${show('nickname', live.nickname) ? 'has-error' : ''}`}>
-                    <label htmlFor="rg-n">昵称 <span className="field-optional">（可选）</span></label>
+                    <label htmlFor="rg-n">{a.nickname} <span className="field-optional">{t.common.optional}</span></label>
                     <input
                       id="rg-n"
                       className="input"
                       value={reg.nickname}
-                      placeholder="展示名称，不超过 64 位"
+                      placeholder={a.regNicknamePh}
                       autoComplete="nickname"
                       aria-invalid={show('nickname', live.nickname)}
                       onBlur={() => setRegTouched((s) => ({ ...s, nickname: true }))}
                       onChange={(e) => setReg({ ...reg, nickname: e.target.value })}
                     />
-                    <p className="err">昵称不能超过 64 位</p>
+                    <p className="err">{a.errNickname}</p>
                   </div>
                   <div className={`field ${show('email', live.email) ? 'has-error' : ''}`}>
-                    <label htmlFor="rg-e">邮箱</label>
+                    <label htmlFor="rg-e">{a.email}</label>
                     <input
                       id="rg-e"
                       className="input"
                       type="email"
                       value={reg.email}
-                      placeholder="用于验证与找回密码"
+                      placeholder={a.regEmailPh}
                       autoComplete="email"
                       required
                       aria-invalid={show('email', live.email)}
                       onBlur={() => setRegTouched((s) => ({ ...s, email: true }))}
                       onChange={(e) => setReg({ ...reg, email: e.target.value })}
                     />
-                    <p className="err">{reg.email.trim() ? '邮箱格式不正确' : '请填写邮箱'}</p>
+                    <p className="err">{reg.email.trim() ? a.errEmailFormat : a.errEmailEmpty}</p>
                   </div>
                   <motion.button
                     className="btn btn-primary btn-block"
@@ -384,11 +392,11 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
                     whileTap={reduceMotion || busy ? undefined : { scale: 0.985 }}
                     transition={{ duration: 0.18, ease: EASE }}
                   >
-                    {busy ? '创建中…' : '创建账号'}
+                    {busy ? a.creating : a.createAccount}
                   </motion.button>
                   <p className="switch-line">
-                    已有账号？
-                    <button type="button" onClick={() => switchTab('登录')}>去登录</button>
+                    {a.hasAccount}
+                    <button type="button" onClick={() => switchTab('login')}>{a.goLogin}</button>
                   </p>
                 </motion.form>
               )}
@@ -401,7 +409,8 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
             animate={{ opacity: 1 }}
             transition={{ ...soft, delay: reduceMotion ? 0 : 0.28 }}
           >
-            登录即表示同意平台使用条款与隐私政策
+            <LangToggle variant="compact" className="auth-lang" />
+            <span className="auth-terms">{a.terms}</span>
           </motion.p>
         </motion.section>
       </main>

@@ -179,14 +179,14 @@
   align-items: center;
   gap: 6px;
   width: calc(100% - 16px);
-  margin: 8px 8px 2px;
-  height: 34px;
+  margin: 6px 8px 2px;
+  height: 30px;
   padding: 0 8px;
   border: 0;
   border-radius: 8px;
   background: none;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.01em;
   color: var(--text-3);
@@ -266,13 +266,15 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 6px;
   width: auto;
   max-width: 100%;
   margin: 0;
   padding: 8px 8px 10px;
   pointer-events: none;
 }
-.sb-row--settings {
+.sb-row--settings,
+.sb-row--lang {
   pointer-events: auto;
   width: auto;
   max-width: 100%;
@@ -282,8 +284,14 @@
   padding: 0 10px;
   justify-content: flex-start;
   gap: 10px;
+  white-space: nowrap;
 }
-.sb-row--settings > svg {
+.sb-row--lang { flex: none; }
+.sb-row--settings > svg,
+.sb-row--lang > svg,
+.sb-row--lang .react-useanimations,
+/* LangToggle 把 Lottie 包在 .lang-globe 里，宽度要锁住否则文字会随动画抖动 */
+.sb-row--lang .lang-globe {
   flex: none;
   width: 16px;
   height: 16px;
@@ -350,15 +358,22 @@
   overflow: hidden;
 }
 /* 折叠：脚栏拉满宽，齿轮与导航图标同中轴 */
+.sidebar[data-collapsed] {
+  /* 折叠态脚栏只剩「个人设置」一枚圆钮 */
+  padding-bottom: 58px;
+}
 .sidebar[data-collapsed] .sb-foot {
   left: 0;
   right: 0;
   width: 100%;
   max-width: none;
+  flex-direction: column;
   justify-content: center;
+  gap: 6px;
   padding: 8px 0 10px;
 }
-.sidebar[data-collapsed] .sb-row--settings {
+.sidebar[data-collapsed] .sb-row--settings,
+.sidebar[data-collapsed] .sb-row--lang {
   width: 36px;
   min-width: 36px;
   max-width: 36px;
@@ -366,27 +381,21 @@
   padding: 0;
   justify-content: center;
 }
-/* 侧栏导航 RubberSegment：显化底槽 + 抬高未选项对比，与上下行对齐 */
+/* 侧栏导航：RubberSegment 竖向；去掉底槽描边，只保留滑动拇指 */
+.sb-nav { padding: 4px 8px; }
 .sb-nav .rubber-segment {
-  --rs-idle: 0.82;
-  --rs-hover: 1;
   width: 100%;
-  /* 底槽相对侧栏略分一层，避免和透明轨道一样「只有滑块、没有控件感」 */
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--text) 6%, transparent);
+  box-shadow: none;
 }
 .sb-nav .rubber-segment[data-vertical] .rubber-segment__item {
-  height: 38px;
-  padding: 0 10px;
-  font-size: 13.5px;
+  height: 32px;
+  padding: 0 9px;
+  gap: 9px;
+  font-size: 13px;
 }
 .sidebar[data-collapsed] .rubber-segment[data-vertical] {
   --rs-min: 0px;
 }
-/*
- * 折叠：图标落在滑块正中。
- * 不要 flex-start + 左 padding（会偏出 clip 可见区）；
- * 也不要留着 .sb-item 的 gap——标签 max-width:0 后 gap 仍占位，会把 16px 图标往左甩约半个 gap。
- */
 .sidebar[data-collapsed] .rubber-segment[data-vertical] .rubber-segment__item {
   justify-content: center;
   padding: 0;

@@ -108,12 +108,27 @@ public enum ErrorCode {
     AGENT_DISABLED(5009, "Agent 已停用"),
     AGENT_BUILTIN_READONLY(5010, "内置默认 Agent 不允许此操作"),
     TOOL_NOT_FOUND(5011, "工具不存在"),
+    /**
+     * 5012（P0）：运行不存在，或不属于当前用户。
+     *
+     * <p>越权与不存在统一此码 → HTTP 404：用 403 区分"存在但不是你的"等于
+     * 告诉探测者"这个 runId 是有效的"，与 2010 会话不存在同一条理由。
+     */
+    AGENT_RUN_NOT_FOUND(5012, "运行不存在"),
+    /** 5013：当前状态不允许该操作（例如对 RUNNING 的运行提交审批）。 */
+    AGENT_RUN_STATE_INVALID(5013, "运行状态不允许此操作"),
+    /** 5014：审批已被处理、已过期，或该运行当前没有待决策审批。 */
+    APPROVAL_NOT_PENDING(5014, "审批已处理或已失效"),
+    /** 5015：运行已取消（用于取消后仍尝试推进运行的路径）。 */
+    AGENT_RUN_CANCELLED(5015, "运行已取消"),
 
     // ---------- 6xxx 工作流 / 评测 ----------
     WORKFLOW_DEFINITION_INVALID(6001, "工作流定义非法"),
     WORKFLOW_NODE_FAILED(6002, "工作流节点执行失败"),
     EVAL_DATASET_EMPTY(6003, "评测集为空"),
     EVAL_JUDGE_MODEL_UNAVAILABLE(6004, "评测裁判模型不可用"),
+    WORKFLOW_NOT_FOUND(6005, "工作流不存在"),
+    WORKFLOW_RUN_NOT_FOUND(6006, "工作流运行不存在"),
 
     // ---------- 7xxx 限流 / 配额 ----------
     RATE_LIMITED(7001, "请求过于频繁，请稍后再试"),

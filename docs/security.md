@@ -57,8 +57,32 @@
   已经校验过它**——将来出现第二个签发方、或别的组件共用同一个密钥时，这一条就是唯一能
   区分"谁签的"的东西。测试：`JwtIssuerValidationTest`（同一套声明签三支令牌、
   只有 `iss` 不同：正确放行 / 错误 401 / 缺失 401）。
-- **无 refresh token**：代码中没有任何路径读取 `JWT_REFRESH_TOKEN_TTL`；该变量在 `.env.example:98-101` 被显式标注为"死的"。
-- **无服务端注销**：`.logout(AbstractHttpConfigurer::disable)`（`SecurityConfig.java:89`），会话策略 `STATELESS`（`:90`）。前端 `logout()` 只是清掉本地存储（`frontend/src/lib/auth.ts` 的 `authStore.logout`、`frontend/src/lib/api.ts` 的 `tokenStore.clear`）——**logout = 客户端丢 token**，令牌在服务端仍然有效直到过期。
+- ~~**无 refresh token**~~ → **已实现**（2026-10，迁移 V21 `sys_user_session`）：opaque refresh +
+  轮转 + 设备会话，见 §1.5。
+- ~~**无服务端注销**~~ → **已实现**（同期）：`POST /api/auth/logout` 在服务端撤销当前设备的
+  refresh 会话，见 §1.5。**仍存在的残留边界**：access JWT 本身依旧不可即时吊销
+  （改密 / 软删除外，见 §3），只能等其 30 分钟过期——列入文末「已知安全边界」#2。
+
+### 1.5 Refresh Token 轮转与服务端注销（设备会话）
+
+- 登录成功后除 access JWT 外另发一支 **opaque refresh token**（`AuthServiceImpl.java:175`，
+  `RefreshTokenService.issueSession`，`RefreshTokenService.java:90-94`）；刷新窗口默认 7 天
+  （`nexus.jwt.refresh-token-ttl`，`application.yml:135`，`NexusJwtProperties.java:47`）。
+- **库存哈希、不存明文**：refresh 仅在签发当次明文返回；持久化的是哈希
+  （`RefreshTokenHasher.hash`，`RefreshTokenService.java:248`；表 `sys_user_session`，迁移 V21）。
+- **轮转（rotation）**：`POST /api/auth/refresh`（`AuthController.java:56-60`）执行
+  "条件撤销旧会话（独立事务先提交）→ 签新 access + 新 refresh"（`RefreshTokenService.java:102-146`）。
+  并发使用同一支 refresh 时只有一个请求赢，输的一方 401——**refresh 重放会被拒**。
+  账户状态在撤销前检查：禁用 / 软删用户不能换发新令牌（`:105`、`requireEnabledUser :234-240`）。
+- **服务端注销**：
+  - `POST /api/auth/logout`（`AuthController.java:67-69`）：按 refresh 哈希撤销当前设备会话，
+    幂等、不区分"会话不存在"与"已撤销"（`RefreshTokenService.java:149-164`）。
+  - `GET /api/users/me/sessions` 列设备、`DELETE /api/users/me/sessions/{id}` 撤指定设备、
+    `POST /api/users/me/sessions/revoke-all` 全部退出（`UserSessionController.java:42-57`；
+    只能撤自己的会话，越权撤他人设备抛 `SESSION_NOT_FOUND`，`RefreshTokenService.java:167-175`）。
+- refresh / logout 是公开端点，凭证是请求体里的 refresh token 而非 access JWT
+  （`SecurityConfig.java:67-72`）。Spring Security 的 `.logout()` 仍关闭（`SecurityConfig.java:94`）、
+  请求链仍 `STATELESS`（`:95`）——这里的"会话"是 `sys_user_session` 行，不是 HTTP Session。
 
 ---
 
@@ -274,7 +298,8 @@
 ### 12.1 哪些是 secret
 
 - `JWT_SECRET`（→ `nexus.jwt.secret`，`application.yml:102`）。
-- `AI_CHAT_API_KEY`（→ 模型 provider `api-key`，`application.yml:253`）。
+- `AI_CHAT_API_KEY`（→ 对话模型 provider `api-key`，`application.yml:253`）。
+- `AI_EMBEDDING_API_KEY`（→ 云端百炼嵌入 provider `api-key`；compose 必填，见 §13）。
 - 数据库 / 中间件口令：`MYSQL_PASSWORD`、`NEXUS_VECTOR_PASSWORD`、`REDIS_PASSWORD`、`RABBITMQ_PASSWORD`（`application.yml:57,81,181` 等）。
 - 注意 `ES_USERNAME` / `ES_PASSWORD` 变量在 `.env.example:64-65` 存在，但当前代码里的 ES 接入未使用它们（compose 的 ES 关闭了安全模块，见 §13）。
 
@@ -295,19 +320,26 @@
 - `application-secret.yml/.yaml`、`application-prod.yml/.yaml`、`*.pem`、`*.p12`、`*.jks`（`:42-48`）。
 - `.secrets/` 与 `*.key.txt`（`:98-99`）。本机确实存在 `.secrets/`，`deploy/.env.example:35-36` 提示可放 `ai-key.txt` 并用 shell 注入。
 - `application-local.yml` 是**有意提交**的（只含 compose 开发默认口令，`:39-41` 注释说明）。
-- 另：演示 JWT 一律不入库——`web/.demo-token`、`web/.demo-kb-id`（`:87-88`），以及归档副本 `docs/archive/web-vue/.demo-token`、`docs/archive/web-vue/.demo-kb-id`（`:91-92`）。
+- 另：演示 JWT 一律不入库——归档前端副本 `docs/archive/web-vue/.demo-token`、`docs/archive/web-vue/.demo-kb-id`（历史路径；现行前端为 `frontend/`，勿再写回 `web/`）。
 
 ---
 
 ## 13. Docker 环境变量与暴露面
 
-- **fail-closed 的 `${VAR:?…}` 写法**：`deploy/docker-compose.yml` 的 backend 环境里
-  `JWT_SECRET: ${JWT_SECRET:?...}`（`:292`）与 `AI_CHAT_API_KEY: ${AI_CHAT_API_KEY:?...}`（`:293`）。
-  `:?` 语义 = 变量未设置或为空时 `docker compose` **直接报错退出，连容器都不创建**（注释 `:286-291`）。这是把 `nexus.jwt.secret` 的 fail-closed 前移到编排层，防止 `application-local.yml` 的开发默认密钥把"忘配密钥"掩盖成"启动成功"。
-- **backend 不发布端口**：`backend.ports: []`（`:248`），只有 nginx 能访问它（注释 `:18-25,221-224`）。
-- **只有 nginx 对外**：`frontend` 发布 `${NEXUS_FRONTEND_PORT:-8088}:80`（`:327-329`），是唯一入口。其余基础设施端口全部绑定 `127.0.0.1`（mysql `:46`、postgres `:78`、redis `:116`、es `:140`、rabbitmq `:170-171`、ollama `:205`）。
-- backend 健康检查打 `/actuator/health`（公开端点，`:303-304`）。
+- **fail-closed 的 `${VAR:?…}` 写法**：`deploy/docker-compose.yml` 的 backend 环境里有
+  **三个**必填变量——`JWT_SECRET: ${JWT_SECRET:?...}`（`:270`）、
+  `AI_CHAT_API_KEY: ${AI_CHAT_API_KEY:?...}`（`:271`）、
+  `AI_EMBEDDING_API_KEY: ${AI_EMBEDDING_API_KEY:?...}`（`:259`）。
+  `:?` 语义 = 变量未设置或为空时 `docker compose` **直接报错退出，连容器都不创建**（注释 `:264-269`）。这是把 `nexus.jwt.secret` 的 fail-closed 前移到编排层，防止 `application-local.yml` 的开发默认密钥把"忘配密钥"掩盖成"启动成功"。
+- **backend 端口只绑回环**：`backend.ports` 为 `"127.0.0.1:8080:8080"`（`:222-223`）——容器间由
+  nginx 访问，宿主机可直连调试，局域网/公网不可达（注释 `:18-25,195-197`）。
+- **只有 frontend 监听 0.0.0.0**：`frontend` 发布 `${NEXUS_FRONTEND_PORT:-8088}:80`（`:315-317`），
+  是唯一对外入口。其余端口全部绑定 `127.0.0.1`（mysql `:46`、postgres `:78`、redis `:116`、
+  es `:140`、rabbitmq `:170-171`、backend `:222-223`）。
+- backend 健康检查打 `/actuator/health`（公开端点，`:288-295`）。
 - ES 开发环境关闭安全模块：`xpack.security.enabled: "false"`（`:143-145`），注释注明生产必须开启。
+- **嵌入流量走容器外 HTTPS**：backend 调云端百炼 `text-embedding-v4`，编排中没有本地模型容器
+  （旧 `ollama` 服务已删除，`docker-compose.yml:186-190` 只保留恢复说明）。
 
 ---
 
@@ -316,18 +348,31 @@
 以下均为**代码中不存在或不完整**的机制，不是设计目标，也不应被理解为已实现。
 
 1. **Token 存 localStorage，暴露于 XSS**：前端令牌存 `localStorage`（键 `nx-token`，过期时间另存 `nx-token-expires-at`；见 `frontend/src/lib/api.ts` 的 `tokenStore`），没有 HttpOnly Cookie。任何 XSS 都能读取并外带令牌。
-2. **无服务端注销、无 refresh token**：`.logout` 关闭、会话 STATELESS（`SecurityConfig.java:89-90`）；logout 仅前端清 token（`frontend/src/lib/auth.ts` 的 `authStore.logout` / `handleUnauthorized`）；refresh token 无任何实现（`.env.example:98-101`）。
+2. **access JWT 在到期前不可单独吊销**：refresh 轮转与服务端注销（撤销 refresh 会话）已实现
+   （见 §1.5），但 **access JWT 仍只凭 exp / `ver` / 用户存在性生效**——logout 之后，那支
+   尚未过期的 access token 在其剩余 TTL（默认 30 分钟）内依然有效。能即时令 access 失效的
+   现有路径只有：改密码（`token_version` +1，见 §3）与软删用户（§3.3）；停用账号同样不即时
+   吊销（见 #6）。若设备遗失后要求"立即踢下线"，当前需要配合改密或管理侧停用 + 等过期。
 3. ~~**`iss` 从不校验**~~ → **已关闭**（2026-10-02 Phase 5.9 九），见 §1.4。
 4. **限流在存储不可用时 fail-open，可被绕过**：Redis/内存不可用时限流直接放行（`RateLimiter.java:95-104`）；登录冻结同样 fail-open（`LoginAttemptLimiter.java:60-64,81-92`）。
 5. **`redis-enabled=false` 时多实例限流失效**：进程内实现各实例独立计数，额度乘以实例数（`SecurityStore.java:14-21`；`.env.example:34-38`）。即便开 Redis，`allkeys-lru` 淘汰也会重置计数（`docker-compose.yml:105-108`）。
-6. **停用账号不立即吊销已签发令牌**：`status=0` 只在登录时检查（`AuthServiceImpl.java:148-150`）；`TokenVersionValidator` / `UserAuthCache` 只按用户存在与版本号判断，**不检查 status**，故停用后既有令牌仍有效至过期。（软删除会立即失效，见 §3.3，两者行为不同。）
+6. **停用账号不立即吊销已签发的 access JWT**：登录时检查 status（`AuthServiceImpl.java:157-159`），
+   refresh 轮转时也检查（`RefreshTokenService.requireEnabledUser :234-240`，故停用后**不能换新令牌**）；
+   但 `TokenVersionValidator` / `UserAuthCache` 只按用户存在与版本号判断、**不检查 status**，
+   故既有 access JWT 在其剩余 TTL（≤30 分钟）内仍有效，且已持有的 refresh 虽不可换新却不会被
+   主动撤销（需管理侧删会话或改密）。（软删除会立即失效，见 §3.3，两者行为不同。）
 7. **无安全响应头配置**：`frontend/nginx.conf` 未配置 `Content-Security-Policy`、`X-Frame-Options`、`Strict-Transport-Security` 等任何安全响应头（仅对 `index.html` 设 `Cache-Control`，`nginx.conf:42-44`）；主 `SecurityFilterChain` 也未显式调用 `.headers(...)`（全仓仅 `StandaloneDevSecurityConfig.java:30` 为 dev 的 H2 console 设置 `frameOptions.sameOrigin`）。静态页面响应不受后端安全链保护。
 8. **无 TLS**：nginx 只 `listen 80`（`nginx.conf:9`），无 HTTPS 终结、无证书配置；backend 亦无 TLS。
 9. **无 OAuth2 / OIDC 第三方登录**：`AuthServiceImpl.java:48-51` 明确这是"将来接入"方向，当前只有自建用户名口令。
-10. **无 CSRF token**：`.csrf(disable)`（`SecurityConfig.java:86`）——理由是纯 Token API 不用 Cookie/Session（类注释 `:36-38`），并非遗漏；但这也意味着一旦引入 Cookie 承载凭证就需重新评估。
+10. **无 CSRF token**：`.csrf(disable)`（`SecurityConfig.java:91`）——理由是纯 Token API 不用 Cookie/Session（类注释 `:36-38`），并非遗漏；但这也意味着一旦引入 Cookie 承载凭证就需重新评估。
 11. **无 mTLS、无字段级加密、无 KMS/Vault**：密钥全部来自环境变量（`application.yml:102,253`），没有密钥管理服务，落库字段无字段级加密。
 12. **无审计日志表**：认证/安全事件只走 slf4j 日志（如 `AuthServiceImpl.java:142,167`；`RateLimitQuotaFilter.java:165`），没有独立的审计日志表；`ObservabilityRegistry` 是进程内计数器（`LongAdder` + `ConcurrentHashMap`，`ObservabilityRegistry.java:15-21`），非持久化审计。
 13. **无 IP 黑名单持久化**：只有基于键 TTL 的临时冻结/限流计数，没有持久化黑名单。
 14. **ES 安全模块关闭（开发编排）**：`xpack.security.enabled: "false"`（`docker-compose.yml:144`）；且 ES 端口仅绑 `127.0.0.1`（`:140`）。
-15. **无 Micrometer / Prometheus 指标**：全仓无相关依赖或 `MeterRegistry` / `@Timed` 使用；可观测性仅有自研 `ObservabilityRegistry` 计数。
+15. **有 Micrometer 指标、但无 Prometheus 等指标后端**：`nexus-common` 以 `optional` 依赖
+    `micrometer-core`（`nexus-common/pom.xml:43-47`），`ObservabilityRegistry` 把计数/计时转发给
+    `MeterRegistry`（`ObservabilityRegistry.java:115,130,159`），actuator 暴露
+    `/actuator/metrics`（需认证，不在公开端点列表；`application.yml:103-116`）。
+    **不存在** `micrometer-registry-prometheus`（全仓 pom 无该依赖），因此没有
+    `/actuator/prometheus` 抓取端点、没有 Grafana 看板；代码中也没有任何 `@Timed` 注解。
 16. **登录失败冻结是按用户名、可被定向 DoS**：攻击者能用错密码把他人账号刷到冻结（`LoginAttemptLimiter.java:22-26`）；跨用户名的分布式撞库与代理后 IP 失真本期不覆盖。

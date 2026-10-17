@@ -1,10 +1,12 @@
 import { useEffect, useRef, type ReactNode } from 'react'
-import { Download, ExternalLink, FileSpreadsheet, FileText, Layers, X } from 'lucide-react'
+import { Download, ExternalLink, FileText, Layers, X } from 'lucide-react'
 import Markdown from '@/components/Markdown'
 import { toast } from '@/lib/toast'
 import type { ThemeMode } from '@/lib/types'
 import type { DocItem } from '@/data'
 import type { ChunkView } from '@/lib/api'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select,textarea,[tabindex]:not([tabindex="-1"])'
 
@@ -71,6 +73,8 @@ export default function DocPreview({ doc, theme, onClose, content, chunks = [], 
   const panelRef = useRef<HTMLDivElement>(null)
   const lastActive = useRef<HTMLElement | null>(null)
   const open = doc !== null
+  const { locale } = useLocale()
+  const c = appCopy(locale).doc
 
   useEffect(() => {
     if (!open) return
@@ -102,7 +106,6 @@ export default function DocPreview({ doc, theme, onClose, content, chunks = [], 
   if (!doc) return null
 
   const isBinary = doc.type === 'PDF' || doc.type === 'DOCX'
-  const Icon = doc.type === 'DOCX' ? FileSpreadsheet : FileText
 
   const meta: ReactNode = (
     <>
@@ -117,44 +120,44 @@ export default function DocPreview({ doc, theme, onClose, content, chunks = [], 
   return (
     <>
       <div className="drawer-scrim" onClick={onClose} aria-hidden="true" />
-      <aside className="drawer" role="dialog" aria-modal="true" aria-label={`预览 ${doc.name}`} ref={panelRef} tabIndex={-1}>
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label={c.aria(doc.name)} ref={panelRef} tabIndex={-1}>
         <header className="drawer-head">
-          <span className="doc-preview-ic"><Icon size={16} /></span>
+          <span className="doc-preview-ic"><FileText size={16} /></span>
           <div style={{ minWidth: 0, flex: 1 }}>
             <h3 className="drawer-title">{doc.name}</h3>
             <p className="drawer-meta">{meta}</p>
           </div>
-          <button className="btn btn-ghost btn-sm" type="button" onClick={onDownload} disabled={!onDownload} title={onDownload ? "下载原文" : "当前文件类型暂不支持下载"}>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={onDownload} disabled={!onDownload} title={onDownload ? c.download : c.downloadUnsupported}>
             <Download size={14} />
           </button>
-          <button className="close" type="button" aria-label="关闭" onClick={onClose}><X size={17} /></button>
+          <button className="close" type="button" aria-label={c.closeAria} onClick={onClose}><X size={17} /></button>
         </header>
 
         <div className="drawer-body">
-          {loading && <p className="hint" role="status">正在读取文档内容…</p>}
+          {loading && <p className="hint" role="status">{c.loading}</p>}
           {error && <p className="form-error active" role="alert">{error}</p>}
           {isBinary ? (
             <div className="doc-binary">
-              <span className="doc-binary-ic"><Icon size={22} /></span>
-              <p className="doc-binary-title">暂不支持内嵌 {doc.type} 预览</p>
-              <p className="doc-binary-desc">当前 API 返回文档元信息与解析切片，不提供 PDF/DOCX 原始文件下载或内嵌预览。</p>
+              <span className="doc-binary-ic"><FileText size={22} /></span>
+              <p className="doc-binary-title">{c.binaryTitle(doc.type)}</p>
+              <p className="doc-binary-desc">{c.binaryDesc}</p>
             </div>
           ) : content ? (
             <>
               <Markdown text={content} theme={theme} />
               <section className="doc-chunks">
-                <h4><Layers size={13} /> 解析切片（{chunks.length}）</h4>
+                <h4><Layers size={13} /> {c.chunksTitle(chunks.length)}</h4>
                 {chunks.map((chunk) => (
                   <div className="doc-chunk" key={chunk.id}>
-                    <span className="doc-chunk-h">{chunk.headingPath || '切片 ' + (chunk.chunkIndex + 1)}</span>
+                    <span className="doc-chunk-h">{chunk.headingPath || c.chunkFallback(chunk.chunkIndex)}</span>
                     <span className="doc-chunk-d">{chunk.content}</span>
                   </div>
                 ))}
-                {chunks.length === 0 && !loading && <p className="hint">暂无可显示的切片。</p>}
+                {chunks.length === 0 && !loading && <p className="hint">{c.noChunks}</p>}
               </section>
             </>
           ) : !loading && !error ? (
-            <p className="hint">服务端没有返回可预览的原始文本。</p>
+            <p className="hint">{c.noText}</p>
           ) : null}
         </div>
       </aside>

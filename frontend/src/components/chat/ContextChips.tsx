@@ -1,5 +1,8 @@
 import { AlertTriangle, BookOpen, FileText, Globe, Layers, MessagesSquare, Paperclip } from 'lucide-react'
 import type { RunContext } from '@/data'
+import { pagesCopy } from '@/lib/pagesCopy'
+import { useLocale } from '@/lib/locale'
+import Loc from '@/components/Loc'
 import '@/styles/context.css'
 
 interface Props {
@@ -18,47 +21,50 @@ interface Props {
  * 那是唯一会造成"模型像是失忆"的情况，必须让用户看见，否则会被误判成模型变笨。
  */
 export default function ContextChips({ context, onOpenRefs }: Props) {
+  const { locale } = useLocale()
+  /* 字典取名 c：本文件解构出的 kbs / retrieved / web 等均无冲突 */
+  const c = pagesCopy(locale).chat
   const { kbs, retrieved, usedDocs, scannedDocs, historyTurns, web, attachments, truncated } = context
 
   return (
-    <div className="ctx" aria-label="本轮上下文">
+    <div className="ctx" aria-label={c.ctxAria}>
       {kbs.length > 0 && (
-        <span className="ctx__chip" title={kbs.join('、')}>
+        <span className="ctx__chip" title={kbs.join(c.listSep)}>
           <BookOpen size={12} aria-hidden="true" />
-          知识库 {kbs.length}
+          <Loc>{c.ctxKb(kbs.length)}</Loc>
         </span>
       )}
-      <span className="ctx__chip" title="在绑定的知识库里检索到的切片数">
+      <span className="ctx__chip" title={c.ctxHitTitle}>
         <Layers size={12} aria-hidden="true" />
-        命中 {retrieved} 切片
+        <Loc>{c.ctxHit(retrieved)}</Loc>
       </span>
       <button
         className="ctx__chip ctx__chip--btn"
         type="button"
         onClick={onOpenRefs}
-        title="查看引用的文档"
+        title={c.ctxCiteTitle}
       >
         <FileText size={12} aria-hidden="true" />
-        引用 {usedDocs} 篇{scannedDocs > 0 ? ` / 共 ${scannedDocs} 篇` : ''}
+        <Loc>{c.ctxCite(usedDocs, scannedDocs)}</Loc>
       </button>
-      <span className="ctx__chip" title="带到这一轮的历史轮数">
+      <span className="ctx__chip" title={c.ctxHistoryTitle}>
         <MessagesSquare size={12} aria-hidden="true" />
-        历史 {historyTurns} 轮
+        <Loc>{c.ctxHistory(historyTurns)}</Loc>
       </span>
-      <span className="ctx__chip" data-off={web ? undefined : ''} title={web ? '本轮允许联网检索' : '本轮未联网'}>
+      <span className="ctx__chip" data-off={web ? undefined : ''} title={web ? c.ctxWebOnTitle : c.ctxWebOffTitle}>
         <Globe size={12} aria-hidden="true" />
-        {web ? '已联网' : '未联网'}
+        <Loc>{web ? c.ctxWebOn : c.ctxWebOff}</Loc>
       </span>
       {attachments && attachments.length > 0 && (
-        <span className="ctx__chip" title={attachments.join('、')}>
+        <span className="ctx__chip" title={attachments.join(c.listSep)}>
           <Paperclip size={12} aria-hidden="true" />
-          附件 {attachments.length}
+          <Loc>{c.ctxAttach(attachments.length)}</Loc>
         </span>
       )}
       {truncated && truncated > 0 ? (
-        <span className="ctx__chip ctx__chip--warn" title="超出上下文窗口，早期对话已被省略">
+        <span className="ctx__chip ctx__chip--warn" title={c.ctxTruncatedTitle}>
           <AlertTriangle size={12} aria-hidden="true" />
-          已省略早期 {truncated} 轮
+          <Loc>{c.ctxTruncated(truncated)}</Loc>
         </span>
       ) : null}
     </div>

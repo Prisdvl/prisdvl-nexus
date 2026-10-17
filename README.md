@@ -1,536 +1,274 @@
-# Prisdvl-Nexus
+# Prisdvl Nexus
 
-> Personal Knowledge Base & Agent Platform
-> 个人知识库 + AI Agent 智能工作平台
+**A Self-Hosted, Multi-User AI Knowledge Base & Agent Platform**
+多用户自托管 AI 知识库与 Agent 平台 —— 文档导入、混合检索、带引用的 RAG，以及可配置、权限受控的 Agent。
 
-一个以**个人知识库为核心数据源**、基于 **Spring AI** 构建的 AI 应用：文档解析 → 结构化 Chunk → Embedding → 混合检索 → RAG，让大模型真正"读懂"你自己的 Obsidian / Markdown 笔记，并给出**可点击、可追溯的知识来源**；再通过 Tool Calling → Agent，把 AI 从"回答问题"升级为"基于个人知识执行任务"。
+[![CI](https://github.com/Prisdvl/prisdvl-nexus/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
+![Java](https://img.shields.io/badge/Java-21-orange)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.1-green)
+![Spring AI](https://img.shields.io/badge/Spring%20AI-2.0.1-green)
+![React](https://img.shields.io/badge/React-19-61dafb)
+![Docker Compose](https://img.shields.io/badge/Docker%20Compose-7%20services-2496ED)
 
-它不是一个聊天机器人 demo，而是一个**跑得起来的完整系统**：8 个容器、4 个 Maven 模块、621 个测试、17 个 E2E 脚本，以及在真实 ES / pgvector / MySQL 上验收过的行为。
+Prisdvl Nexus 是一个可以**完整跑起来**的多用户知识平台：每个用户拥有独立工作区与知识库，导入自己的文档后，
+系统完成解析 → 结构化切片 → Embedding → **Elasticsearch BM25 + pgvector 混合检索（RRF 融合）** →
+带引用的 RAG 回答；再通过基于 **Spring AI Tool Calling** 的可配置 Agent，把检索、问答等能力以工具形式暴露给模型，
+工具调用过程实时可见、随消息落库，并通过进程内 **MCP（JSON-RPC）** 端点开放给外部客户端。
+
+> 形态：模块化单体（4 个 Maven 模块）+ React 19 单页应用；一条 `docker compose up -d` 起 7 个服务得到完整系统。
 
 ---
 
-## 1. 项目简介
+## 1. Screenshots / 界面预览
 
-### 解决什么问题
+> 以下为 **2026-10-14 用当前 React 19 代码实截**的界面（1440×900，内置 mock 数据，
+> `VITE_USE_MOCK=true` 的 dev server；非真实模型/真实用户数据）。历史界面（Vue 版）见
+> [docs/archive/screenshots/current/](docs/archive/screenshots/current/)（仅作演进记录）。
 
-| 问题 | 本项目的能力 |
+![Landing](assets/screenshots/landing.png)
+
+![Knowledge bases](assets/screenshots/kb-list.png)
+
+![RAG chat with citations](assets/screenshots/chat-streaming.png)
+
+![Agents](assets/screenshots/agents.png)
+
+---
+
+## 2. Why / 核心价值
+
+| 问题 | Prisdvl Nexus 的能力 |
 | --- | --- |
-| 通用 LLM 不知道我笔记本里写了什么 | **RAG**：导入 Obsidian Vault / MD / TXT / PDF / DOCX / ZIP，结构化切分 + 向量检索 + BM25 混合检索 + 重排 |
-| 模型经常"编"我的笔记里没有的内容 | **检索前置 + 强制引用**；RAG 路径零命中时**不再调用模型**，直接返回固定文案 |
-| 笔记数量大，重复导入很慢、很贵 | **SHA-256 增量同步**：未变更跳过、变更重建 |
-| 想让 AI 帮我查资料，而不只是聊天 | **Tool Calling + Agent**：模型自己决定检索什么，检索过程实时可见、工具痕迹随消息落库 |
-| 多个知识库要一起查 | **多库检索**：逐库并行召回 → 跨库归并 → 全局重排；**单库失败不影响其它库**，且失败会被点名 |
+| 通用大模型不知道团队/个人文档里写了什么 | **RAG**：导入 MD / TXT / PDF / DOCX / ZIP / Obsidian Vault，结构化切分 + 向量 + BM25 混合检索 + LLM 重排 |
+| 模型编造文档里不存在的内容 | **检索前置 + 强制引用**；RAG 路径零命中时**不调用模型**，直接返回固定文案 |
+| 文档多、重复导入慢且贵 | **SHA-256 增量同步**：未变更跳过、变更重建 |
+| 多个知识库要一起查 | **多库并行检索**：虚拟线程扇出 → 按输入顺序装配 → 跨库 RRF → 全局重排；单库失败被点名且不拖垮其它库 |
+| 希望模型"动手做事"而不只是答题 | **Tool Calling + Agent**：配置化 Agent、工具白名单、用户级启停、执行轨迹落库、流式可随时停止；并经 **MCP** 对外开放 |
 
-### 为什么值得看
+三个值得展开的技术取舍（不是 PPT，是有测试钉住的实现）：
 
-三个技术上的硬骨头，本项目都给了可运行的答案，而不是设计稿：
-
-1. **混合检索怎么融**——ES 的 BM25 名次与 pgvector 的余弦相似度不可比，用 **RRF**（倒数排名融合，k=60）取值而不是加权求和；融合后再过一次 LLM 重排。
-2. **多库检索怎么做**——虚拟线程扇出 + **按输入顺序装配**（不是完成顺序）+ 逐库失败隔离。其中"按输入顺序"是被两个真实陷阱逼出来的：稳定排序会让同分条目次序随完成时序抖动，而检索事件要推 SSE 帧、**绝不能并发写监听器**。
-3. **零命中为什么不调模型**——这是产品语义问题不是性能问题：让模型在"没检索到"的情况下自由发挥，就是幻觉的开始。但这条规则**只对 RAG 路径成立**，Agent 模式下检索是一个工具，零命中会变成一条工具观测。详见 [docs/rag.md](docs/rag.md) §5。
+1. **混合检索怎么融** —— ES 的 BM25 名次与 pgvector 余弦相似度不可比，用 **RRF（Reciprocal Rank Fusion，k=60）**融合名次而非加权求和，融合后再做一次 LLM 重排。
+2. **多库检索怎么做** —— 虚拟线程扇出 + **按输入顺序（非完成顺序）装配** + 逐库失败隔离；检索事件要推 SSE 帧，任务内绝不并发写监听器。
+3. **零命中为什么不调模型** —— 产品语义而非性能问题：没检索到还让模型自由发挥就是幻觉的开始。该规则**只对 RAG 路径成立**；Agent 模式下检索是工具，零命中变成一条工具观测。详见 [docs/rag.md](docs/rag.md)。
 
 ---
 
-## 2. 核心能力
+## 3. Quick Start / 快速开始
 
-> 状态标记：✅ 已实现且有测试 / ◐ 部分实现（边界见 §14）
+### 方式一：Docker Compose（推荐，得到完整系统）
+
+前置：JDK 21（宿主机打 jar）、Docker Desktop；两个模型 API Key（对话网关 + 阿里云百炼嵌入）。
+
+```bash
+# 1) 宿主机打出 fat jar（后端镜像只运行、不构建）
+mvn -B package -DskipTests
+
+# 2) 配置必填变量（共 3 个，缺任一个 compose 都会拒绝启动）
+cd deploy
+cp .env.example .env
+#   编辑 .env：JWT_SECRET、AI_CHAT_API_KEY、AI_EMBEDDING_API_KEY
+
+# 3) 构建并起整栈（7 个服务）
+docker compose build
+docker compose up -d
+docker compose ps                 # 等到全部 (healthy)
+```
+
+打开 http://localhost:8088 ，注册账号（**用户名 / 密码 / 邮箱**均为必填；默认 console 邮件通道下验证码在 backend 日志里）。
+
+第一次让知识可检索需要走完：**新建知识库 → 导入文档 → 向量化 → 建索引**，然后即可在对话页发起带引用的问答。
+
+- 嵌入模型：云端 **阿里云百炼 `text-embedding-v4`（1024 维）**，在 [百炼控制台](https://bailian.console.aliyun.com/) 开通并把 API-KEY 填入 `AI_EMBEDDING_API_KEY`。**不需要本地拉取任何模型**（早期版本的 Ollama 方案已移除）。
+- 对话模型：任意 OpenAI 兼容网关，默认 `AI_CHAT_BASE_URL` / `AI_CHAT_MODEL` 可换成 DeepSeek 官方等。
+- 完整环境变量、端口、持久化、故障排查见 [docs/deployment.md](docs/deployment.md)。
+
+### 方式二：本地开发
+
+```bash
+# 后端（仓库根目录，JDK 21 + Maven 3.9+）
+mvn -B clean package -DskipTests
+java -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=standalone
+#   standalone = H2 内存库 + 检索降级为 SQL 关键词匹配，零外部依赖，重启清空
+
+# 前端（另开终端；Node 20+）
+cd frontend
+npm ci
+npm run dev        # http://localhost:5175 ，/api 由 Vite 代理到本机后端 8080
+```
+
+需要真实 MySQL/pgvector/ES 的开发形态：`cd deploy && docker compose up -d mysql postgres redis elasticsearch rabbitmq`，
+后端用 `--spring.profiles.active=local` 启动。详见 [docs/deployment.md](docs/deployment.md) §1。
+
+---
+
+## 4. Architecture / 系统架构
+
+```
+浏览器 ──http://localhost:8088──► [frontend] nginx（SPA + /api、/mcp 反代；SSE 不缓冲）
+                                         │ 容器网络
+                                         ▼
+                    nexus-app（Spring Boot 4.1 / JDK 21）
+                    auth · user · knowledge · chat · agent · tool · mcp
+                                         │
+              nexus-ai（ChatClient / ToolCallingManager / Agent Runtime /
+                       Retriever 策略族 / Embedding / Rerank）
+                                         │
+              nexus-knowledge（解析 / 切片 / 向量库 / ES 索引 /
+                              检索 / 引用 / 多库扇出）
+                                         │
+                    nexus-common（Result / ErrorCode / 异常 / 工具）
+
+基础设施：MySQL 8.4（业务库）· PostgreSQL 18 + pgvector（向量）· Elasticsearch 9.4 + IK（BM25）
+          Redis 8（限流/配额/会话）· RabbitMQ 4（异步导入 + DLQ）
+```
+
+模块依赖严格线性、编译期强制：`nexus-app → nexus-knowledge → nexus-ai → nexus-common`，无环。
+MCP 端点留在 nexus-app 进程内复用鉴权与 Spring 上下文，**不存在独立的 nexus-mcp-server 模块**。
+为什么是模块化单体而不是微服务，见 [docs/architecture.md](docs/architecture.md)。
+
+### 核心链路
+
+- **知识导入**：Parser 分派（MD/TXT 直读、PDF 走 PDFBox、DOCX 走 POI、ZIP/Vault 安全解包）→ 标题感知切片 → Embedding 写 pgvector（HNSW，`vector(1024)`）；RabbitMQ 异步导入带 DLX/DLQ，`nexus.import.mode=sync` 可回退。
+- **混合检索**：ES BM25（IK 分词、字段加权）与 pgvector 向量各取名次 → RRF 融合 → LLM 重排（5s 超时降级）；元数据过滤下推到 ES `filter` / SQL `WHERE`。
+- **多库检索**：单库在调用线程直跑，多库才虚拟线程扇出；扇出总超时 `nexus.retrieval.fanout-timeout`（默认 10s）；部分失败返回部分结果并显式点名，全部失败抛原异常。
+- **Agent**：`AgentDefinition`（配置）/ `AgentRuntime`（一次执行）/ `AgentService`（持久化门面）三分；工具循环由 Spring AI `ToolCallingManager` 驱动，不是手写 while。
+- **工具权限**：用户启用集合 ∩ Agent 白名单双层裁剪；`READ` 直接执行，`WRITE`/`DANGEROUS` 必须人工确认（`once`/`always`/`deny`，`always` 落库且可撤销）；权限存 `ai_tool_registry`，执行前读库判定；MCP 的 `tools/list`、`tools/call` 走同一启停判定，停用工具不可见也不可调（JSON-RPC `-32003` / 业务码 `5004`）。
+- **人工审批闭环**：`POST /api/agent/runs` 起运行 → `WAITING_APPROVAL` 挂起（`UPDATE … WHERE status=?` 原子转换）→ SSE `approval_required` → `POST /api/agent/runs/{runId}/approval` 恢复**同一次**调用；拒绝作为 observation 回灌模型（不是失败），工具调用与运行轨迹全量落库且入参脱敏。
+- **流式（SSE）**：检索事件先于第一个字到达；支持随时停止；取消注册表仅在内存（多实例/重启失效，属已知限制）。
+
+---
+
+## 5. Capabilities / 能力清单
+
+> 状态：✅ 已实现且有测试 · ◐ 部分实现（边界见 §8）
 
 | 域 | 能力 | 状态 |
 | --- | --- | --- |
-| **知识导入** | MD / TXT / PDF（PDFBox）/ DOCX（POI）/ ZIP / Obsidian Vault 解析 | ✅ |
-| | SHA-256 增量同步、异步导入（RabbitMQ + DLQ）、失败原因逐条透出、重试 | ✅ |
-| | ZIP Slip / Zip Bomb 防护（词法拒绝 + 三层字节上限） | ✅ |
-| **切片** | 标题感知切分、Token 计数、切片状态（向量 / 索引）可查 | ✅ |
-| **检索** | 向量检索（pgvector，HNSW，`vector(1024)`） | ✅ |
-| | 关键词检索（Elasticsearch + IK 中文分词，字段加权 BM25） | ✅ |
-| | 混合检索（RRF 融合） | ✅ |
-| | LLM 重排（5s 超时降级） | ✅ |
-| | 元数据过滤下推（`tags` / `folder` / `documentId` → ES `filter` / pgvector `WHERE`） | ✅ |
-| **RAG** | 同步问答 + SSE 流式问答，`[n]` 引用解析，引用落库 | ✅ |
-| | 多知识库检索（并行扇出、逐库失败隔离、失败点名） | ✅ |
-| **Agent** | 配置化 Agent（Definition / Runtime 分离，落库 `agent` 表） | ✅ |
-| | 工具白名单、采样温度、回答策略（`KB_PREFERRED` / `KB_ONLY`）、绑定多知识库 | ✅ |
-| | Tool Trace 随消息落库、刷新后仍在 | ✅ |
-| | 流式执行 + 随时停止 | ✅ |
-| **MCP** | 进程内 JSON-RPC 端点 `POST /mcp`（init / ping / tools-list / tools-call），JWT 鉴权 | ✅ |
-| **用户与安全** | 注册 / 登录 / JWT / BCrypt / RBAC | ✅ |
-| | 令牌吊销（`token_version`）、登录失败冻结、限流、每日配额 | ✅ |
-| | 改密码 / 改资料 / 额度只读接口 | ✅ |
-| **可观测** | 自建计数器 + Micrometer（`/actuator/metrics`）；只读聚合接口已移除（原型无界面） | ◐ |
-| **部署** | 8 服务 docker compose 整栈、nginx 入口、健康检查、数据卷持久化 | ✅ |
-| **前端** | Vue 3 控制台：登录 / 知识库 / 文档与切片 / 检索 / 对话（Agent + RAG）/ Agent 管理 / 账号设置 | ✅ |
+| 知识导入 | MD / TXT / PDF（PDFBox 3）/ DOCX（POI 5）/ ZIP / Obsidian Vault；SHA-256 增量同步；RabbitMQ 异步导入 + DLQ；ZIP Slip / Zip Bomb 防护 | ✅ |
+| 切片与索引 | 标题感知切分、Token 计数、切片的向量/索引双状态可查；ES 索引按知识库隔离 | ✅ |
+| 检索 | pgvector HNSW 向量、ES+IK 关键词、RRF 混合、LLM 重排（超时降级）、元数据过滤下推 | ✅ |
+| RAG | 同步 + SSE 流式问答、`[n]` 引用解析、引用随消息落库、多知识库并行检索与失败点名 | ✅ |
+| Agent | 配置化（落库 `agent` 表）、工具白名单、温度、回答策略（`KB_PREFERRED` / `KB_ONLY`）、多知识库绑定、Tool Trace 落库、流式 + 停止；**运行状态机 + 工具人工审批（`READ`/`WRITE`/`DANGEROUS` + `once`/`always`/`deny` + 授权撤销 + 调用审计）** | ✅ |
+| MCP | 进程内 `POST /mcp`（initialize / ping / tools/list / tools/call），JWT 鉴权，遵守用户工具启停 | ✅ |
+| 用户与安全 | 注册（邮箱必填）/ 登录 / JWT（HS256）/ BCrypt / RBAC；**Refresh Token 轮转 + 服务端 logout（设备会话）**；邮箱验证 / 重置密码；令牌版本吊销、登录冻结、限流、每日配额 | ✅ |
+| 可观测 | 自建计数器 + Micrometer（`/actuator/metrics`）；无 Prometheus / 时间序列 | ◐ |
+| 部署 | 7 服务 docker compose、nginx 唯一对外入口、健康检查、数据卷持久化 | ✅ |
+| 前端 | React 19 + Vite + TS：落地页 / 登录注册 / 知识库与文档 / 对话（RAG + Agent）/ Agent 管理 / 账号设置；主题与引导 | ✅ |
 
 ---
 
-## 3. 系统架构
+## 6. Tech Stack & Modules / 技术栈与模块
 
-```
-┌──────────────┐
-│   浏览器      │
-└──────┬───────┘
-       │  http://localhost:8088
-┌──────▼───────────────────────────────────────────────┐
-│  Nginx (frontend/nginx.conf, 前端容器内)                    │
-│  · SPA fallback   · /api/ 反代   · /mcp 反代           │
-│  · SSE 不缓冲 (proxy_buffering off, 3600s)            │
-└──────┬───────────────────────────────────────────────┘
-       │  仅此一个入口对外；backend 不发布端口
-┌──────▼───────────────────────────────────────────────┐
-│  nexus-app   (Spring Boot 4.1.1 / JDK 21)            │
-│  auth · user · knowledge · chat · agent · tool        │
-│  mcp                          ← Controller 层          │
-└──────┬───────────────────────────────────────────────┘
-       │
-┌──────▼───────────────────────────────────────────────┐
-│  nexus-ai        模型接入 / ChatClient / ChatMemory    │
-│                  ToolCallingManager / Agent Runtime   │
-│                  Retriever 端口与策略族 / Embedding    │
-└──────┬───────────────────────────────────────────────┘
-       │
-┌──────▼───────────────────────────────────────────────┐
-│  nexus-knowledge  解析 / 切片 / 向量库 / ES 索引       │
-│                   检索实现 / 引用 / 多库扇出           │
-└──────┬───────────────────────────────────────────────┘
-       │
-┌──────▼───────────────────────────────────────────────┐
-│  nexus-common     Result / ErrorCode / 异常 / 工具     │
-└──────────────────────────────────────────────────────┘
-
-数据与中间件：
-  MySQL 8.4       业务库（用户 / 知识库 / 文档 / 切片 / 会话 / Agent）
-  PostgreSQL 18   pgvector 0.8.6 向量库（HNSW, vector(1024)）
-  Elasticsearch   + analysis-ik，关键词检索（BM25）
-  Redis 8        限流 / 配额 / 令牌版本 / 登录冻结
-  RabbitMQ 4     异步导入（含 DLX/DLQ）
-  Ollama         本地模型（可选，`--profile ai-local`）
-```
-
-模块依赖是**严格线性**的：`nexus-common ← nexus-ai ← nexus-knowledge ← nexus-app`，无环。
-
-**为什么是模块化单体而不是微服务**——完整论证见 [docs/architecture.md](docs/architecture.md) §1.3，一句话版本：本项目的四个模块之间是**调用关系密集、数据强一致、由同一个团队同一个人维护**，拆成微服务只会把一次本地方法调用变成一次网络调用 + 分布式事务 + 一套服务发现，换不到任何东西；而模块化的收益（依赖方向可强制、领域边界清晰、未来真要拆时有现成接缝）已经在**编译期**拿到了。MCP 端点就是这条原则的产物：它按 MCP 协议独立成端点，但**留在 nexus-app 进程内**复用了鉴权与 Spring 上下文，而不是新起一个 `nexus-mcp-server` 进程。
-
-> 详细架构（分层规则、模型可替换、数据流、引用实现）见 [docs/architecture.md](docs/architecture.md)。
-
----
-
-## 4. 核心链路
-
-### 4.1 Knowledge Pipeline（文档导入）
-
-```
-File ──► Parser ──► Document ──► Chunk ──► Embedding ──► Vector Store
-```
-
-- **Parser**：按格式分派（MD / TXT 直读，PDF 走 PDFBox，DOCX 走 POI，ZIP / Vault 走 `VaultPackageExtractor` 解包后逐文件分派）。
-- **Chunk**：标题感知切分，带标题路径与 Token 数；切片上有独立的**向量状态**与**索引状态**——这是排查"为什么搜不到"的第一手信息。
-- **Embedding → Vector Store**：写入 pgvector（`vector(1024)`，HNSW 余弦索引）。
-- **异步**：导入任务走 RabbitMQ（`nexus.import.exchange`），队列配了 DLX/DLQ；`nexus.import.mode=sync` 可回退成同步。
-- **增量**：SHA-256 比对，未变更跳过、变更重建。
-
-> 详见 [docs/rag.md](docs/rag.md) §1。
-
-### 4.2 Hybrid RAG（混合检索 → 重排）
-
-```
-query ──┬──► ES BM25 召回  ──┐
-        │   (ik 分词, 字段加权) │
-        └──► pgvector 召回 ──┴──► RRF 融合(k=60) ──► LLM 重排 ──► 上下文装配 ──► 生成
-```
-
-- 两路的**名次**而不是分数进入 RRF，因此 BM25 分与余弦相似度不可比的问题被绕开。
-- 融合后再调 LLM 做重排（5s 超时则降级用融合结果）。
-
-> 详见 [docs/rag.md](docs/rag.md) §2。
-
-### 4.3 Multi-KB Retrieval（多库检索）
-
-```
-kb1 ──┐
-kb2 ──┼──► 虚拟线程扇出 ──► 按输入顺序装配 ──► 跨库 RRF ──► 全局重排 ──► 上下文
-kb3 ──┘        │
-               └──► 失败库 → RetrievalFailure + retrieval.kb.failed 计数 + 界面点名
-```
-
-- 单库时**在调用线程直接执行**（不切线程），多库才扇出——单库路径行为零变化。
-- 整体超时 `nexus.retrieval.fanout-timeout`（默认 10s）。
-- 部分库失败 → 返回部分结果并**显式告知**（事件 + 提示词 + 前端标签「其中 N 个知识库检索失败」）；**全部失败 → 抛原异常**，不伪装成"检索到 0 条"。
-- 归属校验失败（越权）与嵌入模型不一致**不被隔离**，仍整批失败——把越权探测变成"部分成功"比报错更糟。
-
-> 详见 [docs/rag.md](docs/rag.md) §3 与 [docs/decisions.md](docs/decisions.md) B.48 / ADR-022。
-
-### 4.4 Agent
-
-```
-Agent 配置 ──► Agent Runtime ──► Prompt 装配 ──► LLM
-                 (绑定知识库 / 工具白名单 / 温度 / 回答策略)    │
-                                     ┌───────────────────────┘
-                                     ▼
-                              Tool Calling ──► Tool Result ──► LLM ──► …
-```
-
-- 职责三分：`AgentDefinition` 是**配置**，`AgentRuntime` 是**一次执行**，`AgentService` 是**持久化与 CRUD 门面**。
-- **循环不是手写的 while**——由 Spring AI 的 `ToolCallingManager` 驱动（模型 → 工具 → 模型）。
-- 检索在 Agent 模式下是一个**工具**，绑定哪些知识库决定它的检索范围；空绑定 = 不限制。
-
-> 详见 [docs/agent.md](docs/agent.md)。
-
-### 4.5 Tool Calling
-
-- 工具注册表 + **用户启用集合 ∩ Agent 白名单**双层裁剪；单轮工具调用有数量上限。
-- 工具调用痕迹随消息落库（`chat_message.agent_id` 记录 Agent 出处），刷新后仍在。
-- **MCP 直连同样遵守用户启停**（5.9 八）：`tools/list` 不再列出停用的工具，`tools/call` 拒绝
-  （JSON-RPC `-32003` + 业务码 `5004`）。此前这条路径一次权限判定都没有——开关看起来生效，实际只生效了一半。
-
-### 4.6 Chat Streaming（SSE）
-
-- 流式 SSE，检索事件**先于第一个字**到达（RAG 的"检索到 N 个片段"卡片因此能排在回答之前）。
-- 支持随时 `POST /api/chat/stream/{requestId}/stop`；取消注册表**只在内存里**，多实例/重启即失效。
-- 事件由**调用线程按序回放**，任务内绝不并发写监听器。
-
-### 4.7 Observability
-
-> ⚠️ **2026-10-08 调整**：`GET /api/observability/summary` 与 `/agents` 两个只读接口已移除（原型无对应界面）；
-> 计数采集（`ObservabilityRegistry`）与 Micrometer / Actuator 指标保持不变。
-
-
-- 自建计数器（`ObservabilityRegistry`）~~+ 只读接口 `GET /api/observability/summary`、`/agents`~~（**已移除**，原型无界面）。
-- 覆盖 token / 延迟 / 检索数 / 工具调用 / 失败库计数（`retrieval.kb.failed`）。
-- **同一批点也接上 Micrometer**（5.9 六）：`/actuator/metrics` 可读 `nexus.llm.calls|tokens|latency`、
-  `nexus.chat.requests|latency`、`nexus.retrieval.requests`、`nexus.agent.executions`、`nexus.errors`
-  以及全部降级计数。**只有一个上报口、两种读法**——刻意不写第二套采集。
-- **仍未做**：没有 Prometheus / Grafana，也没有时间序列；计数仍是进程内累计，重启清零。
-
----
-
-## 5. 技术栈
-
-| 层 | 选型 |
+| 层 | 选型（以 `pom.xml` / `frontend/package.json` 为准） |
 | --- | --- |
-| 语言 / 构建 | **Java 21**、Maven 3.9（4 模块 reactor） |
-| 框架 | **Spring Boot 4.1.1**、**Spring AI 2.0.1**（BOM） |
-| AI 能力 | ChatClient / ChatMemory / Tool Calling / Advisors / Observation |
-| 业务库 | MySQL 8.4.11 LTS + MyBatis-Plus 3.5.17 + Flyway 12.4.0 |
+| 语言 / 构建 | Java 21、Maven 3.9+（4 模块 reactor） |
+| 框架 | Spring Boot 4.1.1、Spring AI 2.0.1（BOM） |
+| 业务库 | MySQL 8.4 + MyBatis-Plus 3.5.17 + Flyway（迁移 V1–V21，无 V11） |
 | 向量库 | PostgreSQL 18 + pgvector 0.8.6（HNSW，`vector(1024)`） |
-| 关键词检索 | Elasticsearch 9.4.5 + analysis-ik 9.4.5（BM25） |
-| 缓存 / 队列 | Redis 8.10.2、RabbitMQ 4.3.6 |
+| 关键词检索 | Elasticsearch 9.4.5 + analysis-ik 9.4.5 |
+| 缓存 / 队列 | Redis 8.10、RabbitMQ 4.3 |
+| 模型 | 对话：OpenAI 兼容网关（可换）；嵌入：阿里云百炼 `text-embedding-v4`（1024 维） |
 | 文档解析 | PDFBox 3.0.7、Apache POI 5.5.1 |
-| 前端 | React 19 + Vite + TypeScript（依赖以 `frontend/package.json` 为准） |
-| 部署 | Docker / docker compose、Nginx |
-
-> 版本以 **`pom.xml` 与 `frontend/package.json` 为准**——这里是两者的摘要，不是另一份事实来源。
-> 选型理由与版本决策记录在 [docs/decisions.md](docs/decisions.md)。
-> 注意：前端**没有使用 Pinia**，状态直接在组件内管理。
-
----
-
-## 6. 模块结构
+| 前端 | React 19.3、Vite 8.3、TypeScript 6、React Router 8（目录 `frontend/`） |
+| 部署 | Docker / docker compose、nginx 1.29 |
 
 ```
-prisdvl-nexus/                      (root pom, packaging=pom)
-├── nexus-common/                   Result / ErrorCode / 异常 / 通用工具（无 Web 依赖）
-├── nexus-ai/                       模型接入、ChatClient/ChatMemory、
-│                                   ToolCallingManager、Agent Runtime、
-│                                   Retriever 端口与策略族、Embedding、Rerank
-├── nexus-knowledge/                解析 / 切片 / 向量库 / ES 索引 /
-│                                   检索实现 / 引用 / 多库扇出
-├── nexus-app/                      Spring Boot 可执行应用（唯一的可运行模块）
-│                                   auth · user · knowledge · chat · agent ·
-│                                   tool · mcp
-├── frontend/                        React 前端（对话 / 知识库 / Agent）
-│   ├── src/                        views / api / components
-│   ├── scripts/                    E2E 与截图脚本（17 个 verify-*.mjs）
-│   ├── nginx.conf                  生产入口配置
-│   └── Dockerfile                  node 构建 → nginx 运行
-├── deploy/
-│   ├── docker-compose.yml          8 个服务的整栈编排
-│   ├── .env.example                必填 secret 说明（缺了 compose 拒绝启动）
-│   ├── backend/Dockerfile          应用镜像（JRE only）
-│   ├── elasticsearch/Dockerfile    ES + IK 插件
-│   └── postgres/init/              扩展初始化（vector 等）
-├── scripts/                        smoke.ps1 / cleanup-test-data.ps1 / seed-demo.mjs（历史遗留）
-├── docs/                           架构 / 数据库 / API / RAG / Agent / 安全 / 部署 / 决策
-└── README.md
+prisdvl-nexus/
+├── nexus-common/        通用 Result/ErrorCode/异常/工具（无 Web 依赖）
+├── nexus-ai/            模型接入、ToolCallingManager、Agent Runtime、检索策略、Embedding
+├── nexus-knowledge/     解析/切片/向量库/ES/检索/引用/多库扇出
+├── nexus-app/           唯一可运行模块：全部 Controller 与装配（auth…mcp）
+├── frontend/            React 19 前端（src/pages、src/components、src/lib…）
+│   ├── scripts/         qa-*.mjs 等 QA/截图脚本（复用系统 Edge，不下载浏览器）
+│   ├── nginx.conf       生产入口（SPA fallback、/api 与 /mcp 反代、SSE 不缓冲）
+│   └── Dockerfile       node:22-alpine 构建 → nginx:1.29-alpine 运行
+├── deploy/              docker-compose.yml（7 服务）、.env.example、backend/ES Dockerfile
+├── scripts/             smoke.ps1、cleanup-test-data.ps1、seed-demo.mjs、demo-vault.zip
+└── docs/                架构 / RAG / Agent / 安全 / 部署 / 数据库 / API / 决策（archive/ 为历史记录）
 ```
 
-**依赖方向由编译期强制**：`nexus-app → nexus-knowledge → nexus-ai → nexus-common`，反向依赖编译不过。`nexus-common` 不依赖 Web，因此可以被任何模块复用而不引入 Web 栈。
+---
 
-> 注意：**不存在 `nexus-mcp-server` 模块**（`pom.xml` 里是注释掉的占位）。MCP 是 nexus-app 内的一个端点，理由见 §3。
+## 7. Security / 安全边界
+
+已实现（机制与证据见 [docs/security.md](docs/security.md)）：
+
+- JWT HS256，claims 含 `sub/username/roles/ver/jti/iss/iat/exp`；限定 HS256 防算法混淆；校验 `iss` 与令牌版本。
+- BCrypt 密码哈希；`token_version` 改密即吊销全部已签发 access token。
+- **Refresh Token 轮转 + 设备会话**（`sys_user_session`，迁移 V21）：`POST /api/auth/refresh` 轮换、`POST /api/auth/logout` 撤销当前设备会话；access JWT 本身仍靠 exp/版本号失效。
+- 登录失败冻结（按用户名，fail-open）、固定窗口限流（`Retry-After`，fail-open）、每日请求 + token 双配额（fail-closed）。
+- 用户隔离把 `user_id` 写进 SQL；越权返回 404/业务码而非 403；上传防 ZIP Slip（整批中止）与 Zip Bomb（三层解压后上限）。
+- compose 对 `JWT_SECRET` / `AI_CHAT_API_KEY` / `AI_EMBEDDING_API_KEY` 用 `${VAR:?…}` fail-closed；只有 nginx 端口对全网开放，其余端口绑 `127.0.0.1`。
+
+**明确未实现 / 已知边界**（不要误以为有）：
+
+- Token 存 `localStorage`，存在 XSS 暴露面；无 HttpOnly Cookie 方案。
+- 无 TLS 终结、无安全响应头（CSP/HSTS 等）、无 OAuth2/OIDC、无 CSRF token（纯 Token API）、无字段级加密 / KMS。
+- Redis 不可用时限流/冻结降级为进程内实现（fail-open），多实例下限流不一致；`allkeys-lru` 也可能淘汰计数键。
+- 停用账号不会立即吊销已签发 access token（软删除会立即失效，两者不同）。
+- ES 在开发编排中关闭安全模块、仅绑回环；compose 是**单机**部署，未验证多机/高可用。
 
 ---
 
-## 7. 数据模型
+## 8. Testing / 测试与验证
 
-| 域 | 表 |
+**本仓库当前一次实测**（命令、环境、日期如下；不以历史数字充当本次结果）：
+
+| 口径 | 结果 |
 | --- | --- |
-| 账号权限 | `sys_user`、`sys_role`、`sys_user_role` |
-| 知识库 | `kb_knowledge_base`、`kb_document`、`kb_chunk`、`kb_document_tag`、`kb_document_link` |
-| 导入 | `kb_import_task`、`kb_import_task_item` |
-| 问答留档 | `kb_qa_record`（含 `citations` 引用 JSON） |
-| 会话 | `chat_conversation`、`chat_message`、`SPRING_AI_CHAT_MEMORY` |
-| Agent | `agent`、`agent_knowledge_base`、`agent_tool`、`tool` |
-| 平台 | `workspace` |
-| 迁移 | `flyway_schema_history` |
+| 后端 `mvn -B test`（默认，无 LIVE 开关） | **810** 个用例：**0** 失败 / **0** 错误 / **33** 跳过，BUILD SUCCESS（4 模块，2026-10-15；common 19 / ai 76 / knowledge 174 / app 541——较上轮 +46 个用例，全部是 P0 工具授权与人工审批） |
+| 前端 `npm run build`（`tsc --noEmit && vite build`） | exit 0（2026-10-14；仅有既存的 chunk 体积警告） |
+| compose 配置校验 | `docker compose config --quiet` 通过（缺 3 个必填变量时拒绝启动，2026-10-14 复验） |
+| 前端 QA | `verify:all` 等浏览器 QA 脚本：**NOT VERIFIED**（本轮未跑完整 QA 集；截图见 §1） |
 
-- 迁移由 **Flyway** 管理（`nexus-app/src/main/resources/db/migration/`），当前 **V1–V18**。
-- **没有 V11**：编号为某阶段预留后未使用，Flyway 不要求连续。
-- **只增不改**：新增字段一律 `ADD COLUMN` 带默认值，不改名、不删除。
-- 向量库有独立的迁移目录（`db/vector-migration/`），因为 pgvector 表不在 Flyway 的业务库管辖范围内。
-- 所有外键都是**逻辑外键**（不建物理约束）。
-
-> 完整 ER 图、字段说明与索引设计见 [docs/database.md](docs/database.md)。
-
----
-
-## 8. 安全设计
-
-| 机制 | 实现 |
-| --- | --- |
-| 认证 | JWT（HS256），claims 含 `sub/username/roles/ver/jti/iss/iat/exp` |
-| 密码 | BCrypt 哈希 |
-| 令牌吊销 | `token_version`；改密码后 bump 版本，**所有已签发令牌立即失效** |
-| 登录失败冻结 | 连续失败达阈值后冻结一段时间（fail-open） |
-| 限流 | 按用户与 IP 的固定窗口计数，返回 `Retry-After`（fail-open） |
-| 每日配额 | 请求数 + token 数双限额，日历日键 + TTL（**fail-closed**） |
-| 用户隔离 | `CurrentUser.requireId()` 取用户；`requireOwned/requireAllOwned` 把 `user_id` **写进 SQL 查询**，不是取回来再过滤 |
-| 越权语义 | 返回 404 / 3001，**不返回 403**（不泄露资源是否存在） |
-| 上传防护 | ZIP Slip 词法拒绝（`..` / 绝对路径 / `C:/`）后**整批中止**；Zip Bomb 三层上限（条目数 / 单文件 / 总量，按**解压后**字节判） |
-| 部署 | `JWT_SECRET` / `AI_CHAT_API_KEY` 用 `${VAR:?…}` fail-closed——缺了 compose **拒绝启动**；backend 不发布端口 |
-
-**未实现**（不要误以为有）：OAuth2 / 第三方登录、refresh token、服务端 logout、CSRF token、TLS、安全响应头、字段级加密、KMS/Vault。
-
-> 逐条机制与证据见 [docs/security.md](docs/security.md)。
-
----
-
-## 9. Docker 部署
-
-一条命令得到完整系统（8 个服务）：
+默认 `mvn test` 跳过的用例是需要真实基础设施 / 真实模型的 **LIVE 测试**（Testcontainers 自起 ES/PG 的检索类、
+连真实模型的嵌入/对话类），由环境变量门控（如 `AI_SEARCH_LIVE=true`、`AI_VECTOR_LIVE=true`、
+`AI_EMBEDDING_LIVE=true`、或非空的 `AI_CHAT_API_KEY`）。**只要 shell 里设了 `AI_CHAT_API_KEY`（哪怕是占位值），对应 LIVE 套件就会执行**；无有效密钥时会失败——这不是默认 CI 口径。GitHub Actions 故意不注入任何模型密钥。
 
 ```bash
-# 1) 先用 JDK 21 打出 jar（镜像里只运行、不构建）
-JAVA_HOME=/d/develop/jdk-21 mvn -B package -DskipTests
-
-# 2) 配置必填 secret
-cd deploy
-cp .env.example .env        # 填 JWT_SECRET 与 AI_CHAT_API_KEY；缺了 compose 会拒绝启动
-
-# 3) 起整栈
-docker compose build && docker compose up -d
-docker compose ps           # 等 8 个服务全部 (healthy)
-
-# 4) 浏览器打开
-#    http://localhost:8088
+# 与 CI 一致：先确保未导出 AI_CHAT_API_KEY / *_LIVE
+mvn -B test                    # 默认：单元 + MockMvc/集成，LIVE 用例自动跳过
+cd frontend && npm run build   # 前端类型检查 + 生产构建（tsc --noEmit && vite build）
 ```
 
-8 个服务：`mysql`、`postgres-pgvector`、`redis`、`elasticsearch`、`rabbitmq`、`ollama`、`backend`、`frontend`。
-容器里只有 JRE 与静态资源，**不需要在容器内装 JDK / Maven / Node**；`backend` **不发布端口**，只有 nginx 对外。
-
-> 环境变量、端口、健康检查、初始化顺序、日志查看、数据持久化、启停与更新、常见问题，全部见
-> [docs/deployment.md](docs/deployment.md) §2。**该文档的步骤是从零可执行的**，不是示意。
+> 证据分级：UNIT / INTEGRATION / E2E（真浏览器）/ LIVE（真 ES/pgvector/模型）/ REAL ENVIRONMENT（整栈）。
+> 没真跑过的一律标 **NOT VERIFIED**。历史各轮验收数字保留在 [docs/deployment.md](docs/deployment.md) §8（带日期，勿与当前口径混用）。
 
 ---
 
-## 10. 本地开发
+## 9. Known Limitations & Roadmap / 已知限制与路线图
 
-### 方式 A：`standalone`——完全不需要 Docker
+当前仍欠的事（完整清单与优先级见 [docs/roadmap.md](docs/roadmap.md)）：
 
-用 H2 内存库跑通全部功能，**重启即清空**：
-
-```powershell
-$env:JAVA_HOME = 'D:\develop\jdk-21'
-mvn -B clean package -DskipTests
-java -jar nexus-app\target\nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=standalone
-
-# 另开终端：冒烟测试（注册→登录→建会话→问答→流式+停止→查历史）
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
-
-# （可选 / 历史遗留）手动造演示数据：仅对已归档的 Vue E2E 有用；
-# 当前 React 前端 QA 走 mock，不需要这一步（H2 重启后数据即失效）
-node scripts\seed-demo.mjs
-```
-
-### 方式 B：`local`——基础设施在容器、后端在宿主机
-
-改代码频繁重启时更方便：
-
-```powershell
-cd deploy
-docker compose up -d mysql postgres elasticsearch redis rabbitmq ollama
-docker compose ps            # 等 6 个服务 (healthy)
-
-cd ..
-$env:JAVA_HOME = 'D:\develop\jdk-21'
-mvn -B clean package -DskipTests
-java -jar nexus-app\target\nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=local
-```
-
-| 服务 | 地址 |
-| --- | --- |
-| MySQL | `localhost:3307`（宿主机原生 MySQL 占了 3306，故映射到 3307） |
-| PostgreSQL | `localhost:5433` |
-| Elasticsearch | http://localhost:9200 |
-| RabbitMQ 控制台 | http://localhost:15672 |
-| Redis | `localhost:6379` |
-
-### 前端
-
-```powershell
-cd web
-npm install
-npm run dev        # http://localhost:5173（/api 由 Vite 代理到后端 8080，不涉及 CORS）
-npm run build      # vue-tsc 类型检查 + vite build
-```
-
-三个 profile 的分工：`local`（真实 MySQL，日常开发）、`standalone`（H2 内存，无 Docker 时应急）、`test`（H2，跑测试）。
-**新增 profile 配置或迁移脚本后必须重新 `package`**，否则 jar 里还是旧的。
+1. **检索事件命中列表未持久化** —— 「检索到 N 个片段」卡片刷新后消失（引用列表已落库，两者不同）。
+2. **安全加固** —— TLS 终结、安全响应头、Token 从 localStorage 迁移等（access JWT 仍短 TTL，refresh 已可服务端吊销）。
+3. **CI 覆盖面** —— 已有最小 GitHub Actions（后端默认 `mvn test` + 前端 `npm run build` + `compose config`）；**LIVE / 真浏览器 E2E 尚未进流水线**。
+4. **前端首包体积** —— `elk`（约 1.46 MB / gzip 456 KB）与主 chunk（约 1.18 MB / gzip 392 KB，2026-10-14 `npm run build`）偏大，来自 mermaid/elk 与 markdown 渲染链。
+5. **取消注册表与审批等待注册表仅内存**（进程重启后 `WAITING_APPROVAL` 的运行被标为 `FAILED`，而不是被恢复）、**观测无时间序列、无物理外键、单机部署** 等工程边界。
+6. **审批的两条未做边界**：`GET /api/tool-invocations`（审计数据已落库，查询接口未开）与 `POST /api/agent/runs` 自身的流式形态（`approval_required` 事件走 `/api/chat/stream` 的工具拦截点）。
 
 ---
 
-## 11. 前端验证（E2E / QA）
-
-当前前端是 `frontend/`（React 19 + Vite）。验证脚本在 `frontend/scripts/`，
-通过 `package.json` 的 `npm run verify:<name>` 调用，**复用系统 Edge**（`playwright-core`，不下载浏览器）：
-
-```powershell
-cd D:\develop\Prisma\frontend
-npm run build          # tsc --noEmit && vite build（本轮实测 exit 0）
-npm run verify:all     # 汇总门禁（不含需后端的 verify:mode-switch-real）
-```
-
-- **mock 类脚本**（`verify:routing` / `verify:interactions` / `verify:unify` / `verify:chat` /
-  `verify:mode-switch` 等）需要一个以 `VITE_USE_MOCK=true` 启动的 dev server（默认端口 `5175`），
-  否则脚本靠 legacy flag 预置的登录会失效、等 `.shell` 超时。
-- **`verify:mode-switch-real`** 需要后端在 `8080`、dev server 带 `/api` proxy 且**非** mock；
-  它**不在 `verify:all` 里**。
-- 截图证据写到 `docs/prototypes/shots/`（各 QA 脚本的 `z*-*.png` 与 `verify:shots` 产出）。
-- **Vue 时代的 17 个 `web/scripts/verify-*.mjs` 已随 `web/` 归档到 `docs/archive/web-vue/scripts/`**，
-  当前流程不再使用；它们描述的地址口径（`e2e-config.mjs`）同样只对归档副本有效。
-- 本轮实测：`verify:mode-switch`（mock）11/11 通过；`verify:chat` 144/0 通过。
-
-## 12. 测试情况
-
-| 口径 | 数字 |
-| --- | --- |
-| 单元 + 集成测试 | **648 / 0 失败 / 0 错误 / 24 跳过**（125 个测试类，2026-10-09 第二阶段 `mvn -o test` 实测） |
-| 真机（容器化整栈） | 上面那 24 个 live 测试**全部真跑通过，0 跳过** |
-
-那 24 个跳过项**不是被删掉的失败**：它们是需要真实 MySQL / ES / pgvector / 真模型的 live 测试，
-在无 Docker 的默认环境里被跳过，在整栈起来后全部执行并通过。构成（实测 surefire）：
-`LiveChunkIndexTest` 9 / `LiveVectorStoreTest` 4 / `ChatStreamLiveTest` 3 /
-`LiveEmbeddingTest` 2 / `LiveModelCallTest` 2 / `MySqlJsonRoundTripTest` 2 / `AgentLoopTest` 1 / `MultiTurnMemoryTest` 1。
-其中两个检索类自 5.9 起**自带容器**（Testcontainers，见第 10 节 `LiveInfrastructure`），
-因此它们的跳过与否只取决于环境变量，不再取决于"你本机那套业务容器此刻是什么状态"。
-
-按模块：`nexus-common` 19 / `nexus-ai` 66 / `nexus-knowledge` 174 / `nexus-app` 389。
-
-```bash
-JAVA_HOME=/d/develop/jdk-21 mvn -B clean test        # 全量
-cd frontend && npm run build                         # 前端类型检查 + 构建
-```
-
-> **跑测试前先 `docker compose stop`**。整栈 8 个容器占着内存时，Mockito 的 ByteBuddy 自附加
-> （它要再 fork 一个 JVM）会失败，报 `does not supply a working agent attachment mechanism`——
-> 这个报错看着像 JDK 有问题，**实际是内存不足**。跑完 `docker compose start` 恢复。
-
-**证据分级**：本项目文档对每条结论标注验证层级——`UNIT`（单元测试）/ `INTEGRATION`（MockMvc 等集成）/ `E2E`（真浏览器）/ `LIVE`（真 MySQL/ES/pgvector）/ `REAL ENVIRONMENT`（整栈容器化）。
-**凡是没真跑过的，就写 NOT VERIFIED**，不用"应该没问题"糊过去。
-
----
-
-## 13. 项目演进
-
-平台化升级是一条与功能 Phase 并行的轨道，每个阶段都有决策记录与验收证据（[docs/decisions.md](docs/decisions.md) 附录 B）：
-
-| 阶段 | 内容 |
-| --- | --- |
-| 平台化 1 | 架构分析（**未改代码**） |
-| 平台化 2 | `workspace` 领域模型 + 知识库平台字段（迁移 V9/V10） |
-| 平台化 3.1–3.4 | Retriever 端口抽象（含新旧一致性测试）、检索参数真正可配置、元数据过滤下推、RAG 会话流式 |
-| 平台化 4.1–4.2 | Agent 配置化（后端 CRUD + 前端管理页） |
-| 平台化 5.3–5.5 | 知识库闭环（上传 / 删文档 / 失败原因）、Agent 闭环（温度 / 工具白名单 / 出处）、多知识库 RAG |
-| 平台化 5.6 | 用户与安全：改密码 + 令牌吊销、登录失败冻结、限流与每日配额 |
-| 平台化 5.5.1 | 多库检索并行化 + 逐库失败隔离 |
-| 平台化 5.7 | 部署产品化：容器化整栈 + 真机验收（18 个 live 测试全部真跑、11 个 E2E 经 nginx 全绿） |
-| 平台化 5.8 | 产品化收口与最终验收（本文档重写 + RAG/Agent/安全/架构/部署文档补齐 + 全链路冒烟） |
-| 平台化 5.9 | 最终完善：ES 索引按库隔离、引用落库、Micrometer 指标、Live 测试自带宽容器、MCP 工具权限、JWT `iss` 校验、过期注释 |
-
-**当前状态**：功能 Phase 1–5 与平台化轨均已完成到 5.9，可运行的是一条完整链路（导入 → 检索 → RAG → Agent → 工具 → 引用 → 可观测），而**不是**一堆独立的演示端点。
-
-在这之后又做了一轮**产品化收口**（不新增 Phase，只修"真实用户长期使用"会踩到的问题）：
-会话删除补齐 `SPRING_AI_CHAT_MEMORY` 级联、评测集入口从普通对话页移到 Agent 管理页、
-Agent 页去掉实现叙述、知识库详情页统一为「导入」词汇，以及 E2E 全面脱离演示账号
-（`API_BASE` 口径收进 `docs/archive/web-vue/scripts/lib/e2e-config.mjs`）。
-逐项见 [docs/archive/reports/user-acceptance-issues.md](docs/archive/reports/user-acceptance-issues.md) 的 UA-018 ~ UA-021。
-
----
-
-## 14. 已知限制
-
-诚实列出，不藏：
-
-**架构级**
-1. **Observability 无后端**——已接 Micrometer（`/actuator/metrics` 可读），但**没有 Prometheus / Grafana、没有时间序列**，计数仍是进程内累计、重启清零。
-2. ~~Citation 是部分实现~~ → **5.9 五 已补**：会话流式（RAG 与 Agent 模式）的引用随消息落库
-   （`chat_message.metadata.citations`，含 `knowledgeBaseId`），刷新聊天页面后仍在，多库下能标出来源库。
-3. **没有 `citation` SSE 事件**——引用随 `done` 的 `citations` 字段给出，不单开一个事件。
-4. **Agent 最大迭代没有显式旋钮**——终止条件由框架与工具数量上限决定。
-5. **`answerPolicy` 只在提示词层强制**，不是代码级断言。
-6. **`RerankedRetriever` 装饰器休眠**——重排在 `RagAnswerServiceImpl` 里直接调用，端口有了但没接线。
-7. ~~MCP 直连 `tools/call` 绕过用户启停~~ → **5.9 八 已修**：`tools/list` 与 `tools/call` 同走 `ToolRegistry.enabledFor`。
-8. **流式取消注册表只在内存**，多实例 / 重启即失效。
-9. **无 refresh token，logout = 客户端丢弃 token**（`iss` 自 5.9 九 起**已校验**）。
-
-**工程级**
-10. ~~ES 索引 `recreateIndex()` 不是同秒幂等的~~ → **5.9 四 已修**：物理索引名尾部加 `AtomicLong` 序号。
-11. ~~`LiveChunkIndexTest` 会清空共享 ES 索引~~ → **5.9 七 已修**：`Live*` 测试自带一次性容器（Testcontainers），碰不到开发栈的数据。
-12. **`retrieval` 事件的命中列表未持久化**——"检索到 N 个片段"卡片刷新后消失（引用列表已落库，见第 2 条；两者不是同一件事）。
-13. **无物理外键**，全部逻辑外键。
-14. **真机容器的 Live 测试仍由环境变量开关**（默认跳过）——`docker compose stop` 后 `mvn test` 才能全绿，CI 里可重复的一步尚未接。
-15. **配额与限流在 Redis 不可用时降级为进程内实现**，多实例下可绕过。
-16. **软删除 / 停用不会立即吊销已签发令牌**。
-17. **token 存在 localStorage**，有 XSS 暴露面。
-
-完整清单与分级见 [docs/archive/reports/productization-gap-analysis.md](docs/archive/reports/productization-gap-analysis.md)。
-
----
-
-## 15. Roadmap
-
-**下一步优先级**（依据 gap 分析，不是愿望清单）：
-
-1. **检索事件的持久化**——引用已落库（5.9 五），仍未落库的是 `retrieval` 的命中列表本身。
-2. **安全加固**——TLS 终结、安全响应头、logout 与 refresh token、把 token 从 localStorage 挪走。
-3. **CI 化**——把真机回归（Testcontainers + E2E 脚本）从"人工跑"变成流水线里可重复的一步。
-4. **Phase 6+ 的功能扩展**——Workflow / Evaluation / 更完整的 MCP（当前 MCP 只有 4 个方法）。
-
-> 长期阶段拆分（Phase 0–11）见 [docs/roadmap.md](docs/roadmap.md)。
-> ⚠️ **该文档的 Phase 编号与上文"平台化 5.x"不是同一套编号**，两者同名不同义，读的时候注意区分。
-> 产品化差距与分级（P1/P2/P3）见 [docs/archive/reports/productization-gap-analysis.md](docs/archive/reports/productization-gap-analysis.md)。
-
----
-
-## 文档索引
+## 10. Documentation / 文档索引
 
 | 文档 | 内容 |
 | --- | --- |
-| [docs/architecture.md](docs/architecture.md) | 系统架构、分层规则、模块化单体的理由、数据流 |
-| [docs/rag.md](docs/rag.md) | 文档导入、混合检索、多库检索、元数据过滤、零命中行为、引用 |
-| [docs/agent.md](docs/agent.md) | Agent 三类的职责、执行链路、工具白名单、状态、温度、流式与停止 |
-| [docs/security.md](docs/security.md) | JWT / BCrypt / 令牌吊销 / 冻结 / 限流 / 配额 / 隔离 / 上传防护 |
-| [docs/deployment.md](docs/deployment.md) | 部署与使用（含容器化整栈、从零可执行步骤、验收证据表） |
-| [docs/database.md](docs/database.md) | ER 图、核心表设计、索引、Redis/ES 结构 |
-| [docs/api.md](docs/api.md) | 统一返回、错误码、REST 与 SSE 协议（含"规划中未实现"的明确标注） |
-| [docs/decisions.md](docs/decisions.md) | 架构决策记录（ADR）+ 每阶段实测记录 |
-| [docs/archive/reports/productization-gap-analysis.md](docs/archive/reports/productization-gap-analysis.md) | 产品化差距审计与 P1/P2/P3 分级 |
-| [docs/roadmap.md](docs/roadmap.md) | Phase 0–11 任务拆分（注意编号体系与平台化轨不同） |
-| [docs/archive/reports/platform-upgrade-phase1-analysis.md](docs/archive/reports/platform-upgrade-phase1-analysis.md) | 平台化升级的架构分析 |
-| [docs/archive/reports/platform-phase3-baseline.md](docs/archive/reports/platform-phase3-baseline.md) | 平台化 Phase 3 基线与真机验证记录 |
+| [docs/deployment.md](docs/deployment.md) | 三种运行方式、compose 编排、环境变量、持久化、健康检查、故障排查（§8 为带日期的历史真机验收） |
+| [docs/architecture.md](docs/architecture.md) | 分层规则、模块化单体理由、数据流 |
+| [docs/rag.md](docs/rag.md) | 导入、混合检索、多库扇出、元数据过滤、零命中行为、引用 |
+| [docs/agent.md](docs/agent.md) | Agent 职责、执行链路、工具白名单、温度与回答策略、流式与停止 |
+| [docs/security.md](docs/security.md) | JWT / Refresh / BCrypt / 限流 / 配额 / 隔离 / 上传防护与已知边界 |
+| [docs/database.md](docs/database.md) | ER 图、核心表、索引、Redis/ES 结构 |
+| [docs/api.md](docs/api.md) | 统一返回、错误码、REST 与 SSE 协议（含"规划中未实现"标注） |
+| [docs/roadmap.md](docs/roadmap.md) | 当前未完成待办 + Phase 0–11 历史规划（编号体系说明见文首） |
+| [docs/decisions.md](docs/decisions.md) | 架构决策记录（ADR）与分阶段实测记录 |
+| [docs/archive/](docs/archive/) | 旧 Vue 版前端、历史报告与截图 —— **历史记录，不是当前操作说明** |
+
+---
 
 ## 开发约定
 
-1. **一次只做一个 Step**：需求 → 设计 → 实现 → 运行 → 测试 → 总结，完成后再进入下一步。
-2. **分层不可跨越**：`Controller → Service → Domain/Mapper`；Controller 不碰数据库、不直接调 LLM。
-3. **可运行优先**：不为"看起来高级"引入无实际价值的组件。
-4. **每个核心模块必须有测试**。
-5. **答案必须区分来源**：知识库内容 / 检索到的外部资料 / 模型自身知识 / 模型推测。
-6. **文档与代码同一次提交**，测试数字用实测值，没跑过的写 NOT VERIFIED。
+1. 分层不可跨越：`Controller → Service → Domain/Mapper`；Controller 不碰数据库、不直接调 LLM。
+2. 每个核心模块必须有测试；测试数字只用实测值，没跑过的写 NOT VERIFIED。
+3. 文档与代码同一次提交；不为"看起来高级"引入无实际价值的组件。
+4. 答案必须区分来源：知识库内容 / 检索到的外部资料 / 模型自身知识 / 模型推测。

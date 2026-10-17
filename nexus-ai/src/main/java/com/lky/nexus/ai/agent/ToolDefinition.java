@@ -48,6 +48,16 @@ public record ToolDefinition(
         ToolCategory category,
 
         /**
+         * 权限分级（P0）：执行前是否需要人工审批的**唯一依据**。
+         *
+         * <p>注意这里放的是"代码声明的默认值"。运行时真正生效的那一份在
+         * {@code ai_tool_registry.permission}（V22）：管理员把它改成 DANGEROUS 之后，
+         * 执行拦截读的是库里的值。两者不一致时以库为准——理由是安全默认：
+         * 降级必须显式发生在数据里，不能被"代码里写着 READ"悄悄覆盖。
+         */
+        ToolPermission permission,
+
+        /**
          * 入参 JSON Schema：由实现的 {@code @Tool} 方法反射生成，<b>只活在内存里</b>
          * （{@code tool} 表没有这一列）。MCP 的 {@code tools/list} 直接读它——
          * 正是为了让 MCP 客户端看到的 schema 与模型看到的永远是同一份。
@@ -72,13 +82,15 @@ public record ToolDefinition(
         description = requireText(description, "description");
         Objects.requireNonNull(source, "ToolDefinition.source 不能为空");
         Objects.requireNonNull(category, "ToolDefinition.category 不能为空");
+        Objects.requireNonNull(permission, "ToolDefinition.permission 不能为空："
+                + "缺失等于「权限未知」，而未知权限必须默认拒绝——不要用 null 表示 READ");
         Objects.requireNonNull(jsonSchema, "ToolDefinition.jsonSchema 不能为空："
                 + "它由实现的 @Tool 方法反射生成，缺失说明装配环节出了问题（不要拿 null 去糊 MCP 的 tools/list）");
     }
 
     /** 给日志与痕迹用的一句话描述。 */
     public String describe() {
-        return "%s(%s, %s%s)".formatted(code, name, source,
+        return "%s(%s, %s, %s%s)".formatted(code, name, source, permission,
                 builtin ? ", 内置" : "");
     }
 

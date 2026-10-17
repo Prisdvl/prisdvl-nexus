@@ -74,6 +74,11 @@ public final class ErrorCodeHttpStatusMapper {
             // 但对外仍然是"这个 code 没有对应的资源"，前端按 404 展示即可，不必分成两个码
             case TOOL_NOT_FOUND -> HttpStatus.NOT_FOUND;
 
+            // P0：运行不存在（含越权）→ 404；状态类拒绝 → 409
+            // （与 AGENT_DISABLED 同一条理由：请求格式对，是资源当前状态不允许）
+            case AGENT_RUN_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case AGENT_RUN_STATE_INVALID, APPROVAL_NOT_PENDING, AGENT_RUN_CANCELLED -> HttpStatus.CONFLICT;
+
             // 7xxx 限流
             case RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
 
@@ -85,6 +90,8 @@ public final class ErrorCodeHttpStatusMapper {
             // 与 AGENT_DISABLED 同一条理由用 409 而不是 400：用户的请求格式是对的，
             // 换接口就行，改参数没用
             case CONVERSATION_MODE_UNSUPPORTED -> HttpStatus.CONFLICT;
+            // Workflow：访问别人的工作流或运行不暴露存在性，统一 404
+            case WORKFLOW_NOT_FOUND, WORKFLOW_RUN_NOT_FOUND -> HttpStatus.NOT_FOUND;
         };
     }
 }

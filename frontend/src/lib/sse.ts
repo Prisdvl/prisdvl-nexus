@@ -4,7 +4,7 @@
  * 不用 EventSource：它只能 GET 且不能带 Authorization 头；本项目的流式对话是
  * POST /api/chat/stream + Bearer 令牌，所以这里手写帧解析。
  * 事件名是后端 SseEventNames 的契约：meta / delta / retrieval / tool_call /
- * tool_result / usage / done / error（见 docs/api.md 5.2）。
+ * tool_result / approval_required / usage / done / error（见 docs/api.md 5.2）。
  */
 import { API_BASE, tokenStore } from '@/lib/api'
 
@@ -14,6 +14,8 @@ export interface SseHandlers {
   onRetrieval?: (d: Record<string, unknown>) => void
   onToolCall?: (d: Record<string, unknown>) => void
   onToolResult?: (d: Record<string, unknown>) => void
+  /** 工具被权限闸门拦下、等待人工审批（payload: runId / approvalId / toolCode / arguments / reason） */
+  onApprovalRequired?: (d: Record<string, unknown>) => void
   onUsage?: (d: Record<string, unknown>) => void
   onDone?: (d: Record<string, unknown>) => void
   onError?: (message: string) => void
@@ -70,6 +72,7 @@ function dispatch(frame: string, h: SseHandlers): void {
     case 'retrieval': h.onRetrieval?.(payload); break
     case 'tool_call': h.onToolCall?.(payload); break
     case 'tool_result': h.onToolResult?.(payload); break
+    case 'approval_required': h.onApprovalRequired?.(payload); break
     case 'usage': h.onUsage?.(payload); break
     case 'done': h.onDone?.(payload); break
     case 'error': h.onError?.(String(payload.message ?? '生成失败')); break

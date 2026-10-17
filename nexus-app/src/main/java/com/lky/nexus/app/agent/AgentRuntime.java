@@ -105,6 +105,20 @@ public class AgentRuntime {
      * @param question   用户问题
      */
     public AgentAnswer ask(Long userId, AgentDefinition definition, String question) {
+        return ask(userId, definition, question, null);
+    }
+
+    /**
+     * 跑一次 Agent，并把过程事件交给调用方提供的监听器（P0：运行状态机用）。
+     *
+     * <p>它与 {@link #ask(Long, AgentDefinition, String)} 是同一条实现：一次性调用的三件
+     * （提示词、工具、ToolContext）与流式对话共用 {@link #configure}，本方法只是把
+     * "痕迹往哪送"变成参数。审批事件正是靠这条链路从执行壳回到发起者的。
+     *
+     * <p>{@code listener} 为 null 时退化成"只收痕迹、不推事件"，与旧行为完全一致。
+     */
+    public AgentAnswer ask(Long userId, AgentDefinition definition, String question,
+                           AgentContext.ToolCallListener listener) {
         long start = System.currentTimeMillis();
         // Agent 执行次数（5.9 六）：四个一次性入口（/api/agent/ask、Agent 试跑、评测、MCP）
         // 全都汇到这里。计数点选在**这里而不是 configure**——configure 也被流式链路调用，
@@ -112,11 +126,14 @@ public class AgentRuntime {
         observabilityRegistry.increment(ObservabilityRegistry.AGENT_EXECUTIONS);
         // 痕迹由监听器收进本次调用的私有列表：不共享状态，天然并发安全
         List<AgentContext.ToolCallRecord> trace = new ArrayList<>();
+        AgentContext.ToolCallListener effective = listener == null
+                ? AgentContext.collector(trace)
+                : new TraceCollectingListener(listener, trace);
         String answer;
         try {
             // 传 userId：用户配了自己的对话模型就走他自己的凭据跑 Agent，未配置回落全局模型。
             answer = configure(chatClientFactory.get(definition.modelRole(), userId).prompt(),
-                    userId, definition, AgentContext.collector(trace))
+                    userId, definition, effective)
                     .user(question)
                     // token 记账归属（5.6）。Agent 会跑多轮工具循环，而 UsageMeteringAdvisor
                     // 位于工具循环内侧 ⇒ 每一轮各记一笔。这不是重复：每一轮都真的调了一次模型
@@ -149,5 +166,51 @@ public class AgentRuntime {
      */
     public AgentAnswer askWithDefault(Long userId, String question) {
         return ask(userId, agentService.resolveDefault(userId), question);
+    }
+
+    /**
+     * 把过程事件同时送两个地方：调用方提供的监听器（可能推 SSE、可能落运行轨迹），
+     * 以及本类自己的痕迹列表（{@link AgentAnswer#toolCalls()} 要用）。
+     *
+     * <p>不这样做的话，要么调用方拿不到事件，要么 {@code AgentAnswer} 里的工具轨迹变成空——
+     * 后者会让"回答里写过工具调用，但 trace 是 0 条"，与 4.3 修过的静默缺口是同一类问题。
+     * 每个方法都必须转发，尤其是 {@link #runId()} 与 {@link #onApprovalRequired}：
+     * 漏掉它们审批链路就会以为"这条运行没有审批通道"，从而默认拒绝。
+     */
+    private static final class TraceCollectingListener implements AgentContext.ToolCallListener {
+
+        private final AgentContext.ToolCallListener delegate;
+        private final List<AgentContext.ToolCallRecord> sink;
+
+        TraceCollectingListener(AgentContext.ToolCallListener delegate, List<AgentContext.ToolCallRecord> sink) {
+            this.delegate = delegate;
+            this.sink = sink;
+        }
+
+        @Override
+        public void onCall(String tool, String input) {
+            delegate.onCall(tool, input);
+        }
+
+        @Override
+        public void onResult(AgentContext.ToolCallRecord record) {
+            sink.add(record);
+            delegate.onResult(record);
+        }
+
+        @Override
+        public void onRetrieval(String tool, List<com.lky.nexus.knowledge.service.ChunkSearchService.SearchHit> hits) {
+            delegate.onRetrieval(tool, hits);
+        }
+
+        @Override
+        public Long runId() {
+            return delegate.runId();
+        }
+
+        @Override
+        public void onApprovalRequired(AgentContext.ApprovalRequired event) {
+            delegate.onApprovalRequired(event);
+        }
     }
 }

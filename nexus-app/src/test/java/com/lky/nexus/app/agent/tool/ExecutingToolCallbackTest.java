@@ -1,6 +1,7 @@
 package com.lky.nexus.app.agent.tool;
 
 import com.lky.nexus.ai.agent.ToolCategory;
+import com.lky.nexus.ai.agent.ToolPermission;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -84,8 +85,14 @@ class ExecutingToolCallbackTest {
     private ExecutingToolCallback shell(ToolCallback callback, ObservabilityRegistry observability) {
         // 假工具声明 selfReports = true（"自己上报"这一侧）：本类只看壳自己那三件事。
         // "谁都不许少报一条痕迹"这个不变量由 ToolResourceTest 对真实注册表逐条断言（B.40）
+        //
+        // 权限按被测工具的真实风险写：它是"一调用就抛"的假工具（下面叫 bomb），
+        // 语义上属于 DANGEROUS。这里刻意不写成 READ —— 权限是执行拦截的依据，
+        // 为了少传一个参数而把危险工具标成 READ，正是这个特性要防的事。
+        // （本用例用的是不带闸门的构造器：验证的是执行壳自身，授权路径由 ApprovalFlowTest 覆盖。）
         return new ExecutingToolCallback(new ToolCatalog.Registered(
-                "boom", "炸弹工具", ToolCategory.OTHER, "测试用", "{\"type\":\"object\"}", callback, true),
+                "boom", "炸弹工具", ToolCategory.OTHER, ToolPermission.DANGEROUS,
+                "测试用", "{\"type\":\"object\"}", callback, true),
                 observability);
     }
 

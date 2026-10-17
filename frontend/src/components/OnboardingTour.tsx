@@ -2,6 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import '@/styles/tour.css'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
+import Loc from '@/components/Loc'
+
+type TourCopy = ReturnType<typeof appCopy>['tour'] & { navKb: string; navChat: string }
 
 /** 首次登录的引导是否已看过 */
 const DONE_KEY = 'nx-proto-tour-done'
@@ -35,45 +40,55 @@ const navItem = (label: string) =>
  *  2) 遮罩 **pointer-events: none**（只有说明卡片可点）：引导不该阻断用户操作，
  *     也避免把"正常功能测试"挡在外面。
  */
-const STEPS: Step[] = [
+/**
+ * 引导步骤按语言生成：标题 / 描述 / 锚点标签都随 locale 变。
+ * 若写成模块级常量，切换语言后卡片仍是旧文案，且 navItem() 会找不到已改名的导航项。
+ */
+function buildSteps(t: TourCopy): Step[] {
+  return [
   {
     id: 'new',
-    title: '从「新对话」开始',
-    desc: '想聊就聊，不用先建文件夹。会话会自动收进左侧列表，随时回来接着问。',
+    title: t.s1title,
+    desc: t.s1desc,
     place: 'right',
     find: () => document.querySelector<HTMLElement>('.sb-row--quick'),
   },
   {
     id: 'kb',
-    title: '先让知识库有料',
-    desc: '上传 PDF / Markdown 后会被切分、向量化；对话里 @ 一下就能引用它作答。',
+    title: t.s2title,
+    desc: t.s2desc,
     place: 'right',
-    find: () => navItem('知识库'),
+    find: () => navItem(t.navKb),
   },
   {
     id: 'chat',
-    title: '回答要能追溯',
-    desc: '对话区右侧的横线是提问导航；回答上方的工具调用轨迹会显示检索了哪些库、读了哪篇文档。',
+    title: t.s3title,
+    desc: t.s3desc,
     place: 'right',
-    find: () => navItem('对话'),
+    find: () => navItem(t.navChat),
   },
   {
     id: 'composer',
-    title: '输入框里的两个快捷键',
-    desc: '输入 @ 引用数据源（知识库 / 上传文件 / 联网），输入 / 打开快捷命令。',
+    title: t.s4title,
+    desc: t.s4desc,
     place: 'top',
     find: () => document.querySelector<HTMLElement>('.prompt-bar__field'),
   },
   {
     id: 'settings',
-    title: '外观与数据都在这里',
-    desc: '主题、配色、通知、用量与数据导出，统一收在「设置」里。',
+    title: t.s5title,
+    desc: t.s5desc,
     place: 'right',
     find: () => document.querySelector<HTMLElement>('.sb-row--settings'),
   },
-]
+  ]
+}
 
 export default function OnboardingTour() {
+  const { locale } = useLocale()
+  const copy = appCopy(locale)
+  const t = useMemo<TourCopy>(() => ({ ...copy.tour, navKb: copy.nav.kb, navChat: copy.nav.chat }), [copy])
+  const steps = useMemo(() => buildSteps(t), [t])
   const [open, setOpen] = useState(false)
   const [index, setIndex] = useState(0)
   /* 目标与卡片位置（滚动/缩放时重算） */
@@ -107,11 +122,11 @@ export default function OnboardingTour() {
   /* 当前步骤（跳过找不到目标的步骤） */
   const step = useMemo(() => {
     if (!open) return null
-    for (let i = index; i < STEPS.length; i += 1) {
-      if (STEPS[i].find()) return { ...STEPS[i], at: i }
+    for (let i = index; i < steps.length; i += 1) {
+      if (steps[i].find()) return { ...steps[i], at: i }
     }
     return null
-  }, [open, index])
+  }, [open, index, steps])
 
   /* 计算高亮框与卡片位置 */
   useEffect(() => {
@@ -149,23 +164,23 @@ export default function OnboardingTour() {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') finish()
-      if (e.key === 'ArrowRight') setIndex((i) => Math.min(i + 1, STEPS.length - 1))
+      if (e.key === 'ArrowRight') setIndex((i) => Math.min(i + 1, steps.length - 1))
       if (e.key === 'ArrowLeft') setIndex((i) => Math.max(i - 1, 0))
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [open, finish])
+  }, [open, finish, steps])
 
   /* 到最后一步后"下一步"就是完成 */
   useEffect(() => {
-    if (open && index >= STEPS.length - 1) setIndex(STEPS.length - 1)
-  }, [open, index])
+    if (open && index >= steps.length - 1) setIndex(steps.length - 1)
+  }, [open, index, steps])
 
   if (!open || !step) return null
-  const isLast = step.at === STEPS.length - 1
+  const isLast = step.at === steps.length - 1
 
   return createPortal(
-    <div className="tour" role="dialog" aria-modal="false" aria-label="新手引导">
+    <div className="tour" role="dialog" aria-modal="false" aria-label={t.aria}>
       {box && (
         <>
           {/* 高亮框：靠超大 box-shadow 把四周压暗，中心保持透明 */}
@@ -184,15 +199,15 @@ export default function OnboardingTour() {
             style={{ left: box.card.left, top: box.card.top, width: CARD_W }}
           >
             <div className="tour__head">
-              <span className="tour__badge">{step.at + 1} / {STEPS.length}</span>
-              <button className="tour__close" type="button" aria-label="关闭引导" onClick={() => finish()}>
+              <span className="tour__badge">{step.at + 1} / {steps.length}</span>
+              <button className="tour__close" type="button" aria-label={t.closeAria} onClick={() => finish()}>
                 <X size={14} />
               </button>
             </div>
-            <h3 className="tour__title">{step.title}</h3>
-            <p className="tour__desc">{step.desc}</p>
+            <h3 className="tour__title"><Loc>{step.title}</Loc></h3>
+            <p className="tour__desc"><Loc>{step.desc}</Loc></p>
             <div className="tour__actions">
-              <button className="btn btn-ghost btn-sm" type="button" onClick={() => finish()}>跳过</button>
+              <button className="btn btn-ghost btn-sm" type="button" onClick={() => finish()}><Loc>{t.skip}</Loc></button>
               <span className="tour__spacer" />
               <button
                 className="btn btn-ghost btn-sm"
@@ -200,14 +215,14 @@ export default function OnboardingTour() {
                 disabled={index === 0}
                 onClick={() => setIndex((i) => Math.max(i - 1, 0))}
               >
-                上一步
+                <Loc>{t.prev}</Loc>
               </button>
               <button
                 className="btn btn-primary btn-sm"
                 type="button"
                 onClick={() => (isLast ? finish() : setIndex((i) => i + 1))}
               >
-                {isLast ? '完成' : '下一步'}
+                <Loc>{isLast ? t.done : t.next}</Loc>
               </button>
             </div>
           </div>

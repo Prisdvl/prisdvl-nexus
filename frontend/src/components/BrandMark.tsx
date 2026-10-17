@@ -1,3 +1,6 @@
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
+
 interface BrandMarkProps {
   size?: number
   wordmark?: boolean
@@ -14,6 +17,7 @@ interface BrandMarkProps {
  * ⚠️ 原图 719×564 非方形，这里按高度等比缩放（width: auto），不做裁切拉伸。
  */
 export default function BrandMark({ size = 34, wordmark = true, tagline = false }: BrandMarkProps) {
+  const copy = appCopy(useLocale().locale).shell
   return (
     <span className="brand">
       <span className="mark" aria-hidden="true">
@@ -25,7 +29,7 @@ export default function BrandMark({ size = 34, wordmark = true, tagline = false 
         />
       </span>
       {wordmark && <span className="wordmark">Prisdvl Nexus</span>}
-      {tagline && <span className="tagline">个人知识库 · AI 对话 · 自定义 Agent</span>}
+      {tagline && <span className="tagline">{copy.tagline}</span>}
     </span>
   )
 }

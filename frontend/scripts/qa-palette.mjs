@@ -102,14 +102,14 @@ for (const theme of ['light', 'dark']) {
   for (const [label, path] of [['工作台', '/#/app/workbench'], ['知识库列表', '/#/app/kb'], ['知识库详情', '/#/app/kb/1'], ['对话', '/#/app/chat'], ['Agent', '/#/app/agents'], ['账号', '/#/app/account']]) {
     await page.goto(BASE + path, { waitUntil: 'networkidle' })
     await page.waitForTimeout(1600)
-    if (label === '工作台') await page.waitForTimeout(1200) // 等轮播渲染
+    if (label === '工作台') await page.waitForTimeout(1000) // 等图表动画稳定
     console.log(`[${theme}] ${label}:`, (await scan(page, `${theme}/${label}`)) ? 'ok' : 'FAIL')
   }
 
   // 打开真实文件导入弹窗，并检查可执行上传操作的对比度
   await page.goto(BASE + '/#/app/kb/1', { waitUntil: 'networkidle' })
   await page.waitForTimeout(1600)
-  await page.getByRole('button', { name: /导入文档/ }).click()
+  await page.getByRole('button', { name: /导入/ }).first().click()
   await page.waitForTimeout(800)
   console.log(`[${theme}] 文档导入弹窗:`, (await scan(page, `${theme}/文档导入弹窗`)) ? 'ok' : 'FAIL')
   const nextContrast = await page.evaluate(() => window.__contrast('.dialog .btn-primary'))
@@ -121,17 +121,6 @@ for (const theme of ['light', 'dark']) {
   }
   await page.keyboard.press('Escape')
   await page.waitForTimeout(400)
-
-  // 轮播指示点（非文字元素，门槛 3:1）
-  await page.goto(BASE + '/#/app/workbench', { waitUntil: 'networkidle' })
-  await page.waitForTimeout(2200)
-  const indContrast = await page.evaluate(() => window.__contrast('.carousel-indicator.active', 'backgroundColor', '.lp-carousel .carousel-item'))
-  if (indContrast !== null && indContrast >= 3) {
-    console.log(`[${theme}] 轮播激活指示点对比度: ok (${indContrast})`)
-  } else {
-    console.log(`[${theme}] 轮播激活指示点对比度: FAIL (${indContrast})`)
-    issues.push(`${theme}/轮播指示点对比度 ${indContrast} < 3`)
-  }
 
   // 新建会话模式选择控件使用主题 token
   await page.goto(BASE + '/#/app/chat', { waitUntil: 'networkidle' })

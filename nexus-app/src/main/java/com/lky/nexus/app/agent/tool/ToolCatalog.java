@@ -2,8 +2,8 @@ package com.lky.nexus.app.agent.tool;
 
 import com.lky.nexus.ai.agent.ToolCategory;
 import com.lky.nexus.ai.agent.ToolDefinition;
+import com.lky.nexus.ai.agent.ToolPermission;
 import com.lky.nexus.ai.agent.ToolSource;
-import com.lky.nexus.app.agent.KnowledgeSearchTool;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
@@ -37,19 +37,6 @@ import java.util.Optional;
 public class ToolCatalog {
 
     /**
-     * 一条内置工具的登记项。
-     *
-     * @param implementation 带 {@code @Tool} 方法的实现对象（一个类可以有多个 {@code @Tool} 方法，
-     *                       此时显示名与分类为它们共有——今天每个实现恰好只暴露一个工具）
-     * @param displayName    界面显示名（模型看不到）
-     * @param category       分类（只用于界面分组，不参与任何判定）
-     * @param selfReports    该工具是否<b>自己</b>调 {@code AgentContext.call/record} 报告过程痕迹
-     */
-    public record Declaration(Object implementation, String displayName, ToolCategory category,
-                              boolean selfReports) {
-    }
-
-    /**
      * 注册表里的一项：{@code code} 与描述/schema 全部来自实现，本类只加上显示名与分类。
      *
      * <p>{@link #callback()} 是<b>未包壳</b>的原始回调；执行壳（日志、计数、把异常变成
@@ -71,6 +58,7 @@ public class ToolCatalog {
     public record Registered(String code,
                             String displayName,
                             ToolCategory category,
+                            ToolPermission permission,
                             String description,
                             String jsonSchema,
                             ToolCallback callback,
@@ -79,7 +67,7 @@ public class ToolCatalog {
         /** 转成运行期值对象；{@code enabled} 来自用户态（没有覆盖行就是 true）。 */
         public ToolDefinition toDefinition(boolean enabled) {
             return new ToolDefinition(code, displayName, description, ToolSource.BUILTIN,
-                    category, jsonSchema, enabled, true);
+                    category, permission, jsonSchema, enabled, true);
         }
 
         public String describe() {
@@ -89,15 +77,13 @@ public class ToolCatalog {
 
     private final Map<String, Registered> byCode;
 
-    public ToolCatalog(KnowledgeSearchTool knowledgeSearchTool, CalculatorTool calculatorTool) {
-        this.byCode = register(List.of(
-                // knowledge_search 自己上报：它的痕迹要带上只有它知道的信息——
-                // "5 条结果（跳过 1 个库）"、"已降级为关键词匹配"、"检索不可用：<异常>"。
-                // 壳给不出这些，所以这类工具的详情仍然由工具自己写。
-                new Declaration(knowledgeSearchTool, "知识库检索", ToolCategory.RETRIEVAL, true),
-                // calculator 不上报：它的结果从入参和返回值就直接看得出，没有额外信息可写，
-                // 交给壳兜底即可（也正因为它是第一个"不自报"的工具，才把上面那个洞顶了出来）
-                new Declaration(calculatorTool, "计算器", ToolCategory.COMPUTE, false)));
+    /**
+     * P0 起工具来源由 {@link ToolProvider} 决定（Spring 按 {@code @Order} 注入有序列表），
+     * 而不是在构造器里写死两条。行为不变：内置 provider 的顺序仍是
+     * knowledge_search → calculator。
+     */
+    public ToolCatalog(List<ToolProvider> providers) {
+        this.byCode = register(providers);
     }
 
     /** 全部内置工具（按登记顺序：界面与 MCP tools/list 用它）。 */
@@ -109,9 +95,9 @@ public class ToolCatalog {
         return Optional.ofNullable(code == null ? null : byCode.get(code.trim()));
     }
 
-    private Map<String, Registered> register(List<Declaration> declarations) {
+    private Map<String, Registered> register(List<ToolProvider> providers) {
         Map<String, Registered> registered = new LinkedHashMap<>();
-        for (Declaration declaration : declarations) {
+        for (ToolDeclaration declaration : providers.stream().flatMap(p -> p.declare().stream()).toList()) {
             ToolCallback[] callbacks = ToolCallbacks.from(declaration.implementation());
             if (callbacks.length == 0) {
                 // 登记了却没有 @Tool 方法：这种"看起来注册了其实什么也没有"的静默缺口必须在启动时炸掉
@@ -133,8 +119,8 @@ public class ToolCatalog {
                     throw new IllegalStateException("工具 %s 没有入参 schema（反射失败？）——MCP 的 tools/list 直接读它".formatted(code));
                 }
                 Registered previous = registered.put(code, new Registered(code, declaration.displayName(),
-                        declaration.category(), definition.description(), definition.inputSchema(), callback,
-                        declaration.selfReports()));
+                        declaration.category(), declaration.permission(), definition.description(),
+                        definition.inputSchema(), callback, declaration.selfReports()));
                 if (previous != null) {
                     // code 撞车会让"按 code 绑定"这件事产生歧义（绑的是哪一个？），启动时就该停
                     throw new IllegalStateException("内置工具的 code 重复：%s（%s 与 %s 同名，模型只能看到一个）"

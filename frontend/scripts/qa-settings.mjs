@@ -40,12 +40,12 @@ const groups = await page.locator('.settings-group').allInnerTexts()
 check('左导航含 5 个分组', groups.length === 5, groups.join(' / '))
 check('分组标题正确', ['个人', '访问与安全', '通知', '数据与用量', '危险区'].every((g) => groups.includes(g)), groups.join('/'))
 const items = await page.locator('.settings-item').count()
-check('共 10 个设置分区', items === 10, `${items} 个`)
+check('共 11 个设置分区', items === 11, `${items} 个`)
 check('默认停在「公开资料」', (await page.locator('.settings-item[aria-current="true"]').innerText()).includes('公开资料'))
 check('有面包屑（分组 / 分区）', (await page.locator('.settings-crumbs').innerText()).includes('个人'))
 
 /* ---------- 2. 逐个分区都能渲染（不残留旧内容） ---------- */
-const LABELS = ['公开资料', '账号偏好', '外观', '密码与登录', '邮箱验证', '会话与设备', '通知偏好', '用量配额', '数据导出', '注销账号']
+const LABELS = ['公开资料', '模型 Key', '账号偏好', '外观', '密码与登录', '邮箱验证', '会话与设备', '通知偏好', '用量配额', '数据导出', '注销账号']
 await page.evaluate(() => {
   window.__swapped = 0
   document.addEventListener('animationstart', (e) => { if (e.animationName === 'route-in') window.__swapped++ }, true)
@@ -60,13 +60,16 @@ for (const label of LABELS) {
   rendered.push(`${label}→${title}`)
   if (!title || panels !== 1) allRendered = false
 }
-check('10 个分区都能切换到对应内容', allRendered, rendered.join(' | '))
+check('11 个分区都能切换到对应内容', allRendered, rendered.join(' | '))
 check('每次切换都播放进入过渡', (await page.evaluate(() => window.__swapped)) >= LABELS.length - 1, `${await page.evaluate(() => window.__swapped)} 次`)
 
 /* ---------- 3. 各分区关键控件在位 ---------- */
 const byItem = async (label) => { await page.locator('.settings-item', { hasText: label }).first().click(); await page.waitForTimeout(420) }
 await byItem('外观')
-check('外观分区有两组控件（主题/配色）', (await page.locator('.settings-body .appearance .rubber-segment').count()) === 2)
+const appearanceRubbers = await page.locator('.settings-body .appearance .rubber-segment').count()
+const prisdvlNote = await page.locator('.settings-body .appearance .appearance-note').count()
+const swatches = await page.locator('.settings-body .accent-swatches .accent-swatch').count()
+check('外观分区有主题分段或品牌主题说明与配色色板', (appearanceRubbers === 1 || prisdvlNote === 1) && swatches >= 4, `rubber=${appearanceRubbers} prisdvl=${prisdvlNote} swatches=${swatches}`)
 
 /* 橡皮分段：可视拇指宽度必须恰好一格
    （历史 bug：clip 停在 inset(0) 四边为 0 = 整个轨道露出，看起来"所有选项同时被选中"） */
@@ -116,7 +119,7 @@ check('撤销后策略被清空', (await page.evaluate(() => localStorage.getIte
 await byItem('密码与登录')
 check('密码与登录有修改密码按钮', (await page.locator('.settings-body button', { hasText: '修改密码' }).count()) === 1)
 await byItem('会话与设备')
-check('会话管理不伪造设备清单', (await page.locator('.settings-body .list-row').count()) === 1 && (await page.locator('.settings-body').innerText()).includes('暂不提供设备会话列表'))
+check('会话管理显示当前浏览器会话', (await page.locator('.settings-body .list-row').count()) === 1 && (await page.locator('.settings-body').innerText()).includes('当前浏览器'))
 await byItem('注销账号')
 check('注销账号无法在后端不支持时执行', (await page.locator('.settings-body .btn-danger[disabled]').count()) === 1)
 check('注销账号面板有危险色边框', (await page.locator('.settings-body .panel-danger').count()) === 1)
@@ -136,7 +139,7 @@ await page.waitForTimeout(420)
 check('无匹配时显示空状态', (await page.locator('.settings-empty').count()) === 1 && (await page.locator('.settings-item').count()) === 0)
 await page.locator('.settings-search input').fill('')
 await page.waitForTimeout(420)
-check('清空搜索后恢复 10 项', (await page.locator('.settings-item').count()) === 10)
+check('清空搜索后恢复 11 项', (await page.locator('.settings-item').count()) === 11)
 
 /* ---------- 5. 桌面截图 ---------- */
 await page.locator('.settings-item', { hasText: '外观' }).first().click()

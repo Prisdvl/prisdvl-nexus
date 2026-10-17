@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { applyDocumentLang } from './lib/locale'
 import App from './App'
 import './styles/tokens.css'
 import './styles/global.css'
@@ -15,6 +16,8 @@ import './styles/global.css'
  */
 import './bits/PromptBar/PromptBar.css';
 import './styles/chat-view.css'
+import './styles/kb-detail.css'
+import './styles/kb-manage.css'
 
 /*
  * 这里**不再**做主题的预渲染初始化。
@@ -26,6 +29,8 @@ import './styles/chat-view.css'
  * theme.ts 先正确写入 → 本文件随后用**已废弃的旧键**覆盖回 light，
  * 表现为"切了深色、刷新又变亮"（看着像持久化坏了）。删掉即修复。
  */
+
+applyDocumentLang()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

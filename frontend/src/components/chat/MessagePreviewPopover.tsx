@@ -1,6 +1,8 @@
 import { createPortal } from 'react-dom'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { messageSummary } from '@/lib/summary'
+import { pagesCopy } from '@/lib/pagesCopy'
+import { useLocale } from '@/lib/locale'
 import type { ChatMsg } from '@/data'
 
 const VIEWPORT_PAD = 14
@@ -36,6 +38,7 @@ export default function MessagePreviewPopover({
   onJump,
   onClosed,
 }: Props) {
+  const c = pagesCopy(useLocale().locale).chat
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number; place: 'left' | 'right' } | null>(null)
 
@@ -96,7 +99,7 @@ export default function MessagePreviewPopover({
       data-phase={phase}
       style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999, width: POPOVER_W }}
       role="group"
-      aria-label="本次对话的问题导航"
+      aria-label={c.previewAria}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       onFocusCapture={onMouseEnter}
@@ -120,7 +123,7 @@ export default function MessagePreviewPopover({
               className="msg-preview__item"
               data-active={isCurrent ? '' : undefined}
               aria-current={isCurrent ? 'location' : undefined}
-              aria-label={`跳转到第 ${qIndex} 个提问：${messageSummary(message.text)}`}
+              aria-label={c.previewJumpAria(qIndex, messageSummary(message.text))}
               title={message.text}
               onClick={() => onJump(qIndex)}
             >

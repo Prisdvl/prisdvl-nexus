@@ -113,8 +113,8 @@ class UploadSizeLimitHttpTest {
     private String registerAndLogin(String username) throws Exception {
         // 注册可能因为用户名已存在而返回 409（同一进程内多个测试类共用上下文时），登录才是真正的门
         postJson("/api/auth/register", """
-                {"username":"%s","password":"%s"}
-                """.formatted(username, PASSWORD));
+                {"username":"%s","password":"%s","email":"%s@example.com"}
+                """.formatted(username, PASSWORD, username));
 
         HttpResponse<String> login = postJson("/api/auth/login", """
                 {"username":"%s","password":"%s"}

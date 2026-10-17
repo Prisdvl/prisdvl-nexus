@@ -18,6 +18,7 @@
     "verify:unify": "node scripts/qa-unify.mjs",
     "verify:doc": "node scripts/qa-doc.mjs",
     "verify:chat": "node scripts/qa-chat.mjs",
+    "verify:approval": "node scripts/verify-approval-chain.mjs",
     "verify:mode-switch": "node scripts/qa-mode-switch.mjs",
     "verify:mode-switch-real": "node scripts/qa-mode-switch-real.mjs",
     "verify:theme": "node scripts/qa-theme.mjs",
@@ -40,6 +41,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-router": "^8.4.0",
+    "react-useanimations": "^3.1.1",
     "simple-icons": "^16.35.0"
   },
   "devDependencies": {

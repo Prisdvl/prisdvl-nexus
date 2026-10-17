@@ -6,3 +6,10 @@ dist
 .verify-dist/
 .vite-cache-verify/
 vite.verify.config.ts
+
+# QA / 截图脚本的生成图：frontend/scripts/*.mjs 用相对路径把 page.screenshot
+# 直接写在本目录（如 shot-ops.mjs → qa-workbench.png、shot-market.mjs → qa-market-plugins.png）。
+# 刻意不用 *.png / **/*.png：只匹配本目录下带 qa 标记的两种命名，
+# assets/screenshots/ 与 docs/ 下的正式图片资源不受影响。
+/qa-*.png
+/*-qa.png

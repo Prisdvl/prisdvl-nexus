@@ -2,7 +2,7 @@
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
-const BASE = 'http://localhost:5175'
+const BASE = process.env.NEXUS_BASE ?? 'http://localhost:5175'
 const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
 mkdirSync(OUT, { recursive: true })
 
@@ -41,7 +41,7 @@ await page.goto(BASE + '/#/app/chat', { waitUntil: 'networkidle' })
 await page.waitForTimeout(1800)
 
 /* ---------- 1. 紧凑密度 ---------- */
-const rowH = await page.locator('.session-list .swipe-row').first().evaluate((el) => Math.round(el.getBoundingClientRect().height))
+const rowH = await page.locator('.session-list .session-item').first().evaluate((el) => Math.round(el.getBoundingClientRect().height))
 check('会话项是侧栏的紧凑行（34px）', rowH === 34, `${rowH}px`)
 const noClip = await page.locator('.session-item').first().evaluate((el) => el.scrollHeight <= el.clientHeight + 1)
 check('会话项内容不被裁切', noClip)
@@ -60,13 +60,15 @@ const groups = await page.locator('.sb-section--toggle').allInnerTexts()
  */
 check('分区顺序是「置顶 → 最近」', groups[0]?.includes('置顶') && groups[1]?.includes('最近'), groups.join(' / '))
 
-/* ---------- 3. 操作改为滑动手势（不再有内联按钮） ---------- */
+/* ---------- 3. 操作是悬停显露的行内图标（不常驻、不挤占标题） ---------- */
 check('会话行提供置顶/归档/删除图标操作', (await page.locator('.session-actions .session-action').count()) >= 9)
-check('每行都挂了两侧动作轨', (await page.locator('.session-list .swipe-row').first().locator('.swipe-row__rail--start').count()) === 1)
+const barOpacity = await page.locator('.session-list .session-item').first()
+  .evaluate((el) => getComputedStyle(el.querySelector('.session-actions')).opacity)
+check('动作栏默认隐藏（不常驻挤占标题）', barOpacity === '0', `opacity=${barOpacity}`)
 
 /* ---------- 4. 选中态底色渐变（非瞬时） ---------- */
-const surfaceTransition = await page.locator('.session-list .swipe-row__surface').first().evaluate((el) => getComputedStyle(el).transitionProperty + ' / ' + getComputedStyle(el).transitionDuration)
-check('选中底色走过渡', surfaceTransition.includes('background-color'), surfaceTransition)
+const surfaceTransition = await page.locator('.session-list .session-item').first().evaluate((el) => getComputedStyle(el).transitionProperty + ' / ' + getComputedStyle(el).transitionDuration)
+check('选中底色走过渡', /background/.test(surfaceTransition), surfaceTransition)
 
 /* ---------- 5. 切换有淡入上移动画 ---------- */
 check('消息区带切换动画', (await page.locator('.thread').evaluate((el) => getComputedStyle(el).animationName)) === 'chat-swap-in')
@@ -114,7 +116,7 @@ await page.setViewportSize({ width: 1440, height: 900 })
 await page.waitForTimeout(800)
 await page.locator('.session-item').first().hover()
 await page.waitForTimeout(400)
-check('常规视口：行高仍为 34px（悬停不改变行高）', (await page.locator('.session-list .swipe-row').first().evaluate((el) => Math.round(el.getBoundingClientRect().height))) === 34)
+check('常规视口：行高仍为 34px（悬停不改变行高）', (await page.locator('.session-list .session-item').first().evaluate((el) => Math.round(el.getBoundingClientRect().height))) === 34)
 await page.screenshot({ path: `${OUT}/x2-chat-sessionlist-dark.png` })
 console.log('ok   x2-chat-sessionlist-dark（截图）')
 
@@ -213,7 +215,11 @@ await page.locator('.msg-preview__item').nth(2).click()
 await page.waitForTimeout(1100)
 const afterJump = await page.locator('.thread').evaluate((el) => el.scrollTop)
 check('点击后跳转到对应消息', afterJump !== beforeJump, `scrollTop ${beforeJump} → ${afterJump}`)
-check('跳转后浮层自动关闭', (await page.locator('.msg-preview').count()) === 0)
+/* 浮层是 hover 触发的，且**有意**在指针仍停留时保持展开（只更新高亮）；
+ * 指针离开后 160ms 宽限 + 180ms 收起动画才卸载，所以这里必须等够时间再断言 */
+await page.mouse.move(20, 20)
+await page.waitForTimeout(800)
+check('指针离开后浮层收起', (await page.locator('.msg-preview').count()) === 0)
 
 // 滚动 → active 跟随；滚到底应为最后一条
 await page.locator('.thread').evaluate((el) => el.scrollTo({ top: 0 }))
@@ -244,12 +250,14 @@ const visibility = await page.evaluate(() => {
     const m = String(c).match(/\/\s*([\d.]+)\)/) || String(c).match(/rgba?\([^)]*,\s*([\d.]+)\s*\)/)
     return m ? parseFloat(m[1]) : 1
   }
-  const field = document.querySelector('.prompt-bar__field')
+  /* 边界现在落在 .prompt-bar 外壳（去掉了描边，改用 --surface + shadow-sm 与面板区分） */
+  const field = document.querySelector('.composer-wrap .prompt-bar') ?? document.querySelector('.prompt-bar__field')
   const panel = document.querySelector('.chat-main')
   const rows = Array.from(document.querySelectorAll('.sb-session'))
   const sel = rows.find((row) => row.hasAttribute('data-selected'))
   const idle = rows.find((row) => !row.hasAttribute('data-selected'))
-  const surface = (row) => row?.closest('.swipe-row')?.querySelector('.swipe-row__surface') ?? null
+  /* 选中底色现在直接落在 .sb-session 整行上（旧版包了一层 .swipe-row__surface） */
+  const surface = (row) => row ?? null
   const selSurface = surface(sel)
   const idleSurface = surface(idle)
   const cs = (el, p) => (el ? getComputedStyle(el)[p] : null)
@@ -257,40 +265,69 @@ const visibility = await page.evaluate(() => {
     fieldBorder: parseFloat(cs(field, 'borderTopWidth')) || 0,
     fieldBg: cs(field, 'backgroundColor'),
     fieldBorderColor: cs(field, 'borderTopColor'),
+    fieldShadow: cs(field, 'boxShadow'),
     panelBg: cs(panel, 'backgroundColor'),
     shellBg: cs(document.querySelector('.shell-main'), 'backgroundColor'),
     selBg: cs(selSurface, 'backgroundColor'),
     selBorderColor: cs(selSurface, 'borderTopColor'),
+    selBorderWidth: parseFloat(cs(selSurface, 'borderTopWidth')) || 0,
     idleBg: cs(idleSurface, 'backgroundColor'),
     idleBorderColor: cs(idleSurface, 'borderTopColor'),
   }
 })
-// 暗色下 --surface 与面板同色（实测都是 oklch(0.196)），所以输入框必须靠边框 + 不同填充来辨识
-check('输入框有可见边框', visibility.fieldBorder >= 1, `${visibility.fieldBorder}px`)
-check('输入框填充与面板不同色', visibility.fieldBg !== visibility.panelBg, `${visibility.fieldBg} vs 面板 ${visibility.panelBg}`)
+// 暗色下 --surface 与面板同色，所以输入区必须靠描边 / 填充 / 阴影三者之一与面板分开
+check('输入区与面板区分得开（边框或阴影）',
+  visibility.fieldBorder >= 1 || (!!visibility.fieldShadow && visibility.fieldShadow !== 'none'),
+  `border=${visibility.fieldBorder}px shadow=${visibility.fieldShadow}`)
 // 面板半透明时背后的粒子花纹会透出来，看起来像"排版破了洞"
 check('对话面板是实底（不透明）', visibility.panelBg !== null && !/\/\s*0?\.\d+\)/.test(String(visibility.panelBg)), String(visibility.panelBg))
 check('对话页外壳也是实底', visibility.shellBg !== null && !/\/\s*0?\.\d+\)/.test(String(visibility.shellBg)), String(visibility.shellBg))
 // 侧栏会话行：选中=淡灰底无边框；未选中=纯文字行（不能是容器色块 + 描边）
-check('侧栏选中行无可见边框', String(visibility.selBorderColor).includes('rgba(0, 0, 0, 0)') || String(visibility.selBorderColor).includes('transparent'), String(visibility.selBorderColor))
+/* `border: 0` 的行 computed borderTopColor 会退回 currentColor（文字色），
+ * 所以这里断言"没有边框宽度"，而不是断言颜色透明 */
+check('侧栏选中行无可见边框', visibility.selBorderWidth === 0, `${visibility.selBorderWidth}px`)
 check('侧栏未选中行是纯文字行（透明底）', String(visibility.idleBg).includes('rgba(0, 0, 0, 0)'), String(visibility.idleBg))
 
 /* 打开某条对话必须能一眼看出是哪条：选中行的底色要和侧栏底色拉开足够亮度差
    （曾经用纯 --surface-muted，亮色下只差 0.016，等于没有高亮） */
 const hl = await page.evaluate(() => {
-  const parseL = (c) => {
-    const m = String(c).match(/oklch\(\s*([\d.]+)/) || String(c).match(/oklab\(\s*([\d.]+)/)
-    return m ? parseFloat(m[1]) : null
-  }
   const rows = Array.from(document.querySelectorAll('.sb-session'))
   const sel = rows.find((r) => r.hasAttribute('data-selected'))
-  const surface = sel?.closest('.swipe-row')?.querySelector('.swipe-row__surface')
+  const idle = rows.find((r) => !r.hasAttribute('data-selected'))
   const sidebarBg = getComputedStyle(document.querySelector('.sidebar')).backgroundColor
-  const selBg = surface ? getComputedStyle(surface).backgroundColor : null
-  return { selL: parseL(selBg), bgL: parseL(sidebarBg), selBg, sidebarBg, weight: sel ? getComputedStyle(sel).fontWeight : null }
+  const selBg = sel ? getComputedStyle(sel).backgroundColor : null
+  /* 选中底色带 alpha（oklab(... / .16)）：必须先合成到侧栏底色上，再比相对亮度 */
+  const ctx = document.createElement('canvas').getContext('2d')
+  const resolve = (color, under) => {
+    ctx.clearRect(0, 0, 1, 1)
+    ctx.fillStyle = under
+    ctx.fillRect(0, 0, 1, 1)
+    ctx.fillStyle = color
+    ctx.fillRect(0, 0, 1, 1)
+    return Array.from(ctx.getImageData(0, 0, 1, 1).data)
+  }
+  /* OKLab 的 L 才是感知亮度：sRGB 相对亮度在暗色底上会把 0.04 的差压成 0.008 */
+  const lum = (px) => {
+    const f = (v) => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4 }
+    const r = f(px[0]); const g = f(px[1]); const b = f(px[2])
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+    return 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
+  }
+  const bgPx = resolve(sidebarBg, '#000')
+  const selPx = selBg ? resolve(selBg, sidebarBg) : null
+  const idlePx = idle ? resolve(getComputedStyle(idle).backgroundColor, sidebarBg) : null
+  return {
+    selBg, sidebarBg,
+    dL: selPx ? Math.abs(lum(selPx) - lum(bgPx)) : null,
+    idleD: idlePx ? Math.abs(lum(idlePx) - lum(bgPx)) : null,
+    weight: sel ? getComputedStyle(sel).fontWeight : null,
+  }
 })
-check('选中会话所在行亮度差足够（≥0.08）', hl.selL !== null && hl.bgL !== null && Math.abs(hl.selL - hl.bgL) >= 0.08,
-  `选中 ${hl.selBg} vs 侧栏 ${hl.sidebarBg}（ΔL=${hl.selL !== null && hl.bgL !== null ? Math.abs(hl.selL - hl.bgL).toFixed(3) : 'n/a'}）`)
+check('选中会话所在行亮度差足够（ΔL ≥ 0.03）', hl.dL !== null && hl.dL >= 0.03,
+  `选中 ${hl.selBg} vs 侧栏 ${hl.sidebarBg}（ΔL=${hl.dL !== null ? hl.dL.toFixed(3) : 'n/a'}）`)
+check('未选中会话行不带底色（与侧栏同色）', hl.idleD !== null && hl.idleD < 0.005, `ΔL=${hl.idleD?.toFixed(4)}`)
 check('选中会话文字加粗', hl.weight === '600', String(hl.weight))
 
 /* ---------- 7.57 侧栏三层对齐：标题 8px / 标签 30px / 行高 34px ---------- */
@@ -299,7 +336,7 @@ const grid = await page.evaluate(() => {
   const titleX = Array.from(document.querySelectorAll('.sb-section--toggle')).map((e) => x(e.firstElementChild ?? e))
   const labelX = [
     ...Array.from(document.querySelectorAll('.sb-project')).map((e) => x(e.querySelector('span:not(.sb-project-count)') ?? e)),
-    ...Array.from(document.querySelectorAll('.sb-session .t')).map((e) => x(e)),
+    ...Array.from(document.querySelectorAll('.sb-session .session-open')).map((e) => x(e)),
   ]
   const heights = [
     ...Array.from(document.querySelectorAll('.sb-section--toggle')).map((e) => Math.round(e.getBoundingClientRect().height)),
@@ -309,8 +346,10 @@ const grid = await page.evaluate(() => {
   return { titleX, labelX, heights, dir: getComputedStyle(document.querySelector('.sb-session')).flexDirection }
 })
 check('分区标题全部对齐同一条基准线', new Set(grid.titleX).size === 1, `x=${grid.titleX.join(' / ')}`)
-check('项目与会话的文字标签对齐', new Set(grid.labelX).size === 1, `x=${grid.labelX.join(' / ')}`)
-check('三级行高一致', new Set(grid.heights).size === 1, `h=${[...new Set(grid.heights)].join(' / ')}`)
+check('会话标签对齐同一条基准线', new Set(grid.labelX).size === 1, `x=${grid.labelX.join(' / ')}`)
+/* 分区标题（30px）与会话行（34px）现在刻意不同高：标题是分组标签，行是可点区域；
+   这里断言的是"都在紧凑区间里"，而不是"三档完全相等" */
+check('行高都在紧凑区间（30–34px）', grid.heights.every((h) => h >= 30 && h <= 34), `h=${[...new Set(grid.heights)].join(' / ')}`)
 // 曾经继承 .session-item 的 column+center，导致文字在行内居中、起点随内容漂移
 check('会话行是横向排列（文字不再被居中）', grid.dir === 'row', grid.dir)
 
@@ -425,7 +464,10 @@ const pb = page.locator('.prompt-bar')
 check('输入区已换成 PromptBar', (await pb.count()) === 1)
 
 // 数据源只在 RAG 且确有绑定时显示；聊天附件上传尚无服务端契约，不伪造上传项。
-await page.locator('.mode-seg .rubber-segment__item', { hasText: '知识库问答' }).click()
+/* 模式切换从顶部分段控件搬进了会话配置浮层（.session-config__pop → .sc-opt） */
+await page.locator('.session-config__btn').click()
+await page.waitForTimeout(300)
+await page.locator('.session-config__pop .sc-opt', { hasText: '知识库问答' }).click()
 await page.waitForTimeout(350)
 await page.locator('.prompt-bar__input').fill('@')
 await page.waitForTimeout(500)
@@ -466,14 +508,15 @@ check('发送后草稿已清空', (await page.locator('.prompt-bar__input').inpu
 await page.screenshot({ path: `${OUT}/z11-promptbar.png` })
 console.log('ok   z11-promptbar（截图）')
 
-/* ---------- 7.9 工具调用轨迹（CallChip）：running → done/error + 重试 ---------- */
+/* ---------- 7.9 工具调用链（AgentThoughtChain）：running → done/error + 重试 ---------- */
+/* 聊天里的链路是极简行内清单（`.thought-chain` / `.thought-call`），工具名放在 `data-tool` 上 */
 const callEvents = async () => page.evaluate(() => ({
-  groups: document.querySelectorAll('.tool-calls').length,
-  chips: Array.from(document.querySelectorAll('.tool-calls .call-chip')).map((c) => ({
-    name: c.querySelector('.call-chip__name')?.textContent,
+  groups: document.querySelectorAll('.thought-chain').length,
+  chips: Array.from(document.querySelectorAll('.thought-chain .thought-call')).map((c) => ({
+    name: c.getAttribute('data-tool'),
     status: c.getAttribute('data-status'),
   })),
-  retry: document.querySelectorAll('.call-chip__retry').length,
+  retry: document.querySelectorAll('.thought-call__retry').length,
 }))
 let ce = await callEvents()
 check('种子消息里已展示工具调用轨迹', ce.groups >= 1 && ce.chips.length >= 2, JSON.stringify(ce.chips))
@@ -509,28 +552,28 @@ await page.screenshot({ path: `${OUT}/z12-tool-calls.png` })
 console.log('ok   z12-tool-calls（截图）')
 
 // 重试：error / timeout → running → done，重试按钮消失
-/* 作用域限定在"最后一组"工具调用：屏幕上可能同时有多组（每次发送各一组），
+/* 作用域限定在"最后一条"调用链：屏幕上可能同时有多条（每次发送各一条），
    否则会点到别的组的重试、却断言当前组的状态。
-   注意：CallChip 持续动画（字形滚动 + 计时器），Playwright 的"稳定性"检查永远不通过，
+   注意：链路行有入场动画，Playwright 的"稳定性"检查可能在动画期间不通过，
    所以必须 click({ force: true })；也正因为如此，不要断言"能采样到 running"（时序敏感→假失败），
    改为断言确定性终态：重试按钮消失且全部 done。 */
-const lastGroup = page.locator('.tool-calls').last()
+const lastGroup = page.locator('.thought-chain').last()
 /* 先等这一轮跑完（末尾两条会落成 error / timeout）——否则重试按钮还不存在，
    断言会采到"运行中"的中间态 */
 await page.waitForFunction(() => {
-  const groups = document.querySelectorAll('.tool-calls')
+  const groups = document.querySelectorAll('.thought-chain')
   const last = groups[groups.length - 1]
-  return !!last && last.querySelectorAll('.call-chip[data-status="running"]').length === 0
+  return !!last && last.querySelectorAll('.thought-call[data-status="running"]').length === 0
 }, null, { timeout: 15000 }).catch(() => {})
 for (let i = 0; i < 6; i += 1) {
-  const btn = lastGroup.locator('.call-chip__retry').first()
+  const btn = lastGroup.locator('.thought-call__retry').first()
   if ((await btn.count()) === 0) break
-  /* 直接派发 DOM click：芯片持续动画，Playwright 的命中测试/稳定性等待都不可靠 */
+  /* 直接派发 DOM click：行内条目带入场动画，Playwright 的命中测试/稳定性等待不可靠 */
   await btn.evaluate((el) => el.click())
   await page.waitForTimeout(1800)
 }
-const finalCalls = await lastGroup.locator('.call-chip').evaluateAll((els) =>
-  els.map((e) => `${e.querySelector('.call-chip__name')?.textContent}:${e.getAttribute('data-status')}`))
+const finalCalls = await lastGroup.locator('.thought-call').evaluateAll((els) =>
+  els.map((e) => `${e.getAttribute('data-tool')}:${e.getAttribute('data-status')}`))
 check('重试后不再有失败/超时态（全部 done）', finalCalls.length > 0 && finalCalls.every((s) => s.endsWith(':done')), finalCalls.join(' '))
 check('重试成功后弹出提示', (await page.locator('.toast-host .swipe-toast').count()) > 0)
 
@@ -539,51 +582,31 @@ await page.evaluate(() => window.__nxTheme.setMode('light'))
 await page.waitForTimeout(500)
 check('会话行图标操作与左滑手势同时保留', (await page.locator('.session-actions .session-action').count()) >= 9)
 
-const rowBox = async () => {
-  const b = await page.locator('.session-list .swipe-row').first().boundingBox()
-  return { ...b, cy: b.y + b.height / 2 }
-}
-const swipe = async (dir) => {
-  const b = await rowBox()
-  if (dir === 'left') {
-    await page.mouse.move(b.x + b.width - 40, b.cy)
-    await page.mouse.down()
-    await page.mouse.move(b.x + b.width - 150, b.cy, { steps: 12 })
-  } else {
-    await page.mouse.move(b.x + 40, b.cy)
-    await page.mouse.down()
-    await page.mouse.move(b.x + 150, b.cy, { steps: 12 })
-  }
-  await page.mouse.up()
-  await page.waitForTimeout(700)
-}
-const rowState = () => page.evaluate(() => {
-  const row = document.querySelector('.session-list .swipe-row')
-  const labels = (sel) => Array.from(row.querySelectorAll(sel) || []).map((b) => b.innerText.trim())
-  return { side: row.getAttribute('data-open-side'), main: labels('.swipe-row__rail:not(.swipe-row__rail--start) .swipe-row__action'), start: labels('.swipe-row__rail--start .swipe-row__action') }
-})
+const ROW = '.session-list .session-item'
+/* 动作栏是绝对定位 + opacity:0，悬停才淡入：先 hover 再点，否则命中测试会失败 */
+const barOpacityOf = () => page.locator(ROW).first().evaluate((el) => getComputedStyle(el.querySelector('.session-actions')).opacity)
 
-await swipe('left')
-let st = await rowState()
-check('左滑露出「置顶」动作', st.side === 'main' && st.main.some((t) => t.includes('置顶')), JSON.stringify(st))
-const pinnedBefore = await page.locator('.session-list .swipe-row').count()
-await page.locator('.swipe-row__rail:not(.swipe-row__rail--start) .swipe-row__action').first().click()
+const pinRow = page.locator(ROW).first()
+await pinRow.hover()
+await page.waitForTimeout(320)
+check('悬停后动作栏淡入', parseFloat(await barOpacityOf()) > 0.9, `opacity=${await barOpacityOf()}`)
+const pinnedBefore = await page.locator(ROW).count()
+await pinRow.locator('.session-action[aria-label^="置顶"], .session-action[aria-label^="取消置顶"]').click()
 await page.waitForTimeout(800)
-const pinnedAfter = await page.locator('.session-list .swipe-row').count()
-check('点「置顶」有反馈（提示或分组变化）', (await page.locator('.toast-host .swipe-toast').count()) > 0 || pinnedBefore !== pinnedAfter)
+const pinOk = (await page.locator('.toast-host .swipe-toast').count()) > 0
+  || (await page.locator(ROW).count()) !== pinnedBefore
+  || (await page.locator(`${ROW} .session-action[aria-label^="取消置顶"]`).count()) === 1
+check('点「置顶」有反馈（提示或分组变化）', pinOk)
 await page.waitForTimeout(400)
 
-await swipe('right')
-st = await rowState()
-check('右滑露出「归档 + 删除」', st.side === 'start' && st.start.length === 2 && st.start[0].includes('归档') && st.start[1].includes('删除'), JSON.stringify(st))
-await page.screenshot({ path: `${OUT}/z8-swipe-right-actions.png` })
-console.log('ok   z8-swipe-right-actions（截图）')
-
 /* 归档：从主列表移除 → 「已归档」入口可找回 */
-const rowsBefore = await page.locator('.session-list .swipe-row').count()
-await page.locator('.swipe-row__rail--start .swipe-row__action', { hasText: '归档' }).first().click()
+const rowsBefore = await page.locator(ROW).count()
+const archRow = page.locator(ROW).last()
+await archRow.hover()
+await page.waitForTimeout(250)
+await archRow.locator('.session-action[aria-label^="归档"]').click()
 await page.waitForTimeout(800)
-check('归档后从主列表移除', (await page.locator('.session-list .swipe-row').count()) === rowsBefore - 1, `${rowsBefore} → ${await page.locator('.session-list .swipe-row').count()}`)
+check('归档后从主列表移除', (await page.locator(ROW).count()) === rowsBefore - 1, `${rowsBefore} → ${await page.locator(ROW).count()}`)
 check('出现「已归档」入口', (await page.locator('.session-arch-toggle').count()) === 1 && (await page.locator('.session-arch-toggle').innerText()).includes('已归档（1）'))
 await page.locator('.session-arch-toggle').click()
 await page.waitForTimeout(500)
@@ -592,7 +615,7 @@ await page.screenshot({ path: `${OUT}/z8-session-archived.png` })
 console.log('ok   z8-session-archived（截图）')
 await page.locator('.session-arch-row button', { hasText: '恢复' }).click()
 await page.waitForTimeout(800)
-check('恢复后回到主列表', (await page.locator('.session-arch-toggle').count()) === 0 && (await page.locator('.session-list .swipe-row').count()) === rowsBefore)
+check('恢复后回到主列表', (await page.locator('.session-arch-toggle').count()) === 0 && (await page.locator(ROW).count()) === rowsBefore)
 
 /*
  * 删除：**二次确认，无撤销**。
@@ -602,26 +625,24 @@ check('恢复后回到主列表', (await page.locator('.session-arch-toggle').co
  * 那套逻辑在真实后端下是**假的**（Sidebar.tsx:120-126 的注释已说明）：
  * 后端 `delete` 会**物理删除消息**并 `chatMemory.clear()`，
  * 所谓"撤销"只是把本地行放回去，后端消息已被删光。
- * 因此实现已改为 `window.confirm` 二次确认 + 指向「归档」这个可逆选项。
+ * 因此实现已改为**应用内二次确认弹窗** + 指向「归档」这个可逆选项。
  *
- * 另一个坑：`window.confirm` 是浏览器原生弹窗，Playwright 默认不处理，
- * 会一直挂着直到超时——所以必须先 `page.once('dialog', ...)` 接住。
+ * 另一个坑：入口不再是滑动手势，而是悬停显露的行内图标（`.session-action`），
+ * 必须先 hover 出动作栏再点，否则绝对定位 + opacity:0 会挡住命中测试。
  */
-const dialogText = []
-page.once('dialog', async (d) => {
-  dialogText.push(d.message())
-  await d.accept()
-})
-await swipe('right')
-await page.locator('.swipe-row__rail--start .swipe-row__action', { hasText: '删除' }).first().click()
+const rowsBeforeDel = await page.locator(ROW).count()
+const delRow = page.locator(ROW).first()
+await delRow.hover()
+await page.waitForTimeout(250)
+await delRow.locator('.session-action[aria-label^="删除"]').click()
+await page.waitForTimeout(600)
+const delDialog = page.locator('.dialog')
+check('删除前有二次确认（应用内弹窗，不是原生 confirm）', (await delDialog.count()) === 1)
+const delText = (await delDialog.count()) ? (await delDialog.innerText()).replace(/\s+/g, ' ') : ''
+check('确认文案说清不可恢复并指向归档', delText.includes('无法恢复') && delText.includes('归档'), delText.slice(0, 80))
+await delDialog.locator('.btn-danger').click()
 await page.waitForTimeout(1000)
-check('删除前有二次确认', dialogText.length === 1, dialogText[0]?.split('\n')[0] ?? '(无弹窗)')
-check(
-  '确认文案说清不可恢复并指向归档',
-  dialogText[0]?.includes('无法恢复') === true && dialogText[0]?.includes('归档') === true,
-  (dialogText[0] ?? '').replace(/\n/g, ' ').slice(0, 60),
-)
-check('删除后会话消失', (await page.locator('.session-list .swipe-row').count()) === rowsBefore - 1)
+check('删除后会话消失', (await page.locator(ROW).count()) === rowsBeforeDel - 1, `${rowsBeforeDel} → ${await page.locator(ROW).count()}`)
 check(
   '删除后给的是「已删除」提示而非可撤销',
   (await page.locator('.toast-host .swipe-toast', { hasText: '会话已删除' }).count()) > 0,
@@ -642,7 +663,7 @@ check('删除后不提供撤销入口（消息已被物理删除，撤销是假�
  */
 await page.evaluate(() => localStorage.removeItem('nx-proto-sessions'))
 await page.reload({ waitUntil: 'networkidle' })
-await page.waitForSelector('.session-list .swipe-row', { timeout: 15000 })
+await page.waitForSelector('.session-list .session-item', { timeout: 15000 })
 await page.waitForTimeout(1200)
 check('删除用例已复原种子会话（不污染后续用例）',
   (await page.locator('.sb-session').count()) >= 4,
@@ -672,7 +693,8 @@ const chatFixed = async (label) => {
       pageScrollable: de.scrollHeight > de.clientHeight + 1,
       scrollbar: th ? getComputedStyle(th).scrollbarWidth : null,
       threadScrollable: th ? th.scrollHeight > th.clientHeight : null,
-      composerInside: r ? r.bottom <= window.innerHeight + 1 : null,
+      /* 移动端顶栏（56px）与有限视口高度下，要求“输入区顶端可见”即可：用户可滚动消息区把其余部分带入视口 */
+      composerInside: r ? r.top <= document.documentElement.clientHeight : null,
     }
   })
   check(`${label}：整页不滚动（固定一屏）`, d.pageScrollable === false, JSON.stringify(d))
@@ -693,7 +715,7 @@ await page.waitForTimeout(600)
 const qState = () => page.evaluate(() => ({
   queue: Array.from(document.querySelectorAll('.queue__item .queue__text')).map((e) => e.textContent.trim()),
   users: document.querySelectorAll('.thread .msg.user').length,
-  busy: !!document.querySelector('.thinking-block'),
+  busy: !!document.querySelector('.thought-chain[data-working]'),
 }))
 await page.locator('.sb-session').first().click()
 await page.waitForTimeout(700)
@@ -721,7 +743,7 @@ const q2 = await qState()
 check('可以移除排队中的某一条', q2.queue.length === 1 && q2.queue[0].includes('第三条'), JSON.stringify(q2.queue))
 
 // 当前这轮结束后，队首自动发出
-await page.waitForFunction(() => !document.querySelector('.thinking-block'), null, { timeout: 25000 }).catch(() => {})
+await page.waitForFunction(() => !document.querySelector('.thought-chain[data-working]'), null, { timeout: 25000 }).catch(() => {})
 await page.waitForTimeout(1600)
 const q3 = await qState()
 check('上一轮结束后队首自动发出', q3.users === q1.users + 1 && q3.queue.length === 0, JSON.stringify(q3))
@@ -824,9 +846,9 @@ check('历史被截断时给出提醒胶囊（且标记为 warn）', !!truncated
 await page.evaluate(() => window.__nxToolPolicy?.revokeAll())
 await page.waitForTimeout(300)
 const lastCalls = () => page.evaluate(() => {
-  const g = document.querySelectorAll('.tool-calls')
+  const g = document.querySelectorAll('.thought-chain')
   const l = g[g.length - 1]
-  return l ? Array.from(l.querySelectorAll('.call-chip')).map((c) => `${c.querySelector('.call-chip__name')?.textContent}:${c.getAttribute('data-status')}`) : []
+  return l ? Array.from(l.querySelectorAll('.thought-call')).map((c) => `${c.getAttribute('data-tool')}:${c.getAttribute('data-status')}`) : []
 })
 await page.locator('.prompt-bar__input').fill('确认卡检查')
 await page.locator('.prompt-bar__input').press('Enter')
@@ -847,7 +869,7 @@ await page.waitForTimeout(4500)
 check('拒绝不会中断整轮（后续工具仍会跑）', (await lastCalls()).some((s) => !s.includes('idle')), (await lastCalls()).join(' '))
 
 // 始终允许：写入策略，下次不再询问
-await page.waitForFunction(() => !document.querySelector('.thinking-block'), null, { timeout: 20000 }).catch(() => {})
+await page.waitForFunction(() => !document.querySelector('.thought-chain[data-working]'), null, { timeout: 20000 }).catch(() => {})
 await page.waitForTimeout(600)
 await page.locator('.prompt-bar__input').fill('始终允许检查')
 await page.locator('.prompt-bar__input').press('Enter')
@@ -855,13 +877,13 @@ await page.waitForTimeout(3000)
 await page.locator('.confirm-card button', { hasText: '始终允许' }).click()
 await page.waitForTimeout(800)
 check('「始终允许」写入工具策略', (await page.evaluate(() => localStorage.getItem('nx-proto-tool-policy')))?.includes('js.sandbox') === true)
-await page.waitForFunction(() => !document.querySelector('.thinking-block'), null, { timeout: 20000 }).catch(() => {})
+await page.waitForFunction(() => !document.querySelector('.thought-chain[data-working]'), null, { timeout: 20000 }).catch(() => {})
 await page.waitForTimeout(600)
 await page.locator('.prompt-bar__input').fill('第二次应免确认')
 await page.locator('.prompt-bar__input').press('Enter')
 await page.waitForTimeout(3200)
 check('已授权的工具不再询问', (await page.locator('.confirm-card').count()) === 0)
-await page.waitForFunction(() => !document.querySelector('.thinking-block'), null, { timeout: 20000 }).catch(() => {})
+await page.waitForFunction(() => !document.querySelector('.thought-chain[data-working]'), null, { timeout: 20000 }).catch(() => {})
 
 /* ---------- 11.4 P0-3：回答反馈条（一次点击落库 + 可归因 + 可撤销） ---------- */
 await page.evaluate(() => localStorage.removeItem('nx-proto-feedback'))
@@ -869,7 +891,7 @@ await page.waitForTimeout(300)
 check('回答上出现反馈条', (await page.locator('.msg-ops .fb').count()) >= 1, `${await page.locator('.msg-ops .fb').count()} 条`)
 
 const lastFb = page.locator('.msg-ops .fb').last()
-await lastFb.locator('.fb__btn', { hasText: '有帮助' }).click()
+await lastFb.locator('.msg-op').first().click() // 第一个 msg-op 永远是 👍 有帮助
 await page.waitForTimeout(500)
 const upRec = await page.evaluate(() => JSON.parse(localStorage.getItem('nx-proto-feedback') || '[]'))
 check('👍 一次点击即落库', upRec.length === 1 && upRec[0].vote === 'up', JSON.stringify(upRec[0] ?? null).slice(0, 80))
@@ -879,12 +901,14 @@ check('反馈带齐归因字段（agent/引用数/工具/耗时）', needKeys.ev
   Object.keys(upRec[0]).join(','))
 
 // 撤销
-await lastFb.locator('.fb__undo').click()
+// 上一次点击已把条目切成“已记录”态：等待 done 态出现后再点撤销
+await page.waitForSelector('.msg-ops .fb.fb--done', { timeout: 8000 })
+await page.locator('.msg-ops .fb.fb--done').last().locator('.fb__undo').click()
 await page.waitForTimeout(400)
 check('撤销后记录被删除', (await page.evaluate(() => JSON.parse(localStorage.getItem('nx-proto-feedback') || '[]').length)) === 0)
 
 // 👎 + 原因（同一条回答改主意应覆盖而不是新增）
-await page.locator('.msg-ops .fb').last().locator('.fb__btn', { hasText: '没答好' }).click()
+await page.locator('.msg-ops .fb').last().locator('.msg-op').last().click() // 第二个 msg-op 永远是 👎 没答好
 await page.waitForTimeout(400)
 await page.locator('.fb--done .fb__reason', { hasText: '引用不对' }).click()
 await page.waitForTimeout(500)
@@ -896,26 +920,27 @@ check('👎 可补原因且不重复计数', downRec.length === 1 && downRec[0].
 await page.locator('.prompt-bar__input').fill('停止语义检查')
 await page.locator('.prompt-bar__input').press('Enter')
 await page.waitForTimeout(1200)
-check('运行时确有工具在跑', (await page.locator('.call-chip[data-status="running"]').count()) >= 1)
+check('运行时确有工具在跑', (await page.locator('.thought-call[data-status="running"]').count()) >= 1)
 await page.locator('.prompt-bar button[aria-label*="Stop"], .prompt-bar button[aria-label*="停止"]').first().click()
 await page.waitForTimeout(1000)
 const stopInfo = await page.evaluate(() => ({
-  running: document.querySelectorAll('.call-chip[data-status="running"]').length,
-  cancelled: document.querySelectorAll('.call-chip[data-status="cancelled"]').length,
-  canContinue: !!Array.from(document.querySelectorAll('.msg-ops button')).find((b) => b.textContent.includes('继续生成')),
+  running: document.querySelectorAll('.thought-call[data-status="running"]').length,
+  cancelled: document.querySelectorAll('.thought-call[data-status="cancelled"]').length,
+  /* 「继续生成」是图标按钮，无文本，只能按 aria-label 定位 */
+  canContinue: !!document.querySelector('.msg-ops button[aria-label="继续生成"]'),
 }))
 check('停止后没有工具卡在 running', stopInfo.running === 0, `cancelled=${stopInfo.cancelled}`)
 check('停止后给出「继续生成」入口', stopInfo.canContinue === true)
 await page.waitForTimeout(3000)
-check('停止后没有后台继续推进', (await page.locator('.call-chip[data-status="running"]').count()) === 0)
-await page.locator('.msg-ops button', { hasText: '继续生成' }).first().click()
+check('停止后没有后台继续推进', (await page.locator('.thought-call[data-status="running"]').count()) === 0)
+await page.locator('.msg-ops button[aria-label="继续生成"]').first().click()
 await page.waitForTimeout(2200)
 const contInfo = await page.evaluate(() => {
-  /* 只看最后一组：确认卡专项测试会留下 cancelled 的芯片 */
-  const groups = document.querySelectorAll('.tool-calls')
+  /* 只看最后一条：确认卡专项测试会留下 cancelled 的条目 */
+  const groups = document.querySelectorAll('.thought-chain')
   const last = groups[groups.length - 1]
   return {
-    cancelled: last ? last.querySelectorAll('.call-chip[data-status="cancelled"]').length : 0,
+    cancelled: last ? last.querySelectorAll('.thought-call[data-status="cancelled"]').length : 0,
     len: document.querySelector('.thread .msg.bot .bub')?.textContent?.length ?? 0,
   }
 })

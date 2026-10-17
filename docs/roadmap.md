@@ -9,37 +9,42 @@
 >
 > 两套编号的对照、以及平台化轨每阶段的验收证据，见：
 > - [decisions.md](decisions.md) 附录 B（逐阶段实测记录）
-> - [productization-gap-analysis.md](productization-gap-analysis.md)（P1/P2/P3 分级与实施顺序）
-> - [../README.md](../README.md) §2（**按代码核对过的能力清单，是当前进度的权威来源**）与 §13（平台化轨的演进）
+> - [archive/reports/productization-gap-analysis.md](archive/reports/productization-gap-analysis.md)（P1/P2/P3 分级与实施顺序；**历史报告**）
+> - [../README.md](../README.md) §5 能力清单（**当前进度的权威来源**）与 §9 已知限制
 >
-> **本文状态**：Phase 0–3 的 Step 有逐条 ✅/待补标注，Phase 4–11 保持规划原样、**未随实现更新**。
-> 因此**不要用本文判断"某个功能做没做"**——用 README §2 的能力清单或直接看代码。
+> **本文状态**：文首「当前未完成待办」随代码复核更新；下方 Phase 0–11 大段是**功能阶段规划原文**（含早期 Vue 表述），**未全量改写**，只作历史对照。
+> 因此**不要用 Phase 表判断"某个功能做没做"**——用 README §5 或直接看代码。
 
 > 规则：**一次只做一个 Step**。每个 Step 的完成标准是"能跑 + 有测试 + 我知道为什么这么做"。
 > 每个 Phase 结束必须产出：①更新的 `docs/` ②新增的测试 ③一段能背下来的面试回答。
 >
 > 另注：本文 Step 0.2 写的是"三个模块"（common / knowledge / app），**平台化阶段新增了 `nexus-ai`**，现为 4 个模块。
 
-## 当前未完成待办（2026-10-10 实测复核）
+## 当前未完成待办（2026-10-14 复核）
 
-> 这一节是**当前真正还欠着的事**，每条都经源码/构建产物复核。
-> 与下面 Phase 0–11 的规划原意不同，那些是"当初想做什么"，本节是"现在还没做什么"。
+> 这一节是**当前真正还欠着的事**，与下面 Phase 0–11「当初想做什么」不同。
+> 已落地能力（多用户知识库、混合检索、Agent、MCP、Refresh Token / 邮箱验证、7 服务 Compose、最小 CI）见 README §5 / §8，不在此重复列「待做」。
 
-| # | 待办 | 现状（2026-10-10 实测） | 优先级 |
+| # | 待办 | 现状（2026-10-14） | 优先级 |
 |---|---|---|---|
-| 1 | **用户中止后后端误报"未预期异常"** | ❌ 未修。`send()` 仍可能向已关闭的响应写帧，抛 `AsyncRequestNotUsableException`，被 `GlobalExceptionHandler` 记为 ERROR 并让"对话失败次数"指标 +1。**对用户无影响**（客户端已断开），但日志与指标失真。最小修复：`send()` 内捕获 `IOException` / `AsyncRequestNotUsableException` 降级为 WARN，或推送前判断响应是否仍可用 | P2 |
-| 2 | **前端首包体积** | ❌ 未处理，实测 `elk-*.js` **1.4 MB**（gzip 438 KB）、`index-*.js` **1016 KB**（gzip 333 KB）。⚠️ 成因已不是 Element Plus（已移除），现在主要来自 elk 布局引擎与 markdown 渲染链。收益明确但涉及面较广 | P3 |
-| 3 | **导入任务逐文件进度** | ❌ 前端未做。后端 `GET /api/import-tasks/{id}/items` 已具备逐文件明细能力，缺的是前端把状态从"按知识库单槽"改成"按文件逐项"并渲染一行一文件（等待/上传中/解析中/完成/失败 + 重试） | P3 |
-| 4 | **欢迎区示例问题只有一条** | ❌ 未改。有知识库但无会话时，示例问题仅由首个知识库名生成一条。多库时应按库分别生成，且每条都必须真能命中用户资料（否则会变成"伪造已有内容"） | P3 |
-| 5 | **E2E 用例的数据回收** | ⚠️ 部分解决。已有 `deploy/` 下的清理工具与独立账号前缀；但"每次跑完自动回收"仍未接入脚本 | P3 |
+| 1 | **用户中止后后端误报"未预期异常"** | ❌ 未修。`send()` 仍可能向已关闭的响应写帧，抛 `AsyncRequestNotUsableException`，被记为 ERROR 并使失败计数 +1。对用户无影响，但日志/指标失真 | P2 |
+| 2 | **前端首包体积** | ❌ 未处理。2026-10-14 `npm run build`：`elk-*.js` **≈1.46 MB**（gzip 456 KB）、`index-*.js` **≈1.18 MB**（gzip 392 KB）。主因 mermaid/elk 与 markdown 链 | P3 |
+| 3 | **导入任务逐文件进度 UI** | ❌ 后端 `GET /api/import-tasks/{id}/items` 已有；前端仍偏「按知识库单槽」 | P3 |
+| 4 | **欢迎区示例问题只有一条** | ❌ 多库时应按库分别生成且须能命中真实资料 | P3 |
+| 5 | **E2E / LIVE 进 CI + 数据回收自动化** | ⚠️ 最小 CI 已覆盖默认 `mvn test` + `npm run build` + `compose config`；LIVE/真浏览器 E2E 与「跑完自动回收」仍未进流水线 | P3 |
+| 6 | **检索命中列表持久化** | ❌ 「检索到 N 个片段」刷新后消失（引用列表已落库，二者不同） | P2 |
+| 7 | **审批闭环的两条边界** | ⚠️ P0 已完成（状态机 / SSE 事件 / `once|always|deny` / 授权撤销 / 审计）。仍欠：等待审批的注册表只在内存（进程重启后该运行标 `FAILED` 而不是恢复）、`GET /api/tool-invocations` 审计查询接口未开、`POST /api/agent/runs` 没有自己的流式形态（事件走 `/api/chat/stream` 的工具拦截点） | P2 |
 
-**已不再需要的条目**（历史文档里提过，现已不成立，勿再捡回来）：
+**已不再需要的条目**（勿再捡回来）：
 
-- ~~全局导航侧栏不可收缩~~ → React 版 `Sidebar.tsx` 已有 `collapsed` 状态并持久化到 `localStorage`（`nx-proto-sb-collapsed`）
-- ~~首包体积由 Element Plus 全量引入导致~~ → `frontend/package.json` 已无 `element-plus` 依赖
+- ~~全局导航侧栏不可收缩~~ → React `Sidebar` 已支持折叠并持久化
+- ~~首包体积由 Element Plus 导致~~ → `frontend/package.json` 无 `element-plus`
+- ~~无 Refresh Token / 无服务端 logout~~ → Phase 4：`sys_user_session` + refresh 轮转 + 设备会话注销（见 `docs/security.md` §1.5）
+- ~~无最小 CI~~ → `.github/workflows/ci.yml`（不含 LIVE/E2E）
+- ~~Compose 仍依赖本机 Ollama 拉嵌入模型~~ → 嵌入改云端百炼 `text-embedding-v4`；编排为 7 服务
+- ~~工具只有"启停"、没有权限分级与人工确认~~ → P0（迁移 V22）落地：`ai_tool_registry` 权限、`/api/agent/runs` 状态机、SSE `approval_required`、`ai_tool_grant` 可撤销授权、工具调用审计
 
-> 本节由已删除的 `docs/future-improvements.md` 迁入（2026-10-10）。
-> 迁移时已剔除不成立条目，并按当前构建产物更新了体积数字。
+> 「当前未完成待办」原由已删除的 `docs/future-improvements.md` 迁入（2026-10-10），2026-10-14 再按代码与构建产物修订。
 
 ---
 
@@ -172,9 +177,9 @@
 | 6.1 | Agent 定义与配置（提示词、模型角色、最大步数、超时、工具白名单） |
 | 6.2 | `Planner`：目标拆解与"是否需要检索/工具"判定 |
 | 6.3 | `AgentExecutor`：**手动驱动工具循环**（关闭自动 advisor），含重试/超时/最大步数 |
-| 6.4 | 权限体系：`ToolPermissionChecker`（USER×AGENT×TOOL 三级，默认只读） |
-| 6.5 | 人工确认：`WAITING_APPROVAL` 状态 + SSE `approval_required` + 恢复接口 |
-| 6.6 | 审计：`ai_tool_invocation` + `ai_agent_run(_step)` 全轨迹 |
+| 6.4 | 权限体系：`READ` / `WRITE` / `DANGEROUS` 落库到 `ai_tool_registry`，执行前读库判定 —— ✅ **已完成**（P0，V22；权限单独一张注册表，见 `database.md` 6.0.4） |
+| 6.5 | 人工确认：`WAITING_APPROVAL` 状态 + SSE `approval_required` + 恢复接口 —— ✅ **已完成**（P0；`/api/agent/runs` 状态机 + `once`/`always`/`deny` + `/api/users/me/tool-grants` 可撤销授权） |
+| 6.6 | 审计：`ai_tool_invocation` + `ai_agent_run(_step)` 全轨迹 —— ✅ **已完成**（P0；入参与结果脱敏落库，`THINK` 只写阶段标记、不存隐藏推理） |
 | 6.7 | 前端：Agent 页面（目标输入、步骤时间线、工具调用卡片、确认弹窗） |
 | 6.8 | 测试：越权调用必须被拒；拒绝后模型能换方案；超过最大步数正确终止 |
 

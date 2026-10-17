@@ -1,5 +1,8 @@
 import { Link, useRouteError } from 'react-router'
 import { AlertTriangle, RotateCcw, Home } from 'lucide-react'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
+import Loc from './Loc'
 
 /**
  * 路由级错误边界。
@@ -9,8 +12,9 @@ import { AlertTriangle, RotateCcw, Home } from 'lucide-react'
  * 这里给出：发生了什么（人话）+ 两个明确的恢复动作（重试 / 回工作台）+ 可折叠的技术细节。
  */
 export default function AppError() {
+  const s = appCopy(useLocale().locale).shell
   const error = useRouteError() as Error | undefined
-  const message = error?.message ?? '未知错误'
+  const message = error?.message ?? s.errorUnknown
 
   return (
     <div className="page" style={{ maxWidth: 640, margin: '0 auto', paddingTop: 80 }}>
@@ -24,22 +28,22 @@ export default function AppError() {
         >
           <AlertTriangle size={22} />
         </span>
-        <h1 className="page-title" style={{ fontSize: 20 }}>这个页面出错了</h1>
+        <h1 className="page-title" style={{ fontSize: 20 }}><Loc>{s.errorTitle}</Loc></h1>
         <p className="page-sub" style={{ marginTop: 8 }}>
-          界面遇到了未预期的问题，你的会话数据已保存在本地，刷新不会丢。
+          <Loc>{s.errorBody}</Loc>
         </p>
 
         <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 20 }}>
           <button className="btn btn-primary" type="button" onClick={() => window.location.reload()}>
-            <RotateCcw size={15} /> 重新加载
+            <RotateCcw size={15} /> <Loc>{s.errorReload}</Loc>
           </button>
           <Link className="btn btn-ghost" to="/app/workbench" onClick={() => { /* 回工作台重新开始 */ }}>
-            <Home size={15} /> 回到工作台
+            <Home size={15} /> <Loc>{s.errorHome}</Loc>
           </Link>
         </div>
 
         <details style={{ marginTop: 22, textAlign: 'left' }}>
-          <summary style={{ cursor: 'pointer', fontSize: 12.5, color: 'var(--text-3)' }}>技术细节（反馈问题时请附上）</summary>
+          <summary style={{ cursor: 'pointer', fontSize: 12.5, color: 'var(--text-3)' }}><Loc>{s.errorDetails}</Loc></summary>
           <pre
             style={{
               marginTop: 10, padding: 12, overflowX: 'auto',

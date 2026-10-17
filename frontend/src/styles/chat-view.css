@@ -21,6 +21,8 @@
   --chat-col: 768px;
   /* 阅读列的基础左右内边距（不含轨道占位） */
   --chat-pad: 24px;
+  /* 让对话区填满视口，使消息列（thread-row）能收缩以容纳底部输入区，避免移动端输入区被顶出屏幕 */
+  height: 100%;
   /*
    * 消息导航轨道的占位宽度。它必须**左右对称**地计入内边距：
    * 只在右侧加会把正文的中线推离输入框的中线（实测偏左 26px）。
@@ -49,7 +51,7 @@
 .chat-fixed .chat-layout {
   width: 100%;
   max-width: none;
-  height: auto;
+  height: 100%;
   min-height: 0;
   flex: 1 1 auto;
   display: grid;
@@ -225,6 +227,7 @@
   padding: 28px var(--chat-gutter) 32px;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-width: none;
   overscroll-behavior-y: contain;
 }
 

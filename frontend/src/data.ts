@@ -45,13 +45,17 @@ export interface AgentItem {
   model: string
   tools: string[]
   kb: string
+  /** 角色图标 id（前端展示用；后端暂无该字段） */
+  icon?: string
+  /** 草稿 / 已发布（与后端 status 对齐） */
+  status?: 'DRAFT' | 'PUBLISHED'
 }
 
 export const AGENTS: AgentItem[] = [
-  { id: '1', name: '面试助手', desc: '结合知识库回答八股与场景题，追问式陪练', model: 'deepseek-v4-flash', tools: ['knowledge_search', 'calculator'], kb: '我的 Java 笔记' },
-  { id: '2', name: 'Java 代码审查员', desc: '贴代码即审：命名、并发、异常处理', model: 'glm-5.3', tools: ['knowledge_search', 'code_runner'], kb: '我的 Java 笔记' },
-  { id: '3', name: '简历润色师', desc: '把经历改写为 STAR 句式，对齐 JD', model: 'kimi-k2.6', tools: ['knowledge_search'], kb: '软技能与项目' },
-  { id: '4', name: '默认助手', desc: '通用对话，未绑定知识库时直接作答', model: 'auto', tools: [], kb: '无' },
+  { id: '1', name: '面试助手', desc: '结合知识库回答八股与场景题，追问式陪练', model: 'deepseek-v4-flash', tools: ['knowledge_search', 'calculator'], kb: '我的 Java 笔记', icon: 'graduation', status: 'PUBLISHED' },
+  { id: '2', name: 'Java 代码审查员', desc: '贴代码即审：命名、并发、异常处理', model: 'glm-5.3', tools: ['knowledge_search', 'code_runner'], kb: '我的 Java 笔记', icon: 'code', status: 'PUBLISHED' },
+  { id: '3', name: '简历润色师', desc: '把经历改写为 STAR 句式，对齐 JD', model: 'kimi-k2.6', tools: ['knowledge_search'], kb: '软技能与项目', icon: 'pen', status: 'PUBLISHED' },
+  { id: '4', name: '默认助手', desc: '通用对话，未绑定知识库时直接作答', model: 'auto', tools: [], kb: '无', icon: 'bot', status: 'PUBLISHED' },
 ]
 
 export const QA_HISTORY = [
@@ -77,6 +81,11 @@ export interface ToolCall {
   requiresConfirm?: boolean
   /** 给人看的风险说明（确认卡里展示） */
   explain?: string
+  /**
+   * 工具返回的结果摘要：真实后端在 `tool_result` 事件里带回 `resultSummary`，
+   * 展开这一行时才显示（原型 mock 数据没有这个字段）。
+   */
+  result?: string
   /** 预期耗时（毫秒）：进度条按它走，计时器同步 */
   expectedMs?: number
 }

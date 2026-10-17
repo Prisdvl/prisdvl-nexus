@@ -118,7 +118,7 @@ await auditFocus('入口页', 20)
 
 /* 落地页 CTA 不得破坏 hash 路由（曾用 href="#flow"，被路由吃掉且不滚动） */
 const beforeHash = await page.evaluate(() => location.hash)
-await page.locator('button.btn-ghost', { hasText: '了解工作流程' }).click()
+await page.locator('button.btn-ghost', { hasText: '了解流程' }).click()
 await page.waitForTimeout(1200)
 const afterHash = await page.evaluate(() => location.hash)
 const scrolled = await page.evaluate(() => {
@@ -143,6 +143,10 @@ for (const [label, path] of [
   ['知识库详情', '/#/app/kb/1'],
   ['对话', '/#/app/chat'],
   ['Agent', '/#/app/agents'],
+  ['自动化', '/#/app/automations'],
+  ['工作流', '/#/app/workflows'],
+  ['插件', '/#/app/plugins'],
+  ['Agent 社区', '/#/app/community'],
   ['账号', '/#/app/account'],
 ]) {
   console.log(`\n=== ${label} ===`)

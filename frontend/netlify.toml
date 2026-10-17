@@ -1,0 +1,10 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# SPA history 路由。注意：Netlify/Vercel 只能托管静态前端；
+# Spring + MySQL/ES/Redis 仍需另外部署或本机隧道（见 docs/deployment.md）。
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

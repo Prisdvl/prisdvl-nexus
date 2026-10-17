@@ -1,18 +1,43 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Bot, Check, Copy, Pencil, Play, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  BarChart3, BookOpen, Bot, Briefcase, Check, Code2, Copy, FlaskConical, GraduationCap,
+  Pencil, PenLine, Play, Plus, RefreshCw, Search, Sparkles, Trash2, Zap,
+} from 'lucide-react'
 import PixelCard from '@/bits/PixelCard/PixelCard'
 import StatusMark from '@/bits/StatusMark/StatusMark'
 import Stepper, { Step } from '@/bits/Stepper/Stepper'
 import Modal from '@/components/Modal'
 import { StateEmpty } from '@/components/Skeleton'
+import ToolTrace from '@/components/chat/ToolTrace'
+import CometDial from '@/bits/CometDial/CometDial'
 import { toast } from '@/lib/toast'
 import { useParticleColors } from '@/lib/palette'
-import { AGENTS, type AgentItem } from '@/data'
+import { AGENTS, type AgentItem, type ToolCall } from '@/data'
 import { api, USE_MOCK, errMessage, type ToolInfo } from '@/lib/api'
 import { fetchAgents, fetchKbs } from '@/lib/backendData'
 import type { KbItem } from '@/data'
+import { pagesCopy } from '@/lib/pagesCopy'
+import { useLocale } from '@/lib/locale'
+import Loc from '@/components/Loc'
+
+/* 10 个可选角色图标（前端展示；后端暂无 icon 字段） */
+const AGENT_ICONS: Record<string, typeof Bot> = {
+  bot: Bot,
+  search: Search,
+  code: Code2,
+  book: BookOpen,
+  graduation: GraduationCap,
+  briefcase: Briefcase,
+  flask: FlaskConical,
+  pen: PenLine,
+  chart: BarChart3,
+  zap: Zap,
+}
+const AGENT_ICON_IDS = Object.keys(AGENT_ICONS)
 
 export default function AgentsPage() {
+  const { locale } = useLocale()
+  const g = pagesCopy(locale).agents
   /* 粒子色与知识库卡片统一：跟随当前配色与明暗 */
   const particleColors = useParticleColors()
   const [agents, setAgents] = useState<AgentItem[]>(USE_MOCK ? AGENTS : [])
@@ -20,6 +45,13 @@ export default function AgentsPage() {
   const [agentsError, setAgentsError] = useState('')
   const [newName, setNewName] = useState('')
   const [newDesc, setNewDesc] = useState('')
+  const [newPrompt, setNewPrompt] = useState('')
+  const [wizCreativity, setWizCreativity] = useState(0.4)
+  const [wizIcon, setWizIcon] = useState<string>('bot')
+  const [wizTestIn, setWizTestIn] = useState('')
+  const [wizTestOut, setWizTestOut] = useState('')
+  const [wizTesting, setWizTesting] = useState(false)
+  const [testCalls, setTestCalls] = useState<ToolCall[]>([])
   const [busy, setBusy] = useState(false)
   const [wizard, setWizard] = useState(false)
   /* 编辑既有 Agent（名称/描述；后端局部更新，null 字段不改） */
@@ -64,6 +96,12 @@ export default function AgentsPage() {
     setNewDesc('')
     setWizKbIds([])
     setWizTools([])
+    setNewPrompt('')
+    setWizCreativity(0.4)
+    setWizIcon('bot')
+    setWizTestIn('')
+    setWizTestOut('')
+    setWizTesting(false)
     if (!USE_MOCK) {
       fetchKbs().then(setKbChoices).catch(() => setKbChoices([]))
       api.tools.list().then((rows) => setToolChoices(rows.filter((t) => t.enabled))).catch(() => setToolChoices([]))
@@ -82,21 +120,29 @@ export default function AgentsPage() {
     setTesting(true)
     setTestOut('')
     setTestFailed(false)
+    const calls: ToolCall[] = [
+      { id: `c-${Date.now()}-1`, icon: 'search', name: 'knowledge_search', argument: `{"q":"${testIn.trim().slice(0, 40)}"}`, status: 'running' },
+      { id: `c-${Date.now()}-2`, icon: 'terminal', name: 'calculator', argument: '{"expr":"complexity"}' , status: 'idle' },
+    ]
+    setTestCalls(calls)
     try {
       if (USE_MOCK) {
         await new Promise((resolve) => setTimeout(resolve, 700))
-        setTestOut(`Agent「${testAgent.name}」：演示回答（mock 模式）`)
-        toast.info('已完成本地演示', '当前为 mock 模式，没有调用后端')
+        setTestOut(g.mockTestOut(testAgent.name))
+        setTestCalls(calls.map((c) => ({ ...c, status: 'done' as const })))
+        toast.info(g.mockTestTitle, g.mockTestBody)
         return
       }
       const result = await api.agents.testChat(testAgent.id, testIn.trim())
       setTestOut(result.answer)
-      toast.success('Agent 执行完成', result.usedTools ? `调用工具 ${result.toolCalls?.length ?? 0} 次` : '本次未调用工具')
+      setTestCalls(calls.map((c) => ({ ...c, status: 'done' as const })))
+      toast.success(g.testDoneTitle, result.usedTools ? g.testToolsUsed(result.toolCalls?.length ?? 0) : g.testNoTools)
     } catch (e) {
       setTestFailed(true)
       const msg = errMessage(e)
       setTestOut(msg)
-      toast.error('Agent 执行失败', msg)
+      setTestCalls(calls.map((c, i) => ({ ...c, status: i === 0 ? 'done' as const : 'error' as const })))
+      toast.error(g.testFailTitle, msg)
     } finally {
       setTesting(false)
     }
@@ -106,46 +152,46 @@ export default function AgentsPage() {
     if (USE_MOCK) {
       const idx = agents.findIndex((x) => x.id === a.id)
       setAgents((list) => list.filter((x) => x.id !== a.id))
-      toast.undo('已删除 Agent', a.name, () => {
+      toast.undo(g.deletedTitle, a.name, () => {
         setAgents((list) => {
           const out = [...list]
           out.splice(Math.min(idx, out.length), 0, a)
           return out
         })
-        toast.success('已恢复 Agent', a.name)
+        toast.success(g.restoredTitle, a.name)
       })
       return
     }
     /* 后端删除不可恢复 → 明确二次确认 */
-    if (!window.confirm(`确定删除 Agent「${a.name}」吗？此操作不可恢复。`)) return
+    if (!window.confirm(g.confirmDelete(a.name))) return
     try {
       await api.agents.remove(a.id)
       setAgents(await fetchAgents())
       if (testAgent?.id === a.id) setTestAgent(null)
-      toast.success('Agent 已删除', a.name)
+      toast.success(g.deletedOkTitle, a.name)
     } catch (e) {
-      toast.error('删除失败', errMessage(e))
+      toast.error(g.deleteFailTitle, errMessage(e))
     }
   }
 
   const duplicateAgent = async (a: AgentItem) => {
     if (USE_MOCK) {
-      const copy = { ...a, id: String(Date.now()), name: `${a.name} 副本` }
+      const copy = { ...a, id: String(Date.now()), name: g.copyName(a.name) }
       setAgents((list) => {
         const out = [...list]
         out.splice(out.findIndex((x) => x.id === a.id) + 1, 0, copy)
         return out
       })
-      toast.success('已复制 Agent', copy.name)
+      toast.success(g.copiedTitle, copy.name)
       return
     }
     try {
       /* 复制走服务端 duplicate：副本回到 DRAFT，code 由服务端生成，避免前端伪造标识 */
       await api.agents.duplicate(a.id)
       setAgents(await fetchAgents())
-      toast.success('已复制 Agent', `${a.name} 副本（草稿）`)
+      toast.success(g.copiedTitle, g.copiedMockName(a.name))
     } catch (e) {
-      toast.error('复制失败', errMessage(e))
+      toast.error(g.copyFailTitle, errMessage(e))
     }
   }
 
@@ -155,14 +201,30 @@ export default function AgentsPage() {
     setEditDesc(a.desc)
   }
 
+  /** 发布：草稿 → 已发布。后端 status 字段已支持，mock 时只改本地。 */
+  const publishAgent = async (a: AgentItem) => {
+    if (USE_MOCK) {
+      setAgents((list) => list.map((x) => x.id === a.id ? { ...x, status: 'PUBLISHED' as const } : x))
+      toast.success(g.publishDone, a.name)
+      return
+    }
+    try {
+      await api.agents.update(a.id, { status: 'PUBLISHED' })
+      setAgents(await fetchAgents())
+      toast.success(g.publishDone, a.name)
+    } catch (e) {
+      toast.error(g.saveFailTitle, errMessage(e))
+    }
+  }
+
   const saveEdit = async () => {
     if (!editing || savingEdit) return
     const name = editName.trim()
-    if (!name) { toast.error('名称不能为空'); return }
+    if (!name) { toast.error(g.errNameEmpty); return }
     if (USE_MOCK) {
       setAgents((list) => list.map((x) => (x.id === editing.id ? { ...x, name, desc: editDesc.trim() } : x)))
       setEditing(null)
-      toast.success('已保存修改', name)
+      toast.success(g.savedTitle, name)
       return
     }
     setSavingEdit(true)
@@ -170,9 +232,9 @@ export default function AgentsPage() {
       await api.agents.update(editing.id, { name, description: editDesc.trim() || null })
       setAgents(await fetchAgents())
       setEditing(null)
-      toast.success('已保存修改', name)
+      toast.success(g.savedTitle, name)
     } catch (e) {
-      toast.error('保存失败', errMessage(e))
+      toast.error(g.saveFailTitle, errMessage(e))
     } finally {
       setSavingEdit(false)
     }
@@ -182,59 +244,73 @@ export default function AgentsPage() {
     set(list.includes(key) ? list.filter((x) => x !== key) : [...list, key])
   }
 
+  const wizardCompleteness = Math.round(
+    ((newName.trim() ? 1 : 0) + (newDesc.trim() ? 1 : 0) + (newPrompt.trim() ? 1 : 0) + (wizKbIds.length ? 1 : 0) + (wizTools.length ? 1 : 0)) / 5 * 100,
+  )
+
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <p className="eyebrow" style={{ margin: 0 }}>Agent</p>
-          <h1 className="page-title">我的 Agent</h1>
-          <p className="page-sub">把「知识和工具」打包成一个会干活的身份</p>
+          <h1 className="page-title"><Loc>{g.title}</Loc></h1>
+          <p className="page-sub"><Loc>{g.sub}</Loc></p>
         </div>
-        <button className="btn btn-primary" type="button" onClick={openWizard}><Plus size={16} /> 新建 Agent</button>
+        <button className="btn btn-primary" type="button" onClick={openWizard}><Plus size={16} /> <Loc>{g.newAgent}</Loc></button>
       </div>
 
-      {loadingAgents && <p className="hint" role="status">正在加载 Agent…</p>}
+      {loadingAgents && <p className="hint" role="status">{g.loading}</p>}
       {!loadingAgents && agentsError && (
         <div className="panel panel-pad">
-          <p className="form-error active" role="alert" style={{ marginTop: 0 }}>Agent 列表加载失败：{agentsError}</p>
-          <button className="btn btn-ghost btn-sm" type="button" onClick={() => void loadAgents()}><RefreshCw size={13} /> 重试</button>
+          <p className="form-error active" role="alert" style={{ marginTop: 0 }}>{g.listFailPrefix} {agentsError}</p>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => void loadAgents()}><RefreshCw size={13} /> {g.retry}</button>
         </div>
       )}
       {!loadingAgents && !agentsError && agents.length === 0 && (
         <div className="panel">
           <StateEmpty
             icon={<Bot size={20} />}
-            title="还没有 Agent"
-            desc="Agent 会带着你绑定的知识库与工具干活：面试陪练、代码审查、简历润色都可以做成一个 Agent。"
-            action={<button className="btn btn-primary btn-sm" type="button" onClick={openWizard}><Plus size={14} /> 新建 Agent</button>}
+            title={g.emptyTitle}
+            desc={g.emptyDesc}
+            action={<button className="btn btn-primary btn-sm" type="button" onClick={openWizard}><Plus size={14} /> {g.newAgent}</button>}
           />
         </div>
       )}
 
       {agents.length > 0 && <div className="agent-grid">
-        {agents.map((a) => (
+        {agents.map((a) => {
+          const Icon = AGENT_ICONS[a.icon ?? 'bot'] ?? Bot
+          return (
           <PixelCard key={a.id} gap={8} speed={45} colors={particleColors}>
             <div className="agent-inner">
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Bot size={15} style={{ color: 'var(--primary)' }} />
+                  <Icon size={15} style={{ color: 'var(--primary)' }} aria-hidden="true" />
                   <h2 className="nm">{a.name}</h2>
+                  {a.status === 'DRAFT' && <span className="badge" data-tone="warning">{g.draftBadge}</span>}
+                  {a.status === 'PUBLISHED' && <span className="badge" data-tone="success">{g.publishedBadge}</span>}
                 </div>
                 <p className="ds">{a.desc}</p>
                 <div className="tags">
                   <span className="chip" style={{ fontSize: 11 }}>{a.model}</span>
-                  {a.tools.map((t) => <span className="badge" data-tone="accent" key={t}>{t}</span>)}
-                  <span className="badge">绑定 {a.kb}</span>
+                  {a.tools.slice(0, 2).map((t) => <span className="badge" data-tone="accent" key={t}>{t}</span>)}
+                  {a.tools.length > 2 && <span className="badge">+{a.tools.length - 2}</span>}
                 </div>
+                <p className="agent-kb" title={`${g.boundKb(a.kb)}`}>{g.boundKb(a.kb)}</p>
               </div>
               <div className="acts">
-                <button className="btn btn-primary btn-sm" type="button" onClick={() => { setTestAgent(a); setTestOut(''); setTestFailed(false) }}><Play size={13} /> 测试</button>
-                <button className="btn btn-ghost btn-sm" type="button" aria-label="编辑" title="编辑名称与描述" onClick={() => openEdit(a)}><Pencil size={13} /></button>
+                {a.status === 'DRAFT' && (
+                  <button className="btn btn-ghost btn-sm" type="button" title={g.publishBtn} aria-label={`${g.publishBtn}: ${a.name}`} onClick={() => void publishAgent(a)}>
+                    <Sparkles size={13} />
+                  </button>
+                )}
+                <button className="btn btn-primary btn-sm" type="button" onClick={() => { setTestAgent(a); setTestOut(''); setTestFailed(false) }}><Play size={13} /> {g.test}</button>
+                <button className="btn btn-ghost btn-sm" type="button" aria-label={g.editAria} title={g.editTitle} onClick={() => openEdit(a)}><Pencil size={13} /></button>
                 <button
                   className="btn btn-ghost btn-sm"
                   type="button"
-                  aria-label="复制"
-                  title="复制为草稿副本"
+                  aria-label={g.duplicateAria}
+                  title={g.duplicateTitle}
                   onClick={() => void duplicateAgent(a)}
                 >
                   <Copy size={13} />
@@ -242,8 +318,8 @@ export default function AgentsPage() {
                 <button
                   className="btn btn-danger btn-sm"
                   type="button"
-                  aria-label="删除"
-                  title="删除 Agent"
+                  aria-label={g.deleteAria}
+                  title={g.deleteTitle}
                   onClick={() => void removeAgent(a)}
                 >
                   <Trash2 size={13} />
@@ -251,64 +327,93 @@ export default function AgentsPage() {
               </div>
             </div>
           </PixelCard>
-        ))}
+          )
+        })}
       </div>}
 
-      <div className="panel panel-pad" style={{ marginTop: 24 }}>
-        <h2 className="col-title" style={{ marginTop: 0 }}>测试台{testAgent ? ` · ${testAgent.name}` : ''}</h2>
+      <div className="panel panel-pad bench-panel">
+        <div className="bench-head">
+          <h2 className="col-title" style={{ margin: 0 }}>{g.benchTitle}{testAgent ? ` · ${testAgent.name}` : ''}</h2>
+          {testAgent && <span className="badge" data-tone="accent">{testAgent.model}</span>}
+          <span style={{ flex: 1 }} />
+          {(testOut || testCalls.length > 0) && (
+            <button className="btn btn-ghost btn-sm" type="button" onClick={() => { setTestOut(''); setTestCalls([]); setTestFailed(false) }}>
+              {locale === 'en' ? 'Clear' : '清空'}
+            </button>
+          )}
+        </div>
         {!testAgent ? (
-          <p className="hint">从上方选择一个 Agent 后在这里试跑；草稿状态也可以测试。</p>
+          <p className="hint">{g.benchHint}</p>
         ) : (
-          <>
-            <form onSubmit={runTest} style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
-              <input className="input" value={testIn} onChange={(e) => setTestIn(e.target.value)} placeholder="输入一条指令，例如：帮我出一道 JVM 调优题并讲解" aria-label="测试指令" />
-              <button className="btn btn-primary" type="submit" disabled={!testIn.trim() || testing}>
-                <Play size={14} /> 运行
-              </button>
-            </form>
-            {testing && (
-              <StatusMark status="running" size={18} label="Agent 正在执行（工具调用中）" fontSize={14} />
-            )}
-            {!testing && testOut && !testFailed && (
-              <StatusMark status="done" size={18} label="执行完成" fontSize={14} strike={false} />
-            )}
-            {testFailed && !testing && (
-              <StatusMark status="failed" size={18} label="执行失败" fontSize={14} strike={false} />
-            )}
-            {testOut && (
-              <div style={{ marginTop: 12, padding: 14, border: '1px solid var(--border)', borderRadius: 12, fontSize: 13.5, whiteSpace: 'pre-wrap', lineHeight: 1.7, background: 'var(--surface)' }}>
-                {testOut}
+          <div className="bench-layout">
+            <div className="bench-compose">
+              <div className="bench-examples">
+                <span className="bench-examples__label">{g.benchExamples}</span>
+                {g.examplePrompts.map((p) => (
+                  <button className="chip" type="button" key={p} onClick={() => setTestIn(p)}>{p}</button>
+                ))}
               </div>
-            )}
-          </>
+              <form className="bench-form" onSubmit={runTest}>
+                <textarea
+                  className="input"
+                  rows={3}
+                  value={testIn}
+                  onChange={(e) => setTestIn(e.target.value)}
+                  placeholder={g.benchPh}
+                  aria-label={g.benchInputAria}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit() } }}
+                />
+                <button className="btn btn-primary" type="submit" disabled={!testIn.trim() || testing}>
+                  <Play size={14} /> {testing ? g.running : g.run}
+                </button>
+              </form>
+              <p className="hint">{g.benchHint}</p>
+            </div>
+            <div className="bench-result">
+              <div className="bench-result-head">
+                <span>{g.benchTrace}</span>
+                {testing && <StatusMark status="running" size={16} label={g.running} fontSize={12} />}
+                {!testing && testOut && !testFailed && <StatusMark status="done" size={16} label={g.runDone} fontSize={12} strike={false} />}
+                {testFailed && !testing && <StatusMark status="failed" size={16} label={g.runFailed} fontSize={12} strike={false} />}
+              </div>
+              <div className="bench-result-body">
+                <div className="bench-trace">
+                  {testCalls.length > 0 ? <ToolTrace calls={testCalls} /> : <p className="hint">{locale === 'en' ? 'Tool trace appears here after a run.' : '运行后在这里查看工具轨迹。'}</p>}
+                </div>
+                <div className="bench-answer">
+                  {testOut ? <div className="bench-output">{testOut}</div> : <p className="hint">{g.testResultEmpty}</p>}
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 
       <Modal
         open={wizard}
-        title="新建 Agent"
+        title={g.createTitle}
         onClose={() => { if (!busy) setWizard(false) }}
         shouldBlockClose={() => busy}
         width={580}
-        footer={busy ? <span className="hint">正在创建…</span> : undefined}
+        footer={busy ? <span className="hint">{g.creating}</span> : undefined}
       >
         <Stepper
           key={wizKey}
           initialStep={wizStep}
           onStepChange={setWizStep}
-          backButtonText="上一步"
-          nextButtonText="下一步"
-          finalButtonText="创建 Agent"
+          backButtonText={g.stepBack}
+          nextButtonText={g.stepNext}
+          finalButtonText={g.stepFinal}
           nextButtonProps={busy ? { disabled: true } : undefined}
           onFinalStepCompleted={async () => {
             const name = newName.trim()
-            if (!name) { toast.error('请先填写名称'); resetWizard(1); return }
+            if (!name) { toast.error(g.errNameRequired); resetWizard(1); return }
             if (USE_MOCK) {
-              const created = { ...AGENTS[0], id: String(Date.now()), name, desc: newDesc.trim() }
+              const created = { ...AGENTS[0], id: String(Date.now()), name, desc: newDesc.trim(), icon: wizIcon, status: 'DRAFT' as const }
               setAgents((list) => [created, ...list])
               setTestAgent(created)
               setWizard(false)
-              toast.success('Agent 已创建', 'mock 模式：未调用后端')
+              toast.success(g.createdTitle, g.createdMockBody)
               return
             }
             setBusy(true)
@@ -318,6 +423,7 @@ export default function AgentsPage() {
                 code: `agent-${Date.now().toString(36)}`,
                 name,
                 description: newDesc.trim() || null,
+                systemPrompt: newPrompt.trim() || null,
                 /* 空数组 = 不限制（检索全部知识库 / 装配全部启用工具），语义见后端 DTO 注释 */
                 kbIds: wizKbIds,
                 toolCodes: wizTools,
@@ -327,9 +433,9 @@ export default function AgentsPage() {
               const createdItem = rows.find((r) => r.id === created.id)
               if (createdItem) setTestAgent(createdItem)
               setWizard(false)
-              toast.success('Agent 已创建', '初始状态为草稿，可先在测试台验证再发布')
+              toast.success(g.createdTitle, g.createdRealBody)
             } catch (e) {
-              toast.error('创建失败', errMessage(e))
+              toast.error(g.createFailTitle, errMessage(e))
               /* Stepper 此刻已进入"完成"态，重挂载回确认步让用户可修改后重试 */
               resetWizard(3)
             } finally {
@@ -340,21 +446,43 @@ export default function AgentsPage() {
           <Step>
             <div style={{ padding: '10px 0 6px' }}>
               <div className="field">
-                <label htmlFor="agent-name">名称</label>
-                <input id="agent-name" className="input" placeholder="例如：代码审查员" aria-label="Agent 名称" value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={128} />
+                <label htmlFor="agent-name">{g.nameLabel}</label>
+                <input id="agent-name" className="input" placeholder={g.namePh} aria-label={g.nameAria} value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={128} />
               </div>
               <div className="field">
-                <label htmlFor="agent-desc">描述</label>
-                <textarea id="agent-desc" className="input" rows={3} maxLength={512} placeholder="这个 Agent 擅长做什么、以什么语气回答" aria-label="Agent 描述" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
+                <label htmlFor="agent-desc">{g.descLabel}</label>
+                <textarea id="agent-desc" className="input" rows={3} maxLength={512} placeholder={g.descPh} aria-label={g.descAria} value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
               </div>
-              <p className="hint">模型角色由系统配置统一管理，当前版本不在创建向导中选择。</p>
+              <div className="field">
+                <label>{g.iconLabel}</label>
+                <div className="agent-icon-picker" role="radiogroup" aria-label={g.iconLabel}>
+                  {AGENT_ICON_IDS.map((id) => {
+                    const Icon = AGENT_ICONS[id]
+                    return (
+                    <button
+                      key={id}
+                      type="button"
+                      role="radio"
+                      aria-checked={wizIcon === id}
+                      className="agent-icon-opt"
+                      data-on={wizIcon === id ? '' : undefined}
+                      onClick={() => setWizIcon(id)}
+                    >
+                      <Icon size={16} aria-hidden="true" />
+                    </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <p className="hint">{g.draftHint}</p>
+              <p className="hint">{g.modelRoleHint}</p>
             </div>
           </Step>
           <Step>
             <div style={{ padding: '10px 0 6px' }}>
               <div className="field">
-                <label>绑定知识库{!USE_MOCK && '（不选 = 不限制，可检索你的全部知识库）'}</label>
-                {!USE_MOCK && kbChoices.length === 0 && <p className="hint">还没有可用的知识库；不选即表示不限制。</p>}
+                <label>{g.bindKbLabel}{!USE_MOCK && ` (${g.bindKbHint})`}</label>
+                {!USE_MOCK && kbChoices.length === 0 && <p className="hint">{g.bindKbEmpty}</p>}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   {(USE_MOCK ? ['我的 Java 笔记', 'Redis 源码阅读', '面经合集'] : kbChoices.map((kb) => kb.name)).map((label, i) => {
                     const key = USE_MOCK ? label : kbChoices[i].id
@@ -375,8 +503,8 @@ export default function AgentsPage() {
                 </div>
               </div>
               <div className="field">
-                <label>工具权限{!USE_MOCK && '（不选 = 不限制，装配全部已启用工具）'}</label>
-                {!USE_MOCK && toolChoices.length === 0 && <p className="hint">没有获取到工具目录；不选即表示不限制。</p>}
+                <label>{g.bindToolsLabel}{!USE_MOCK && ` (${g.bindToolsHint})`}</label>
+                {!USE_MOCK && toolChoices.length === 0 && <p className="hint">{g.bindToolsEmpty}</p>}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   {(USE_MOCK
                     ? ['knowledge_search（知识库检索）', 'calculator（数学计算）']
@@ -399,15 +527,76 @@ export default function AgentsPage() {
                   })}
                 </div>
               </div>
+              <div className="field">
+                <label htmlFor="agent-prompt">{g.instructionsLabel}</label>
+                <textarea id="agent-prompt" className="input" rows={4} value={newPrompt} placeholder={g.instructionsPh} onChange={(e) => setNewPrompt(e.target.value)} />
+                <p className="hint">{g.instructionsHint}</p>
+              </div>
+              <div className="field">
+                <label>{g.creativityLabel}</label>
+                <div className="agent-dial-row">
+                  <CometDial
+                    value={Math.round(wizCreativity * 100)}
+                    min={0}
+                    max={100}
+                    step={5}
+                    unit="%"
+                    label={g.creativityLabel}
+                    size={150}
+                    sweep={300}
+                    thickness={5}
+                    onChange={(v) => setWizCreativity(v / 100)}
+                  />
+                  <p className="hint" style={{ maxWidth: 220 }}>{g.creativityHint}</p>
+                </div>
+              </div>
             </div>
           </Step>
           <Step>
             <div style={{ padding: '10px 0 6px' }}>
-              <p style={{ margin: 0 }}>确认创建：创建后可在测试台先验证，再发布到会话中选用。</p>
-              <ul style={{ margin: '10px 0 0', paddingLeft: 18, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.9 }}>
-                <li>名称：{newName.trim() || '（未填写）'}</li>
-                <li>知识库：{USE_MOCK ? '演示选择' : (wizKbIds.length ? `限定 ${wizKbIds.length} 个` : '不限制')}</li>
-                <li>工具：{USE_MOCK ? '演示选择' : (wizTools.length ? wizTools.join('、') : '不限制')}</li>
+              <h4 className="wizard-subtitle">{g.testStepTitle}</h4>
+              <div className="agent-dial-row">
+                <CometDial value={wizardCompleteness} min={0} max={100} step={5} unit="%" label="完备度" size={130} sweep={300} thickness={5} />
+                <p className="hint" style={{ maxWidth: 240 }}>
+                  名称、描述、指令、知识库与工具五项配置齐全时达到 100%。
+                </p>
+              </div>
+              <p className="hint" style={{ marginTop: 4 }}>{g.testStepHint}</p>
+              <div className="wizard-test-row">
+                <input
+                  className="input"
+                  value={wizTestIn}
+                  placeholder={g.benchPh}
+                  aria-label={g.benchInputAria}
+                  onChange={(e) => setWizTestIn(e.target.value)}
+                />
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  disabled={!wizTestIn.trim() || wizTesting}
+                  onClick={() => {
+                    setWizTesting(true)
+                    setWizTestOut('')
+                    window.setTimeout(() => {
+                      setWizTestOut(g.mockTestOut(newName.trim() || 'Agent'))
+                      setWizTesting(false)
+                    }, 700)
+                  }}
+                >
+                  <Play size={14} /> {wizTesting ? g.testRunning : g.testRun}
+                </button>
+              </div>
+              <div className="wizard-test-result">
+                <span className="hint">{g.testResultTitle}</span>
+                {wizTestOut ? <div className="bench-output">{wizTestOut}</div> : <p className="hint">{g.testResultEmpty}</p>}
+              </div>
+              <p style={{ margin: 0 }}>{g.confirmIntro}</p>
+              <ul className="wizard-summary">
+                <li>{g.sumName(newName.trim() || g.sumEmpty)}</li>
+                <li>{g.sumKb(USE_MOCK ? g.sumDemo : (wizKbIds.length ? g.sumLimit(wizKbIds.length) : g.sumAll))}</li>
+                <li>{g.sumTools(USE_MOCK ? g.sumDemo : (wizTools.length ? wizTools.join(' · ') : g.sumAll))}</li>
+                <li>{g.draftHint}</li>
+                <li>{g.instructionsLabel}: {newPrompt.trim() ? `${newPrompt.trim().slice(0, 40)}${newPrompt.trim().length > 40 ? '…' : ''}` : g.sumEmpty}</li>
               </ul>
             </div>
           </Step>
@@ -416,23 +605,23 @@ export default function AgentsPage() {
 
       <Modal
         open={editing !== null}
-        title="编辑 Agent"
+        title={g.editTitleModal}
         onClose={() => { if (!savingEdit) setEditing(null) }}
         shouldBlockClose={() => savingEdit}
         width={480}
         footer={
           <>
-            <button className="btn btn-ghost" type="button" onClick={() => setEditing(null)} disabled={savingEdit}>取消</button>
-            <button className="btn btn-primary" type="button" onClick={() => void saveEdit()} disabled={savingEdit}>{savingEdit ? '保存中…' : '保存'}</button>
+            <button className="btn btn-ghost" type="button" onClick={() => setEditing(null)} disabled={savingEdit}>{g.cancel}</button>
+            <button className="btn btn-primary" type="button" onClick={() => void saveEdit()} disabled={savingEdit}>{savingEdit ? g.saving : g.save}</button>
           </>
         }
       >
         <div className="field">
-          <label htmlFor="agent-edit-name">名称</label>
+          <label htmlFor="agent-edit-name">{g.nameLabel}</label>
           <input id="agent-edit-name" className="input" value={editName} onChange={(e) => setEditName(e.target.value)} maxLength={128} />
         </div>
         <div className="field">
-          <label htmlFor="agent-edit-desc">描述</label>
+          <label htmlFor="agent-edit-desc">{g.descLabel}</label>
           <textarea id="agent-edit-desc" className="input" rows={3} value={editDesc} onChange={(e) => setEditDesc(e.target.value)} maxLength={512} />
         </div>
       </Modal>

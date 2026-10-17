@@ -1,29 +1,36 @@
 import { Menu } from 'lucide-react'
 import BrandMark from './BrandMark'
+import Loc from './Loc'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
 import type { PageKey } from '@/lib/types'
-
-const TITLE: Record<PageKey, string> = {
-  workbench: '工作台',
-  kb: '知识库',
-  chat: '对话',
-  agents: 'Agent',
-  account: '账号',
-}
 
 interface Props {
   page: PageKey
+  /** 与 AppShell 的抽屉开关同名，这里只做透传（命名保持一致便于阅读） */
   onOpenDrawer: () => void
 }
 
-/** 手机顶栏：汉堡 + 品牌 + 当前页名（<768px 才显示，见 CSS） */
 export default function MobileBar({ page, onOpenDrawer }: Props) {
+  const { locale } = useLocale()
+  const t = appCopy(locale)
+  const title = t.nav[page]
+
   return (
     <header className="mobile-bar">
-      <button className="mb-btn" type="button" aria-label="打开导航" aria-expanded={false} onClick={onOpenDrawer}>
-        <Menu size={18} />
+      <button
+        type="button"
+        className="mb-btn"
+        aria-label={t.nav.openNav}
+        title={t.nav.openNav}
+        onClick={onOpenDrawer}
+      >
+        <Menu size={19} />
       </button>
-      <BrandMark size={26} wordmark={false} />
-      <span className="mb-title">{TITLE[page]}</span>
+      <BrandMark wordmark={false} size={22} />
+      <span className="mb-title" style={{ flex: 1, margin: 0 }}>
+        <Loc key={`${page}-${title}`}>{title}</Loc>
+      </span>
     </header>
   )
 }

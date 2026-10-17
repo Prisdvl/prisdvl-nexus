@@ -19,6 +19,10 @@ const SEGMENT_TO_PAGE: Record<string, PageKey> = {
   kb: 'kb',
   chat: 'chat',
   agents: 'agents',
+  automations: 'automations',
+  workflows: 'workflows',
+  plugins: 'plugins',
+  community: 'community',
   account: 'account',
 }
 

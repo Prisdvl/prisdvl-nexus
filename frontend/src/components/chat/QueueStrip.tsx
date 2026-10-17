@@ -1,4 +1,7 @@
 import { ListOrdered, X } from 'lucide-react'
+import { pagesCopy } from '@/lib/pagesCopy'
+import { useLocale } from '@/lib/locale'
+import Loc from '@/components/Loc'
 import '@/styles/queue.css'
 
 interface Props {
@@ -19,26 +22,29 @@ interface Props {
  * 顺序队列才是符合人类对话直觉的模型。
  */
 export default function QueueStrip({ items, onRemove, onClear }: Props) {
+  const { locale } = useLocale()
+  /* 字典取名 c：本文件的 props 名为 items，刻意避开同名 */
+  const c = pagesCopy(locale).chat
   if (items.length === 0) return null
 
   return (
-    <div className="queue" role="status" aria-label={`待发送队列，共 ${items.length} 条`}>
+    <div className="queue" role="status" aria-label={c.queueAria(items.length)}>
       <span className="queue__head">
         <ListOrdered size={13} aria-hidden="true" />
-        排队中 {items.length}
+        <Loc>{c.queueHead(items.length)}</Loc>
       </span>
       <ul className="queue__list">
         {items.map((text, i) => (
           <li className="queue__item" key={`${i}-${text.slice(0, 8)}`}>
             <span className="queue__idx">{i + 1}</span>
             <span className="queue__text" title={text}>{text}</span>
-            <button className="queue__del" type="button" aria-label={`移除排队第 ${i + 1} 条`} onClick={() => onRemove(i)}>
+            <button className="queue__del" type="button" aria-label={c.queueRemoveAria(i + 1)} onClick={() => onRemove(i)}>
               <X size={12} />
             </button>
           </li>
         ))}
       </ul>
-      <button className="queue__clear" type="button" onClick={onClear}>清空</button>
+      <button className="queue__clear" type="button" onClick={onClear}><Loc>{c.queueClear}</Loc></button>
     </div>
   )
 }

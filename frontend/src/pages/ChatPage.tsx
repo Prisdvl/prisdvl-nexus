@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import {
-  BookOpen, Check, ChevronDown, ChevronRight, Copy, Download, GitBranch, Maximize2, MessagesSquare, Minimize2, Pencil, Pin, Plus, RefreshCw, Search, Settings2, Square, Trash2, Wrench, X,
+  BookOpen, Check, ChevronDown, ChevronRight, Copy, Download, GitBranch, Maximize2, MessagesSquare, Minimize2, Pencil, Pin, Plus, RefreshCw, Search, Settings2, Square, Trash2, X,
 } from 'lucide-react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Archive02Icon, Delete02Icon } from '@hugeicons/core-free-icons'
@@ -9,13 +9,14 @@ import ReferencePanel from '@/components/chat/ReferencePanel'
 import FeedbackBar from '@/components/chat/FeedbackBar'
 import ConfirmCard, { type ConfirmRequest } from '@/components/chat/ConfirmCard'
 import ContextChips from '@/components/chat/ContextChips'
+import ConversationTrace, { type TraceMeta } from '@/components/chat/ConversationTrace'
 import ResultCard from '@/components/chat/ResultCard'
 import QueueStrip from '@/components/chat/QueueStrip'
 import { toolPolicy } from '@/lib/toolPolicy'
 import '@/styles/reference.css'
-import CallChip from '@/bits/CallChip/CallChip'
 import PromptBar, { type PromptBarSource } from '@/bits/PromptBar/PromptBar'
-import ThoughtLine from '@/bits/ThoughtLine/ThoughtLine'
+import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
+import AgentThoughtChain from '@/components/chat/AgentThoughtChain'
 import StatusMark from '@/bits/StatusMark/StatusMark'
 import RubberSegment from '@/bits/RubberSegment/RubberSegment'
 import Stepper, { Step } from '@/bits/Stepper/Stepper'
@@ -32,6 +33,10 @@ import { fetchKbs, useLoad } from '@/lib/backendData'
 import { api, errMessage, USE_MOCK, type ConversationMode } from '@/lib/api'
 import { isTempId, fetchMessages, toSessionItem } from '@/lib/conversations'
 import { postSse } from '@/lib/sse'
+import { promptChatCommands, promptEfforts, promptModels } from '@/lib/promptBarPreset'
+import { pagesCopy } from '@/lib/pagesCopy'
+import { useLocale } from '@/lib/locale'
+import Loc from '@/components/Loc'
 
 const REPLY = `已在绑定的知识库中检索到相关内容，下面是**结构化回答**：
 
@@ -97,6 +102,12 @@ interface ChatPageProps {
 
 export default function ChatPage({ theme, onOpenDoc, initialConversationId }: ChatPageProps) {
 
+  /* 文案字典：`c` 在本文件里被大量回调形参（m.calls / m.cites 的 c）遮蔽，
+     下面凡是需要字典的回调都把形参改名（call / cite），避免拿到错的 c。 */
+  const { locale } = useLocale()
+  const c = pagesCopy(locale).chat
+  const tr = pagesCopy(locale).trace
+
   /* 会话数据来自共享 store：侧栏的「最近会话」与这里读写同一份 */
   const {
     sessions, activeId, archived, createRequests,
@@ -117,10 +128,10 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
   const [thoughtSteps, setThoughtSteps] = useState<string[]>([])
   const addThoughtStep = (step: string) =>
     setThoughtSteps((list) => (list.includes(step) ? list : [...list, step]))
-  /** 后端工具 code → 面向用户的中文步骤名（未知 code 原样展示，不编造功能） */
+  /** 后端工具 code → 面向用户的步骤名（未知 code 原样展示，不编造功能） */
   const TOOL_STEP_NAME: Record<string, string> = {
-    knowledge_search: '知识库检索',
-    calculator: '数学计算',
+    knowledge_search: c.toolStepSearch,
+    calculator: c.toolStepCalc,
   }
   const previousStreaming = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
@@ -142,6 +153,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
   const [interrupted, setInterrupted] = useState(false)
   /** 右上角「会话配置」浮层：收纳 模式 / Agent / 知识库 三段选择 */
   const [configOpen, setConfigOpen] = useState(false)
+  const [chatView, setChatView] = useState<'chat' | 'trace'>('chat')
   const configRef = useRef<HTMLDivElement>(null)
   const [wizard, setWizard] = useState(false)
   /* 点引用不跳页：在右侧面板就地查看；需要原文时再点面板里的跳转 */
@@ -301,7 +313,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
       .catch((e) => {
         if (cancelled) return
         setMessagesFailed(id)
-        toast.error('消息加载失败', errMessage(e))
+        toast.error(c.loadFailTitle, errMessage(e))
       })
       .finally(() => { setLoadingMessages(false) })
     return () => { cancelled = true }
@@ -341,7 +353,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
      */
     if (USE_MOCK || isTempId(active.id)) {
       patch(active.id, (s) => ({ ...s, agentId }))
-      toast.success('已切换 Agent', agentNameOf(agentId))
+      toast.success(c.agentSwitched, agentNameOf(agentId))
       return
     }
     /*
@@ -354,7 +366,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
      */
     const needModeChange = active.mode !== 'AGENT'
     if (needModeChange && agentId !== null && agents.length === 0) {
-      toast.error('没有可用的 Agent', '请先到 Agent 页面创建一个并发布，再回到这里选用。')
+      toast.error(c.noAgentTitle, c.noAgentBody)
       return
     }
     try {
@@ -381,11 +393,11 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         kbs: updated.kbIds ?? [],
       }))
       toast.success(
-        needModeChange ? '已切换到 Agent 模式并选定 Agent' : '已切换 Agent',
+        needModeChange ? c.agentModeSwitched : c.agentSwitched,
         agentNameOf(agentId),
       )
     } catch (e) {
-      toast.error('切换失败', errMessage(e))
+      toast.error(c.switchFailTitle, errMessage(e))
       /* 本地保持不变：宁可不动，也不能与后端不一致 */
     }
   }
@@ -393,9 +405,9 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
   /* ---------------- 会话模式切换（PLAIN / RAG / AGENT） ---------------- */
 
   const MODE_OPTIONS: { value: ConversationMode; label: string }[] = [
-    { value: 'PLAIN', label: '普通对话' },
-    { value: 'RAG', label: '知识库问答' },
-    { value: 'AGENT', label: 'Agent' },
+    { value: 'PLAIN', label: c.modePlain },
+    { value: 'RAG', label: c.modeRag },
+    { value: 'AGENT', label: c.modeAgent },
   ]
 
   /**
@@ -416,15 +428,15 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         agentId: mode === 'AGENT' ? s.agentId : null,
         kbs: mode === 'RAG' ? s.kbs : [],
       }))
-      toast.success('已切换模式', `${prevMode} → ${mode}（原型演示，未落库）`)
+      toast.success(c.modeSwitchedTitle, c.modeSwitchedMock(prevMode, mode))
       return
     }
 
     /* 切到 AGENT 但一个 Agent 都没有：先说清下一步，不假装绑定成功 */
     if (mode === 'AGENT' && agents.length === 0) {
       toast.error(
-        '还没有可用的 Agent',
-        'AGENT 模式需要一个已发布的 Agent。请先到 Agent 页面创建并发布，再切回这里；切换后可在顶部选择。',
+        c.modeNoAgentTitle,
+        c.modeNoAgentBody,
       )
       return
     }
@@ -447,20 +459,20 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
        */
       const cleaned: string[] = []
       if (active.agentId !== null && updated.agentId === null) {
-        cleaned.push('Agent 绑定已清除')
+        cleaned.push(c.cleanedAgent)
       }
       if (active.kbs.length > 0 && (updated.kbIds ?? []).length === 0) {
-        cleaned.push('知识库绑定已清除')
+        cleaned.push(c.cleanedKb)
       }
       const name = MODE_OPTIONS.find((o) => o.value === mode)?.label ?? mode
       toast.success(
-        `已切换到${name}模式`,
+        c.modeSwitchedTo(name),
         cleaned.length > 0
-          ? `${cleaned.join('，')}。历史回答保持原样，新回答按当前模式执行。`
-          : '历史回答保持原样，新回答按当前模式执行。',
+          ? c.modeSwitchedBody(cleaned)
+          : c.historyKept,
       )
     } catch (e) {
-      toast.error('切换失败', errMessage(e))
+      toast.error(c.switchFailTitle, errMessage(e))
       /* 本地不动：不先显示成功再等后端 */
     }
   }
@@ -471,12 +483,12 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
 
   const archiveSession = (id: string) => {
     archiveSessionStore(id)
-    toast.info('会话已归档', '可在侧栏「已归档」中找回')
+    toast.info(c.archivedTitle, c.archivedBody)
   }
 
   const restoreSession = (id: string) => {
     restoreSessionStore(id)
-    toast.success('会话已恢复', '已回到最近会话')
+    toast.success(c.restoredTitle, c.restoredBody)
   }
 
   const commitRename = (id: string) => {
@@ -547,19 +559,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
   /* PromptBar 的 @ 数据源：当前会话绑定的知识库 + 上传/联网（原型示意） */
   const promptSources: PromptBarSource[] = (active.mode === 'RAG' ? kbOptions : [])
     .filter((kb) => active.kbs.includes(kbKey(kb)))
-    .map((kb) => ({ key: kbKey(kb), name: kb.name, description: '当前会话绑定的知识库', icon: <BookOpen size={14} /> }))
-  const PROMPT_COMMANDS = [
-    { key: 'summarize', name: '/总结', description: '把当前会话浓缩成要点' },
-    { key: 'explain', name: '/讲解', description: '用更直白的话重讲一遍' },
-    { key: 'tasks', name: '/待办', description: '整理成可执行的清单' },
-  ]
-  const PROMPT_MODELS = [
-    { key: 'nexus-pro', name: 'Nexus Pro', tag: '默认' },
-    { key: 'nexus-fast', name: 'Nexus Fast', tag: '快' },
-  ]
-  const PROMPT_EFFORTS = ['低', '中', '高', '极高']
-
-
+    .map((kb) => ({ key: kbKey(kb), name: kb.name, description: c.kbSourceDesc, icon: <BookOpen size={14} /> }))
   /**
    * 真实流式对话：POST /api/chat/stream（SSE）。
    * 与下方的模拟分支并存：USE_MOCK 时仍走模拟（离线演示 + 既有 QA 不受影响）。
@@ -586,7 +586,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         },
         onDelta: (t2) => {
           if (!alive()) return
-          if (!acc) addThoughtStep('生成回答')
+          if (!acc) addThoughtStep(c.stepGenerate)
           acc += t2
           patchMsg(sessionId, botId, (m) => ({ ...m, text: acc }))
         },
@@ -599,8 +599,8 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
             hitsArr.map((h) => h.documentTitle).filter((v): v is string => typeof v === 'string' && !!v),
           ).size
           const failedKbs = Array.isArray(d?.failedKnowledgeBases) ? (d.failedKnowledgeBases as unknown[]) : []
-          addThoughtStep(`检索知识库 · 命中 ${hit} 个切片`)
-          if (failedKbs.length) addThoughtStep('部分知识库检索失败，已跳过')
+          addThoughtStep(c.stepRetrieve(hit))
+          if (failedKbs.length) addThoughtStep(c.stepRetrievePartial)
           patchMsg(sessionId, botId, (m) => ({
             ...m,
             context: { kbs: [], retrieved: hit, usedDocs, scannedDocs: hit, historyTurns: 0, web: false },
@@ -609,45 +609,98 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         onToolCall: (d) => {
           if (!alive()) return
           const toolName = String(d.tool ?? 'tool')
-          addThoughtStep(`调用工具 · ${TOOL_STEP_NAME[toolName] ?? toolName}`)
+          addThoughtStep(c.toolStepLabel(TOOL_STEP_NAME[toolName] ?? toolName))
+          patchMsg(sessionId, botId, (m) => {
+            /*
+             * 走了人工审批的工具：闸门在**执行前**挂起，`approval_required` 已经建过这一行，
+             * 放行后这里只能原地改成"运行中"，再建一条就是同一件事两条记录。
+             */
+            const waiting = (m.calls ?? []).find((call) => call.name === toolName && call.status === 'awaiting')
+            return {
+              ...m,
+              calls: waiting
+                ? (m.calls ?? []).map((call) => (call.id === waiting.id
+                  ? { ...call, status: 'running' as const, argument: typeof d.input === 'string' ? d.input : JSON.stringify(d.input ?? '') }
+                  : call))
+                : [
+                    ...(m.calls ?? []),
+                    {
+                      id: `${Date.now()}-${toolName}`,
+                      icon: 'search' as const,
+                      name: toolName,
+                      argument: typeof d.input === 'string' ? d.input : JSON.stringify(d.input ?? ''),
+                      status: 'running' as const,
+                    },
+                  ],
+            }
+          })
+        },
+        onToolResult: (d) => {
+          if (!alive()) return
+          const summary = typeof d.resultSummary === 'string' ? d.resultSummary : ''
+          patchMsg(sessionId, botId, (m) => ({
+            ...m,
+            /* 形参原为 `c`，会遮蔽文案字典 c，改名 call。
+               已 cancelled 的那条是"用户拒绝"的结论（不是失败），工具结果的回流不能把它改写成"已完成"。 */
+            calls: (m.calls ?? []).map((call) => (call.name === String(d.tool) && call.status !== 'cancelled'
+              ? { ...call, status: 'done' as const, ...(summary ? { result: summary } : {}) }
+              : call)),
+          }))
+        },
+        /*
+         * 工具被权限闸门拦下：后端已落库审批记录并挂起**同一条流**等决定。
+         * 这里只做三件事——建一行"等待确认"、弹出已有的确认卡、把 runId 绑到决定按钮上。
+         */
+        onApprovalRequired: (d) => {
+          if (!alive()) return
+          const toolCode = String(d.toolCode ?? 'tool')
+          const runId = String(d.runId ?? '')
+          const arg = typeof d.arguments === 'string' ? d.arguments : JSON.stringify(d.arguments ?? '')
+          const reason = typeof d.reason === 'string' ? d.reason : ''
+          const callId = `ap_${runId}_${toolCode}`
           patchMsg(sessionId, botId, (m) => ({
             ...m,
             calls: [
               ...(m.calls ?? []),
               {
-                id: `${Date.now()}-${toolName}`,
-                icon: 'search' as const,
-                name: toolName,
-                argument: typeof d.input === 'string' ? d.input : JSON.stringify(d.input ?? ''),
-                status: 'running' as const,
+                id: callId, icon: 'terminal' as const, name: toolCode, argument: arg,
+                status: 'awaiting' as const, requiresConfirm: true, explain: reason,
               },
             ],
           }))
-        },
-        onToolResult: (d) => {
-          if (!alive()) return
-          patchMsg(sessionId, botId, (m) => ({
-            ...m,
-            calls: (m.calls ?? []).map((c) => (c.name === String(d.tool) ? { ...c, status: 'done' as const } : c)),
-          }))
+          setPendingConfirm({
+            callId, name: toolCode, argument: arg, explain: reason, risk: 'high',
+            msgId: botId, sessionId,
+          })
+          resumeRef.current = (decision) => {
+            if (!runId) return
+            /* once / always / deny 由后端按 ApprovalScope 判定；放行后同一条流会继续推 tool_call */
+            api.agentRuns.decide(runId, decision).catch((e) => {
+              toast.error(c.chatFailTitle, errMessage(e))
+              patchMsg(sessionId, botId, (m) => ({
+                ...m,
+                calls: (m.calls ?? []).map((call) => (call.id === callId ? { ...call, status: 'error' as const } : call)),
+              }))
+            })
+          }
         },
         onDone: (d) => {
           if (!alive()) return
           const citationRefs = Array.isArray(d?.citations) ? d.citations as ChatCitationRef[] : []
-          const cites = citationRefs.map((citation) => citation.documentTitle ?? '未知来源')
+          const cites = citationRefs.map((citation) => citation.documentTitle ?? c.unknownSource)
           patchMsg(sessionId, botId, (m) => ({ ...m, text: m.text || acc, ...(cites.length ? { cites, citationRefs } : {}) }))
           if (d?.stopped) setInterrupted(true)
         },
         onError: (m2) => {
           if (!alive()) return
-          toast.error('生成失败', m2)
+          toast.error(c.genFailTitle, m2)
           patchMsg(sessionId, botId, (m) => ({ ...m, text: m.text || '> ⚠️ ' + m2 }))
         },
       }, ctrl.signal)
     } catch (e) {
       if (alive()) {
-        toast.error('对话失败', errMessage(e))
-        patchMsg(sessionId, botId, (m) => ({ ...m, text: m.text || '（生成失败）' }))
+        toast.error(c.chatFailTitle, errMessage(e))
+        patchMsg(sessionId, botId, (m) => ({ ...m, text: m.text || c.genFailBody }))
       }
     } finally {
       if (alive()) {
@@ -672,7 +725,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
      */
     if (streaming) {
       setQueue((q) => [...q, t])
-      toast.info('已加入队列', `当前回答结束后自动发送（第 ${queue.length + 1} 条）`)
+      toast.info(c.queuedTitle, c.queuedBody(queue.length + 1))
       return
     }
     /* skipUserPush：编辑重发时用户消息已经随截断写回，不能再推一条 */
@@ -700,16 +753,16 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     setInterrupted(false)
     const calls: ToolCall[] = [
       { id: `c1-${botId}`, icon: 'search', name: 'kb.search', argument: t.slice(0, 18), status: 'running', expectedMs: 900 },
-      { id: `c2-${botId}`, icon: 'file', name: 'doc.read', argument: DEFAULT_CITES[0] ?? '文档', status: 'idle', expectedMs: 1200 },
+      { id: `c2-${botId}`, icon: 'file', name: 'doc.read', argument: DEFAULT_CITES[0] ?? c.docFallback, status: 'idle', expectedMs: 1200 },
       {
-        id: `c3-${botId}`, icon: 'terminal', name: 'js.sandbox', argument: '复杂度过一遍',
+        id: `c3-${botId}`, icon: 'terminal', name: 'js.sandbox', argument: c.mockArgComplexity,
         status: 'idle', expectedMs: 1500,
         /* 高风险：要在沙箱里真的执行代码，必须先让用户点头 */
         requiresConfirm: true,
-        explain: '这一步会在服务端沙箱里执行一段代码来验证复杂度结论。沙箱与生产隔离，但会消耗执行配额。',
+        explain: c.riskExplain,
       },
       /* 第 4 条演示"超时"：与失败区分开，文案与恢复动作都不同 */
-      { id: `c4-${botId}`, icon: 'search', name: 'web.fetch', argument: '官方文档最新版本', status: 'idle', expectedMs: 9000 },
+      { id: `c4-${botId}`, icon: 'search', name: 'web.fetch', argument: c.mockArgDocs, status: 'idle', expectedMs: 9000 },
     ]
     const sessionId = active.id
     runMeta.current.set(botId, {
@@ -755,12 +808,13 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
       const kind = call.name === 'js.sandbox' ? 'error' : call.name === 'web.fetch' ? 'timeout' : 'done'
       /* 高风险工具：先挂起链路，等用户在确认卡上做决定（除非已"始终允许"） */
       if (call.requiresConfirm && !toolPolicy.isAllowed(call.name)) {
-        setCalls(calls.map((c, j) => (j === i ? { ...c, status: 'awaiting' } : c)))
+        /* 形参原为 `c`，会遮蔽文案字典 c，改名 call */
+        setCalls(calls.map((call, j) => (j === i ? { ...call, status: 'awaiting' } : call)))
         setPendingConfirm({
           callId: call.id,
           name: call.name,
           argument: call.argument,
-          explain: call.explain ?? '这一步会执行一个高风险操作，需要你确认后再继续。',
+          explain: call.explain ?? c.riskFallback,
           risk: 'high',
           msgId: botId,
           sessionId,
@@ -776,7 +830,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
             step(i + 1)
             return
           }
-          setCalls(calls.map((c, j) => (j === i ? { ...c, status: 'running' } : c)))
+          setCalls(calls.map((call, j) => (j === i ? { ...call, status: 'running' } : call)))
           setTimeout(() => {
             if (!alive()) return
             calls[i] = { ...calls[i], status: kind }
@@ -788,7 +842,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         }
         return
       }
-      setCalls(calls.map((c, j) => (j === i ? { ...c, status: 'running' } : c)))
+      setCalls(calls.map((call, j) => (j === i ? { ...call, status: 'running' } : call)))
       setTimeout(() => {
         if (!alive()) return
         calls[i] = { ...calls[i], status: kind }
@@ -816,8 +870,8 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
 
   /** 当前等待用户确认的工具（null 表示没有待确认项） */
   const [pendingConfirm, setPendingConfirm] = useState<(ConfirmRequest & { msgId: string; sessionId: string }) | null>(null)
-  /** 链路被确认卡"挂起"时的续跑函数（允许/拒绝后调用） */
-  const resumeRef = useRef<((decision: 'allow' | 'deny') => void) | null>(null)
+  /** 链路被确认卡"挂起"时的续跑函数（允许一次 / 始终允许 / 拒绝后调用） */
+  const resumeRef = useRef<((decision: 'allow' | 'always' | 'deny') => void) | null>(null)
 
   /** 用户在确认卡上做了决定：允许一次 / 始终允许 / 拒绝 */
   const decideConfirm = (decision: 'allow' | 'always' | 'deny') => {
@@ -831,10 +885,11 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     if (decision === 'deny') {
       patchMsg(pending.sessionId, pending.msgId, (m) => ({
         ...m,
-        calls: (m.calls ?? []).map((c) => (c.id === pending.callId ? { ...c, status: 'cancelled' as const } : c)),
+        /* 形参原为 `c`，会遮蔽文案字典 c，改名 call */
+        calls: (m.calls ?? []).map((call) => (call.id === pending.callId ? { ...call, status: 'cancelled' as const } : call)),
       }))
     }
-    resume?.(decision === 'deny' ? 'deny' : 'allow')
+    resume?.(decision)
   }
 
   /**
@@ -855,8 +910,9 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     if (lastBot) {
       patchMsg(sessionId, lastBot.id, (m) => ({
         ...m,
-        text: m.text || '（已停止，本次回答不完整）',
-        calls: (m.calls ?? []).map((c) => (c.status === 'running' || c.status === 'idle' ? { ...c, status: 'cancelled' as const } : c)),
+        text: m.text || c.stoppedBody,
+        /* 形参原为 `c`，会遮蔽文案字典 c，改名 call */
+        calls: (m.calls ?? []).map((call) => (call.status === 'running' || call.status === 'idle' ? { ...call, status: 'cancelled' as const } : call)),
       }))
     }
     setInterrupted(true)
@@ -865,10 +921,10 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     setStreaming(false)
     /* 停止 = 这一轮与排队都停：留着队列会在停止后立刻自动发出去，反而不符合预期 */
     if (queue.length > 0) {
-      toast.info('已清空待发送队列', `取消了 ${queue.length} 条排队消息`)
+      toast.info(c.queueClearedTitle, c.queueClearedBody(queue.length))
       setQueue([])
     }
-    toast.info('已停止生成', '已完成的部分保留，可继续追问或点「继续生成」')
+    toast.info(c.stopTitle, c.stopBody)
   }
 
   /** 中断后继续：真实模式发一条真实的"继续"追问（新的一轮，走 SSE）；mock 模式本地补完演示 */
@@ -879,7 +935,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     if (!USE_MOCK && !isTempId(sessionId)) {
       /* 后端没有"续写同一条消息"的接口；以一轮真实追问继续，不能本地伪造回答 */
       setInterrupted(false)
-      sendText('请接着上一条被中断的回答，从中断处继续输出剩余内容。')
+      sendText(c.continuePrompt)
       return
     }
     setInterrupted(false)
@@ -888,13 +944,14 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     const alive = () => runSeq.current === runId
     patchMsg(sessionId, lastBot.id, (m) => ({
       ...m,
-      calls: (m.calls ?? []).map((c) => (c.status === 'cancelled' ? { ...c, status: 'done' as const } : c)),
+      /* 形参原为 `c`，会遮蔽文案字典 c，改名 call */
+      calls: (m.calls ?? []).map((call) => (call.status === 'cancelled' ? { ...call, status: 'done' as const } : call)),
     }))
     setTimeout(() => {
       if (!alive()) return
       patchMsg(sessionId, lastBot.id, (m) => ({ ...m, text: REPLY }))
       setStreaming(false)
-      toast.success('已继续生成', '补完了剩余部分')
+      toast.success(c.continueTitle, c.continueBody)
     }, 1200)
   }
 
@@ -903,14 +960,15 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     const sessionId = active.id
     patchMsg(sessionId, msgId, (m) => ({
       ...m,
-      calls: (m.calls ?? []).map((c) => (c.id === callId ? { ...c, status: 'running' as const } : c)),
+      /* 形参原为 `c`，会遮蔽文案字典 c，改名 call */
+      calls: (m.calls ?? []).map((call) => (call.id === callId ? { ...call, status: 'running' as const } : call)),
     }))
     setTimeout(() => {
       patchMsg(sessionId, msgId, (m) => ({
         ...m,
-        calls: (m.calls ?? []).map((c) => (c.id === callId ? { ...c, status: 'done' as const } : c)),
+        calls: (m.calls ?? []).map((call) => (call.id === callId ? { ...call, status: 'done' as const } : call)),
       }))
-      toast.success('工具调用已重试成功', '这次没有报错')
+      toast.success(c.retryOkTitle, c.retryOkBody)
     }, 1200)
   }
 
@@ -934,11 +992,11 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
       const id = branchFrom(msgId)
       if (id === null) return
       setStreaming(false)
-      toast.success('已在新对话中分支', '原会话保持不变，可在新会话里换个问法继续')
+      toast.success(c.branchMockTitle, c.branchMockBody)
       return
     }
     if (isTempId(active.id)) {
-      toast.info('当前会话还没落库', '先发一条消息创建服务端会话后，才能创建持久化分支。')
+      toast.info(c.branchTempTitle, c.branchTempBody)
       return
     }
     /* 只有后端雪花数字 id 才能作为截断点；m_ 前缀的本地消息则整会话复制 */
@@ -949,9 +1007,9 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
       const created = await api.conversations.fork(active.id, { title, beforeMessageId: beforeId })
       addSession(toSessionItem(created))
       setStreaming(false)
-      toast.success('已创建分支对话', title + '：原会话保持不变')
+      toast.success(c.branchCreatedTitle, c.branchCreatedBody(title))
     } catch (e) {
-      toast.error('创建分支失败', errMessage(e))
+      toast.error(c.branchFailTitle, errMessage(e))
     } finally {
       setBranching(false)
     }
@@ -959,11 +1017,11 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
 
   const copyMessage = async (text: string) => {
     try {
-      if (!navigator.clipboard?.writeText) throw new Error('当前浏览器未授权剪贴板访问。')
+      if (!navigator.clipboard?.writeText) throw new Error(c.copyDenied)
       await navigator.clipboard.writeText(text)
-      toast.success('已复制消息')
+      toast.success(c.copyMsgToast)
     } catch (error) {
-      toast.error('复制失败', errMessage(error))
+      toast.error(c.copyFailTitle, errMessage(error))
     }
   }
 
@@ -986,10 +1044,10 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     const md = [
       `# ${active.title}`,
       ``,
-      `- Agent：${agentName}`,
-      `- 知识库：${active.kbs.map(kbName).join('、') || '未绑定'}`,
+      c.exportAgent(agentName),
+      c.exportKb(active.kbs.map(kbName).join(c.listSep) || c.exportKbNone),
       ``,
-      ...active.messages.map((m) => `**${m.role === 'user' ? '我' : 'AI'}**：${m.text}${m.cites?.length ? `\n\n引用：${m.cites.join('、')}` : ''}`),
+      ...active.messages.map((m) => `**${m.role === 'user' ? c.exportRoleUser : c.exportRoleAi}**${c.exportRoleSep}${m.text}${m.cites?.length ? `\n\n${c.exportCites(m.cites.join(c.listSep))}` : ''}`),
     ].join('\n')
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
     const a = document.createElement('a')
@@ -1007,14 +1065,14 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
 
     if (!USE_MOCK && !isTempId(active.id)) {
       if ((active.mode ?? 'PLAIN') !== 'RAG') {
-        toast.error('当前模式不支持绑定知识库', '请先切换到「知识库问答」模式。')
+        toast.error(c.kbModeTitle, c.kbModeBody)
         return
       }
       try {
         const updated = await api.conversations.update(active.id, { kbIds: next })
         patch(active.id, (session) => ({ ...session, kbs: updated.kbIds ?? next }))
       } catch (error) {
-        toast.error('知识库绑定失败', errMessage(error))
+        toast.error(c.kbBindFailTitle, errMessage(error))
       }
       return
     }
@@ -1034,18 +1092,18 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
       if (USE_MOCK) {
         addSession({
           id: nextTmpId(),
-          title: '新会话',
+          title: c.defaultTitle,
           mode: wizMode,
           agentId: selectedAgent,
           kbs: selectedKbNames,
-          updated: '刚刚',
+          updated: c.justNow,
           pinned: false,
           messagesLoaded: true,
           messages: [],
         })
       } else {
         const created = await api.conversations.create({
-          title: '新会话',
+          title: c.defaultTitle,
           mode: wizMode,
           agentId: selectedAgent,
           kbIds: selectedKbIds,
@@ -1054,9 +1112,9 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
       }
       setWizard(false)
       const modeName = MODE_OPTIONS.find((option) => option.value === wizMode)?.label ?? wizMode
-      toast.success('会话已创建', `${modeName}模式`)
+      toast.success(c.createdTitle, c.createdBody(modeName))
     } catch (error) {
-      toast.error('会话创建失败', errMessage(error))
+      toast.error(c.createFailTitle, errMessage(error))
     } finally {
       setCreatingSession(false)
     }
@@ -1074,15 +1132,18 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
    * 这个 bug 是接后端后才出现的：原型期种子数据永远有 4 条会话，
    * `sessions[0]` 永不 undefined。
    */
+  const traceMeta: Record<string, TraceMeta> = Object.fromEntries(runMeta.current)
+  const traceModel = [...active.messages].reverse().map((m) => runMeta.current.get(m.id)?.model).find(Boolean)
+
   if (isEmptyList) {
     return (
       <div className="chat-fixed">
         <div className="chat-empty-first">
           <StateEmpty
             icon={<MessagesSquare size={20} />}
-            title="还没有任何会话"
-            desc="从侧栏点「新对话」开一个，或先在知识库里准备资料。"
-            action={<button className="btn btn-primary" type="button" onClick={() => requestCreate()}>新对话</button>}
+            title={c.emptyTitle}
+            desc={c.emptyDesc}
+            action={<button className="btn btn-primary" type="button" onClick={() => requestCreate()}><Loc>{c.newChat}</Loc></button>}
           />
         </div>
       </div>
@@ -1105,7 +1166,27 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
           <header className="chat-head">
             <div className="chat-head__id">
               <div data-testid="chat-title" className="chat-head__title">{active.title}</div>
-              <div data-testid="chat-meta" className="chat-head__meta">{active.messages.length} 条消息 · {active.updated}</div>
+              <div data-testid="chat-meta" className="chat-head__meta">{c.metaLine(active.messages.length, active.updated)}</div>
+              <div className="chat-view-tabs" role="tablist" aria-label={tr.viewTrace}>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={chatView === 'chat'}
+                  className={`chat-view-tab${chatView === 'chat' ? ' is-on' : ''}`}
+                  onClick={() => setChatView('chat')}
+                >
+                  {tr.viewChat}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={chatView === 'trace'}
+                  className={`chat-view-tab${chatView === 'trace' ? ' is-on' : ''}`}
+                  onClick={() => setChatView('trace')}
+                >
+                  {tr.viewTrace}
+                </button>
+              </div>
             </div>
 
             <div className="chat-head__tools">
@@ -1125,23 +1206,23 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                 onClick={() => setConfigOpen(v => !v)}
                 aria-expanded={configOpen}
                 aria-haspopup="dialog"
-                title="会话设置：模式 / Agent / 知识库"
+                title={c.configTitle}
               >
                 <Settings2 size={13} aria-hidden="true" />
                 <span className="session-config__summary">
                   {(active.mode ?? 'PLAIN') === 'RAG'
-                    ? `知识库问答 · ${active.kbs.length}`
+                    ? c.summaryRag(active.kbs.length)
                     : (active.mode ?? 'PLAIN') === 'AGENT'
                       ? agentName
-                      : '普通对话'}
+                      : c.modePlain}
                 </span>
                 <ChevronDown size={12} aria-hidden="true" className={configOpen ? 'session-config__chev is-open' : 'session-config__chev'} />
               </button>
 
               {configOpen && (
-                <div className="session-config__pop" role="dialog" aria-label="会话设置">
+                <div className="session-config__pop" role="dialog" aria-label={c.configAria}>
                   <div className="sc-section">
-                    <div className="sc-label">模式</div>
+                    <div className="sc-label"><Loc>{c.modeLabel}</Loc></div>
                     {MODE_OPTIONS.map(o => (
                       <button
                         key={o.value}
@@ -1159,8 +1240,8 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
 
                   <div className="sc-section">
                     <div className="sc-label">
-                      Agent
-                      {(active.mode ?? 'PLAIN') !== 'AGENT' && <span className="sc-hint">需切换到 Agent 模式</span>}
+                      <Loc>{c.agentLabel}</Loc>
+                      {(active.mode ?? 'PLAIN') !== 'AGENT' && <span className="sc-hint"><Loc>{c.agentNeedMode}</Loc></span>}
                     </div>
                     {agentOptions.map(o => (
                       <button
@@ -1180,17 +1261,17 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
 
                   <div className="sc-section">
                     <div className="sc-label">
-                      知识库
-                      {(active.mode ?? 'PLAIN') !== 'RAG' && <span className="sc-hint">需切换到知识库问答</span>}
+                      <Loc>{c.kbLabel}</Loc>
+                      {(active.mode ?? 'PLAIN') !== 'RAG' && <span className="sc-hint"><Loc>{c.kbNeedRag}</Loc></span>}
                     </div>
-                    {kbsLoading && <p className="hint" style={{ margin: '4px 0 0' }}>正在加载…</p>}
+                    {kbsLoading && <p className="hint" style={{ margin: '4px 0 0' }}>{c.kbLoading}</p>}
                     {kbsError && (
                       <p className="form-error active" role="alert" style={{ margin: '4px 0 0' }}>
-                        {kbsError} <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}>重试</button>
+                        {kbsError} <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}><Loc>{c.retry}</Loc></button>
                       </p>
                     )}
                     {!kbsLoading && !kbsError && kbOptions.length === 0 && (
-                      <p className="hint" style={{ margin: '4px 0 0' }}>还没有可绑定的知识库。</p>
+                      <p className="hint" style={{ margin: '4px 0 0' }}>{c.kbEmptyBind}</p>
                     )}
                     {!kbsLoading && !kbsError && kbOptions.map(kb => (
                       <button
@@ -1212,15 +1293,26 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
               )}
             </div>
 
-            <button className="btn btn-ghost btn-sm" type="button" onClick={exportMd} title="导出为 Markdown" aria-label="导出为 Markdown">
+            <button className="btn btn-ghost btn-sm" type="button" onClick={exportMd} title={c.exportMd} aria-label={c.exportMd}>
               <Download size={13} />
             </button>
             </div>
           </header>
 
           {/* 页面需要唯一 h1：用当前会话标题（视觉上由左侧列表承担，这里给辅助技术） */}
-          <h1 className="sr-only">对话 · {active.title}</h1>
+          <h1 className="sr-only">{c.h1Title(active.title)}</h1>
           <div className="thread-row">
+          {chatView === 'trace' ? (
+            <ConversationTrace
+              messages={active.messages}
+              meta={traceMeta}
+              agent={agentName}
+              model={traceModel}
+              mode={MODE_OPTIONS.find((o) => o.value === (active.mode ?? 'PLAIN'))?.label ?? ''}
+              kbs={active.kbs.map(kbName)}
+            />
+          ) : (
+          <>
           <div className="thread chat-swap" key={active.id} ref={threadRef}>
             {/* 决策 2：区分「还在拉消息」与「已加载但确实是空的」——
                 否则懒加载期间会闪一下"还没有消息"，看起来像数据丢了。 */}
@@ -1234,8 +1326,8 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
             )}
             {!loadingMessages && active.messages.length === 0 && !streaming && (
               <div className="chat-empty-state">
-                <h2>从一个问题开始</h2>
-                <p>回答将保存在当前会话中，可随时继续或切换模式。</p>
+                <h2><Loc>{c.startTitle}</Loc></h2>
+                <p><Loc>{c.startDesc}</Loc></p>
               </div>
             )}
             {(() => {
@@ -1255,39 +1347,25 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                       <textarea className="input" rows={3} value={editing.text} onChange={(e) => setEditing({ id: m.id, text: e.target.value })} />
                       <div style={{ display: 'flex', gap: 8 }}>
-                        <button className="btn btn-primary btn-sm" type="button" onClick={saveEdit}>保存并重发</button>
-                        <button className="btn btn-ghost btn-sm" type="button" onClick={() => setEditing(null)}>取消</button>
+                        <button className="btn btn-primary btn-sm" type="button" onClick={saveEdit}><Loc>{c.saveResend}</Loc></button>
+                        <button className="btn btn-ghost btn-sm" type="button" onClick={() => setEditing(null)}><Loc>{c.cancel}</Loc></button>
                       </div>
                     </div>
                   ) : m.role === 'bot' ? (
                     <>
                       {m.calls && m.calls.length > 0 && (
-                        <div className="tool-calls">
-                          <span className="tool-calls-label">
-                            <Wrench size={11} /> 工具调用
-                          </span>
-                          {m.calls.map((c) => (
-                            <CallChip
-                              key={c.id}
-                              icon={c.icon}
-                              name={c.name}
-                              argument={c.argument}
-                              status={c.status}
-                              expectedMs={c.expectedMs}
-                              size={32}
-                              radius={9}
-                              color="currentColor"
-                              surfaceColor="var(--surface-muted)"
-                              progressColor="var(--primary)"
-                              progressOpacity={0.12}
-                              doneColor="var(--success)"
-                              errorColor="var(--danger)"
-                              washOpacity={0.16}
-                              /* 失败与超时都可以重试（超时不是错误，但用户同样需要"再试一次"） */
-            onRetry={c.status === 'error' || c.status === 'timeout' ? () => retryCall(m.id, c.id) : undefined}
-                            />
-                          ))}
-                        </div>
+                        <AgentThoughtChain
+                          calls={m.calls}
+                          /*
+                           * 必须把"这一轮还在流式"告诉时间线：两个工具之间（模型正在想下一步）没有任何
+                           * call 处于 running，只按 call 状态推断的话摘要会当场显示「已完成」，而回答还没开始生成。
+                           */
+                          working={streaming && msgIdx === active.messages.length - 1}
+                          context={m.context}
+                          citations={m.cites?.length}
+                          elapsedMs={runMeta.current.get(m.id)?.totalMs}
+                          onRetry={(callId) => retryCall(m.id, callId)}
+                        />
                       )}
                       {/* 上下文胶囊：说明这轮"拿到了什么"，与工具轨迹互补 */}
                       {m.role === 'bot' && m.context && (
@@ -1314,11 +1392,12 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                   )}
                   {m.role === 'bot' && m.cites && (
                     <div className="citation">
-                      {m.cites.map((c, i) => {
-                        const citation = m.citationRefs?.find((item) => item.documentTitle === c)
+                      {m.cites.map((cite, i) => {
+                        /* 形参原为 `c`，会遮蔽文案字典 c，改名 cite */
+                        const citation = m.citationRefs?.find((item) => item.documentTitle === cite)
                         return (
-                          <button key={`${c}-${i}`} className="cite-chip" type="button" data-clickable onClick={() => setRefCitation(citation ?? { documentTitle: c })} title={`在右侧查看「${c}」`}>
-                            <BookOpen size={12} /><span>{c}</span>
+                          <button key={`${cite}-${i}`} className="cite-chip" type="button" data-clickable onClick={() => setRefCitation(citation ?? { documentTitle: cite })} title={c.viewCite(cite)}>
+                            <BookOpen size={12} /><span>{cite}</span>
                           </button>
                         )
                       })}
@@ -1327,26 +1406,26 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                   {m.role === 'bot' && (
                     <span className="msg-state">
                       <StatusMark status="done" size={13} />
-                      已完成{m.cites?.length ? ` · 引用 ${m.cites.length} 篇` : ''}
+                      <Loc>{c.done}</Loc>{m.cites?.length ? <> · <Loc>{c.doneWithCites(m.cites.length)}</Loc></> : null}
                     </span>
                   )}
                   {editing?.id !== m.id && (
                     <div className="msg-ops">
-                      <button className="msg-op" type="button" title="复制消息" aria-label="复制消息" onClick={() => void copyMessage(m.text)}><Copy size={15} aria-hidden="true" /></button>
+                      <button className="msg-op" type="button" title={c.copyMsg} aria-label={c.copyMsg} onClick={() => void copyMessage(m.text)}><Copy size={15} aria-hidden="true" /></button>
                       {m.role === 'user' ? (
-                        <button className="msg-op" type="button" title="编辑并重新发送" aria-label="编辑并重新发送" onClick={() => setEditing({ id: m.id, text: m.text })}><Pencil size={15} aria-hidden="true" /></button>
+                        <button className="msg-op" type="button" title={c.editResend} aria-label={c.editResend} onClick={() => setEditing({ id: m.id, text: m.text })}><Pencil size={15} aria-hidden="true" /></button>
                       ) : (
                         <button
                           className="msg-op"
                           type="button"
-                          title="从此处创建分支"
-                          aria-label="从此处创建分支"
+                          title={c.branchFromAria}
+                          aria-label={c.branchFromAria}
                           disabled={branching || (!USE_MOCK && isTempId(active.id))}
                           onClick={() => void branchFromMsg(m.id)}
                         ><GitBranch size={15} aria-hidden="true" /></button>
                       )}
                       {m.role === 'bot' && interrupted && m.id === [...active.messages].reverse().find((x) => x.role === 'bot')?.id && (
-                        <button className="msg-op" type="button" title="继续生成" aria-label="继续生成" onClick={continueRun}><RefreshCw size={15} aria-hidden="true" /></button>
+                        <button className="msg-op" type="button" title={c.continueGen} aria-label={c.continueGen} onClick={continueRun}><RefreshCw size={15} aria-hidden="true" /></button>
                       )}
                       {/* 反馈：只有真正产出过文字的回答才问，避免"空回答也让人点赞" */}
                       {m.role === 'bot' && m.text.trim().length > 0 && (
@@ -1359,7 +1438,8 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                             agent: agentName,
                             kbCount: active.kbs.length,
                             citedCount: m.cites?.length ?? 0,
-                            tools: (m.calls ?? []).map((c) => ({ name: c.name, status: c.status, ms: c.expectedMs })),
+                            /* 形参原为 `c`，会遮蔽文案字典 c，改名 call */
+                            tools: (m.calls ?? []).map((call) => ({ name: call.name, status: call.status, ms: call.expectedMs })),
                             firstProgressMs: runMeta.current.get(m.id)?.firstProgressMs,
                             totalMs: runMeta.current.get(m.id)?.totalMs,
                           }}
@@ -1372,24 +1452,17 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
               )
               })
             })()}
-            {(streaming || showSettledThought) && (
+            {(streaming || showSettledThought) && !active.messages[active.messages.length - 1]?.calls?.length && (
               <div className="msg bot">
-                <div className="thinking-block" style={{ paddingTop: 8 }}>
-                  <ThoughtLine
-                    working={streaming}
-                    label="正在生成回答"
-                    doneLabel={interrupted ? '已停止' : '本轮已结束'}
-                    steps={USE_MOCK ? [] : thoughtSteps}
-                    showTimer
-                    fontSize={13}
-                  />
-                </div>
+                <AgentThoughtChain calls={[]} working={streaming} steps={thoughtSteps} />
               </div>
             )}
           </div>
 
           {/* 消息导航：右侧横线轨道 + Hover 预览（浮层 Portal 到 body） */}
           <MessageNavigator messages={active.messages} containerRef={threadRef} />
+          </>
+          )}
           </div>
 
           {/* 输入区：PromptBar（@ 数据源 / 命令 / 模型 / 档位 / 附件 / 停止） */}
@@ -1402,9 +1475,9 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
               <button
                 type="button"
                 className="composer-expand"
-                aria-label="退出放大"
+                aria-label={c.collapseAria}
                 aria-pressed="true"
-                title="退出放大 (Esc)"
+                title={c.collapseTitle}
                 onClick={() => setComposerExpanded(false)}
               >
                 <Minimize2 size={15} aria-hidden="true" />
@@ -1413,19 +1486,19 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
               <button
                 type="button"
                 className="composer-expand"
-                aria-label="放大输入框"
-                title="放大输入框"
+                aria-label={c.expandAria}
+                title={c.expandTitle}
                 onClick={() => setComposerExpanded(true)}
               >
                 <Maximize2 size={15} aria-hidden="true" />
               </button>
             ) : null}
             <PromptBar
-              placeholder="输入你的问题…"
+              placeholder={c.composerPh}
               sources={promptSources}
-              commands={PROMPT_COMMANDS}
-              models={PROMPT_MODELS}
-              efforts={PROMPT_EFFORTS}
+              commands={promptChatCommands(locale)}
+              models={promptModels(locale)}
+              efforts={promptEfforts(locale)}
               busy={streaming}
               expanded={composerExpanded}
               onLineCountChange={setComposerLines}
@@ -1445,7 +1518,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
               onClear={() => setQueue([])}
             />
             <p className="composer-hint">
-              Agent：{agentName} · 知识库 {active.kbs.length} 个 · 输入 <code>@</code> 引用数据源，<code>/</code> 使用快捷命令
+              <Loc>{c.hintKb(agentName, active.kbs.length)}</Loc>{' '}<code>@</code>{' '}<Loc>{c.hintAt}</Loc><code>/</code>{' '}<Loc>{c.hintSlash}</Loc>
             </p>
             </div>
           </div>
@@ -1465,18 +1538,19 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
       {/* ---------- 新建会话向导 ---------- */}
       <Modal
         open={wizard}
-        title="新建会话"
+        title={c.wizardTitle}
         onClose={() => { if (!creatingSession) setWizard(false) }}
         shouldBlockClose={() => creatingSession}
       >
         <Stepper
-          backButtonText="上一步"
-          nextButtonText="继续"
+          backButtonText={c.stepBack}
+          nextButtonText={c.stepNext}
+          finalButtonText={c.wizardCreate}
           onFinalStepCompleted={() => { void createConversation() }}
         >
           <Step>
             <div className="wizard-field">
-              <label>选择对话模式</label>
+              <label><Loc>{c.wizardModeLabel}</Loc></label>
               <RubberSegment
                 items={MODE_OPTIONS.map((option) => option.label)}
                 value={MODE_OPTIONS.find((option) => option.value === wizMode)?.label ?? MODE_OPTIONS[0].label}
@@ -1490,16 +1564,16 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                 thumbColor="var(--primary-container)"
                 textColor="var(--text-2)"
                 activeTextColor="var(--primary-text)"
-                aria-label="新会话模式"
+                aria-label={c.wizardModeAria}
               />
               <p className="hint" style={{ marginTop: 9 }}>
-                普通对话不绑定资料；知识库问答使用所选知识库；Agent 模式使用已发布 Agent 的配置。
+                <Loc>{c.wizardModeHint}</Loc>
               </p>
             </div>
 
             {wizMode === 'AGENT' && (
               <div className="wizard-field" style={{ marginTop: 18 }}>
-                <label>选择 Agent</label>
+                <label><Loc>{c.wizardAgentLabel}</Loc></label>
                 <div className="wizard-opts">
                   {agentOptions.map((option) => (
                     <button
@@ -1519,10 +1593,10 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
 
             {wizMode === 'RAG' && (
               <div className="wizard-field" style={{ marginTop: 18 }}>
-                <label>绑定知识库（可多选）</label>
-                {kbsLoading && <p className="hint">正在加载你的知识库…</p>}
-                {kbsError && <p className="form-error active" role="alert">{kbsError} <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}>重试</button></p>}
-                {!kbsLoading && !kbsError && kbOptions.length === 0 && <p className="hint">还没有知识库。你可以先创建空会话，再到知识库页面创建并导入资料。</p>}
+                <label><Loc>{c.wizardKbLabel}</Loc></label>
+                {kbsLoading && <p className="hint">{c.wizardKbLoading}</p>}
+                {kbsError && <p className="form-error active" role="alert">{kbsError} <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}><Loc>{c.retry}</Loc></button></p>}
+                {!kbsLoading && !kbsError && kbOptions.length === 0 && <p className="hint"><Loc>{c.wizardKbEmpty}</Loc></p>}
                 <div className="wizard-opts">
                   {kbOptions.map((kb) => {
                     const key = kbKey(kb)
@@ -1544,15 +1618,15 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
             )}
           </Step>
           <Step>
-            <p style={{ margin: 0 }}>确认创建「{MODE_OPTIONS.find((option) => option.value === wizMode)?.label}」会话。</p>
+            <p style={{ margin: 0 }}><Loc>{c.wizardConfirm(MODE_OPTIONS.find((option) => option.value === wizMode)?.label ?? '')}</Loc></p>
             <p className="hint" style={{ marginTop: 10 }}>
               {wizMode === 'RAG'
-                ? `将绑定 ${wizKbs.length} 个知识库。`
+                ? <Loc>{c.wizardBindCount(wizKbs.length)}</Loc>
                 : wizMode === 'AGENT'
-                  ? `将使用 Agent「${agentNameOf(wizAgent)}」。`
-                  : '会话创建后可以立即提问。'}
+                  ? <Loc>{c.wizardUseAgent(agentNameOf(wizAgent))}</Loc>
+                  : <Loc>{c.wizardPlainReady}</Loc>}
             </p>
-            {creatingSession && <p role="status" className="hint">正在创建会话…</p>}
+            {creatingSession && <p role="status" className="hint"><Loc>{c.wizardCreating}</Loc></p>}
           </Step>
         </Stepper>
       </Modal>

@@ -620,8 +620,8 @@ class AgentResourceTest {
         mockMvc.perform(post("/api/auth/register")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                        {"username":"%s","password":"%s"}
-                        """.formatted(username, PASSWORD)));
+                        {"username":"%s","password":"%s","email":"%s@example.com"}
+                        """.formatted(username, PASSWORD, username)));
 
         String loginBody = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)

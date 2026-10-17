@@ -592,7 +592,7 @@ Content-Type: application/json
 | `delta` | 每个 token 片段（**已实现**） | `{"text":"缓存击穿是指"}` |
 | `tool_call` | Agent/工具场景（**已实现**） | `{"tool":"knowledge_search","input":"缓存击穿怎么解决"}` |
 | `tool_result` | 工具返回（**已实现**） | `{"tool":"knowledge_search","input":"缓存击穿怎么解决","resultSummary":"3 条结果"}` |
-| `approval_required` | 需要人工确认（Phase 8 预留，未实现） | `{"approvalId":"a1","toolCode":"createStudyPlan","arguments":{...},"reason":"该操作会写入你的学习计划"}` |
+| `approval_required` | 工具需要人工确认（**已实现**，P0：只对 `WRITE`/`DANGEROUS` 工具且用户没有 `always` 授权时发送） | `{"runId":"9","approvalId":"11","toolCode":"test_write_tool","arguments":"{\"payload\":\"…\"}","reason":"该工具会修改数据（WRITE），执行前需要你确认。"}` |
 | `citation` | 生成结束后（Phase 3 预留，**仍未作为独立事件实现**） | 引用随 `done` 的 `citations` 字段给出，并同时落库（见下） |
 | `usage` | 结束前（**已实现**） | `{"promptTokens":1820,"completionTokens":240,"totalTokens":2060,"latencyMs":2900,"firstTokenMs":380}` |
 | `done` | 正常结束（**已实现**） | `{"finishReason":"stop"}`；用户停止时 `{"finishReason":"stopped","stopped":true}` |
@@ -641,7 +641,11 @@ Content-Type: application/json
   `hits[].knowledgeBaseId` 是**这一片**出自哪个库。会话可以绑多个库，所以"检索到 N 个片段"
   不再能回答"资料从哪来"——出处必须逐条给。知识库问答流式那条链路固定单库
   （路径里的 `{id}`），因此 `knowledgeBaseIds` 恒为一个元素、`hits[].knowledgeBaseId` 恒等于它。
-- `citation` 事件 / `approval_required` 仍未实现：引用随 `done` 的 `citations` 字段给出，
+- `citation` 事件仍未实现（引用随 `done` 的 `citations` 字段给出）；
+  `approval_required` **已实现**（P0）：事件来自工具执行壳的真实拦截点，
+  发送前 `ai_tool_approval` 与运行状态已落库，`runId`/`approvalId` 就是提交审批要用的两个 id。
+  客户端断开不影响持久化状态——刷新后用 `GET /api/agent/runs/{runId}` 仍能看到待审批，
+  但**断开不等于批准**，工具不会执行。引用随 `done` 的 `citations` 字段给出，
   并**同时写进 `chat_message.metadata.citations`（Phase 5.9 五）**——刷新聊天页面后引用仍在。
 - **RAG 流式生成失败**（`/api/knowledge-bases/{id}/ask/stream`，Phase 5.2）不再发 `error` 帧，
   而是把失败放进**最后一个 `done` 帧**：`{"finishReason":"error","error":"<给用户的话>","errorCode":4001,
@@ -746,7 +750,7 @@ PUT /api/agents/12
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/tools` | 当前用户的工具目录：`{code, name, description, source, category, enabled, builtin}` |
+| GET | `/api/tools` | 当前用户的工具目录：`{code, name, description, source, category, permission, enabled, builtin}`；`permission` 取自数据库（运行时权威），不是代码里的默认值 |
 | PUT | `/api/tools/{code}` | 启停一个工具（`{enabled}`） |
 
 要点：
@@ -757,31 +761,97 @@ PUT /api/agents/12
 - 没有覆盖行 = `enabled=true`（默认开着）。**描述等元数据不落库**：唯一真源是代码里的 `@Tool`，
   库里再存一份就是永远不被读的死数据（见 `database.md` 6.0.1）；
 - **停用的效果是"任何 Agent 都不再装它"**——模型连这个工具的存在都看不到，因此不会再被调用
-  （而不是"调用后被拒"）。拒绝语义（模型看得见但被告知不能用）属审批，落 P1；
+  （而不是"调用后被拒"）。而**需要审批的语义是"模型看得见、但执行前要用户点头"**，
+  已在 P0 落地（见 6.0）；
 - 界面上配白名单的入口在 **Agent 编辑弹窗**（5.4 · P1-9），字段是 `toolCodes`，
   不是 `PUT /api/agents/{id}/tools` ——那个端点**不存在**，也不会做（白名单就是 Agent 的一个字段）。
+
+### 6.0 已实现：工具授权与人工审批闭环（P0，迁移 V22）
+
+权限语义：**`READ` 直接执行；`WRITE` / `DANGEROUS` 必须人工确认**，
+除非该用户对该工具有 `always` 授权。权限与授权都在数据库里（`ai_tool_registry.permission` 是运行时权威），
+执行拦截读的是库里的值——管理员把一个只读工具提级为 `DANGEROUS` 后，下一次调用立即开始要求审批
+（`ToolApprovalFlowTest.registrySyncDoesNotOverwriteAdminPermission` 钉住了这条）。
+
+#### 运行状态机
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/agent/runs` | 发起一次运行 → `{"runId":"9"}`（异步；不阻塞 HTTP 线程） |
+| GET | `/api/agent/runs/{runId}` | 运行详情：状态 + `pendingApproval`（等待审批时非空，刷新后可据此恢复现场） |
+| GET | `/api/agent/runs/{runId}/steps` | 运行轨迹，按 `seq` 升序 |
+| POST | `/api/agent/runs/{runId}/approval` | 提交审批决策 → 返回决策后的运行详情 |
+| POST | `/api/agent/runs/{runId}/cancel` | 取消运行（幂等，等待审批时同样可取消）→ `{"runId":"9","cancelled":true}` |
+
+```http
+POST /api/agent/runs
+{ "agentId": "12", "conversationId": "5001", "question": "把这份纪要写进我的学习计划" }
+200 OK  { "code": 0, "data": { "runId": "9" } }
+
+GET /api/agent/runs/9
+200 OK  { "code": 0, "data": {
+    "id": "9", "status": "WAITING_APPROVAL",
+    "pendingApproval": { "approvalId": "11", "toolCode": "test_write_tool",
+                         "arguments": "{\"payload\":\"…\"}",
+                         "reason": "该工具会修改数据（WRITE），执行前需要你确认。",
+                         "status": "PENDING", "createdAt": "2026-10-15T19:33:23.742" } } }
+
+POST /api/agent/runs/9/approval
+{ "approved": true, "scope": "always", "reason": "信任这个工具" }
+200 OK  { "code": 0, "data": { "id": "9", "status": "RUNNING", "pendingApproval": null } }
+```
+
+状态取值：`RUNNING` / `WAITING_APPROVAL` / `DONE` / `FAILED` / `MAX_ITERATIONS` / `CANCELLED`。
+状态转换一律是**条件更新**（`UPDATE … WHERE status=?`），因此并发审批、审批与取消同时到达时只有一次能生效；
+取消之后再提交审批返回 `5013`（HTTP 409），工具不会执行。
+
+#### 审批决策
+
+| 字段 | 取值 | 语义 |
+| --- | --- | --- |
+| `approved` | `true` / `false` | 是否放行**本次**调用 |
+| `scope` | `once` | 只放行这一次，不写长期授权（缺省值就是它） |
+| `scope` | `always` | 放行本次，并写入 `ai_tool_grant`（后续同工具不再询问） |
+| `scope` | `deny` | 拒绝本次；**不写授权**，并把"用户拒绝"作为 observation 回灌模型 |
+| `reason` | 字符串（≤500） | 可空；拒绝时会出现在回灌给模型的那句话里 |
+
+约束：
+
+- `approved=false` 一律按拒绝处理（`scope` 被收敛成 `deny`），**绝不会**写长期授权；
+- `approved=true` + `scope=deny` 是矛盾组合 → `1001`；
+- 重复审批、审批已过期、运行没有待决策审批 → `5014`（HTTP 409）；
+- **拒绝不是失败**：运行回到 `RUNNING` 让模型换方案，运行不会因为一次拒绝被标成 `FAILED`。
+
+#### 用户工具授权
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/users/me/tool-grants` | 当前用户的长期授权列表 |
+| PUT | `/api/users/me/tool-grants` | 写入/更新 `always` 授权：`{"toolCode":"test_write_tool"}`（幂等） |
+| DELETE | `/api/users/me/tool-grants/{toolCode}` | 撤销单个授权（幂等：本来就没有也返回成功） |
+| DELETE | `/api/users/me/tool-grants` | 撤销全部授权（幂等） |
+
+约束：只接受 `scope=always`（`once`/`deny` → `1001`）；不能给未注册或已禁用的工具授权（`5011`）；
+授权只对当前用户生效（唯一键 `(user_id, tool_code)`）；撤销后下一次调用重新走审批。
+
+#### 审计
+
+每次进入执行壳的工具调用都会写一行 `ai_tool_invocation`（含被拒、被取消、等待超时的），
+运行轨迹写 `ai_agent_run_step`，审批写 `ai_tool_approval`。
+入参与结果都会**脱敏 + 截断**后才落库（`AgentTraceGuards`：`apiKey`/`token`/`password` 等键值、
+`Bearer …`、`sk-…` 一律替换为 `***`）。
+`THINK` 只是阶段标记（"开始运行""等待人工确认"），**不落库也不外发模型的隐藏推理原文**。
 
 ### 6.1 规划中（尚未实现）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/tools/{code}` | 工具详情（入参 JSON Schema、最近调用记录） |
-| POST | `/api/agent/runs` | 发起一次 Agent 任务 → `runId`（可流式，同 SSE 协议） |
-| GET | `/api/agent/runs/{runId}` | 运行状态（RUNNING/WAITING_APPROVAL/DONE/FAILED/MAX_ITERATIONS） |
-| GET | `/api/agent/runs/{runId}/steps` | 完整步骤轨迹（THINK/TOOL_CALL/OBSERVATION/ANSWER） |
-| POST | `/api/agent/runs/{runId}/approval` | 人工确认：`{"approved":true,"reason":"..."}` → 恢复执行 |
-| POST | `/api/agent/runs/{runId}/cancel` | 取消运行 |
-| GET | `/api/tool-invocations` | 工具调用审计流水（按时间/工具/成功与否过滤） |
+| GET | `/api/tool-invocations` | 工具调用审计流水（按时间/工具/成功与否过滤）；本轮只落库，未开查询接口 |
 
-```http
-POST /api/agent/runs
-{ "agentCode": "knowledge-analyst", "goal": "分析我的 Redis 学习情况并给出 7 天计划",
-  "kbIds": [1], "stream": true }
-→ SSE: meta → tool_call(searchKnowledge) → tool_result → ... → approval_required(createStudyPlan)
-   → (用户确认) → tool_result → delta → citation → usage → done
-```
-
-**权限语义**：`READ` 直接执行；`WRITE`/`DANGEROUS` 必须 `approval_required` 且用户确认后执行；拒绝时把"拒绝"作为观察结果回灌给模型，让它换方案而不是失败退出。
+> `POST /api/agent/runs` 的**流式**形态（把整个运行挂到 `POST /api/chat/stream` 上并复用同一条 SSE）
+> 仍未实现：本轮审批事件是通过对话流的工具拦截点真实发出的（`approval_required` 已可用），
+> 但运行状态机自身的接口是查询式的。`GET /api/tool-invocations` 的审计数据已经完整落库。
 
 ---
 

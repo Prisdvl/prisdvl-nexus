@@ -1,59 +1,79 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { FileText, MoreHorizontal, Plus, Search, SearchX } from 'lucide-react'
-import PixelCard from '@/bits/PixelCard/PixelCard'
+import { motion, useReducedMotion } from 'motion/react'
+import { ChevronRight, Database, FileText, Files, Pencil, Plus, RefreshCw, Search, SearchX } from 'lucide-react'
 import Modal from '@/components/Modal'
 import { Skeleton, StateEmpty } from '@/components/Skeleton'
-import { useParticleColors } from '@/lib/palette'
 import { KBS, type KbItem } from '@/data'
 import { api, USE_MOCK, errMessage } from '@/lib/api'
 import { fetchKbs, useLoad } from '@/lib/backendData'
 import { toast } from '@/lib/toast'
+import Loc from '@/components/Loc'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
+import '@/styles/plugins.css'
+import '@/styles/kb-manage.css'
 
 interface Props {
   onOpen: (kb: KbItem) => void
 }
 
+type Filter = 'all' | 'withDocs' | 'empty'
+
+/* 后端 KB 暂无 embedding / collection 字段，这里按序展示演示值，接后端后替换为真实字段 */
+const EMBEDDINGS = ['qwen-emb-8b', 'bge-m3', 'text-embedding-3-large']
+const COLLECTIONS = ['ragent', 'insurance', 'notes', 'algo', 'interview', 'soft-skills']
+const metaOf = (i: number) => ({
+  model: EMBEDDINGS[i % EMBEDDINGS.length],
+  collection: COLLECTIONS[i % COLLECTIONS.length],
+})
+
 export default function KnowledgeBaseListPage({ onOpen }: Props) {
-  /* 粒子色跟随当前配色与明暗（切换配色立即生效），不再按每张卡的"性格色" */
-  const particleColors = useParticleColors()
-  const [query, setQuery] = useState('')
-  /* 真实实现：加载态由请求驱动；mock 模式下直接展示种子数据 */
+  const reduce = useReducedMotion()
+  const { locale } = useLocale()
+  const t = appCopy(locale)
   const { data, loading: remoteLoading, error, reload } = useLoad(() => fetchKbs())
-  const rows = USE_MOCK ? KBS : (data ?? [])
+  const [localRows, setLocalRows] = useState<KbItem[] | null>(null)
+  const rows = localRows ?? (USE_MOCK ? KBS : (data ?? []))
   const loading = USE_MOCK ? false : remoteLoading
-  const [creating, setCreating] = useState(false)
+
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<Filter>('all')
   const [createOpen, setCreateOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
+  const [desc, setDesc] = useState('')
   const [createError, setCreateError] = useState('')
+  const [renaming, setRenaming] = useState<KbItem | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renameBusy, setRenameBusy] = useState(false)
 
   const q = query.trim().toLowerCase()
-  const list = useMemo(
-    () => (q ? rows.filter((k) => `${k.name}${k.desc}`.toLowerCase().includes(q)) : rows),
-    [q, rows],
-  )
+  const list = useMemo(() => rows
+    .filter((kb) => (filter === 'withDocs' ? kb.docs > 0 : filter === 'empty' ? kb.docs === 0 : true))
+    .filter((kb) => (!q ? true : `${kb.name}${kb.desc}`.toLowerCase().includes(q))), [rows, filter, q])
+
+  const totalDocs = rows.reduce((sum, kb) => sum + kb.docs, 0)
+  const withDocs = rows.filter((kb) => kb.docs > 0).length
 
   const createKb = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const cleanName = name.trim()
-    if (!cleanName) {
-      setCreateError('请输入知识库名称。')
-      return
-    }
-    if (cleanName.length > 80) {
-      setCreateError('名称不能超过 80 个字符。')
-      return
-    }
+    const cleanDesc = desc.trim()
+    if (!cleanName) { setCreateError(t.kbList.errNameRequired); return }
+    if (cleanName.length > 80) { setCreateError(t.kbList.errNameLong); return }
+    if (cleanDesc.length > 512) { setCreateError(t.kbList.errDescLong); return }
     if (USE_MOCK) {
-      setCreateError('当前为离线测试模式，无法创建服务端知识库。请使用默认的真实 API 模式。')
+      const item: KbItem = { id: `kb-${Date.now()}`, name: cleanName, desc: cleanDesc, docs: 0, updated: '刚刚', tone: 'ocean' }
+      setLocalRows([item, ...rows])
+      setCreateOpen(false)
+      toast.success(t.kbList.created, cleanName)
       return
     }
-    setCreateError('')
     setCreating(true)
     try {
-      await api.knowledge.create({ name: cleanName })
+      await api.knowledge.create({ name: cleanName, description: cleanDesc || undefined })
       setCreateOpen(false)
-      setName('')
-      toast.success('知识库已创建', cleanName)
+      toast.success(t.kbList.created, cleanName)
       await reload()
     } catch (e) {
       setCreateError(errMessage(e))
@@ -62,131 +82,144 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
     }
   }
 
-  const openCreate = () => {
-    setName('')
-    setCreateError('')
-    setCreateOpen(true)
+  const saveRename = async () => {
+    if (!renaming || renameBusy) return
+    const next = renameDraft.trim()
+    if (!next || next === renaming.name) { setRenaming(null); return }
+    if (USE_MOCK) {
+      setLocalRows(rows.map((kb) => kb.id === renaming.id ? { ...kb, name: next } : kb))
+      setRenaming(null)
+      toast.success(t.common.save, next)
+      return
+    }
+    setRenameBusy(true)
+    try {
+      await api.knowledge.update(renaming.id, { name: next })
+      await reload()
+      setRenaming(null)
+      toast.success(t.common.save, next)
+    } catch (e) {
+      toast.error(t.kbList.loadFailTitle, errMessage(e))
+    } finally {
+      setRenameBusy(false)
+    }
   }
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
-          <p className="eyebrow" style={{ margin: 0 }}>知识库</p>
-          <h1 className="page-title">我的知识库</h1>
-          <p className="page-sub">把散落的笔记变成可检索、可对话的知识资产</p>
+          <p className="eyebrow" style={{ margin: 0 }}><Loc>{t.kbList.eyebrow}</Loc></p>
+          <h1 className="page-title"><Loc>{t.kbList.title}</Loc></h1>
+          <p className="page-sub"><Loc>{t.kbList.sub}</Loc></p>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <div style={{ position: 'relative' }}>
-            <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }} />
-            <input aria-label="搜索知识库"
-              className="input"
-              placeholder="搜索知识库"
-              style={{ width: 220, paddingLeft: 36 }}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+        <div className="kb-actions">
+          <div className="market-search kb-actions__search">
+            <Search size={15} aria-hidden="true" />
+            <input className="input" aria-label={t.kbList.searchAria} placeholder={t.kbList.searchPlaceholder} value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
-          <button className="btn btn-primary" type="button" onClick={openCreate}>
-            <Plus size={16} /> 新建知识库
-          </button>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => void reload()}><RefreshCw size={14} /> {locale === 'en' ? 'Refresh' : '刷新'}</button>
+          <motion.button className="btn btn-primary" type="button" onClick={() => { setName(''); setDesc(''); setCreateError(''); setCreateOpen(true) }} whileHover={reduce ? undefined : { y: -1 }} whileTap={reduce ? undefined : { scale: 0.97 }}>
+            <Plus size={16} /> <Loc>{t.kbList.new}</Loc>
+          </motion.button>
         </div>
       </div>
 
-      {error && (
-        <div className="panel" style={{ marginBottom: 12 }}>
-          <StateEmpty
-            icon={<SearchX size={20} />}
-            title="知识库加载失败"
-            desc={error}
-            action={<button className="btn btn-sm" type="button" onClick={reload}>重试</button>}
-          />
-        </div>
-      )}
+      <div className="stat-grid kb-stats">
+        <div className="stat-card"><div className="label"><Database size={13} /> 知识库总数</div><div className="num">{rows.length}</div><div className="sub">全部实例</div></div>
+        <div className="stat-card accent"><div className="label"><Files size={13} /> 文档数</div><div className="num">{totalDocs}</div><div className="sub">已入库文档</div></div>
+        <div className="stat-card"><div className="label"><FileText size={13} /> 含文档知识库</div><div className="num">{withDocs}</div><div className="sub">已有可检索内容</div></div>
+      </div>
 
-      {loading && (
-        <div className="kb-grid">
-          {Array.from({ length: 6 }, (_, i) => (
-            <div key={i} className="panel" style={{ padding: 18, height: 168, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-              <Skeleton w={86} h={20} radius={999} />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <Skeleton w={`${64 - i * 4}%`} h={15} />
-                <Skeleton w={`${86 - i * 5}%`} h={11} />
-              </div>
-              <Skeleton w={120} h={11} />
-            </div>
-          ))}
-        </div>
-      )}
-
-      {!loading && list.length === 0 && (
-        <div className="panel">
-          <StateEmpty
-            icon={<SearchX size={20} />}
-            title={q ? `没有匹配「${query}」的知识库` : '还没有知识库'}
-            desc={q ? '换个关键词，或直接新建一个知识库开始沉淀。' : '新建第一个知识库，然后把笔记导入进来。'}
-            action={<button className="btn btn-primary btn-sm" type="button" onClick={openCreate}><Plus size={14} /> 新建知识库</button>}
-          />
-        </div>
-      )}
-
-      {!loading && list.length > 0 && <div className="kb-grid">
-        {list.map((kb) => (
-          <PixelCard key={kb.id} gap={8} speed={45} colors={particleColors}>
-            <div className="kb-inner" role="button" tabIndex={0} onClick={() => onOpen(kb)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(kb) }} style={{ cursor: 'pointer' }}>
-              <div>
-                <span className="badge" style={{ position: 'absolute', top: 14, left: 18 }}>
-                  <FileText size={11} /> {kb.docs} 篇文档
-                </span>
-              </div>
-              <div>
-                <h2 className="name">{kb.name}</h2>
-                <p className="desc">{kb.desc || '（无描述）'}</p>
-              </div>
-              <div className="meta">
-                <span className="dot" style={{ background: 'var(--primary)' }} />
-                更新于 {kb.updated || '—'}
-              </div>
-              <MoreHorizontal size={16} className="more" style={{ color: 'var(--text-3)' }} />
-            </div>
-          </PixelCard>
+      <div className="filter-row kb-filters">
+        {([['all', `全部 ${rows.length}`], ['withDocs', `含文档 ${withDocs}`], ['empty', `空知识库 ${rows.length - withDocs}`]] as const).map(([key, label]) => (
+          <button key={key} type="button" className={`chip filter-chip${filter === key ? ' filter-chip--on' : ''}`} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</button>
         ))}
-      </div>}
+      </div>
 
-      <Modal
-        open={createOpen}
-        title="新建知识库"
-        onClose={() => { if (!creating) setCreateOpen(false) }}
-        shouldBlockClose={() => creating}
-        width={440}
-        footer={(
-          <>
-            <button className="btn btn-ghost" type="button" onClick={() => setCreateOpen(false)} disabled={creating}>取消</button>
-            <button className="btn btn-primary" type="submit" form="create-kb-form" disabled={creating}>
-              {creating ? '创建中…' : '创建知识库'}
-            </button>
-          </>
-        )}
-      >
-        <form id="create-kb-form" onSubmit={createKb} noValidate>
+      {error && <div className="kb-list-empty"><StateEmpty icon={<SearchX size={20} />} title={t.kbList.loadFailTitle} desc={error} action={<button className="btn btn-sm" type="button" onClick={() => void reload()}>{t.common.retry}</button>} /></div>}
+
+      {loading ? (
+        <div className="panel panel-pad" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {Array.from({ length: 5 }, (_, i) => <Skeleton key={i} w={`${100 - i * 6}%`} h={16} />)}
+        </div>
+      ) : list.length === 0 && rows.length === 0 ? (
+        <div className="kb-list-empty">
+          <StateEmpty
+            icon={<SearchX size={20} />}
+            title={t.kbList.emptyTitle}
+            desc={t.kbList.emptyDesc}
+            action={<button className="btn btn-primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={16} /> {t.kbList.new}</button>}
+          />
+        </div>
+      ) : list.length === 0 ? (
+        <div className="panel kb-filter-empty" role="status">
+          <SearchX size={16} aria-hidden="true" />
+          <span>
+            {q
+              ? (locale === 'en' ? `No knowledge base matches “${query}”.` : `没有匹配「${query}」的知识库。`)
+              : (locale === 'en' ? 'No knowledge base matches the current filter.' : '没有符合当前筛选条件的知识库。')}
+          </span>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => { setQuery(''); setFilter('all') }}>
+            {locale === 'en' ? 'Clear filters' : '清除筛选'}
+          </button>
+        </div>
+      ) : (
+        <div className="panel kb-table-wrap">
+          <table className="kb-table">
+            <thead>
+              <tr><th>名称</th><th>Embedding 模型</th><th>Collection</th><th>文档数</th><th>更新时间</th><th aria-label="actions" /></tr>
+            </thead>
+            <tbody>
+              {list.map((kb, i) => {
+                const meta = metaOf(i)
+                return (
+                  <tr key={kb.id} onClick={() => onOpen(kb)}>
+                    <td>
+                      <div className="kb-cell">
+                        <span className="kb-cell__icon"><Database size={15} /></span>
+                        <span className="kb-cell__text"><b>{kb.name}</b><small>{kb.desc || t.kbList.noDesc}</small></span>
+                      </div>
+                    </td>
+                    <td><code className="kb-code">{meta.model}</code></td>
+                    <td><span className="badge" data-tone="accent">{meta.collection}</span></td>
+                    <td className="kb-num">{kb.docs}</td>
+                    <td className="kb-time">{kb.updated}</td>
+                    <td className="kb-row-actions">
+                      <button className="plugin-icon-btn" type="button" title="重命名" aria-label={`重命名 ${kb.name}`} onClick={(e) => { e.stopPropagation(); setRenaming(kb); setRenameDraft(kb.name) }}><Pencil size={14} /></button>
+                      <ChevronRight size={15} className="kb-row-chev" aria-hidden="true" />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <Modal open={createOpen} title={t.kbList.createTitle} onClose={() => { if (!creating) setCreateOpen(false) }} shouldBlockClose={() => creating} width={480}
+        footer={<><button className="btn btn-ghost" type="button" onClick={() => setCreateOpen(false)} disabled={creating}>{t.common.cancel}</button><button className="btn btn-primary" type="submit" form="create-kb-form" disabled={creating}>{creating ? t.kbList.creating : t.kbList.createSubmit}</button></>}>
+        <form id="create-kb-form" className="kb-meta-form" onSubmit={createKb} noValidate>
           <div className="field">
-            <label htmlFor="create-kb-name">名称</label>
-            <input
-            id="create-kb-name"
-            className="input"
-            autoComplete="off"
-            maxLength={80}
-            placeholder="例如：产品文档"
-            value={name}
-            onChange={(event) => { setName(event.target.value); setCreateError('') }}
-            aria-invalid={Boolean(createError)}
-            aria-describedby={createError ? 'create-kb-error' : 'create-kb-help'}
-            />
-            {createError
-              ? <p id="create-kb-error" className="form-error active" role="alert">{createError}</p>
-              : <p id="create-kb-help" className="hint">最多 80 个字符。创建后可在知识库详情页导入文档。</p>}
+            <label htmlFor="create-kb-name">{t.kbList.createName}</label>
+            <input id="create-kb-name" className="input" autoComplete="off" maxLength={80} placeholder={t.kbList.createNamePlaceholder} value={name} onChange={(e) => { setName(e.target.value); setCreateError('') }} aria-invalid={Boolean(createError)} autoFocus />
           </div>
+          <div className="field">
+            <label htmlFor="create-kb-desc">{t.kbList.createDesc}</label>
+            <textarea id="create-kb-desc" className="input kb-meta-form__desc" rows={4} maxLength={512} placeholder={t.kbList.createDescPlaceholder} value={desc} onChange={(e) => { setDesc(e.target.value); setCreateError('') }} />
+            <div className="kb-meta-form__foot"><p className="hint" style={{ margin: 0 }}>{t.kbList.createAfterHint}</p><p className="hint" style={{ margin: 0 }}>{desc.trim().length} / 512</p></div>
+          </div>
+          {createError && <p className="form-error active" role="alert">{createError}</p>}
         </form>
+      </Modal>
+
+      <Modal open={renaming !== null} title="重命名知识库" width={440} onClose={() => { if (!renameBusy) setRenaming(null) }} shouldBlockClose={() => renameBusy}
+        footer={<><button className="btn btn-ghost" type="button" onClick={() => setRenaming(null)} disabled={renameBusy}>{t.common.cancel}</button><button className="btn btn-primary" type="button" onClick={() => void saveRename()} disabled={renameBusy || !renameDraft.trim()}>{t.common.save}</button></>}>
+        <div className="field">
+          <label htmlFor="rename-kb">名称</label>
+          <input id="rename-kb" className="input" autoFocus value={renameDraft} maxLength={80} onChange={(e) => setRenameDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void saveRename() } }} />
+        </div>
       </Modal>
     </div>
   )

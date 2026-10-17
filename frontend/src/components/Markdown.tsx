@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { marked } from 'marked'
 import type { ThemeMode } from '@/lib/types'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
 
 interface MarkdownProps {
   text: string
@@ -17,6 +19,7 @@ const loadMermaid = () => {
 
 /** Markdown 正文渲染：标题 / 列表 / 表格 / 行内代码 / 代码块 / Mermaid 图 */
 export default function Markdown({ text, theme, className = '' }: MarkdownProps) {
+  const mermaidFail = appCopy(useLocale().locale).shell.mermaidFail
   const html = useMemo(() => marked.parse(text, { async: false, gfm: true, breaks: true }) as string, [text])
   const ref = useRef<HTMLDivElement>(null)
   const [mermaidErr, setMermaidErr] = useState<string | null>(null)
@@ -59,7 +62,7 @@ export default function Markdown({ text, theme, className = '' }: MarkdownProps)
   return (
     <>
       <div ref={ref} className={`md ${className}`.trim()} dangerouslySetInnerHTML={{ __html: html }} />
-      {mermaidErr && <p className="md-err">Mermaid 渲染失败：{mermaidErr}</p>}
+      {mermaidErr && <p className="md-err">{mermaidFail}{mermaidErr}</p>}
     </>
   )
 }

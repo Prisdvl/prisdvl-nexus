@@ -1,0 +1,135 @@
+/* 终端式工具轨迹：无边框、无卡片、等宽排版 */
+.tool-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 100%;
+  overflow: hidden;
+  margin: 2px 0 6px;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: left;
+}
+/* 兼容层：旧 .call-chip 样式仍在打包里，这里用更高优先级显式复位成终端行 */
+.tool-trace .tool-trace__row {
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: auto;
+  min-height: 22px;
+  padding: 0;
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  user-select: auto;
+  transition: none;
+  color: var(--text-2);
+  animation: tool-step-in 220ms var(--ease-out) both;
+}
+@keyframes tool-step-in {
+  from { opacity: 0; transform: translateX(-4px); }
+}
+.tool-trace__prompt {
+  flex: none;
+  color: var(--primary);
+  font-weight: 600;
+  opacity: 0.85;
+}
+.tool-trace .tool-trace__name {
+  flex: none;
+  color: var(--text);
+  font-weight: 600;
+}
+.tool-trace__arg {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+.tool-trace__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--success);
+  margin-left: 4px;
+}
+.tool-trace__row[data-status='error'],
+.tool-trace__row[data-status='timeout'] { color: var(--danger); }
+.tool-trace__row[data-status='error'] .tool-trace__status,
+.tool-trace__row[data-status='timeout'] .tool-trace__status { color: var(--danger); }
+.tool-trace__row[data-status='cancelled'] .tool-trace__status { color: var(--text-3); }
+.tool-trace__retry {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.tool-trace__retry:hover { background: var(--ui-hover); }
+.tool-trace__retry:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+.tool-trace__note {
+  flex-basis: 100%;
+  padding-left: 16px;
+  color: var(--text-3);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.tool-trace__note::before { content: '# '; opacity: 0.6; }
+.tool-trace__spinner { --ll-color: var(--primary); }
+
+/* 思考态：LatticeLoader sweep + 极简文字 */
+.think-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-3);
+}
+.think-trace__head {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 22px;
+  font-size: 13px;
+}
+.think-trace__head .lattice-loader { --ll-color: var(--primary); }
+.think-trace__label { color: var(--text-2); }
+.think-trace__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0 0 0 4px;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.think-trace__steps li::before {
+  content: '·';
+  margin-right: 7px;
+  color: color-mix(in oklab, var(--text-3) 65%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-trace__retry { transition: none; }
+  .tool-trace .tool-trace__row { animation: none; }
+}

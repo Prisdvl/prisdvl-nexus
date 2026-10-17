@@ -8,7 +8,7 @@
 #   cd deploy
 #   docker compose config            # 校验配置与变量替换（含"缺 secret 直接失败"）
 #   docker compose build             # 构建 backend / frontend（ES 镜像首次也要构建）
-#   docker compose up -d             # 启动全部 8 个服务
+#   docker compose up -d             # 启动全部 7 个服务
 #   docker compose ps                # 看健康状态（要看到 healthy，不是仅 Up）
 #   docker compose logs -f backend   # 看某个服务日志
 #   docker compose restart backend   # 重启（数据不丢）
@@ -16,17 +16,17 @@
 #   docker compose down -v           # 停止并删除数据卷（清库，慎用）
 #
 # 【端口策略：谁能从宿主机访问】
-#   只有 frontend 监听 0.0.0.0（8088）——它是唯一的入口。
-#   其余基础设施端口全部绑定到 127.0.0.1，也就是**只有本机能连**：
-#   保留"宿主机直接跑 java -jar + compose 起基础设施"的开发方式（README §9），
+#   只有 frontend 监听 0.0.0.0（8088）——它是唯一对局域网/公网开放的入口。
+#   其余端口（含 backend 的 8080）全部绑定到 127.0.0.1，也就是**只有本机能连**：
+#   保留"宿主机直接跑 java -jar / 直连后端调试"的开发方式，
 #   但不把这些无认证的服务暴露到局域网/公网。
 #   基础设施的认证一律不设默认口令之外的加固（见 docs/deployment.md 生产清单）。
-#   backend **不发布端口**：只有 nginx 需要访问它，宿主机调试走
+#   容器间只有 nginx 访问 backend；宿主机调试可直连 127.0.0.1:8080，或走
 #     docker compose exec backend curl -s localhost:8080/actuator/health
 #
 # 【容器内一律用 service name】
 #   mysql:3306 / postgres:5432 / redis:6379 / rabbitmq:5672 /
-#   elasticsearch:9200 / ollama:11434
+#   elasticsearch:9200
 #   注意端口是**容器内**的端口：PostgreSQL 在宿主机映射成 5433，容器内仍是 5432。
 #
 # 【镜像版本】均按官方源核对过，依据见 docs/decisions.md 附录 B.4
@@ -192,9 +192,9 @@ services:
   # ----------------------------------------------------------------
   # backend：Spring Boot 单体（java -jar）
   #
-  # 【为什么端口不发布】只有 nginx 需要访问它。宿主机调试走
-  #   docker compose exec backend curl -s localhost:8080/actuator/health
-  # 或直接用入口：http://localhost:8088/api/...
+  # 【端口只绑回环】容器间由 nginx 经 backend:8080 访问；宿主机调试可直连
+  #   127.0.0.1:8080/actuator/health，或走入口 http://localhost:8088/api/...
+  # 不绑 0.0.0.0：无认证的后端不暴露到局域网/公网。
   #
   # 【depends_on 为什么用 condition: service_healthy】
   # 需求里那句"不要简单 depends_on 就假设服务已经可用"说的是默认的

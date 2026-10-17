@@ -7,6 +7,7 @@ import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.agent.AgentContext;
 import com.lky.nexus.app.agent.AgentRuntime;
 import com.lky.nexus.app.agent.AgentService;
+import com.lky.nexus.app.agent.approval.ToolApprovalService;
 import com.lky.nexus.app.chat.model.ChatMode;
 import com.lky.nexus.app.chat.model.MessageStatus;
 import com.lky.nexus.app.chat.model.dto.AssistantReplyDraft;
@@ -101,6 +102,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
     private final RagAnswerService ragAnswerService;
     private final AgentService agentService;
     private final AgentRuntime agentRuntime;
+    private final ToolApprovalService approvalService;
     private final JsonMapper jsonMapper;
     private final ObservabilityRegistry observabilityRegistry;
 
@@ -112,6 +114,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                                  RagAnswerService ragAnswerService,
                                  AgentService agentService,
                                  AgentRuntime agentRuntime,
+                                 ToolApprovalService approvalService,
                                  JsonMapper jsonMapper,
                                  ObservabilityRegistry observabilityRegistry) {
         this.conversationService = conversationService;
@@ -122,6 +125,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         this.ragAnswerService = ragAnswerService;
         this.agentService = agentService;
         this.agentRuntime = agentRuntime;
+        this.approvalService = approvalService;
         this.jsonMapper = jsonMapper;
         this.observabilityRegistry = observabilityRegistry;
     }
@@ -349,6 +353,14 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         private final AtomicLong firstTokenNanos = new AtomicLong();
         private final AtomicBoolean finalized = new AtomicBoolean(false);
         private final AtomicReference<Disposable> subscription = new AtomicReference<>();
+        /**
+         * 本轮对话里正在等待审批的运行（P0）。
+         *
+         * <p>流式链路自己不带 runId（运行是在审批发生时创建的），所以只能在
+         * {@code approval_required} 事件里把它记下来：用户点"停止生成"或客户端断开时，
+         * 那个工具的等待线程还在等一个人点确认——不取消的话它会一直占到审批超时。
+         */
+        private final AtomicReference<Long> pendingApprovalRunId = new AtomicReference<>();
         /** 工具调用痕迹：工具在订阅线程上执行、结束时在订阅线程上落库，但仍然按并发安全的容器声明 */
         private final List<MessageToolCall> toolCalls = Collections.synchronizedList(new ArrayList<>());
 
@@ -473,6 +485,33 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             rememberRetrieval(hits);
         }
 
+        /**
+         * 工具需要人工确认：把审批事件推给前端（P0）。
+         *
+         * <p>这是 {@code SseEventNames.APPROVAL_REQUIRED} 的真实发送点——
+         * 事件来自工具执行壳的拦截，而不是 Controller 拼出来的假帧。
+         *
+         * <p>事件发出时审批状态已经落库（{@link com.lky.nexus.app.agent.approval.ToolApprovalService}
+         * 先写库、后发事件）：客户端断开时线上 SSE 收不到，但 {@code GET /api/agent/runs/{runId}}
+         * 仍能查到待审批；反之先发事件后落库，用户秒点批准时可能查不到记录。
+         *
+         * <p>{@code runId} 一并下发：前端要拿它去提交审批
+         * （{@code POST /api/agent/runs/{runId}/approval}）。它是这条链路的必要字段，
+         * 不是可选装饰。
+         */
+        @Override
+        public void onApprovalRequired(AgentContext.ApprovalRequired event) {
+            pendingApprovalRunId.set(event.runId());
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("runId", event.runId());
+            payload.put("approvalId", event.approvalId());
+            payload.put("toolCode", event.toolCode());
+            // arguments 已是脱敏摘要（执行壳传进来时就做过处理），这里不再二次加工
+            payload.put("arguments", event.arguments());
+            payload.put("reason", event.reason());
+            send(SseEventNames.APPROVAL_REQUIRED, payload);
+        }
+
         private void onChunk(ChatResponse chunk) {
             if (finalized.get()) {
                 return;
@@ -539,6 +578,7 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                 return;
             }
             dispose();
+            cancelPendingApprovalRun();
             persist(MessageStatus.STOPPED, null);
             sendUsage();
             Map<String, Object> payload = donePayload("stopped");
@@ -554,9 +594,29 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                 return;
             }
             dispose();
+            cancelPendingApprovalRun();
             persist(MessageStatus.STOPPED, null);
             cancellationRegistry.clear(requestId);
             log.info("客户端断开，已停止生成 requestId={}, 保留 {} 字", requestId, assembled.length());
+        }
+
+        /**
+         * 停止/断开时把等待中的审批一并取消。
+         *
+         * <p>取消是幂等的，而且<b>绝不等于批准</b>：它只让那个工具的等待线程提前结束并拿到
+         * "运行已取消"的观察结果（工具不会执行）。失败也吞掉——流已经停了，
+         * 让一次清理异常把整个终止路径再炸一次没有意义；运行还有审批超时兜底。
+         */
+        private void cancelPendingApprovalRun() {
+            Long runId = pendingApprovalRunId.getAndSet(null);
+            if (runId == null) {
+                return;
+            }
+            try {
+                approvalService.cancelRun(userId, runId);
+            } catch (Exception ex) {
+                log.warn("停止生成时取消待审批运行失败（仍可由审批超时兜底）：runId={} {}", runId, ex.getMessage());
+            }
         }
 
         private void persist(MessageStatus status, String errorMsg) {

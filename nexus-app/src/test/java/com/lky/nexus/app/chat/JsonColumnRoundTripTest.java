@@ -270,7 +270,7 @@ private static String semanticJson(String raw) {
     private String registerAndLogin(String username) throws Exception {
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"" + username + "\",\"password\":\"rt123456\"}"))
+                        .content("{\"username\":\"" + username + "\",\"password\":\"rt123456\",\"email\":\"" + username + "@example.com\"}"))
                 .andExpect(status().isOk());
         return JsonPath.read(mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)

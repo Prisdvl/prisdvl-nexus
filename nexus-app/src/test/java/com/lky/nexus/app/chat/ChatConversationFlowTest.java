@@ -280,8 +280,8 @@ class ChatConversationFlowTest {
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"%s","password":"%s"}
-                                """.formatted(username, PASSWORD)))
+                                {"username":"%s","password":"%s","email":"%s@example.com"}
+                                """.formatted(username, PASSWORD, username)))
                 .andExpect(result -> assertThat(result.getResponse().getStatus())
                         .as("注册应成功(200)或用户名已存在(409)，实际 %d：%s",
                                 result.getResponse().getStatus(),

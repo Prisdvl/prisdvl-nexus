@@ -3,6 +3,8 @@ import { createHashRouter, Navigate, RouterProvider, useNavigate, useSearchParam
 import AppShell from '@/components/AppShell'
 import { RedirectIfAuthenticated, RequireAuth } from '@/components/RequireAuth'
 import { useAuth, registerAccount } from '@/lib/auth'
+import { appCopy } from '@/lib/appCopy'
+import { useLocale } from '@/lib/locale'
 import { syncConversations } from '@/lib/sync'
 import { preferredLandingPath } from '@/lib/preferences'
 import type { PaletteName, ThemeMode } from '@/lib/types'
@@ -16,12 +18,17 @@ import KnowledgeBaseListPage from '@/pages/KnowledgeBaseListPage'
 import KnowledgeBaseDetailPage from '@/pages/KnowledgeBaseDetailPage'
 import ChatPage from '@/pages/ChatPage'
 import AgentsPage from '@/pages/AgentsPage'
+import AutomationsPage from '@/pages/AutomationsPage'
+import WorkflowPage from '@/pages/WorkflowPage'
+import PluginsPage from '@/pages/PluginsPage'
+import AgentCommunityPage from '@/pages/AgentCommunityPage'
 import AccountPage from '@/pages/AccountPage'
 import CornerControls from '@/components/Appearance'
 import { useTheme } from '@/lib/theme'
 import ToastHost from '@/components/ToastHost'
 import AppError from '@/components/AppError'
 import RouteFade from '@/components/RouteFade'
+import Loc from '@/components/Loc'
 
 /* ---------------- 主题/配色（原型级，放这里供所有路由共享） ---------------- */
 
@@ -105,6 +112,8 @@ function WorkbenchRoute({ theme, palette }: { theme: ThemeMode; palette: Palette
       palette={palette}
       goChat={() => navigate('/app/chat')}
       goKb={() => navigate('/app/kb')}
+      goAgents={() => navigate('/app/agents')}
+      goAutomations={() => navigate('/app/automations')}
       onOpenConversation={(id) => navigate(`/app/chat?conversation=${encodeURIComponent(id)}`)}
     />
   )
@@ -152,12 +161,13 @@ function ChatRoute({ theme }: { theme: ThemeMode }) {
 
 function NotFoundRoute() {
   const navigate = useNavigate()
+  const s = appCopy(useLocale().locale).shell
   return (
     <div className="page" style={{ textAlign: 'center', paddingTop: 80 }}>
       <p className="eyebrow">404</p>
-      <h1 className="page-title">这个地址没有页面</h1>
-      <p className="page-sub" style={{ marginBottom: 20 }}>目前只有 入口 / 登录 / 工作台 / 知识库 / 对话 / Agent / 账号 这些路由。</p>
-      <button className="btn btn-primary" type="button" onClick={() => navigate('/app/workbench')}>回到工作台</button>
+      <h1 className="page-title"><Loc>{s.notFoundTitle}</Loc></h1>
+      <p className="page-sub" style={{ marginBottom: 20 }}><Loc>{s.notFoundBody}</Loc></p>
+      <button className="btn btn-primary" type="button" onClick={() => navigate('/app/workbench')}><Loc>{s.errorHome}</Loc></button>
     </div>
   )
 }
@@ -207,6 +217,10 @@ export default function App() {
                 { path: '/app/kb/:id', element: <KbDetailRoute theme={theme} /> },
                 { path: '/app/chat', element: <ChatRoute theme={theme} /> },
                 { path: '/app/agents', element: <AgentsPage /> },
+                { path: '/app/automations', element: <AutomationsPage /> },
+                { path: '/app/workflows', element: <WorkflowPage /> },
+                { path: '/app/plugins', element: <PluginsPage /> },
+                { path: '/app/community', element: <AgentCommunityPage /> },
                 { path: '/app/account', element: <AccountPage theme={theme} /> },
                 { path: '/app/*', element: <NotFoundRoute /> },
               ],

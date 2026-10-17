@@ -45,7 +45,13 @@ export function runThemeTransition(origin: Element | null | undefined, apply: ()
   }
 
   if (typeof doc.startViewTransition !== 'function') {
+    /* 无 View Transition 时用短淡入兜底，避免瞬间硬切 */
+    const root = document.documentElement
+    root.style.transition = 'background-color 0.35s ease, color 0.35s ease'
     apply()
+    window.setTimeout(() => {
+      root.style.transition = ''
+    }, 380)
     return
   }
 

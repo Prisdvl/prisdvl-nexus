@@ -1,0 +1,120 @@
+/* Magic UI InteractiveHoverButton —— 用项目 CSS 变量，不依赖 Tailwind */
+.ihb {
+  /* 用项目语义色 --text（无 --text-1）；深色模式才能有可读对比度 */
+  --ihb-fg: var(--text);
+  --ihb-bg: var(--surface);
+  --ihb-border: color-mix(in oklab, var(--border) 85%, transparent);
+  --ihb-dot: var(--primary);
+  --ihb-hover-fg: var(--btn-fg);
+  position: relative;
+  display: inline-flex;
+  width: auto;
+  min-height: var(--btn-h-lg, 48px);
+  padding: 0.5rem 1.5rem;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--ihb-border);
+  /* 与落地页 CTA 行 `.lp-cta-row .btn` 同为 12px，避免一颗药丸、一个方角 */
+  border-radius: 12px;
+  background: var(--ihb-bg);
+  color: var(--ihb-fg);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-align: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.28s ease, box-shadow 0.28s ease;
+}
+
+.ihb:hover,
+.ihb:focus-visible {
+  border-color: color-mix(in oklab, var(--ihb-dot) 55%, var(--ihb-border));
+  box-shadow: 0 10px 28px color-mix(in oklab, var(--ihb-dot) 18%, transparent);
+}
+
+.ihb:focus-visible {
+  outline: 2px solid var(--ihb-dot);
+  outline-offset: 3px;
+}
+
+.ihb__idle {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ihb__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: none;
+  border-radius: 999px;
+  background: var(--ihb-dot);
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ihb__label {
+  display: inline-block;
+  transition:
+    transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ihb__hover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: var(--ihb-hover-fg);
+  opacity: 0;
+  transform: translateX(3rem);
+  transition:
+    transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+
+.ihb:hover .ihb__dot,
+.ihb:focus-visible .ihb__dot {
+  transform: scale(100.8);
+}
+
+.ihb:hover .ihb__label,
+.ihb:focus-visible .ihb__label {
+  transform: translateX(3rem);
+  opacity: 0;
+}
+
+.ihb:hover .ihb__hover,
+.ihb:focus-visible .ihb__hover {
+  opacity: 1;
+  transform: translateX(-0.2rem);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ihb__dot,
+  .ihb__label,
+  .ihb__hover {
+    transition: none !important;
+  }
+  .ihb:hover .ihb__dot,
+  .ihb:focus-visible .ihb__dot {
+    transform: none;
+  }
+  .ihb:hover .ihb__label,
+  .ihb:focus-visible .ihb__label {
+    transform: none;
+    opacity: 1;
+  }
+  .ihb:hover .ihb__hover,
+  .ihb:focus-visible .ihb__hover {
+    display: none;
+  }
+}

@@ -380,7 +380,7 @@ class SessionRefreshFlowTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"username":"%s","password":"%s","nickname":"%s","email":"%s@example.com"}
-                                """.formatted(username, PASSWORD, username)))
+                                """.formatted(username, PASSWORD, username, username)))
                 .andExpect(jsonPath("$.code").value(0));
     }
 

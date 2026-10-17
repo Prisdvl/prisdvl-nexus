@@ -10,12 +10,19 @@ export type PaletteName =
   | 'prisdvl'
   | 'terracotta' | 'turquoise' | 'lime'
   | 'indigo' | 'ocean' | 'violet' | 'rose'
-export type PageKey = 'workbench' | 'kb' | 'chat' | 'agents' | 'account'
-
 export const PAGE_PATH: Record<PageKey, string> = {
   workbench: '/app/workbench',
   kb: '/app/kb',
   chat: '/app/chat',
   agents: '/app/agents',
+  plugins: '/app/plugins',
+  community: '/app/community',
+  automations: '/app/automations',
+  workflows: '/app/workflows',
   account: '/app/account',
 }
+export type PageKey =
+  | 'workbench' | 'kb' | 'chat' | 'agents'
+  | 'plugins' | 'community'
+  | 'automations' | 'workflows'
+  | 'account'

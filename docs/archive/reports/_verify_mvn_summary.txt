@@ -1,0 +1,30 @@
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.124 s -- in com.lky.nexus.common.api.ErrorCodeTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.021 s -- in com.lky.nexus.common.api.PageResultTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.124 s -- in com.lky.nexus.common.observe.ObservabilityRegistryTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.219 s -- in com.lky.nexus.common.util.TimeLimitedCallTest
+[INFO] Tests run: 19, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.019 s -- in com.lky.nexus.ai.model.EmbeddingClientTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.006 s -- in com.lky.nexus.ai.model.ModelRefTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.029 s -- in 工具循环上限：ai.tools.* 真的会限制工具调用次数
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.595 s -- in token 记账：Advisor 的记账口径
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.043 s -- in com.lky.nexus.ai.rag.retriever.RetrievalQueryTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.024 s -- in com.lky.nexus.ai.rag.retriever.RetrieverRegistryTest
+[INFO] Tests run: 76, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.431 s -- in com.lky.nexus.knowledge.service.ChunkEmbeddingServiceTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.071 s -- in com.lky.nexus.knowledge.service.ChunkIndexServiceRecreateTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.120 s -- in 检索门面：元数据过滤下推
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.038 s -- in com.lky.nexus.knowledge.service.ChunkSearchServiceKnowledgeConfigTest
+[INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.105 s -- in com.lky.nexus.knowledge.service.ChunkSearchServiceMultiKbTest
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.208 s -- in com.lky.nexus.knowledge.service.ChunkSearchServiceParityTest
+[INFO] Tests run: 174, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.313 s -- in com.lky.nexus.app.security.SecurityStoreDegradationTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.266 s -- in 工作台统计：/api/stats/summary
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.002 s -- in com.lky.nexus.app.tools.cleanup.CleanupPropertiesTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.173 s -- in com.lky.nexus.app.tools.cleanup.TestDataCleanupIntegrationTest
+[WARNING] Tests run: 4, Failures: 0, Errors: 0, Skipped: 4, Time elapsed: 0 s -- in com.lky.nexus.app.vector.LiveVectorStoreTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in com.lky.nexus.app.workflow.WorkflowEngineTest
+[INFO] Tests run: 495, Failures: 0, Errors: 0, Skipped: 33
+[INFO] BUILD SUCCESS

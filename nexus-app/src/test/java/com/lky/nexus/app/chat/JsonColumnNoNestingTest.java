@@ -301,7 +301,7 @@ class JsonColumnNoNestingTest {
     private String registerAndLogin(String username) throws Exception {
         mockMvc.perform(post("/api/auth/register")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"" + username + "\",\"password\":\"json123456\"}"))
+                .content("{\"username\":\"" + username + "\",\"password\":\"json123456\",\"email\":\"" + username + "@example.com\"}"))
                 .andExpect(status().isOk());
         return JsonPath.read(mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)

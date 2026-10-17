@@ -1,0 +1,182 @@
+/*
+ * 执行时间线：跟着对话正文走的一条紧凑活动清单，不是卡片。
+ * 整套只有一处线条（标题下的发丝线）—— 每条记录没有背景、没有圆角、没有胶囊标签；
+ * 状态只由「行首图标 + 尾部一个词」区分，整条记录永远不铺色。
+ */
+.thought-chain {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.thought-chain__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0 7px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: none;
+  color: #8E8E93;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.thought-chain__head:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.thought-chain__spinner { display: grid; place-items: center; flex: none; width: 15px; height: 15px; }
+.thought-chain__time {
+  min-width: 0;
+  overflow: hidden;
+  color: #8E8E93;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thought-chain__head:hover .thought-chain__time { color: var(--text-2); }
+.thought-chain__chev { flex: none; margin-left: auto; color: #6F6F76; transition: transform 220ms var(--ease-out); }
+.thought-chain__chev.is-open { transform: rotate(180deg); }
+
+.thought-chain__body { padding: 9px 0 0; }
+
+.thought-chain__state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 3px;
+  color: #8E8E93;
+  font-size: 12.5px;
+}
+.thought-chain__state svg { flex: none; opacity: 0.75; }
+
+.thought-chain__list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 逐步出现的叙事行：与工具行同一左缩进，无标记 */
+.thought-step {
+  padding: 1px 0 1px 20px;
+  color: #8E8E93;
+  font-size: 12.5px;
+  animation: thought-row-in 260ms var(--ease-out) both;
+}
+
+.thought-call { animation: thought-row-in 260ms var(--ease-out) both; }
+.thought-call__line { display: flex; align-items: center; gap: 4px; }
+.thought-call__row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 1px 0;
+  border: 0;
+  background: none;
+  color: #B4B4BB;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.thought-call__row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.thought-call__row:hover .thought-call__verb { color: var(--text); }
+
+/* 行首状态：默认中性，只有"待确认 / 跑坏了"上色；完成态是一个安静的勾 */
+.thought-call__mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: #6F6F76;
+}
+.thought-call[data-status='done'] .thought-call__mark { color: var(--success); }
+.thought-call[data-status='running'] .thought-call__mark { color: var(--primary-text, var(--primary)); }
+.thought-call[data-status='error'] .thought-call__mark,
+.thought-call[data-status='timeout'] .thought-call__mark { color: var(--danger); }
+.thought-call[data-warn] .thought-call__mark { color: var(--warning); }
+
+/* 进行中：同一个圆环靠 dasharray 切成一段弧再转，不引入任何新依赖 */
+.thought-call__mark.is-spin svg {
+  stroke-linecap: round;
+  stroke-dasharray: 16 47;
+  animation: thought-spin 900ms linear infinite;
+}
+
+.thought-call__verb { flex: none; color: #B4B4BB; }
+/* 工具名退到辅助位：等宽、更小、更暗，扫读时不会跟人话动作抢注意力 */
+.thought-call__tool {
+  flex: none;
+  color: #6F6F76;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  opacity: 0.85;
+}
+.thought-call__tail { display: flex; align-items: center; gap: 6px; flex: none; margin-left: auto; padding-left: 8px; }
+.thought-call__status { flex: none; color: #8E8E93; font-size: 11.5px; }
+.thought-call[data-status='error'] .thought-call__status,
+.thought-call[data-status='timeout'] .thought-call__status { color: var(--danger); }
+.thought-call[data-warn] .thought-call__status { color: var(--warning); }
+.thought-call__chev {
+  flex: none;
+  color: #6F6F76;
+  transform: rotate(-90deg);
+  transition: transform 200ms var(--ease-out);
+}
+.thought-call__chev.is-open { transform: rotate(0deg); }
+.thought-call__retry {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: #6F6F76;
+  cursor: pointer;
+}
+.thought-call__retry:hover { color: var(--text-2); background: rgba(255, 255, 255, 0.05); }
+
+/* 参数与结果：默认收起，点这一行才展开 */
+.thought-call__code {
+  margin: 3px 0 4px 20px;
+  padding: 0;
+  max-height: 240px;
+  overflow: auto;
+  background: none;
+  color: #7C7C84;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@keyframes thought-row-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes thought-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 720px) {
+  .thought-call__tool { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thought-step, .thought-call { animation: none; }
+  .thought-call__mark.is-spin svg { animation: none; }
+  .thought-chain__chev, .thought-call__chev { transition: none; }
+}
