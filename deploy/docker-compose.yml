@@ -252,6 +252,12 @@ services:
       RABBITMQ_USER: ${NEXUS_RABBITMQ_USER:-nexus}
       RABBITMQ_PASSWORD: ${NEXUS_RABBITMQ_PASSWORD:-nexus_pwd}
 
+      # ---- 落库凭据的字段级加密（P1 凭证安全）----
+      # 必须显式透传：容器不会自己读到宿主机的环境变量。
+      # 默认空 = 未配置 ⇒ 保存「模型 Key」会 fail-closed（9999），**不会**静默存明文。
+      # 生成与注意事项见仓库根 .env.example（deploy/.env 里设同名的 NEXUS_SECURITY_CRYPTO_KEK）。
+      NEXUS_SECURITY_CRYPTO_KEK: ${NEXUS_SECURITY_CRYPTO_KEK:-}
+
       # ---- 模型：嵌入走阿里云百炼（DashScope compatible-mode），对话走外部网关 ----
       AI_EMBEDDING_BASE_URL: ${AI_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-text-embedding-v4}

@@ -1,6 +1,7 @@
 package com.lky.nexus.app.llm;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.lky.nexus.app.security.CredentialCipher;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
 import org.slf4j.Logger;
@@ -15,6 +16,10 @@ import org.springframework.util.StringUtils;
  * <p>负责读 / 写当前用户那一行（{@code uk_user_llm_user} 1:1）。
  * 模型调用时真正消费这份凭据的是 {@link DbUserChatCredentialsProvider}，
  * 它实现 nexus-ai 的 {@code UserChatCredentialsProvider} 端口。
+ *
+ * <p>落库的 {@code api_key} 是 {@link CredentialCipher} 产出的密文：
+ * 本类是唯一负责"明文 ⇄ 密文"两侧转换的地方（写入前加密、回显前解密再掩码），
+ * 顺带把加密之前写下的历史明文行就地升级。
  */
 @Service
 public class UserLlmConfigService {
@@ -22,9 +27,11 @@ public class UserLlmConfigService {
     private static final Logger log = LoggerFactory.getLogger(UserLlmConfigService.class);
 
     private final UserLlmConfigMapper userLlmConfigMapper;
+    private final CredentialCipher credentialCipher;
 
-    public UserLlmConfigService(UserLlmConfigMapper userLlmConfigMapper) {
+    public UserLlmConfigService(UserLlmConfigMapper userLlmConfigMapper, CredentialCipher credentialCipher) {
         this.userLlmConfigMapper = userLlmConfigMapper;
+        this.credentialCipher = credentialCipher;
     }
 
     /** 读当前用户的配置（apiKey 掩码回显）。 */
@@ -33,11 +40,14 @@ public class UserLlmConfigService {
         if (po == null) {
             return new UserLlmConfigResponse(null, null, false, false, null);
         }
+        // 掩码必须打在**明文**上：打在密文上既没有意义，又会把密文片段当成 Key 回显出去
+        String plainKey = credentialCipher.decrypt(po.getApiKey());
+        upgradeLegacyRow(po, plainKey);
         return new UserLlmConfigResponse(
                 po.getBaseUrl(), po.getModelName(),
                 Integer.valueOf(1).equals(po.getEnabled()),
-                StringUtils.hasText(po.getApiKey()),
-                mask(po.getApiKey()));
+                StringUtils.hasText(plainKey),
+                mask(plainKey));
     }
 
     /**
@@ -63,13 +73,23 @@ public class UserLlmConfigService {
         po.setBaseUrl(baseUrl);
         po.setModelName(modelName);
 
-        // apiKey 留空 = 保留已有；填了才覆盖
+        // apiKey 留空 = 保留已有（若那行是加密前的历史明文，这里顺手把它升级成密文）；
+        // 填了才覆盖。校验与落库用的是同一个明文值，避免"校验明文、存了密文"这类错位。
+        //
+        // 刻意**不**无脑重加密：GCM 用的是随机 IV，同样明文每次加密结果都不同，
+        // 无脑重加密会让"用户只改了模型名"也把 api_key 密文换掉——无谓的行变更，
+        // 也让"留空即保留"这条语义在库层面无法核对。
+        String plainKey = credentialCipher.decrypt(po.getApiKey());
         if (StringUtils.hasText(request.apiKey())) {
-            po.setApiKey(request.apiKey().trim());
+            plainKey = request.apiKey().trim();
+            po.setApiKey(credentialCipher.encrypt(plainKey));
+        } else if (StringUtils.hasText(plainKey) && !credentialCipher.isEncrypted(po.getApiKey())) {
+            // 历史明文行：留空也顺手升级为密文（幂等，见 upgradeLegacyRow 的说明）
+            po.setApiKey(credentialCipher.encrypt(plainKey));
         }
 
         if (enabled) {
-            validateReady(baseUrl, modelName, po.getApiKey());
+            validateReady(baseUrl, modelName, plainKey);
         }
         po.setEnabled(enabled ? 1 : 0);
 
@@ -88,6 +108,28 @@ public class UserLlmConfigService {
             throw new BusinessException(ErrorCode.PARAM_INVALID,
                     "启用自定义模型需要填完整：Base URL、模型名与 API Key（若 Key 输入框为空，请重新填写）");
         }
+    }
+
+    /**
+     * 把「加密之前写下」的历史明文行就地升级为密文。
+     *
+     * <p>时机是刻意的：只在这一行真的被读出来（GET 配置 / upsert）时做，幂等——
+     * 升级后 {@link CredentialCipher#isEncrypted} 为真，之后不再写库。
+     * <b>不</b>放在模型调用的热路径（{@code DbUserChatCredentialsProvider}）上：
+     * 那条路径只读不写，不该在一次模型调用里混进一次业务写入。
+     *
+     * <p>KEK 未配置时这里会抛 9999（拒绝以明文保存）——这正是"未配置"应该有的表现：
+     * 在用户实际操作的位置报错，而不是安静地把明文继续留在库里。
+     */
+    private void upgradeLegacyRow(UserLlmConfigPO po, String plainKey) {
+        if (!StringUtils.hasText(plainKey) || credentialCipher.isEncrypted(po.getApiKey())) {
+            return;
+        }
+        UserLlmConfigPO patch = new UserLlmConfigPO();
+        patch.setId(po.getId());
+        patch.setApiKey(credentialCipher.encrypt(plainKey));
+        userLlmConfigMapper.updateById(patch);
+        log.info("用户 {} 的历史明文凭据已升级为密文", po.getUserId());
     }
 
     private UserLlmConfigPO findByUser(Long userId) {

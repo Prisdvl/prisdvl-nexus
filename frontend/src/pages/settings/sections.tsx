@@ -161,7 +161,7 @@ export function ModelKeySection() {
         <label htmlFor="mk-key"><Loc>{s.modelKey.keyLabel}</Loc></label>
         <input id="mk-key" className="input" type="password" autoComplete="off"
           placeholder={cfg?.hasApiKey ? s.modelKey.keyPhSet(cfg.apiKeyMasked) : 'sk-…'}
-          value={apiKey} onChange={(e) => setApiKey(e.target.value)} maxLength={500} />
+          value={apiKey} onChange={(e) => setApiKey(e.target.value)} maxLength={320} />
         <p className="hint"><Loc>{s.modelKey.keyHint}</Loc></p>
       </div>
       <div className="field">

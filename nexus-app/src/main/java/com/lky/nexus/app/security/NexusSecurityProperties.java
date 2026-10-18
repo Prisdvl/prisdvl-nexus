@@ -7,7 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import java.util.List;
 
 /**
- * 安全相关配置（{@code nexus.security.*}）：限流、每日配额、登录失败冻结。
+ * 安全相关配置（{@code nexus.security.*}）：限流、每日配额、登录失败冻结、落库凭据加密。
  *
  * <p>照 {@code AiModelProperties} / {@code RetrievalDefaults} 的模式——项目不用
  * {@code @ConfigurationPropertiesScan}，而是由 {@link SecurityStoreConfiguration} 显式
@@ -38,6 +38,28 @@ public class NexusSecurityProperties {
     private Login login = new Login();
 
     private Register register = new Register();
+
+    private Crypto crypto = new Crypto();
+
+    /**
+     * 落库凭据的字段级加密（P1 凭证安全）。
+     *
+     * <p>与上面几项的取舍不同：那些是"按部署规模调的旋钮"，这一项是**开关性质的安全控制**。
+     * 未配置时不退化成明文存储，而是让写入路径 fail-closed（见 {@code CredentialCipher}）。
+     */
+    @Getter
+    @Setter
+    public static class Crypto {
+
+        /**
+         * 字段级加密的 KEK，base64 的 16/24/32 字节（AES-128/192/256）。
+         *
+         * <p>只从环境变量 {@code NEXUS_SECURITY_CRYPTO_KEK} 读，不要写进仓库：
+         * 它一旦泄露，库里所有凭据密文等同于明文。
+         * 生成方式见 {@code .env.example}。
+         */
+        private String kek = "";
+    }
 
     /** 每秒请求数限流（固定窗口，用户维度）。 */
     @Getter

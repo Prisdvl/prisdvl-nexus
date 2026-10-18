@@ -365,7 +365,13 @@
 8. **无 TLS**：nginx 只 `listen 80`（`nginx.conf:9`），无 HTTPS 终结、无证书配置；backend 亦无 TLS。
 9. **无 OAuth2 / OIDC 第三方登录**：`AuthServiceImpl.java:48-51` 明确这是"将来接入"方向，当前只有自建用户名口令。
 10. **无 CSRF token**：`.csrf(disable)`（`SecurityConfig.java:91`）——理由是纯 Token API 不用 Cookie/Session（类注释 `:36-38`），并非遗漏；但这也意味着一旦引入 Cookie 承载凭证就需重新评估。
-11. **无 mTLS、无字段级加密、无 KMS/Vault**：密钥全部来自环境变量（`application.yml:102,253`），没有密钥管理服务，落库字段无字段级加密。
+11. **无 mTLS、无 KMS/Vault；字段级加密只覆盖一处**：密钥全部来自环境变量（`application.yml:102,253`），没有密钥管理服务。
+    落库凭据已做字段级加密——`user_llm_config.api_key` 存的是 AES-GCM 密文（`v1:` 前缀 + base64(IV‖密文‖tag)，
+    `nexus-app/.../security/CredentialCipher.java`），KEK 由 `NEXUS_SECURITY_CRYPTO_KEK` 注入；
+    未配置 KEK 时写入路径 fail-closed（报 9999），不会静默存明文。
+    仍然欠缺的部分：**KEK 自己还是环境变量**（无 KMS 托管、无自动轮换，且换 KEK 会让既有密文全部解不开，
+    需用户重新保存一次）；加密**只覆盖这一列**，其他落库内容仍靠"不写入敏感原值"的脱敏
+    （`AgentTraceGuards`）而非加密；另外**加密前写下的历史明文行**只在用户读取/保存配置时才会被升级。
 12. **无审计日志表**：认证/安全事件只走 slf4j 日志（如 `AuthServiceImpl.java:142,167`；`RateLimitQuotaFilter.java:165`），没有独立的审计日志表；`ObservabilityRegistry` 是进程内计数器（`LongAdder` + `ConcurrentHashMap`，`ObservabilityRegistry.java:15-21`），非持久化审计。
 13. **无 IP 黑名单持久化**：只有基于键 TTL 的临时冻结/限流计数，没有持久化黑名单。
 14. **ES 安全模块关闭（开发编排）**：`xpack.security.enabled: "false"`（`docker-compose.yml:144`）；且 ES 端口仅绑 `127.0.0.1`（`:140`）。

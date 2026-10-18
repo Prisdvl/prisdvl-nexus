@@ -171,6 +171,17 @@ nexus:
     # ⚠️ 多实例部署必须置 true —— 内存实现每个实例各算一份，限流会被放大 N 倍。
     # 邮箱验证码存储（EmailCodeStore）共用同一开关。
     redis-enabled: ${NEXUS_SECURITY_REDIS_ENABLED:false}
+    crypto:
+      # 落库凭据（user_llm_config.api_key，将来还有 user_embedding_config）的字段级加密 KEK：
+      # base64 的 16/24/32 字节（AES-128/192/256），由 CredentialCipher 使用（AES-GCM）。
+      #
+      # ⚠️ 默认空**不是"退化成明文存储"**，而是写入路径 fail-closed：保存模型 Key 会直接报 9999。
+      # 静默存明文才是真正的危险，所以这里刻意不给任何默认值。
+      # ⚠️ 值配错（非法 base64 / 长度不对）会让应用**启动失败**——宁可起不来，
+      # 也不要先写进一批"换对 KEK 也解不开"的密文。
+      # ⚠️ KEK 泄露 ⇒ 库里全部凭据密文等同于明文；只从环境变量注入，勿写入仓库。
+      # 生成方式见 .env.example。
+      kek: ${NEXUS_SECURITY_CRYPTO_KEK:}
     login:
       # 登录失败限制：同一用户名在 window 内失败 max-failures 次 → 冻结 lock-duration。
       # 诚实代价：按用户名冻结意味着攻击者可以用错密码把某个账号锁住（定向 DoS）。

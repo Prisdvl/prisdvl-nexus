@@ -16,7 +16,9 @@ import org.springframework.web.bind.annotation.RestController;
  * 用户身份只从 JWT 的 {@code sub} 取（{@link CurrentUser#requireId()}）——
  * 从请求体接收 userId 是水平越权的典型来源（ADR-018）。
  *
- * <p>API Key 回显一律掩码（见 {@link UserLlmConfigResponse}），永不返回明文。
+ * <p>API Key 回显一律掩码（见 {@link UserLlmConfigResponse}），永不返回明文；
+ * 落库形态是 {@link com.lky.nexus.app.security.CredentialCipher} 的密文——
+ * 「接口不返回明文」与「库里不存明文」是两件事，这里两件都做到了。
  */
 @RestController
 @RequestMapping("/api/users/me/llm-config")

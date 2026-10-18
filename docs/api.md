@@ -133,6 +133,8 @@
 | DELETE | `/api/users/me/sessions/{id}` | 退出指定设备（只能删自己的；否则 `404/2010`） |
 | POST | `/api/users/me/sessions/revoke-all` | 退出全部设备（批量 revoke） |
 | GET | `/api/users/me/quota` | 当前用户当日额度（只读，用于界面上"今日 N/M 次 · x/y tokens"那一行） |
+| GET | `/api/users/me/llm-config` | 当前用户自定义对话模型凭据（`baseUrl` / `modelName` / `enabled` / `hasApiKey` / **`apiKeyMasked`**；**永不返回明文**） |
+| PUT | `/api/users/me/llm-config` | 保存同一份凭据。`apiKey` **留空 = 保留旧值**，填了才覆盖（上限 **320**，超限 `1001`）；`enabled=true` 时三项必须齐全，否则 `1001`。落库形态是 AES-GCM 密文（`v1:` 前缀），见 `security.md` 未实现清单 §11 |
 
 ```http
 POST /api/auth/login
