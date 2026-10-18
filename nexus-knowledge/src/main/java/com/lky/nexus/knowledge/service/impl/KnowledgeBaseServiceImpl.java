@@ -2,8 +2,6 @@ package com.lky.nexus.knowledge.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.lky.nexus.ai.config.AiModelProperties;
-import com.lky.nexus.ai.model.ModelRef;
 import com.lky.nexus.ai.rag.retriever.RetrievalDefaults;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.api.PageQuery;
@@ -27,6 +25,8 @@ import com.lky.nexus.knowledge.model.entity.DocumentTagPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.search.ChunkIndex;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
+import com.lky.nexus.knowledge.service.KnowledgeEmbeddingResolver;
+import com.lky.nexus.knowledge.service.KnowledgeEmbeddingResolver.EffectiveEmbedding;
 import com.lky.nexus.knowledge.storage.DocumentStorage;
 import com.lky.nexus.knowledge.vector.VectorStore;
 import org.slf4j.Logger;
@@ -48,8 +48,9 @@ import java.util.Objects;
  *
  * <p>三个关键设计：
  * <ol>
- *   <li><b>建库时冻结嵌入模型与维度</b>（ADR-008）：从 {@code embedding.default} 角色解析出
- *       具体模型与 dimensions 写进记录。若配置不完整则直接报 4006 ——
+ *   <li><b>建库时冻结嵌入模型与维度</b>（ADR-008）：由 {@link KnowledgeEmbeddingResolver} 解析
+ *       <b>该用户当前生效</b>的嵌入模型（他自己的 BYOK 配置优先，否则 {@code embedding.default} 角色）
+ *       并写进记录。若配置不完整则直接报 4006 ——
  *       宁可在建库时失败，也不要让一批维度不一致的向量悄悄入库（那种错误不会报错，只会让检索结果莫名其妙）。</li>
  *   <li><b>租户隔离写在 SQL 条件里</b>：{@code user_id = ?} 进查询，而不是查出来再在 Java 里比对。</li>
  *   <li><b>访问他人资源返回 404</b>（3001）而不是 403，避免泄露"这个 id 存在"。</li>
@@ -68,8 +69,11 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     private final DocumentTagMapper documentTagMapper;
     private final DocumentLinkMapper documentLinkMapper;
     private final ChunkMapper chunkMapper;
-    private final AiModelProperties aiModelProperties;
     private final RetrievalDefaults retrievalDefaults;
+    /**
+     * 嵌入模型解析（含 BYOK 生效配置）。建库冻结与检索校验共用它，两处不可能解析出不同模型。
+     */
+    private final KnowledgeEmbeddingResolver embeddingResolver;
 
     /**
      * 外部存储的清理直接用<b>端口</b>（{@code VectorStore} / {@code ChunkIndex}）而不是
@@ -86,8 +90,8 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                                     DocumentTagMapper documentTagMapper,
                                     DocumentLinkMapper documentLinkMapper,
                                     ChunkMapper chunkMapper,
-                                    AiModelProperties aiModelProperties,
                                     RetrievalDefaults retrievalDefaults,
+                                    KnowledgeEmbeddingResolver embeddingResolver,
                                     VectorStore vectorStore,
                                     ChunkIndex chunkIndex,
                                     DocumentStorage documentStorage) {
@@ -96,8 +100,8 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         this.documentTagMapper = documentTagMapper;
         this.documentLinkMapper = documentLinkMapper;
         this.chunkMapper = chunkMapper;
-        this.aiModelProperties = aiModelProperties;
         this.retrievalDefaults = retrievalDefaults;
+        this.embeddingResolver = embeddingResolver;
         this.vectorStore = vectorStore;
         this.chunkIndex = chunkIndex;
         this.documentStorage = documentStorage;
@@ -128,7 +132,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         double similarityThreshold = request.similarityThreshold() == null
                 ? retrievalDefaults.getSimilarityThreshold() : request.similarityThreshold();
 
-        FrozenEmbedding embedding = resolveEmbedding();
+        EffectiveEmbedding embedding = resolveEmbedding(userId);
 
         KnowledgeBasePO entity = new KnowledgeBasePO();
         entity.setUserId(userId);
@@ -324,30 +328,17 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     }
 
     /**
-     * 从 {@code embedding.default} 角色解析出要冻结的嵌入模型与维度。
+     * 解析该用户<b>当前生效</b>的嵌入模型与维度（BYOK 路线 A：用户自带配置优先，否则全局角色）。
      *
-     * @throws BusinessException 4006：角色未配置 / 模型不存在 / 未声明 dimensions
+     * <p>刻意不在这里自己解析配置：检索侧读的是同一个
+     * {@link KnowledgeEmbeddingResolver#effectiveFor(Long)}，两边共用一段解析，
+     * 才不会出现"建库冻结 A、检索却要求 B"这种建完库立刻不能用的错位。
+     *
+     * @throws BusinessException 4006：角色未配置 / 模型不存在 / 未声明 dimensions /
+     *                           用户自带配置不在白名单内或维度不被允许
      */
-    private FrozenEmbedding resolveEmbedding() {
-        String role = AiModelProperties.Role.EMBEDDING_DEFAULT;
-        String reference = aiModelProperties.getRoles().get(role);
-        if (!StringUtils.hasText(reference)) {
-            throw new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
-                    "未配置逻辑角色 %s，无法创建知识库".formatted(role));
-        }
-        ModelRef ref = ModelRef.parse(reference);
-        AiModelProperties.ModelEntry entry = aiModelProperties.findModel(ref)
-                .orElseThrow(() -> new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
-                        "找不到嵌入模型 %s，请检查 ai.providers 配置".formatted(ref.value())));
-        if (entry.getDimensions() == null || entry.getDimensions() <= 0) {
-            throw new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
-                    "嵌入模型 %s 未声明 dimensions，无法确定向量维度（向量维度必须建库时冻结）"
-                            .formatted(ref.value()));
-        }
-        return new FrozenEmbedding(ref.provider(), ref.model(), entry.getDimensions());
-    }
-
-    private record FrozenEmbedding(String provider, String model, int dimensions) {
+    private EffectiveEmbedding resolveEmbedding(Long userId) {
+        return embeddingResolver.effectiveFor(userId);
     }
 
     private KnowledgeBaseResponse toResponse(KnowledgeBasePO entity) {

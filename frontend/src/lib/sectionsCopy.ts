@@ -1,7 +1,7 @@
 import type { Locale } from '@/lib/locale'
 
 /**
- * 设置页 11 个分区（sections.tsx）的中英文案字典。
+ * 设置页 12 个分区（sections.tsx）的中英文案字典。
  * 与 appCopy 同风格：类型完整、中英两份、带插值的文案用函数表达。
  * mock 演示数据与导出文件的列名/正文属于数据内容，不在此处翻译。
  */
@@ -52,6 +52,33 @@ export interface SectionsCopy {
     savedBody: string
     saveFailTitle: string
     embedHint: string
+  }
+  embeddingKey: {
+    title: string
+    desc: string
+    loading: string
+    providerLabel: string
+    providerHint: string
+    modelLabel: string
+    modelHint: string
+    baseLabel: string
+    baseHint: string
+    keyLabel: string
+    keyPhSet: (masked: string | null) => string
+    keyHint: string
+    dimLabel: string
+    dimHint: (dim: number) => string
+    enableLabel: string
+    enableHint: string
+    enableAria: string
+    save: string
+    saving: string
+    enabledTitle: string
+    enabledBody: string
+    savedTitle: string
+    savedBody: string
+    saveFailTitle: string
+    frozenHint: string
   }
   prefs: {
     title: string
@@ -251,7 +278,34 @@ const ZH: SectionsCopy = {
     savedTitle: '已保存配置（未启用）',
     savedBody: '可随时打开开关启用',
     saveFailTitle: '保存失败',
-    embedHint: '嵌入模型（知识库向量化）仍使用服务端全局配置，不在此处切换——维度在建库时已冻结。',
+    embedHint: '嵌入模型（知识库向量化）在「嵌入模型」分区单独配置；这里只影响对话生成。',
+  },
+  embeddingKey: {
+    title: '嵌入模型',
+    desc: '填入你自己的嵌入端点与 API Key；启用后，你的知识库在向量化与检索时走自己的额度。向量维度由平台固定，知识库建库时冻结。',
+    loading: '正在读取配置…',
+    providerLabel: '供应商',
+    providerHint: '供应商与模型名一起受平台白名单约束（白名单由服务端下发，这里不硬编码）。',
+    modelLabel: '模型名',
+    modelHint: '从平台白名单中选择；不在白名单里的模型不会被接受。',
+    baseLabel: 'Base URL',
+    baseHint: '你自己的 OpenAI 兼容嵌入端点，如百炼 compatible-mode。',
+    keyLabel: 'API Key',
+    keyPhSet: (masked) => `已设置（${masked}），留空保持不变`,
+    keyHint: 'Key 加密后保存在你的账号下，回显一律掩码；留空提交表示不改动已存的 Key。',
+    dimLabel: '向量维度',
+    dimHint: (dim) => `平台固定为 ${dim} 维（向量列与知识库冻结维度都按它建立），不接受其他维度。`,
+    enableLabel: '启用自定义嵌入模型',
+    enableHint: '关闭时回落服务端全局嵌入模型；开启需四项填齐。',
+    enableAria: '启用自定义嵌入模型',
+    save: '保存配置',
+    saving: '保存中…',
+    enabledTitle: '已启用自定义嵌入模型',
+    enabledBody: '你的知识库将用自己的嵌入端点与额度',
+    savedTitle: '已保存配置（未启用）',
+    savedBody: '可随时打开开关启用',
+    saveFailTitle: '保存失败',
+    frozenHint: '已建知识库的嵌入模型在创建时就已冻结：换模型不会自动迁移，旧库会明确报错，必须重建索引或新建知识库。',
   },
   prefs: {
     title: '账号偏好',
@@ -451,7 +505,34 @@ const EN: SectionsCopy = {
     savedTitle: 'Configuration saved (not enabled)',
     savedBody: 'Flip the switch whenever you want to enable it',
     saveFailTitle: 'Save failed',
-    embedHint: 'Embedding models (knowledge-base vectorization) still use the server-wide configuration and cannot be switched here — dimensions are frozen when a base is created.',
+    embedHint: 'Embedding models (knowledge-base vectorization) live in the separate “Embedding model” section; this section only affects chat generation.',
+  },
+  embeddingKey: {
+    title: 'Embedding model',
+    desc: 'Provide your own embedding endpoint and API key. Once enabled, your knowledge bases embed and retrieve on your own quota. The vector dimension is fixed by the platform and frozen when a base is created.',
+    loading: 'Loading configuration…',
+    providerLabel: 'Provider',
+    providerHint: 'The provider is whitelisted together with the model name (the whitelist comes from the server; nothing is hard-coded here).',
+    modelLabel: 'Model name',
+    modelHint: 'Pick from the platform whitelist — models outside it are rejected.',
+    baseLabel: 'Base URL',
+    baseHint: 'Your own OpenAI-compatible embedding endpoint, e.g. Bailian compatibility mode.',
+    keyLabel: 'API Key',
+    keyPhSet: (masked) => `Already set (${masked}) — leave blank to keep it`,
+    keyHint: 'The key is encrypted under your account and always masked when echoed back; submitting blank keeps the stored key.',
+    dimLabel: 'Vector dimension',
+    dimHint: (dim) => `Fixed at ${dim} by the platform (the vector column and every frozen base use it); other dimensions are rejected.`,
+    enableLabel: 'Enable custom embedding model',
+    enableHint: 'When off, calls fall back to the server-wide embedding model; turning it on requires all four fields.',
+    enableAria: 'Enable custom embedding model',
+    save: 'Save configuration',
+    saving: 'Saving…',
+    enabledTitle: 'Custom embedding model enabled',
+    enabledBody: 'Your knowledge bases now embed on your own endpoint and quota',
+    savedTitle: 'Configuration saved (not enabled)',
+    savedBody: 'Flip the switch whenever you want to enable it',
+    saveFailTitle: 'Save failed',
+    frozenHint: 'A knowledge base freezes its embedding model at creation: switching models does not migrate it — old bases fail loudly and must be re-indexed or rebuilt.',
   },
   prefs: {
     title: 'Preferences',

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.lky.nexus.ai.config.AiModelProperties;
+import com.lky.nexus.ai.model.EmbeddingByokPolicy;
 import com.lky.nexus.ai.model.EmbeddingClient;
 import com.lky.nexus.ai.model.EmbeddingClientFactory;
 import com.lky.nexus.common.api.ErrorCode;
@@ -156,8 +157,11 @@ class ChunkEmbeddingServiceTest {
     // ------------------------------------------------------------------
 
     private ChunkEmbeddingService newService() {
-        // 模型一致性校验现在收敛在 KnowledgeEmbeddingResolver（写入与检索共用）
-        var resolver = new KnowledgeEmbeddingResolver(properties, embeddingClientFactory);
+        // 模型一致性校验现在收敛在 KnowledgeEmbeddingResolver（写入与检索共用）。
+        // 第 4 个参数是"用户自带嵌入凭据"端口：这里显式传 null = 只用全局角色
+        // （纯单测没有 nexus-app 的数据库实现；生产由 Spring 注入）。
+        var resolver = new KnowledgeEmbeddingResolver(properties, embeddingClientFactory,
+                new EmbeddingByokPolicy(properties), null);
         return new ChunkEmbeddingServiceImpl(knowledgeBaseService, chunkMapper, vectorStore, resolver);
     }
 

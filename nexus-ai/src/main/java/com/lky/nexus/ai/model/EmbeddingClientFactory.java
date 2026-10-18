@@ -14,6 +14,8 @@ import org.springframework.ai.openai.OpenAiEmbeddingOptions;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
@@ -38,6 +40,10 @@ import java.util.function.Supplier;
  * 嵌入维度通过 {@code OpenAiEmbeddingOptions.dimensions(...)} 显式下发，确保远端
  * 实际返回维度与 {@code ModelEntry.dimensions} 一致（百炼 text-embedding-v4 默认
  * 1024，也可指定 2048/1536/768/512/256/128/64）。
+ *
+ * <p>两条取客户端的路径：{@link #get(String)} 用服务端全局配置（按角色），
+ * {@link #getForUser(UserEmbeddingCredentials)} 用用户自带凭据（BYOK：白名单 + 固定维度）。
+ * 二者共用同一段构建逻辑，不存在"两份实现各自漂移"的余地。
  */
 @Component
 public class EmbeddingClientFactory {
@@ -45,10 +51,27 @@ public class EmbeddingClientFactory {
     private static final Logger log = LoggerFactory.getLogger(EmbeddingClientFactory.class);
 
     private final AiModelProperties properties;
+    private final EmbeddingByokPolicy byokPolicy;
     private final Map<String, EmbeddingClient> clientsByRole = new ConcurrentHashMap<>();
+    /**
+     * 用户自带凭据的客户端缓存：key 是"凭据指纹"（含 provider/model/baseUrl/apiKey/dimensions）。
+     * 凭据一变指纹就变 → 自动重建；旧条目留在内存里不清理（与 {@link ChatClientFactory}
+     * 同一套取舍：个人系统量级可控，避免跨组件做失效通知）。
+     */
+    private final Map<String, EmbeddingClient> clientsByUser = new ConcurrentHashMap<>();
 
-    public EmbeddingClientFactory(AiModelProperties properties) {
+    /**
+     * 唯一的构造器（构造器注入由 Spring 完成）。
+     *
+     * <p>刻意<b>不</b>再提供 {@code (AiModelProperties)} 这个便捷重载：本类是 {@code @Component}，
+     * 一个类有多个未被 {@code @Autowired} 标注的构造器、又没有无参构造器时，
+     * Spring 无法决定用哪个，会直接 {@code BeanInstantiationException} 启动失败。
+     * （{@code ChatClientFactory} 之所以能有多个构造器，是因为它由
+     * {@code AiConfiguration} 的 {@code @Bean} 方法手工装配，不走构造器推断。）
+     */
+    public EmbeddingClientFactory(AiModelProperties properties, EmbeddingByokPolicy byokPolicy) {
         this.properties = properties;
+        this.byokPolicy = byokPolicy;
     }
 
     /**
@@ -58,6 +81,61 @@ public class EmbeddingClientFactory {
      */
     public EmbeddingClient get(String role) {
         return clientsByRole.computeIfAbsent(role, this::create);
+    }
+
+    /**
+     * 取<b>用户自带凭据</b>的嵌入客户端（BYOK 路线 A）。
+     *
+     * <p>与全局路径的区别只有"配置从哪来"：协议、维度下发、类加载器处理全部复用同一段构建逻辑，
+     * 所以用户路径与全局路径在行为上不存在第二套实现。
+     *
+     * <p>协议按 {@code ai.providers} 里同名供应商的 {@code type} 决定（找不到就按
+     * OpenAI 兼容处理），附加请求头也从同名全局供应商继承——这样"同一网关、不同 Key"
+     * 的行为与全局配置一致，不会因为少发一个自定义头而在某些网关上报 401。
+     *
+     * <p><b>白名单与维度在这里再校验一次</b>：解析方（{@code KnowledgeEmbeddingResolver}）
+     * 已经查过，但这里是"向量可能被真正生产出来"的最后一道边界，多一道断言代价极低，
+     * 却能杜绝将来某个新调用点绕过策略直接建客户端。
+     *
+     * @throws BusinessException 4006：白名单外的模型，或维度不是平台允许的维度
+     */
+    public EmbeddingClient getForUser(UserEmbeddingCredentials credentials) {
+        byokPolicy.requireAllowed(credentials.provider(), credentials.model(),
+                credentials.dimensions(), ErrorCode.MODEL_ROLE_NOT_CONFIGURED);
+        String cacheKey = "user|" + credentials.fingerprint();
+        return clientsByUser.computeIfAbsent(cacheKey, key -> createForUser(credentials));
+    }
+
+    private EmbeddingClient createForUser(UserEmbeddingCredentials credentials) {
+        AiModelProperties.Provider provider = new AiModelProperties.Provider();
+        provider.setName(credentials.provider());
+        provider.setType(protocolOf(credentials.provider()));
+        provider.setBaseUrl(credentials.baseUrl());
+        provider.setApiKey(credentials.apiKey());
+        // 同名全局供应商的附加请求头对用户路径同样适用（见方法注释）
+        properties.findProvider(credentials.provider())
+                .ifPresent(global -> provider.setHeaders(global.getHeaders()));
+
+        AiModelProperties.ModelEntry entry = new AiModelProperties.ModelEntry();
+        entry.setName(credentials.model());
+        entry.setDimensions(credentials.dimensions());
+        entry.setCapabilities(new ArrayList<>(List.of(AiModelProperties.ModelCapability.EMBEDDING)));
+
+        EmbeddingModel model = buildWithApplicationClassLoader(() -> switch (provider.getType()) {
+            case OLLAMA -> buildOllamaEmbeddingModel(provider, entry);
+            case OPENAI_COMPATIBLE -> buildOpenAiCompatibleEmbeddingModel(provider, entry);
+        });
+
+        // 只打模型引用与端点：apiKey 绝不进日志（与 ChatClientFactory 同一种口径）
+        log.info("使用用户自带的嵌入模型：{}（端点 {}，声明维度 {}）",
+                credentials.reference(), credentials.baseUrl(), credentials.dimensions());
+        return new EmbeddingClient(credentials.reference(), model, credentials.dimensions());
+    }
+
+    private AiModelProperties.ProviderType protocolOf(String providerName) {
+        return properties.findProvider(providerName)
+                .map(AiModelProperties.Provider::getType)
+                .orElse(AiModelProperties.ProviderType.OPENAI_COMPATIBLE);
     }
 
     private EmbeddingClient create(String role) {

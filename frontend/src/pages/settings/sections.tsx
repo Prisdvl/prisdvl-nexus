@@ -12,7 +12,7 @@ import StatusMark from '@/bits/StatusMark/StatusMark'
 import Modal from '@/components/Modal'
 import { AppearanceControls } from '@/components/Appearance'
 import { toast } from '@/lib/toast'
-import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserSession } from '@/lib/api'
+import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserEmbeddingConfig, type UserSession } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ACCOUNT_PREFS_KEY, readAccountPreferences } from '@/lib/preferences'
 import { writeLocale, normalizeLocale, useLocale } from '@/lib/locale'
@@ -182,6 +182,135 @@ export function ModelKeySection() {
       </button>
       <p className="hint" style={{ marginTop: 12, marginBottom: 0 }}>
         <Loc>{s.modelKey.embedHint}</Loc>
+      </p>
+    </form>}
+  </section>
+}
+
+/* ---------------- 个人 · 嵌入模型（BYOK：用户自带的嵌入端点与 Key） ---------------- */
+export function EmbeddingKeySection() {
+  const { locale } = useLocale()
+  const s = sectionsCopy(locale)
+  const [cfg, setCfg] = useState<UserEmbeddingConfig | null>(null)
+  const [provider, setProvider] = useState('')
+  const [modelName, setModelName] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [enabled, setEnabled] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  // 白名单来自后端（ai.byok.embedding.allowed-models），前端不硬编码一份副本——
+  // 硬编码必然与后端漂移，而这里的白名单是"能不能写向量"的硬约束。
+  const allowed = cfg?.allowedModels ?? []
+  const providers = Array.from(new Set(allowed.map((m) => m.split(':')[0])))
+  const modelsOf = (p: string) => allowed.filter((m) => m.startsWith(`${p}:`)).map((m) => m.slice(p.length + 1))
+
+  useEffect(() => {
+    let alive = true
+    if (USE_MOCK) {
+      setCfg({
+        provider: null, modelName: null, baseUrl: null, dimensions: 1024, enabled: false,
+        hasApiKey: false, apiKeyMasked: null,
+        allowedModels: ['bailian:text-embedding-v4'], requiredDimensions: 1024,
+      })
+      setProvider('bailian'); setModelName('text-embedding-v4')
+      setLoading(false)
+      return () => { alive = false }
+    }
+    api.users.embeddingConfig()
+      .then((c) => {
+        if (!alive) return
+        setCfg(c)
+        const firstProvider = c.provider ?? c.allowedModels[0]?.split(':')[0] ?? ''
+        setProvider(firstProvider)
+        setModelName(c.modelName ?? c.allowedModels.find((m) => m.startsWith(`${firstProvider}:`))?.slice(firstProvider.length + 1) ?? '')
+        setBaseUrl(c.baseUrl ?? '')
+        setEnabled(c.enabled)
+      })
+      .catch((e) => { if (alive) setError(errMessage(e)) })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [])
+
+  // 换供应商时把模型名对齐到该供应商白名单里的第一项，避免提交出白名单外的组合
+  const onProviderChange = (next: string) => {
+    setProvider(next)
+    if (!modelsOf(next).includes(modelName)) setModelName(modelsOf(next)[0] ?? '')
+  }
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault()
+    if (saving) return
+    setSaving(true); setError('')
+    try {
+      const updated = await api.users.saveEmbeddingConfig({
+        provider: provider.trim() || null,
+        modelName: modelName.trim() || null,
+        baseUrl: baseUrl.trim() || null,
+        apiKey: apiKey.trim(),
+        dimensions: cfg?.requiredDimensions ?? null,
+        enabled,
+      })
+      setCfg(updated)
+      // 保存成功后清空输入框里的 key：服务端已加密存好，下次留空即"保持不变"
+      setApiKey('')
+      toast.success(enabled ? s.embeddingKey.enabledTitle : s.embeddingKey.savedTitle,
+        enabled ? s.embeddingKey.enabledBody : s.embeddingKey.savedBody)
+    } catch (e2) {
+      const message = errMessage(e2); setError(message); toast.error(s.embeddingKey.saveFailTitle, message)
+    } finally { setSaving(false) }
+  }
+
+  return <section className="panel panel-pad">
+    <SectionHead title={s.embeddingKey.title} desc={s.embeddingKey.desc} />
+    {loading ? <p className="hint" role="status"><Loc>{s.embeddingKey.loading}</Loc></p> : <form onSubmit={save}>
+      {error && <p className="form-error active" role="alert">{error}</p>}
+      <div className="field">
+        <label htmlFor="ek-provider"><Loc>{s.embeddingKey.providerLabel}</Loc></label>
+        <select id="ek-provider" className="input" value={provider} onChange={(e) => onProviderChange(e.target.value)}>
+          {providers.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <p className="hint"><Loc>{s.embeddingKey.providerHint}</Loc></p>
+      </div>
+      <div className="field">
+        <label htmlFor="ek-model"><Loc>{s.embeddingKey.modelLabel}</Loc></label>
+        <select id="ek-model" className="input" value={modelName} onChange={(e) => setModelName(e.target.value)}>
+          {modelsOf(provider).map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <p className="hint"><Loc>{s.embeddingKey.modelHint}</Loc></p>
+      </div>
+      <div className="field">
+        <label htmlFor="ek-base"><Loc>{s.embeddingKey.baseLabel}</Loc></label>
+        <input id="ek-base" className="input" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+          value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} maxLength={500} />
+        <p className="hint"><Loc>{s.embeddingKey.baseHint}</Loc></p>
+      </div>
+      <div className="field">
+        <label htmlFor="ek-key"><Loc>{s.embeddingKey.keyLabel}</Loc></label>
+        <input id="ek-key" className="input" type="password" autoComplete="off"
+          placeholder={cfg?.hasApiKey ? s.embeddingKey.keyPhSet(cfg.apiKeyMasked) : 'sk-…'}
+          value={apiKey} onChange={(e) => setApiKey(e.target.value)} maxLength={320} />
+        <p className="hint"><Loc>{s.embeddingKey.keyHint}</Loc></p>
+      </div>
+      <div className="field">
+        <label htmlFor="ek-dim"><Loc>{s.embeddingKey.dimLabel}</Loc></label>
+        <input id="ek-dim" className="input" value={String(cfg?.requiredDimensions ?? 1024)} disabled readOnly />
+        <p className="hint"><Loc>{s.embeddingKey.dimHint(cfg?.requiredDimensions ?? 1024)}</Loc></p>
+      </div>
+      <div className="settings-inline" style={{ margin: '4px 0 16px' }}>
+        <div>
+          <strong style={{ fontSize: 13.5 }}><Loc>{s.embeddingKey.enableLabel}</Loc></strong>
+          <p className="hint" style={{ margin: '4px 0 0' }}><Loc>{s.embeddingKey.enableHint}</Loc></p>
+        </div>
+        <SquishSwitch checked={enabled} onChange={setEnabled} ariaLabel={s.embeddingKey.enableAria} />
+      </div>
+      <button className="btn btn-primary" type="submit" disabled={saving}>
+        <Save size={15} /> {saving ? <Loc>{s.embeddingKey.saving}</Loc> : <Loc>{s.embeddingKey.save}</Loc>}
+      </button>
+      <p className="hint" style={{ marginTop: 12, marginBottom: 0 }}>
+        <Loc>{s.embeddingKey.frozenHint}</Loc>
       </p>
     </form>}
   </section>

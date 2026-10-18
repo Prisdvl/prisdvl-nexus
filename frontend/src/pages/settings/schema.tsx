@@ -7,17 +7,17 @@
  */
 import type { ReactNode } from 'react'
 import {
-  BellRing, Cpu, Download, Gauge, KeyRound, Laptop, MailCheck, Palette, ShieldAlert,
+  BellRing, Boxes, Cpu, Download, Gauge, KeyRound, Laptop, MailCheck, Palette, ShieldAlert,
   SlidersHorizontal, UserRound,
 } from 'lucide-react'
 import {
-  AppearanceSection, DangerSection, EmailSection, ExportSection, ModelKeySection, NotifySection,
-  PrefsSection, ProfileSection, SecuritySection, SessionsSection, UsageSection,
+  AppearanceSection, DangerSection, EmailSection, EmbeddingKeySection, ExportSection, ModelKeySection,
+  NotifySection, PrefsSection, ProfileSection, SecuritySection, SessionsSection, UsageSection,
 } from './sections'
 import { appCopy } from '@/lib/appCopy'
 
 export type SectionId =
-  | 'profile' | 'model' | 'prefs' | 'appearance'
+  | 'profile' | 'model' | 'embedding' | 'prefs' | 'appearance'
   | 'security' | 'email' | 'sessions'
   | 'notify'
   | 'usage' | 'export'
@@ -51,6 +51,7 @@ export function buildSettingsGroups(t: ReturnType<typeof appCopy>['settings']): 
     items: [
       { id: 'profile', label: t.itemProfile, icon: UserRound, alias: 'profile username nickname email 用户名 昵称 邮箱 头像 资料', render: () => <ProfileSection /> },
       { id: 'model', label: t.itemModel, icon: Cpu, alias: 'model key api 大模型 key api key 自定义 模型 网关 base url deepseek', render: () => <ModelKeySection /> },
+      { id: 'embedding', label: t.itemEmbedding, icon: Boxes, alias: 'embedding vector dimension 嵌入 向量 维度 白名单 text-embedding bailian 知识库 检索', render: () => <EmbeddingKeySection /> },
       { id: 'prefs', label: t.itemPrefs, icon: SlidersHorizontal, alias: 'preferences language timezone landing 语言 时区 默认 落地页', render: () => <PrefsSection /> },
       { id: 'appearance', label: t.itemAppearance, icon: Palette, alias: 'appearance theme palette dark light 主题 配色 暗色 浅色 亮色 跟随系统 颜色', render: () => <AppearanceSection /> },
     ],

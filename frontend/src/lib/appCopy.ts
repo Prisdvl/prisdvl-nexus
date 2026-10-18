@@ -460,6 +460,7 @@ export interface AppCopy {
     groupDanger: string
     itemProfile: string
     itemModel: string
+    itemEmbedding: string
     itemPrefs: string
     itemAppearance: string
     itemSecurity: string
@@ -852,7 +853,7 @@ One disk IO = one page (16KB), better locality
     barTitleFallback: '设置', closeAria: '关闭设置',
     groupPersonal: '个人', groupAccess: '访问与安全', groupNotify: '通知',
     groupData: '数据与用量', groupDanger: '危险区',
-    itemProfile: '公开资料', itemModel: '模型 Key', itemPrefs: '账号偏好', itemAppearance: '外观',
+    itemProfile: '公开资料', itemModel: '模型 Key', itemEmbedding: '嵌入模型', itemPrefs: '账号偏好', itemAppearance: '外观',
     itemSecurity: '密码与登录', itemEmail: '邮箱验证', itemSessions: '会话与设备',
     itemNotify: '通知偏好', itemUsage: '用量配额', itemExport: '数据导出', itemDanger: '注销账号',
   },
@@ -1236,7 +1237,7 @@ One disk IO = one page (16KB), better locality
     barTitleFallback: 'Settings', closeAria: 'Close settings',
     groupPersonal: 'Personal', groupAccess: 'Access & security', groupNotify: 'Notifications',
     groupData: 'Data & usage', groupDanger: 'Danger zone',
-    itemProfile: 'Profile', itemModel: 'Model key', itemPrefs: 'Preferences', itemAppearance: 'Appearance',
+    itemProfile: 'Profile', itemModel: 'Model key', itemEmbedding: 'Embedding model', itemPrefs: 'Preferences', itemAppearance: 'Appearance',
     itemSecurity: 'Password & sign-in', itemEmail: 'Email verification', itemSessions: 'Sessions & devices',
     itemNotify: 'Notifications', itemUsage: 'Usage quota', itemExport: 'Data export', itemDanger: 'Delete account',
   },

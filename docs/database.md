@@ -266,6 +266,24 @@ CREATE TABLE workspace (
 | 为什么先不动查询条件 | §三十六 要求"查询必须带 `workspace_id` + `owner_id`"。当前阶段所有查询仍是 `user_id`（个人工作区与用户 1:1，两者等价），**权限维度切到 workspace 是 Phase 8 的事**——迁移里 `workspace_id` 允许为 NULL 正是为此 |
 | 成员角色 | OWNER/ADMIN/EDITOR/VIEWER 已在设计里占位，表与管理接口 Phase 8 才建 |
 
+### 3.2 用户模型凭据（BYOK）
+
+> 两张表都是**每用户一行**（`user_id` 唯一），形状刻意保持一致：
+> `enabled=0` 时即使填了字段也不生效，便于"先填好、暂时停用"。
+> 本节原本缺失（两张表都只在迁移文件与代码里），补记于 BYOK 路线 A 落地时。
+
+| 表 | 迁移 | 关键列 |
+| --- | --- | --- |
+| `user_llm_config` | V19 | `id`、`user_id`（唯一）、`base_url`、`api_key`、`model_name`、`enabled` |
+| `user_embedding_config` | V25 | `id`、`user_id`（唯一）、`provider`、`model_name`、`base_url`、`api_key`、`dimensions`、`enabled` |
+
+| 说明 | 内容 |
+| --- | --- |
+| 生效优先级 | 用户配置 `enabled=1` 且字段齐全 → 用他自己的端点与 Key；否则回落服务端全局（对话走 `chat.*` 角色，嵌入走 `embedding.default`）。首期**不做**管理员强制覆盖 |
+| `api_key` 的存储形态 | **AES-GCM 密文**（`v1:` + base64(IV‖密文‖tag)，`CredentialCipher`），KEK 来自 `NEXUS_SECURITY_CRYPTO_KEK`，接口只回掩码。V19 的建表注释写着"本期不做字段级加密"，那是当时的实情，已被 P1 凭证安全取代（见 `security.md` §11）；**V19 文件本身不改**——改已应用的迁移会破坏 Flyway 校验和 |
+| 嵌入为什么多两列 | 嵌入模型决定**向量空间**：`provider` + `model_name` 一起受白名单约束（`ai.byok.embedding.allowed-models`，默认只含 `bailian:text-embedding-v4`），`dimensions` 必须等于 `ai.byok.embedding.required-dimensions`（默认 1024，与向量列 `vector(1024)` 一致）。遇到别的维度直接拒绝，不截断、不补零 |
+| 换嵌入模型的后果 | 只改"以后用什么"，**不会**迁移已建知识库：知识库建库时冻结的 `embedding_provider / model / dim` 不变，旧库检索会明确 4006，必须显式重建索引或新建知识库 |
+
 ---
 
 ## 4. 知识库与文档（Phase 2 核心）

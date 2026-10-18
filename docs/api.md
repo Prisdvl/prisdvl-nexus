@@ -135,6 +135,8 @@
 | GET | `/api/users/me/quota` | 当前用户当日额度（只读，用于界面上"今日 N/M 次 · x/y tokens"那一行） |
 | GET | `/api/users/me/llm-config` | 当前用户自定义对话模型凭据（`baseUrl` / `modelName` / `enabled` / `hasApiKey` / **`apiKeyMasked`**；**永不返回明文**） |
 | PUT | `/api/users/me/llm-config` | 保存同一份凭据。`apiKey` **留空 = 保留旧值**，填了才覆盖（上限 **320**，超限 `1001`）；`enabled=true` 时三项必须齐全，否则 `1001`。落库形态是 AES-GCM 密文（`v1:` 前缀），见 `security.md` 未实现清单 §11 |
+| GET | `/api/users/me/embedding-config` | 当前用户自定义嵌入模型凭据（BYOK 路线 A）：`provider` / `modelName` / `baseUrl` / `dimensions` / `enabled` / `hasApiKey` / **`apiKeyMasked`**，另带平台约束 **`allowedModels`** 与 **`requiredDimensions`**（未配置时也返回，供前端渲染合法选项） |
+| PUT | `/api/users/me/embedding-config` | 保存同一份凭据。`apiKey` 留空 = 保留旧值；`provider:model` 必须在 `allowedModels` 内，`dimensions` 省略即取 `requiredDimensions`、传了就必须相等——两者任一不合规都是 `1001`；`enabled=true` 时 provider / 模型名 / Base URL / Key 四项必须齐全。**它只改"以后用什么"，不迁移已建知识库**（见下） |
 
 ```http
 POST /api/auth/login

@@ -44,6 +44,9 @@ public class AiModelProperties {
     /** Agent 工具循环的上限（`ai.tools`）。 */
     private ToolLimits tools = new ToolLimits();
 
+    /** 用户自带模型（BYOK）的约束（`ai.byok.*`）。 */
+    private Byok byok = new Byok();
+
     /** 供应商列表。 */
     private List<Provider> providers = new ArrayList<>();
 
@@ -144,6 +147,48 @@ public class AiModelProperties {
          */
         private Map<String, String> headers = new LinkedHashMap<>();
         private List<ModelEntry> models = new ArrayList<>();
+    }
+
+    /**
+     * 用户自带模型（BYOK）的约束（{@code ai.byok.*}）。
+     *
+     * <p>为什么嵌入需要白名单而对话不需要：对话模型换供应商只影响单次生成的文字；
+     * 嵌入模型决定<b>向量空间</b>，而向量列宽在建库时就写死并冻结（ADR-008）。
+     * 让用户随便填一个 768 维模型，写进去的向量宽度就是错的——而且不会报错，
+     * 只会表现为"检索结果莫名其妙"。所以白名单与维度是<b>平台侧</b>的硬约束，
+     * 不是可以交给用户自己负责的偏好。
+     */
+    @Getter
+    @Setter
+    public static class Byok {
+
+        private EmbeddingByok embedding = new EmbeddingByok();
+
+        @Getter
+        @Setter
+        public static class EmbeddingByok {
+
+            /**
+             * 允许用户配置的嵌入模型白名单，元素形如 {@code provider:model}。
+             *
+             * <p>放配置而不是代码枚举：加一个经 LIVE 验证过的模型不必改代码、不必发版。
+             * 但<b>不是</b>可以随便放宽的旋钮——每加一项都意味着"这个模型的维度与端点
+             * 已经被真实验证过"，见 {@code docs/roadmap.md} 的路线 A 验收标准。
+             *
+             * <p>默认只含百炼 {@code text-embedding-v4}（1024 维，与现有
+             * {@code vector(1024)} 列和既有知识库冻结值一致，可平滑替换）。
+             */
+            private List<String> allowedModels = new ArrayList<>(List.of("bailian:text-embedding-v4"));
+
+            /**
+             * 首期唯一允许的嵌入维度。
+             *
+             * <p>向量列是 {@code vector(1024)}，换维度必须新建列/表并重建索引
+             * （{@code db/vector-migration/V1__vector_store.sql} 的注释）。
+             * 多维度分表属路线 B，本轮不实施；这里固定成 1024，遇到别的维度直接拒绝。
+             */
+            private int requiredDimensions = 1024;
+        }
     }
 
     @Getter

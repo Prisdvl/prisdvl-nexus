@@ -366,6 +366,14 @@ export const api = {
     /** 保存自定义对话模型配置；apiKey 留空 = 保留已存的 key */
     saveLlmConfig: (body: { baseUrl?: string | null; apiKey?: string; modelName?: string | null; enabled: boolean }) =>
       http.put<Result<UserLlmConfig>>('/users/me/llm-config', body).then((r) => r.data.data),
+    /** 读取当前用户的自定义嵌入模型配置（apiKey 只回掩码；白名单随响应下发） */
+    embeddingConfig: () =>
+      http.get<Result<UserEmbeddingConfig>>('/users/me/embedding-config').then((r) => r.data.data),
+    /** 保存自定义嵌入模型配置；apiKey 留空 = 保留已存的 key；dimensions 省略 = 用平台允许维度 */
+    saveEmbeddingConfig: (body: {
+      provider?: string | null; modelName?: string | null; baseUrl?: string | null
+      apiKey?: string; dimensions?: number | null; enabled: boolean
+    }) => http.put<Result<UserEmbeddingConfig>>('/users/me/embedding-config', body).then((r) => r.data.data),
     /** 向当前绑定邮箱发送归属验证码（服务端强制冷却与 IP 限流） */
     sendEmailVerification: () =>
       http.post<Result<null>>('/users/me/email/verification/send').then((r) => r.data.data),
@@ -772,6 +780,24 @@ export interface UserLlmConfig {
   enabled: boolean
   hasApiKey: boolean
   apiKeyMasked: string | null
+}
+
+/**
+ * 当前用户的自定义嵌入模型配置（BYOK 路线 A；GET 回显，apiKey 不回明文）。
+ *
+ * `allowedModels` / `requiredDimensions` 是**平台约束**而不是用户数据：白名单与允许的维度
+ * 由后端 `ai.byok.embedding.*` 决定。前端直接用它们渲染选择项，不硬编码一份副本。
+ */
+export interface UserEmbeddingConfig {
+  provider: string | null
+  modelName: string | null
+  baseUrl: string | null
+  dimensions: number
+  enabled: boolean
+  hasApiKey: boolean
+  apiKeyMasked: string | null
+  allowedModels: string[]
+  requiredDimensions: number
 }
 
 export interface AgentToolTrace { tool: string; input?: unknown; output?: unknown; error?: string | null; status?: string }

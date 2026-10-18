@@ -97,6 +97,16 @@ management:
 ai:
   defaults:
     temperature: 0.7
+  byok:
+    embedding:
+      # 测试夹具：**两项**白名单。第二项（text-embedding-v3）只用于验证一条关键路径——
+      # "用户把配置换成另一个合法模型后，冻结在第一个模型上的旧知识库必须被拒绝"，
+      # 生产默认只有 bailian:text-embedding-v4（见 main/resources/application.yml）。
+      # 两个模型都是 1024 维：白名单约束的是 (provider, model)，维度由 required-dimensions 单独钉住。
+      allowed-models:
+        - bailian:text-embedding-v4
+        - bailian:text-embedding-v3
+      required-dimensions: 1024
   roles:
     chat.default: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"
     chat.agent: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"

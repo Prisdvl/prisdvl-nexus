@@ -308,6 +308,23 @@ ai:
   tools:
     max-calls-per-tool-default: 40
     max-total-tool-calls: 150
+  # 用户自带模型（BYOK）的约束。
+  # 对话侧 BYOK（user_llm_config）不需要白名单——换对话模型只影响单次生成的文字。
+  # 嵌入侧必须有白名单：嵌入模型决定**向量空间**，而向量列在建库时写死并冻结
+  # （vector(1024)，ADR-008）。让用户随便填一个 768 维模型，等于允许写入宽度错的向量，
+  # 而且不会报错，只会表现为"检索结果莫名其妙"。
+  byok:
+    embedding:
+      # 允许用户配置的嵌入模型（provider:model）。加一项意味着"该模型的维度与端点
+      # 已经过真实验证"，不是随手放宽的旋钮（见 docs/roadmap.md 路线 A 的验收标准）。
+      # 默认只含百炼 text-embedding-v4：1024 维，与 vector(1024) 列和既有知识库冻结值一致。
+      allowed-models:
+        - bailian:text-embedding-v4
+      # 首期唯一允许的维度。向量列是 vector(1024)，换维度必须新建列/表并重建索引
+      # （db/vector-migration/V1__vector_store.sql）；多维度分表属路线 B，本轮不实施。
+      # ⚠️ 单独改这个值而不迁移向量列，会让启用 BYOK 的用户新建的库全部写不进向量
+      #    （会明确报维度不一致，不会静默写错数据）——两者必须一起迁移。
+      required-dimensions: 1024
   providers:
     # 当前接入 DeepSeek 官方 OpenAI 兼容 API。换供应商只需改 base-url / model / api-key。
     #
