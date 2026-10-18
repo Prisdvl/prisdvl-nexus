@@ -1,7 +1,12 @@
 // 功能级 QA：把「需求里点名的交互」逐条真点一遍（不做视觉判断，只验证行为）
 import { chromium } from 'playwright-core'
+import os from 'node:os'
+import path from 'node:path'
 
 const BASE = 'http://localhost:5175'
+// 截图输出：显式 QA_SHOTS_OUT 优先；未设置时落到系统临时目录。
+// 刻意**不**写进原型截图目录（已不再维护），也不写向只读备份仓库。
+const SHOTS_OUT = process.env.QA_SHOTS_OUT ?? path.join(os.tmpdir(), 'prisma-recover-qa-shots')
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   // 引导只在真实首登时出现，避免污染用例/截图
@@ -237,7 +242,7 @@ await page.waitForTimeout(700)
 await page.waitForTimeout(400)
 check('个人设置弹层已打开', (await page.locator('.settings-dialog').count()) === 1)
 const menuItems = await page.locator('.settings-dialog__item').count()
-check('设置弹层列出全部分区', menuItems === 11, `实际 ${menuItems} 项`)
+check('设置弹层列出全部分区', menuItems === 12, `实际 ${menuItems} 项`)
 check('设置弹层含退出登录', (await page.locator('.settings-dialog__logout').count()) === 1)
 check('设置弹层含搜索', (await page.locator('.settings-dialog__search input').count()) === 1)
 check('侧栏不再常驻账号信息（无头像/无升级）', (await page.locator('.sb-avatar, .sb-upgrade, .sb-user').count()) === 0)
@@ -280,7 +285,7 @@ check('Agent 卡片底部按钮未被裁切', clipped === false, clipped === nul
   check('渲染异常落到我们自己的错误页', eb.ours === true && eb.routerDefault === false, JSON.stringify(eb))
   check('错误页提供恢复动作（重新加载 / 回工作台）', eb.reloadBtn && eb.homeLink)
   check('错误页说明会话数据不会丢 + 可展开技术细节', eb.keepsData && eb.details)
-  await crashPage.screenshot({ path: `${process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'}/z39-error-boundary.png` })
+  await crashPage.screenshot({ path: `${SHOTS_OUT}/z39-error-boundary.png` })
   console.log('ok   z39-error-boundary（截图）')
   await crashPage.close()
 }

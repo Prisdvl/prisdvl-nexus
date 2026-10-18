@@ -1,10 +1,16 @@
 // 设置页（GitHub 式多级）专项 QA
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 const BASE = process.env.QA_BASE ?? 'http://localhost:5175'
-const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
+// 截图输出：显式 QA_SHOTS_OUT 优先；未设置时落到系统临时目录。
+// 刻意**不**写进原型截图目录（已不再维护），也不写向任何其它 checkout 的绝对路径
+// （只读备份仓库）。启动时打印实际目录，方便事后查看。
+const OUT = process.env.QA_SHOTS_OUT ?? path.join(os.tmpdir(), 'prisma-recover-qa-shots')
 mkdirSync(OUT, { recursive: true })
+console.log(`QA 截图输出目录：${OUT}`)
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
@@ -40,12 +46,12 @@ const groups = await page.locator('.settings-group').allInnerTexts()
 check('左导航含 5 个分组', groups.length === 5, groups.join(' / '))
 check('分组标题正确', ['个人', '访问与安全', '通知', '数据与用量', '危险区'].every((g) => groups.includes(g)), groups.join('/'))
 const items = await page.locator('.settings-item').count()
-check('共 11 个设置分区', items === 11, `${items} 个`)
+check('共 12 个设置分区', items === 12, `${items} 个`)
 check('默认停在「公开资料」', (await page.locator('.settings-item[aria-current="true"]').innerText()).includes('公开资料'))
 check('有面包屑（分组 / 分区）', (await page.locator('.settings-crumbs').innerText()).includes('个人'))
 
 /* ---------- 2. 逐个分区都能渲染（不残留旧内容） ---------- */
-const LABELS = ['公开资料', '模型 Key', '账号偏好', '外观', '密码与登录', '邮箱验证', '会话与设备', '通知偏好', '用量配额', '数据导出', '注销账号']
+const LABELS = ['公开资料', '模型 Key', '嵌入模型', '账号偏好', '外观', '密码与登录', '邮箱验证', '会话与设备', '通知偏好', '用量配额', '数据导出', '注销账号']
 await page.evaluate(() => {
   window.__swapped = 0
   document.addEventListener('animationstart', (e) => { if (e.animationName === 'route-in') window.__swapped++ }, true)
@@ -60,8 +66,20 @@ for (const label of LABELS) {
   rendered.push(`${label}→${title}`)
   if (!title || panels !== 1) allRendered = false
 }
-check('11 个分区都能切换到对应内容', allRendered, rendered.join(' | '))
+check('12 个分区都能切换到对应内容', allRendered, rendered.join(' | '))
 check('每次切换都播放进入过渡', (await page.evaluate(() => window.__swapped)) >= LABELS.length - 1, `${await page.evaluate(() => window.__swapped)} 次`)
+
+/* ---------- 2.5 嵌入模型（BYOK 路线 A）：白名单下拉 + 固定维度 ---------- */
+await page.locator('.settings-item', { hasText: '嵌入模型' }).first().click()
+await page.waitForTimeout(420)
+check('嵌入模型：供应商下拉来自白名单', (await page.locator('#ek-provider option').allInnerTexts()).join() === 'bailian', (await page.locator('#ek-provider option').allInnerTexts()).join('/'))
+check('嵌入模型：模型下拉来自白名单', (await page.locator('#ek-model option').allInnerTexts()).join() === 'text-embedding-v4', (await page.locator('#ek-model option').allInnerTexts()).join('/'))
+check('嵌入模型：维度只读且固定 1024', (await page.locator('#ek-dim').isDisabled()) && (await page.locator('#ek-dim').inputValue()) === '1024')
+check('嵌入模型：Base URL / Key / 启用开关 / 保存按钮齐备',
+  (await page.locator('#ek-base').count()) === 1 && (await page.locator('#ek-key').count()) === 1
+  && (await page.locator('.settings-body [role=switch]').count()) === 1
+  && (await page.locator('.settings-body button[type=submit]').count()) === 1)
+check('嵌入模型：明确说明旧库不会自动迁移', (await page.locator('.settings-body').innerText()).includes('冻结'))
 
 /* ---------- 3. 各分区关键控件在位 ---------- */
 const byItem = async (label) => { await page.locator('.settings-item', { hasText: label }).first().click(); await page.waitForTimeout(420) }
@@ -134,12 +152,16 @@ await page.locator('.settings-search input').fill('密码')
 await page.waitForTimeout(420)
 const pwdHits = await page.locator('.settings-item').allInnerTexts()
 check('搜「密码」命中密码与邮箱相关项', pwdHits.some((t) => t.includes('密码与登录')) && pwdHits.some((t) => t.includes('邮箱验证')), pwdHits.join('/'))
+await page.locator('.settings-search input').fill('向量')
+await page.waitForTimeout(420)
+const vecHits = await page.locator('.settings-item').allInnerTexts()
+check('搜「向量」命中嵌入模型', vecHits.some((t) => t.includes('嵌入模型')), vecHits.join('/'))
 await page.locator('.settings-search input').fill('zzzz')
 await page.waitForTimeout(420)
 check('无匹配时显示空状态', (await page.locator('.settings-empty').count()) === 1 && (await page.locator('.settings-item').count()) === 0)
 await page.locator('.settings-search input').fill('')
 await page.waitForTimeout(420)
-check('清空搜索后恢复 11 项', (await page.locator('.settings-item').count()) === 11)
+check('清空搜索后恢复 12 项', (await page.locator('.settings-item').count()) === 12)
 
 /* ---------- 5. 桌面截图 ---------- */
 await page.locator('.settings-item', { hasText: '外观' }).first().click()
