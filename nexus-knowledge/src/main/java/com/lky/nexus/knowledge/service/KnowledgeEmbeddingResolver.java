@@ -110,7 +110,10 @@ public class KnowledgeEmbeddingResolver {
     private EmbeddingClient resolveWithUserCredentials(KnowledgeBasePO knowledgeBase,
                                                        UserEmbeddingCredentials credentials) {
         EffectiveEmbedding effective = effectiveFromUser(credentials);
-        requireFrozen(knowledgeBase, effective.provider(), effective.model(), "用户自带的嵌入配置");
+        // 传的是"完整从句"而不是名词短语：requireFrozen 的模板是「……，而%s。」，
+        // 只给主语会拼出「而用户自带的嵌入配置。」这种缺谓语的句子（2026-10-18 Docker 验收时发现）。
+        requireFrozen(knowledgeBase, effective.provider(), effective.model(),
+                "用户自带的嵌入配置使用的是 " + effective.provider() + ":" + effective.model());
         // 白名单已保证 dimensions == 平台允许维度；这里再与"这一行的冻结维度"对齐。
         // 例如全局曾经是 768 维、后来用户启用 1024 维的 BYOK：旧库不能拿新维度去查。
         if (knowledgeBase.getEmbeddingDim() != null

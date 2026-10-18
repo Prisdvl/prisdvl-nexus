@@ -117,7 +117,10 @@ class KnowledgeEmbeddingByokMultiKbTest {
                 .contains("冻结在 v3 的库")
                 .contains("id=" + frozenV3.getId())
                 .contains("冻结的嵌入模型")
-                .contains("用户自带的嵌入配置");
+                .contains("用户自带的嵌入配置")
+                // 多库场景同样要能看出"冻结的是哪个模型、当前生效的是哪个模型"
+                .contains("bailian:text-embedding-v3")
+                .contains("使用的是 bailian:text-embedding-v4");
         // 预检在扇出之前：它不该是"某个库失败后隔离"的结果（那会是 4005/其它）
         assertThat(failure.getCode()).isNotEqualTo(ErrorCode.VECTOR_STORE_UNAVAILABLE.getCode());
 

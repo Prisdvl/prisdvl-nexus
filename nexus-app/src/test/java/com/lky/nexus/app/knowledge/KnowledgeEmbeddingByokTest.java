@@ -118,6 +118,10 @@ class KnowledgeEmbeddingByokTest {
         assertThatThrownBy(() -> embeddingResolver.resolve(kb))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("冻结的嵌入模型")
+                // 文案必须带"实际生效的模型标识"，且成句
+                // （历史 bug：只传了主语，拼出「……而用户自带的嵌入配置。」）
+                .hasMessageContaining("bailian:text-embedding-v3")
+                .hasMessageContaining("用户自带的嵌入配置使用的是 bailian:text-embedding-v4")
                 .extracting(ex -> ((BusinessException) ex).getCode())
                 .isEqualTo(ErrorCode.MODEL_ROLE_NOT_CONFIGURED.getCode());
 
