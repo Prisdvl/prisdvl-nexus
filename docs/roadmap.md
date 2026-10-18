@@ -33,7 +33,8 @@
 | 4 | **欢迎区示例问题只有一条** | ❌ 多库时应按库分别生成且须能命中真实资料 | P3 |
 | 5 | **E2E / LIVE 进 CI + 数据回收自动化** | ⚠️ 最小 CI 已覆盖默认 `mvn test` + `npm run build` + `compose config`；LIVE/真浏览器 E2E 与「跑完自动回收」仍未进流水线 | P3 |
 | 6 | **检索命中列表持久化** | ❌ 「检索到 N 个片段」刷新后消失（引用列表已落库，二者不同） | P2 |
-| 7 | **审批闭环的两条边界** | ⚠️ P0 已完成（状态机 / SSE 事件 / `once|always|deny` / 授权撤销 / 审计）。仍欠：等待审批的注册表只在内存（进程重启后该运行标 `FAILED` 而不是恢复）、`GET /api/tool-invocations` 审计查询接口未开、`POST /api/agent/runs` 没有自己的流式形态（事件走 `/api/chat/stream` 的工具拦截点） | P2 |
+| 7 | **审批闭环的两条边界** | ⚠️ P0 已完成（状态机 / SSE 事件 / `once\|always\|deny` / 授权撤销 / 审计）。仍欠：等待审批的注册表只在内存（进程重启后该运行标 `FAILED` 而不是恢复）、`GET /api/tool-invocations` 审计查询接口未开、`POST /api/agent/runs` 没有自己的流式形态（事件走 `/api/chat/stream` 的工具拦截点） | P2 |
+| 8 | **嵌入 BYOK（用户自带嵌入模型与大模型 Key）** | 🚧 **部分完成**（2026-10-18）——P0 知识库列表展示编造值**已修**（改用接口真实 `embeddingModel`，编造的 Collection 列已删除）；P1 路线 A（1024 维白名单）、P1 凭证加密与轮换、P2 多维度仍为计划 / 待评估。完整计划见文末同名章节「[嵌入 BYOK（用户自带嵌入模型与大模型 Key）实施计划](#嵌入-byok用户自带嵌入模型与大模型-key实施计划)」 | P1 |
 
 **已不再需要的条目**（勿再捡回来）：
 
@@ -314,3 +315,124 @@ Phase 1  Step 1.1  认证与 JWT
 ✓ 任意异常都返回 {code, message, data} 且带 X-Request-Id
 ✓ mvn test 全绿
 ```
+
+---
+
+## 嵌入 BYOK（用户自带嵌入模型与大模型 Key）实施计划
+
+> 追加于 2026-10-18，基于 `fa4e308` 的代码事实。
+> **P0 / P1 / P2 全部为「计划中」或「待评估」，本节不含任何已完成的实施**；
+> 下面的「现状」只陈述已完成的事实，用来判断依赖，不能当成本节工作的验收依据。
+
+### 现状（已实现，仅作依赖依据）
+
+| 事项 | 事实 | 证据 |
+| --- | --- | --- |
+| 聊天侧「用户自带 Key」 | **已实现**：`user_llm_config`（`base_url` / `api_key` / `model_name` / `enabled`，`user_id` 唯一） | `V19__user_llm_config.sql`、`UserChatCredentialsProvider.find(userId)`、`ChatClientFactory.get(role, userId)` |
+| 嵌入侧选型 | **全局唯一**：`EmbeddingClientFactory.get(String role)` 没有 userId；建库时取全局 `embedding.default` | `EmbeddingClientFactory:59`、`KnowledgeBaseServiceImpl.resolveEmbedding()` |
+| 知识库嵌入模型冻结 | **已实现**：建库写入 provider / model / dim，之后改名等操作不改这三列 | `KnowledgeBaseFlowTest` 的「建库即冻结」断言 |
+| 检索期一致性校验 | **已实现**：`KnowledgeEmbeddingResolver.resolve(kb)` 拿全局角色与冻结值比对，不一致直接 `4006` 拒绝 | `KnowledgeEmbeddingResolver:35-52` |
+| 向量列维度 | **写死** `vector(1024)`，迁移文件注释明确「换维度必须新建列/表并重建索引」 | `db/vector-migration/V1__vector_store.sql` |
+| 凭证存储 | `user_llm_config.api_key` 是 `VARCHAR(500)` **明文列**，接口只做**掩码回显** | 同上迁移 + `UserLlmConfig` 接口 |
+
+### P0（已完成，2026-10-18）修复知识库列表展示的编造值
+
+- **目标**：列表不再把编造的模型名当真实值展示（原来会出现已废弃的 `bge-m3`）。
+- **原缺陷**：`KnowledgeBaseListPage` 用 `metaOf(i)` 按数组下标编造 `model` / `collection`，
+  `EMBEDDINGS` 常量里含 `bge-m3`；而 `GET /api/knowledge-bases` 本来就返回 `embeddingModel`
+  （后端 `KnowledgeBaseResponse` 字段，前端 `api.ts` 的 `KnowledgeBase.embeddingModel?` 早已声明）。
+- **实施**：
+  1. `frontend/src/data.ts`：`KbItem` 增加可选 `embeddingModel`。
+  2. `frontend/src/lib/backendData.ts`：`toKbItem` 透传 `kb.embeddingModel ?? undefined`。
+  3. `frontend/src/pages/KnowledgeBaseListPage.tsx`：删除 `EMBEDDINGS` / `COLLECTIONS` / `metaOf`，
+     该列改为渲染 `kb.embeddingModel ?? '—'`。
+  4. `frontend/scripts/verify-kb.mjs`：断言由「含 Embedding 与 Collection」改为
+     「含 Embedding 模型列、且不存在 Collection 列」。
+- **已定决策（原「未决决策」）**：`collection` 列**直接删除**——后端没有「集合 / 目录」概念，
+  也没有对应字段。等后端真的引入该概念后再补；在此之前不展示任何占位或编造值。
+- **附带改动**：`frontend/src/styles/kb-manage.css` 的窄屏断点原来隐藏第 2、3 列
+  （Embedding + Collection）；删列后第 3 列变成「文档数」，故改为只隐藏第 2 列，
+  避免窄屏把「文档数」一起藏掉。
+- **验收证据**：`npm run build`（`tsc --noEmit && vite build`）exit 0；源码中已无
+  `metaOf` / `EMBEDDINGS` / `COLLECTIONS`。
+- **未覆盖**：mock 模式下演示数据没有 `embeddingModel` 字段，该列显示 `—`；
+  「逐条与接口返回值一致」需要在有真实后端的环境里核对（本机 Docker 容器处于 Exited）。
+
+### P1（计划中）嵌入 BYOK —— 路线 A：白名单 + 用户级配置
+
+- **目标**：用户可以配置自己的嵌入 endpoint / key / model，但**首期只允许 1024 维**
+  （与现有 `vector(1024)` 和冻结维度兼容），维度自由度留到 P2 评估。
+- **依赖**：P0（能展示真实模型名才有意义）、P1 凭证安全（存 Key 前先定加密方案）、
+  现有的冻结比对逻辑（`KnowledgeEmbeddingResolver`）。
+- **步骤**：
+  1. 新增 `user_embedding_config`：`user_id` 唯一、`provider` / `model_name` / `dimensions` /
+     `base_url` / `api_key` / `enabled`，形状对齐 `user_llm_config`。
+  2. `EmbeddingClientFactory` 增加按用户解析的重载（如 `get(role, userId)`）；
+     无用户配置或未启用时**回落全局角色**。
+  3. `KnowledgeEmbeddingResolver.resolve(kb)` 扩成 `resolve(userId, kb)`：
+     **保留「查询模型必须等于冻结模型」这条不变式，但比对对象从全局角色改为
+     「该用户生效的嵌入配置（未配置则回落全局）」**，再在与冻结值一致的模型里优先用用户凭证。
+  4. `(provider, model, dim)` 三元组白名单校验，首期只收经 LIVE 验证过的 1024 维模型
+     （当前即 `bailian:text-embedding-v4`）。
+- **验收标准**：
+  - 用户 A 配置自己的 Key 后，检索只经 A 的凭证；用户 B 行为不变（隔离断言）。
+  - 未配置 / 未启用的用户与今天完全一致（回落全局，零回归）。
+  - 用户配置的模型 ≠ 知识库冻结模型时**仍然 4006 拒绝**——「用自己的 Key」不是绕过冻结的理由。
+  - 用户把配置换成另一个模型后，旧知识库检索报错而不是静默错乱。
+  - 现有默认套件（nexus-app 564 例；四模块合计 833）、LIVE 套件、浏览器 E2E 均不回退。
+- **未决决策**：Key 仅允许落库（加密后）还是也支持「仅本次会话」不落库；
+  用户配置与全局默认的优先级、管理员能否强制覆盖；白名单放配置项还是代码枚举。
+
+### P1（计划中）凭证安全：加密存储、密钥管理、脱敏、轮换
+
+- **目标**：BYOK 落地前把 Key 的存储与生命周期做对。
+- **现状**：`user_llm_config.api_key` 明文入库，接口掩码回显——
+  **掩码不等于加密**，现阶段不能对外宣称「Key 已安全存储」。
+- **依赖**：密钥管理方案（KEK 从环境变量或密钥文件读取）、`user_embedding_config` 的表结构（与上一条同批定）。
+- **步骤**：字段级加密（AES-GCM；密文入库，带版本前缀便于轮换）→ 仅在构造客户端那一刻解密、
+  任何接口与日志都不回显 → 日志与异常信息过滤（禁止 Key 或其截断形式进入 message/堆栈）→
+  轮换（改 Key 不重建知识库，但要清掉缓存的 Chat/Embedding 客户端）→ 停用/删除账号时清理。
+- **验收标准**：数据库里检索不到明文 Key；任何接口与异常响应都不含明文或截断形式的 Key；
+  轮换后新请求用新 Key 且旧客户端缓存失效；有测试断言「库内密文 ≠ 明文」。
+- **未决决策**：是否引入外部 KMS（当前单机部署，倾向进程内 AES-GCM + KEK 环境变量）；
+  轮换是否需要短期保留旧密文以支持平滑过渡。
+
+### P2（待评估）多维度路线 B：按维度分表 / 路由 / 迁移成本
+
+- **目标**：允许 768 / 1536 等维度的模型。**先评估，评估通过再决定是否实施**。
+- **依赖**：P1 路线 A 的落地经验、`db/vector-migration` 的独立迁移机制、HNSW 索引的内存成本。
+- **评估项**：按维度分表（`kb_vector_<dim>`）还是同表加列；每种维度一套 HNSW 的成本；
+  存量知识库是否需要一次性重建；查询期按 KB 冻结维度选表的路由；备份与监控的影响。
+- **验收标准（仅评估阶段）**：产出一份**带数字**的成本/收益结论（索引内存、重建耗时、查询延迟），
+  明确「值不值得做」；不是直接开工。
+- **未决决策**：若结论是「不值得」，是否退化为「平台只支持 1024 维，用户只能换 Key / endpoint，不能换维度」。
+
+### 回归验收（跨阶段，必须全绿）
+
+| 场景 | 断言 |
+| --- | --- |
+| 用户隔离 | A 的凭证不会被 B 使用；跨用户知识库仍返回 404 |
+| 模型不匹配 | 用户配置模型 ≠ 知识库冻结模型 → `4006`，且不发起检索 |
+| 知识库冻结 | 改名 / 改描述不改 `embedding_*`；切全局配置不改变已有知识库 |
+| 重建迁移 | 换模型必须显式重建索引（`/index/recreate`），期间旧索引仍可查 |
+| 异常回滚 | 凭证解密失败或上游 401 时，知识库与向量不产生半写状态 |
+| 既有能力 | RAG、混合检索、RRF、重排、多库扇出在「回落全局」路径上行为不变 |
+
+### 明确约束（写死，不作为可讨论项）
+
+1. 用户更换模型后，**不得**用新模型的向量去查旧索引；旧知识库必须显式重建，
+   期间检索直接报错，不做静默降级。
+2. 模型迁移只能显式触发（重建索引 / 新建知识库），不得隐式自动迁移。
+3. **接口掩码回显 ≠ 数据库加密**；在 P1 凭证安全完成前，不得把「已掩码」当成「已加密」。
+4. 路线 A 阶段遇到非 1024 维模型直接拒绝，不做静默截断或补零。
+
+### 状态一览
+
+| 阶段 | 状态 |
+| --- | --- |
+| 聊天侧 BYOK（`user_llm_config`） | **已实现** |
+| 知识库嵌入模型冻结 + 检索期一致性校验 | **已实现** |
+| P0 知识库列表展示修复 | **已完成**（2026-10-18） |
+| P1 嵌入 BYOK（路线 A，1024 维白名单） | **计划中** |
+| P1 凭证安全（加密 / 轮换 / 脱敏） | **计划中** |
+| P2 多维度（路线 B） | **待评估** |
