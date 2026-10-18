@@ -350,7 +350,15 @@ class WorkflowResourceTest {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.triggerType").value("RETRY"))
+                // 溯源列（V24）：重试指向源运行……
+                .andExpect(jsonPath("$.data.retryOfRunId").value(sourceRunId))
                 .andExpect(jsonPath("$.data.status").value("FAILED"));
+
+        // ……而非重试运行该列为空（不是 0、不是自身 id）
+        mockMvc.perform(get("/api/workflow-runs/" + sourceRunId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.retryOfRunId").isEmpty());
 
         mockMvc.perform(get("/api/workflow-runs/" + retryRunId + "/nodes")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))

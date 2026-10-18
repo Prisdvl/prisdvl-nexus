@@ -127,7 +127,7 @@ export default function RunPanels({
                     <span className="wf-chip" data-tone={runTone(r.status)}>{c.statuses[r.status] ?? r.status}</span>
                     <span className="wf-run-row__time">{shortTime(r.startedAt)}</span>
                     <span className="wf-run-row__meta">
-                      {r.triggerType}{r.durationMs != null ? ` · ${r.durationMs} ms` : ''}
+                      {r.triggerType}{r.retryOfRunId ? ` ↻ #${r.retryOfRunId}` : ''}{r.durationMs != null ? ` · ${r.durationMs} ms` : ''}
                     </span>
                   </button>
                 </li>

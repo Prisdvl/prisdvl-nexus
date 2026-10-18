@@ -111,7 +111,7 @@ public class WorkflowRuntimeService {
         WorkflowGraph graph = definitionService.loadGraph(versionId);
 
         WorkflowRunPO run = newRun(workflowId, versionId, userId,
-                writeJson(request.inputs()), triggerType == null ? "MANUAL" : triggerType);
+                writeJson(request.inputs()), triggerType == null ? "MANUAL" : triggerType, null);
 
         Map<String, WorkflowNodeRunPO> nodeRuns = insertPendingNodeRuns(run.getId(), graph);
         try {
@@ -207,8 +207,8 @@ public class WorkflowRuntimeService {
      * <p>只允许 FAILED / CANCELLED：成功的没必要重试（直接再跑一次即可），
      * RUNNING / WAITING_APPROVAL 是「正在进行中」，重试等于同一张图并发双跑。
      *
-     * <p>已知缺口：表里没有「重试自哪次运行」的列，所以只靠 {@code triggerType=RETRY} 区分，
-     * 无法回溯源运行（要补需要一次迁移）。
+     * <p>溯源：新运行的 `retry_of_run_id`（V24）指向源运行，所以运行历史能把重试与它续跑的
+     * 那次运行对上；非重试运行该列为 NULL。
      */
     @Transactional(noRollbackFor = BusinessException.class)
     public WorkflowRunResponse retry(Long userId, Long runId) {
@@ -224,7 +224,7 @@ public class WorkflowRuntimeService {
                         .orderByAsc(WorkflowNodeRunPO::getId));
 
         WorkflowRunPO run = newRun(source.getWorkflowId(), source.getVersionId(), userId,
-                source.getInputJson(), "RETRY");
+                source.getInputJson(), "RETRY", source.getId());
         Map<String, WorkflowNodeRunPO> nodeRuns = insertPendingNodeRuns(run.getId(), graph);
         ExecutionState state = stateFromNodeRuns(graph, sourceNodeRuns);
         copySucceededInto(sourceNodeRuns, nodeRuns);
@@ -328,13 +328,14 @@ public class WorkflowRuntimeService {
 
     /** 新建一条运行记录（run / retry 共用）；调用方负责后续执行与收尾。 */
     private WorkflowRunPO newRun(Long workflowId, Long versionId, Long userId,
-                                 String inputJson, String triggerType) {
+                                 String inputJson, String triggerType, Long retryOfRunId) {
         WorkflowRunPO run = new WorkflowRunPO();
         run.setWorkflowId(workflowId);
         run.setVersionId(versionId);
         run.setUserId(userId);
         run.setStatus("RUNNING");
         run.setTriggerType(triggerType);
+        run.setRetryOfRunId(retryOfRunId);
         run.setInputJson(inputJson);
         LocalDateTime now = LocalDateTime.now();
         run.setCreatedAt(now);
@@ -650,6 +651,7 @@ public class WorkflowRuntimeService {
                 run.getVersionId(),
                 run.getStatus(),
                 run.getTriggerType(),
+                run.getRetryOfRunId(),
                 parseJson(run.getInputJson()),
                 parseJson(run.getOutputJson()),
                 run.getErrorCode(),

@@ -9,6 +9,8 @@ public record WorkflowRunResponse(
         Long versionId,
         String status,
         String triggerType,
+        /** 重试自哪次运行；非重试为 null（V24 起可用）。 */
+        Long retryOfRunId,
         Object input,
         Object output,
         Integer errorCode,

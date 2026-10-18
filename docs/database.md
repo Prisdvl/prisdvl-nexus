@@ -637,7 +637,7 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 | --- | --- |
 | `wf_workflow` | `id`、`user_id`、`workspace_id`、`name`、`description`、`draft_version_id`、`published_version_id`、`status`(`DRAFT`/`PUBLISHED`)、`deleted` |
 | `wf_version` | `id`、`workflow_id`、`version_no`（`(workflow_id, version_no)` 唯一）、`schema_version`、`graph_json`、`graph_hash`、`status`(`DRAFT`/`PUBLISHED`)、`created_by`、`published_at` |
-| `wf_run` | `id`、`workflow_id`、`version_id`、`user_id`、`status`(`QUEUED`/`RUNNING`/`SUCCEEDED`/`FAILED`/`CANCELLED`/**`WAITING_APPROVAL`**)、`trigger_type`(`MANUAL`/`DEBUG`/`RETRY`)、`input_json`、`output_json`、`error_code`、`error_message`、`started_at`、`finished_at`、`duration_ms` |
+| `wf_run` | `id`、`workflow_id`、`version_id`、`user_id`、`status`(`QUEUED`/`RUNNING`/`SUCCEEDED`/`FAILED`/`CANCELLED`/**`WAITING_APPROVAL`**)、`trigger_type`(`MANUAL`/`DEBUG`/`RETRY`)、`retry_of_run_id`（**V24**：`RETRY` 时指向被续跑的源运行，其余为 `NULL`）、`input_json`、`output_json`、`error_code`、`error_message`、`started_at`、`finished_at`、`duration_ms` |
 | `wf_node_run` | `id`、`run_id`、`node_id`、`node_type`、`status`(`PENDING`/`RUNNING`/`SUCCEEDED`/`FAILED`/`SKIPPED`/**`WAITING_APPROVAL`**)、`attempt`、`input_json`、`output_json`、`error_code`、`error_message`、`latency_ms`、`started_at`、`finished_at` |
 
 > **节点类型实际是 8 种**：`START / KNOWLEDGE_RETRIEVAL / LLM / AGENT / IF_ELSE / TEMPLATE / HUMAN_APPROVAL / END`
@@ -651,7 +651,9 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 > `WAITING_APPROVAL`，由 `POST /api/workflow-runs/{runId}/approval` 推进；失败/已取消的运行可由
 > `POST /api/workflow-runs/{runId}/retry` 从失败节点续跑（已成功节点的输出回灌为初始状态）。
 >
-> **已知缺口**：`wf_run` 没有「重试自哪次运行」的列，RETRY 只能靠 `trigger_type` 区分，无法回溯源运行（补它需要一次迁移）。
+> **重试溯源（V24 起）**：`wf_run.retry_of_run_id` 记录「重试自哪次运行」，`trigger_type=RETRY` 不再是唯一线索；
+> 非重试运行该列为 `NULL`（含 V24 之前的历史数据）。接口层是 `WorkflowRunResponse.retryOfRunId`。
+> 旧版文档在这里记的「已知缺口」已因此关闭。
 
 ---
 

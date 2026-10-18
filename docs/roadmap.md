@@ -211,7 +211,7 @@
 | 8.1 | 定义模型与存储（`wf_definition/node/edge`）+ 校验（无环、有 START/END） |
 | 8.2 | `WorkflowEngine`：节点调度、上下文传递、变量解析 |
 | 8.3 | 节点执行器：**实际实现 8 种**（`START`/`KNOWLEDGE_RETRIEVAL`/`LLM`/`AGENT`/`IF_ELSE`/`TEMPLATE`/`HUMAN_APPROVAL`/`END`）；设计稿里的 `AI`/`TOOL`/`CONDITION`/`PARALLEL` 未实现（`AI`≈`LLM`、`CONDITION`≈`IF_ELSE`） |
-| 8.4 | 运行持久化与恢复（`wf_run` / `wf_node_run`，失败节点重试）—— ✅ **已实现**：`POST /api/workflow-runs/{runId}/retry` 用已成功节点输出回灌后续跑（表无「重试自哪次运行」列） |
+| 8.4 | 运行持久化与恢复（`wf_run` / `wf_node_run`，失败节点重试）—— ✅ **已实现**：`POST /api/workflow-runs/{runId}/retry` 用已成功节点输出回灌后续跑；**V24 起** `wf_run.retry_of_run_id` 记录「重试自哪次运行」（此前只能靠 `trigger_type=RETRY` 区分，无法溯源） |
 | 8.5 | 预置工作流：知识缺口分析、7 天学习计划、知识报告 —— ✅ **已实现**（`GET /api/workflows/presets` + `POST /workflows/presets/{code}`），但为**用现有 8 种节点写出的顺序版**：设计稿里那套 `PARALLEL` 扇出与工具节点仍不存在 |
 | 8.6 | 前端：工作流画布（可先用表单化编辑器，画布放最后）+ 运行轨迹 —— ✅ 画布、逐类型配置、运行轨迹与运行历史均已实现 |
 | 8.7 | 测试：条件分支、并行收敛、人工确认恢复、失败重试 —— 人工确认与失败重试已有后端用例 + 浏览器 E2E；**并行收敛无对应实现**，条件分支仅单测 |

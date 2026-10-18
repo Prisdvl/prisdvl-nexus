@@ -25,6 +25,9 @@ public class WorkflowRunPO {
 
     private String triggerType;
 
+    /** 重试自哪次运行（V24）；非重试为 null。 */
+    private Long retryOfRunId;
+
     private String inputJson;
 
     private String outputJson;

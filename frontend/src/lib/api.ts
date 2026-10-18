@@ -692,6 +692,8 @@ export interface WorkflowRun {
   versionId: string
   status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'WAITING_APPROVAL'
   triggerType: string
+  /** 重试自哪次运行（RETRY 时指向源运行）；非重试为 null */
+  retryOfRunId?: string | null
   input: Record<string, unknown> | null
   output: unknown
   errorCode: number | null
