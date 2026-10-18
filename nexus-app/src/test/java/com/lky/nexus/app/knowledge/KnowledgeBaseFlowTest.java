@@ -46,9 +46,9 @@ class KnowledgeBaseFlowTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.id").isString())
-                // ADR-008：建库即冻结
-                .andExpect(jsonPath("$.data.embeddingProvider").value("ollama"))
-                .andExpect(jsonPath("$.data.embeddingModel").value("bge-m3"))
+                // ADR-008：建库即冻结（嵌入选型为百炼 text-embedding-v4；原 ollama:bge-m3 方案已弃用）
+                .andExpect(jsonPath("$.data.embeddingProvider").value("bailian"))
+                .andExpect(jsonPath("$.data.embeddingModel").value("text-embedding-v4"))
                 .andExpect(jsonPath("$.data.embeddingDim").value(1024))
                 .andExpect(jsonPath("$.data.chunkStrategy").value("MARKDOWN_HEADING"))
                 .andExpect(jsonPath("$.data.chunkSize").value(400))
@@ -142,7 +142,7 @@ class KnowledgeBaseFlowTest {
                 .andExpect(jsonPath("$.data.retrievalTopK").value(12))
                 .andExpect(jsonPath("$.data.similarityThreshold").value(0.85))
                 // 改名不应影响已冻结的嵌入模型
-                .andExpect(jsonPath("$.data.embeddingModel").value("bge-m3"));
+                .andExpect(jsonPath("$.data.embeddingModel").value("text-embedding-v4"));
 
         mockMvc.perform(get("/api/knowledge-bases").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(jsonPath("$.data.total").value(1))

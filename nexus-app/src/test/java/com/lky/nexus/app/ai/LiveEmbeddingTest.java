@@ -15,14 +15,16 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 真实嵌入模型验收测试（需要本地 Ollama 与 bge-m3，因此默认跳过）。
+ * 真实嵌入模型验收测试（用百炼 {@code text-embedding-v4}，默认跳过）。
  *
- * <p>启用方式：
+ * <p>启用方式（与 test profile 的 {@code embedding.default} 一致）：
  * <pre>
- * docker compose --profile ai-local up -d ollama
- * docker compose exec ollama ollama pull bge-m3
+ * $env:AI_EMBEDDING_API_KEY='&lt;百炼 Key&gt;'   # 缺省时用假 Key，本类不会跑
  * $env:AI_EMBEDDING_LIVE='true'; mvn -pl nexus-app test -Dtest=LiveEmbeddingTest
  * </pre>
+ *
+ * <p>曾经这条路要求本机 Ollama + {@code bge-m3}（现已完全弃用）；代码里的 OLLAMA 协议支持仍保留，
+ * 只是不再是默认选型，也不再被测试依赖。
  *
  * <p>它验证的不只是"能不能返回向量"，还包括<b>向量是否真的表达了语义</b>——
  * 这一条比任何维度断言都重要：如果模型没加载对（例如返回了全零向量），
@@ -37,7 +39,7 @@ class LiveEmbeddingTest {
     private EmbeddingClientFactory embeddingClientFactory;
 
     @Test
-    @DisplayName("bge-m3 真实调用：1024 维、中文可用、语义相似度排序正确")
+    @DisplayName("百炼 text-embedding-v4 真实调用：1024 维、中文可用、语义相似度排序正确")
     void embedsRealText() {
         EmbeddingClient client = embeddingClientFactory.get(AiModelProperties.Role.EMBEDDING_DEFAULT);
 

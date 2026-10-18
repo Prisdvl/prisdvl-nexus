@@ -85,10 +85,10 @@ management:
 # 覆盖 providers 列表（Spring Boot 中 profile 的 list 会整体替换，不是合并），
 # 用一个明显是假值的 api-key，让注册表能够构建模型对象（构建不发起网络请求）。
 #
-# 【隔离说明】主 application.yml 的嵌入供应商可能随开发环境切换（如 bailian），
-# 但 KnowledgeBaseFlowTest 等用例按 ADR-008 冻结断言固定为 ollama:bge-m3。
-# 因此 test profile 显式钉死 embedding.default=ollama:bge-m3，避免测试耦合主配置漂移。
-# 这不改变生产/local 正式选型，只隔离测试。
+# 【隔离说明】这里把 embedding.default 钉成 bailian:text-embedding-v4，与生产选型一致，
+# 并与 KnowledgeBaseFlowTest 等用例按 ADR-008 做的「冻结嵌入模型」断言对齐。
+# 曾经钉的是 ollama:bge-m3（本地 Ollama 方案），那个方案已完全弃用，只保留代码里的 OLLAMA 协议支持。
+# 假 Key 只是为了让注册表能构建模型对象；真实调用由 LiveEmbeddingTest 守卫（需 AI_EMBEDDING_LIVE + 真 Key）。
 ai:
   defaults:
     temperature: 0.7
@@ -96,7 +96,7 @@ ai:
     chat.default: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"
     chat.agent: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"
     chat.judge: "deepseek:${AI_JUDGE_MODEL:deepseek-chat}"
-    embedding.default: "ollama:bge-m3"
+    embedding.default: "bailian:${AI_EMBEDDING_MODEL:text-embedding-v4}"
   providers:
     - name: deepseek
       type: OPENAI_COMPATIBLE
@@ -110,13 +110,15 @@ ai:
         - name: ${AI_CHAT_MODEL:deepseek-chat}
           context-window: 65536
           capabilities: [CHAT, TOOL_CALLING, JSON]
-    # 嵌入：测试固定 ollama:bge-m3（与 KnowledgeBaseFlowTest 断言一致）。假配置即可，构建不发请求。
-    - name: ollama
-      type: OLLAMA
-      base-url: ${AI_EMBEDDING_BASE_URL:http://localhost:11434}
+    # 嵌入：与主配置同为百炼 text-embedding-v4（1024 维，与知识库冻结维度一致）。
+    # 假 Key 让构建不发起请求；真实调用由 LiveEmbeddingTest 守卫。
+    - name: bailian
+      type: OPENAI_COMPATIBLE
+      base-url: ${AI_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${AI_EMBEDDING_API_KEY:sk-test-dummy-key-not-a-real-credential-0123456789}
       models:
-        - name: bge-m3
-          dimensions: 1024
+        - name: ${AI_EMBEDDING_MODEL:text-embedding-v4}
+          dimensions: ${AI_EMBEDDING_DIM:1024}
           capabilities: [EMBEDDING]
 
 mybatis-plus:
