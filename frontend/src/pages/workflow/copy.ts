@@ -40,11 +40,16 @@ const zh = {
     noConfig: '该类型没有必填配置。',
   },
   missing: '（未配置）', pickNone: '未选择', kbEmpty: '还没有知识库', agentEmpty: '还没有 Agent',
+  approve: '同意并继续', reject: '拒绝', retryRun: '重试运行',
+  awaitingApproval: '该运行停在人工审批上；同意后会从闸门之后继续执行，拒绝则本次运行失败。',
+  approvalDone: '已同意，运行已继续', rejectDone: '已拒绝，运行已失败', approvalFailed: '审批提交失败',
+  retryHint: '重试沿用本次运行的版本与入参，从失败节点继续；已成功的节点不会重跑。',
+  retryDone: '已发起重试', retryFailed: '重试失败',
   dirty: '有未保存改动', clean: '已保存', publishedAs: '已发布版本', draftAs: '草稿版本', noVersion: '无版本',
   startTaken: 'START 节点只能有一个', nodesCount: '节点', edgesCount: '连线',
   statuses: {
     QUEUED: '排队', RUNNING: '执行中', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消',
-    PENDING: '待执行', SKIPPED: '已跳过',
+    PENDING: '待执行', SKIPPED: '已跳过', WAITING_APPROVAL: '待审批',
   } as Record<string, string>,
   types: {
     START: { title: '开始', desc: '接收运行时输入' },
@@ -53,6 +58,7 @@ const zh = {
     AGENT: { title: 'Agent', desc: '调用已配置的 Agent' },
     IF_ELSE: { title: '条件分支', desc: '按受限操作符走 true / false' },
     TEMPLATE: { title: '模板', desc: '模板渲染出文本' },
+    HUMAN_APPROVAL: { title: '人工审批', desc: '挂起等待人工放行' },
     END: { title: '结束', desc: '输出结果' },
   } as Record<WfNodeType, { title: string; desc: string }>,
 }
@@ -91,11 +97,16 @@ const en: typeof zh = {
     noConfig: 'This type has no required configuration.',
   },
   missing: '(not set)', pickNone: 'None', kbEmpty: 'No knowledge bases', agentEmpty: 'No agents',
+  approve: 'Approve and continue', reject: 'Reject', retryRun: 'Retry run',
+  awaitingApproval: 'This run is paused on a human approval gate. Approving resumes after the gate; rejecting fails the run.',
+  approvalDone: 'Approved — the run continued', rejectDone: 'Rejected — the run failed', approvalFailed: 'Could not submit the decision',
+  retryHint: 'Retry reuses this run’s version and inputs and continues from the failed node; succeeded nodes are not re-run.',
+  retryDone: 'Retry started', retryFailed: 'Retry failed',
   dirty: 'Unsaved changes', clean: 'Saved', publishedAs: 'Published version', draftAs: 'Draft version', noVersion: 'no version',
   startTaken: 'Only one START node is allowed', nodesCount: 'nodes', edgesCount: 'links',
   statuses: {
     QUEUED: 'Queued', RUNNING: 'Running', SUCCEEDED: 'Succeeded', FAILED: 'Failed', CANCELLED: 'Cancelled',
-    PENDING: 'Pending', SKIPPED: 'Skipped',
+    PENDING: 'Pending', SKIPPED: 'Skipped', WAITING_APPROVAL: 'Awaiting approval',
   } as Record<string, string>,
   types: {
     START: { title: 'Start', desc: 'Receives run inputs' },
@@ -104,6 +115,7 @@ const en: typeof zh = {
     AGENT: { title: 'Agent', desc: 'Invoke a configured agent' },
     IF_ELSE: { title: 'Condition', desc: 'Branch true / false on a limited operator' },
     TEMPLATE: { title: 'Template', desc: 'Render text from a template' },
+    HUMAN_APPROVAL: { title: 'Approval', desc: 'Pause and wait for a human decision' },
     END: { title: 'End', desc: 'Emit the result' },
   } as Record<WfNodeType, { title: string; desc: string }>,
 }

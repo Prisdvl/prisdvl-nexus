@@ -29,6 +29,10 @@ interface Props {
   nodeRuns: WorkflowNodeRun[]
   nodeRunsLoading: boolean
   traceError: string
+  /** 对「当前选中的这次运行」的动作：人工审批 / 从失败节点续跑。 */
+  onApprove: (runId: string, decision: 'APPROVE' | 'REJECT') => void
+  onRetry: (runId: string) => void
+  actionBusy: boolean
 }
 
 /** 后端返回的是 LocalDateTime 字符串（无时区），只取时间部分显示，避免 Date 解析引入时区问题。 */
@@ -49,6 +53,7 @@ export default function RunPanels({
   run, runError,
   runs, runsTotal, runsPage, runsPages, runsLoading, runsError, selectedRunId, onSelectRun, onGoRunsPage, onReloadRuns,
   nodeRuns, nodeRunsLoading, traceError,
+  onApprove, onRetry, actionBusy,
 }: Props) {
   /* 选中的运行可能不在当前页，因此找不到时不显示「运行失败」提示，只展示轨迹本身 */
   const selectedRun = runs.find((r) => r.id === selectedRunId) ?? null
@@ -157,6 +162,33 @@ export default function RunPanels({
                 <span>{shortTime(selectedRun.startedAt)}</span>
                 {selectedRun.durationMs != null && <span>{c.duration}: {selectedRun.durationMs} ms</span>}
               </p>
+            )}
+            {/* 动作绑在「当前选中的那次运行」上：挂起中可审批，失败/已取消可续跑 */}
+            {selectedRun?.status === 'WAITING_APPROVAL' && (
+              <>
+                <p className="hint">{c.awaitingApproval}</p>
+                <div className="wf-actions">
+                  <button className="btn btn-primary" type="button" disabled={actionBusy}
+                          onClick={() => onApprove(selectedRun.id, 'APPROVE')}>
+                    <CheckCircle2 size={14} /> {c.approve}
+                  </button>
+                  <button className="btn btn-ghost wf-danger" type="button" disabled={actionBusy}
+                          onClick={() => onApprove(selectedRun.id, 'REJECT')}>
+                    <AlertTriangle size={14} /> {c.reject}
+                  </button>
+                </div>
+              </>
+            )}
+            {(selectedRun?.status === 'FAILED' || selectedRun?.status === 'CANCELLED') && (
+              <>
+                <p className="hint">{c.retryHint}</p>
+                <div className="wf-actions">
+                  <button className="btn btn-ghost" type="button" disabled={actionBusy}
+                          onClick={() => onRetry(selectedRun.id)}>
+                    <RefreshCw size={14} /> {c.retryRun}
+                  </button>
+                </div>
+              </>
             )}
             <ol className="wf-log">
               {nodeRuns.map((nr) => (

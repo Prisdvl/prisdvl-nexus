@@ -538,6 +538,9 @@ export const api = {
     create: (body: { name: string; description?: string }) =>
       http.post<Result<Workflow>>('/workflows', body).then((r) => r.data.data),
     get: (id: string) => http.get<Result<Workflow>>(`/workflows/${id}`).then((r) => r.data.data),
+    /** 改元信息（名称 / 描述）：局部更新，只传要改的字段；description 传空串清空。不产生新版本。 */
+    update: (id: string, body: { name?: string; description?: string | null }) =>
+      http.put<Result<Workflow>>(`/workflows/${id}`, body).then((r) => r.data.data),
     saveDraft: (id: string, body: { nodes: WorkflowNode[]; edges: WorkflowEdge[] }) =>
       http.put<Result<Workflow>>(`/workflows/${id}/draft`, body).then((r) => r.data.data),
     validate: (id: string) =>
@@ -560,6 +563,12 @@ export const api = {
     nodes: (runId: string) =>
       http.get<Result<WorkflowNodeRun[]>>(`/workflow-runs/${runId}/nodes`).then((r) => r.data.data),
     cancel: (runId: string) => http.post<Result<WorkflowRun>>(`/workflow-runs/${runId}/cancel`).then((r) => r.data.data),
+    /** 人工审批：decision 只接受 APPROVE / REJECT（后端非等待态返回 6007/409）。 */
+    approve: (runId: string, body: { decision: 'APPROVE' | 'REJECT'; comment?: string }) =>
+      http.post<Result<WorkflowRun>>(`/workflow-runs/${runId}/approval`, body).then((r) => r.data.data),
+    /** 从失败节点续跑：以同一版本新建一次运行（仅 FAILED/CANCELLED，否则 6008/409）。 */
+    retry: (runId: string) =>
+      http.post<Result<WorkflowRun>>(`/workflow-runs/${runId}/retry`).then((r) => r.data.data),
   },
   rag: {
     ask: (kbId: string, question: string, topK = 5) =>
@@ -625,7 +634,7 @@ export interface WorkflowNodePosition { x: number; y: number }
 
 export interface WorkflowNode {
   id: string
-  type: 'START' | 'END' | 'KNOWLEDGE_RETRIEVAL' | 'LLM' | 'AGENT' | 'IF_ELSE' | 'TEMPLATE'
+  type: 'START' | 'END' | 'KNOWLEDGE_RETRIEVAL' | 'LLM' | 'AGENT' | 'IF_ELSE' | 'TEMPLATE' | 'HUMAN_APPROVAL'
   version: number
   position?: WorkflowNodePosition | null
   config: Record<string, unknown>
@@ -668,7 +677,7 @@ export interface WorkflowRun {
   id: string
   workflowId: string
   versionId: string
-  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
+  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'WAITING_APPROVAL'
   triggerType: string
   input: Record<string, unknown> | null
   output: unknown
@@ -683,7 +692,7 @@ export interface WorkflowNodeRun {
   id: string
   nodeId: string
   nodeType: string
-  status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED'
+  status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED' | 'WAITING_APPROVAL'
   attempt: number
   input: Record<string, unknown> | null
   output: unknown

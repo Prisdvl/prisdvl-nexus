@@ -129,6 +129,10 @@ public enum ErrorCode {
     EVAL_JUDGE_MODEL_UNAVAILABLE(6004, "评测裁判模型不可用"),
     WORKFLOW_NOT_FOUND(6005, "工作流不存在"),
     WORKFLOW_RUN_NOT_FOUND(6006, "工作流运行不存在"),
+    /** 6007：/approval 打到的运行已不在等待审批状态（含重复审批、已被取消）。 */
+    WORKFLOW_APPROVAL_NOT_PENDING(6007, "工作流运行不处于等待审批状态"),
+    /** 6008：/retry 打到的运行不处于可重试状态（成功 / 运行中 / 等待审批都不行）。 */
+    WORKFLOW_RETRY_NOT_ALLOWED(6008, "该运行当前不可重试"),
 
     // ---------- 7xxx 限流 / 配额 ----------
     RATE_LIMITED(7001, "请求过于频繁，请稍后再试"),

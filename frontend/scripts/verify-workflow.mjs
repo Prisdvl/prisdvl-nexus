@@ -35,15 +35,20 @@ const check = (name, ok, extra = '') => {
 }
 /* 故意制造的失败运行 URL：本机没配对话模型，LLM 节点报 4006，
    而 ErrorCodeHttpStatusMapper 把 4006 映射成 502 BAD_GATEWAY（上游=模型，错在配置不在客户端）。
-   这是既定契约，所以对该 URL 的 502 不是问题，而是要断言的事实。 */
+   这是既定契约，所以对这些 URL 的 502 不是问题，而是要断言的事实。
+   另外「重试一个必失败的运行」同样会 502，也属于预期。 */
 let expectedFailRunUrl = ''
 let observedFailRunStatus = 0
+let observedRetryStatus = 0
+const isExpectedFailure = (url) =>
+  (expectedFailRunUrl !== '' && url.startsWith(expectedFailRunUrl)) ||
+  /\/api\/workflow-runs\/\d+\/retry$/.test(url)
 
 page.on('pageerror', (e) => issues.push(`pageerror: ${String(e.message).slice(0, 160)}`))
 page.on('console', (m) => {
   if (m.type() !== 'error') return
   const url = m.location?.()?.url ?? ''
-  if (expectedFailRunUrl && url.startsWith(expectedFailRunUrl)) return
+  if (isExpectedFailure(url)) return
   // 带上资源 URL：否则 "502 Bad Gateway" 这类报错看不出是哪个请求
   issues.push(`console.error: ${m.text().slice(0, 140)}${url ? ` @ ${url}` : ''}`)
 })
@@ -51,11 +56,16 @@ page.on('console', (m) => {
 page.on('response', (r) => {
   const st = r.status()
   if (st !== 502 && st !== 503 && st !== 504) return
-  if (expectedFailRunUrl && r.url().startsWith(expectedFailRunUrl)) {
-    observedFailRunStatus = st
+  const url = r.url()
+  if (isExpectedFailure(url)) {
+    if (/\/retry$/.test(url)) {
+      observedRetryStatus = st
+    } else {
+      observedFailRunStatus = st
+    }
     return
   }
-  issues.push(`gateway ${st} ${r.url()}`)
+  issues.push(`gateway ${st} ${url}`)
 })
 
 const nodeCount = () => page.locator('.wf-node').count()
@@ -109,7 +119,7 @@ check('工作流页标题', (await page.locator('.page-title').first().innerText
 
 // ---- 创建：后端建图后画布应出现 START → END 种子图 ----
 // 注意：没有任何工作流时页面只显示空状态（不渲染三栏），
-// 所以「面板 7 类」这条必须在创建/打开之后断言，否则读到 0。
+// 所以「面板 8 类」这条必须在创建/打开之后断言，否则读到 0。
 await page.locator('.wf-bar__new').fill(WF_NAME)
 await page.locator('.wf-bar button', { hasText: '新建' }).click()
 // 必须等「新建的那个工作流」真正成为选中项：页面会先自动打开最近更新的工作流，
@@ -128,7 +138,7 @@ await page.waitForTimeout(300)
 check('创建后画布有种子节点', (await nodeCount()) === 2, `nodes=${await nodeCount()}`)
 check('种子图有 START → END 连线', (await edgeCount()) === 1, `edges=${await edgeCount()}`)
 check('选择栏出现新工作流', (await page.locator('.wf-bar__select').inputValue()).length > 0)
-check('节点面板 7 类（后端 TYPES）', (await page.locator('.wf-palette-item').count()) === 7)
+check('节点面板 8 类（后端 TYPES）', (await page.locator('.wf-palette-item').count()) === 8)
 // 运行历史来自真实接口：还没跑过时应为空态，不能有残留行
 check('新工作流运行历史为空', (await page.locator('.wf-run-row').count()) === 0, `rows=${await page.locator('.wf-run-row').count()}`)
 // 当前工作流 id（选择栏的值就是它），后面既用于断言失败运行的 URL，也用于补足分页条数
@@ -271,6 +281,70 @@ check('失败轨迹里能看到失败节点', (await page.locator('.wf-log li[da
 const failErr = (await page.locator('.wf-log__err').first().innerText().catch(() => '')).trim()
 check('失败节点带错误消息', failErr.length > 0, `err=${failErr.slice(0, 48)}`)
 
+// ---- 人工审批：另建 START→HUMAN_APPROVAL→END，跑到闸门应挂起，同意后跑完 ----
+const approvalName = `${WF_NAME}-approval`
+await page.locator('.wf-bar__new').fill(approvalName)
+await page.locator('.wf-bar button', { hasText: '新建' }).click()
+await page.waitForFunction(
+  (name) => {
+    const sel = document.querySelector('.wf-bar__select')
+    const opt = sel && [...sel.options].find((o) => (o.textContent ?? '') === name)
+    return !!opt && sel.value === opt.value
+  },
+  approvalName,
+  { timeout: 20000 },
+)
+await page.waitForTimeout(300)
+await page.locator('.wf-palette-item', { hasText: '人工审批' }).first().click()
+await page.waitForTimeout(200)
+const gateId = await page.locator('.wf-node').nth(2).innerText().then((t) => t.split('\n')[0].trim())
+await link('start', gateId)
+await link(gateId, 'end')
+await clickHead('保存草稿')
+await clickHead('发布')
+await page.waitForFunction(
+  () => [...document.querySelectorAll('.wf-bar .wf-chip')].some((c) => (c.textContent ?? '').includes('已发布')),
+  null,
+  { timeout: 20000 },
+)
+await clickHead('正式运行')
+await page
+  .waitForFunction(
+    () => [...document.querySelectorAll('.wf-run-row .wf-chip')].some((c) => (c.textContent ?? '').includes('待审批')),
+    null,
+    { timeout: 60000 },
+  )
+  .catch(() => {})
+check('审批闸门让运行挂起（历史出现待审批）',
+  (await page.locator('.wf-run-row .wf-chip', { hasText: '待审批' }).count()) >= 1)
+await page.locator('.wf-panel button', { hasText: '同意并继续' }).first().click()
+await page
+  .waitForFunction(
+    () => [...document.querySelectorAll('.wf-run-row .wf-chip')].some((c) => (c.textContent ?? '').includes('成功')),
+    null,
+    { timeout: 60000 },
+  )
+  .catch(() => {})
+check('同意后运行继续执行至成功',
+  (await page.locator('.wf-run-row .wf-chip', { hasText: '成功' }).count()) >= 1)
+
+// ---- 失败续跑：切回失败的那个工作流，对失败运行点「重试运行」 ----
+await page.locator('.wf-bar__select').selectOption({ label: WF_NAME })
+await page.waitForTimeout(800)
+await page.waitForFunction(() => document.querySelectorAll('.wf-run-row').length > 0, null, { timeout: 20000 })
+const rowsBeforeRetry = await page.locator('.wf-run-row').count()
+await page.locator('.wf-run-row').first().click()
+await page.waitForTimeout(400)
+await page.locator('.wf-panel button', { hasText: '重试运行' }).first().click()
+await page
+  .waitForFunction((n) => document.querySelectorAll('.wf-run-row').length > n, rowsBeforeRetry, { timeout: 60000 })
+  .catch(() => {})
+const rowsAfterRetry = await page.locator('.wf-run-row').count()
+check('重试新建了一次运行', rowsAfterRetry > rowsBeforeRetry, `${rowsBeforeRetry} → ${rowsAfterRetry}`)
+const retryRowText = (await page.locator('.wf-run-row').first().innerText()).replace(/\s+/g, ' ')
+check('新运行标注为 RETRY', retryRowText.includes('RETRY'), retryRowText)
+check('重试失败同样按 4006 → 502', observedRetryStatus === 502, `status=${observedRetryStatus}`)
+
 // ---- 分页：用真实凭据在 Node 侧直接调 API 补足条数（>1 页），再验证翻页 ----
 const auth = await (await fetch(`${BASE}/api/auth/login`, {
   method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -285,7 +359,22 @@ for (let i = 0; i < 8; i += 1) {
   })
 }
 await page.reload({ waitUntil: 'networkidle' })
-await page.waitForFunction(() => document.querySelectorAll('.wf-run-row').length > 0, null, { timeout: 30000 })
+// reload 后页面会自动打开「最近更新」的工作流，而它现在可能是后面建的审批工作流；
+// 分页断言必须针对 wid（第一个工作流），所以显式切回去。
+await page.waitForFunction(() => !!document.querySelector('.wf-bar__select option'), null, { timeout: 30000 })
+await page.locator('.wf-bar__select').selectOption(wid)
+// 等切换真正生效：选择框值变到 wid 且历史行数到 10 条（wid 共 12 次运行）。
+// 只等「行数 > 0」会读到切换前那个工作流的 1 行——实测踩过。
+await page
+  .waitForFunction(
+    (target) => {
+      const sel = document.querySelector('.wf-bar__select')
+      return !!sel && sel.value === target && document.querySelectorAll('.wf-run-row').length === 10
+    },
+    wid,
+    { timeout: 30000 },
+  )
+  .catch(() => {})
 const page1Rows = await page.locator('.wf-run-row').count()
 check('分页：第 1 页满 10 条', page1Rows === 10, `rows=${page1Rows}`)
 const now1 = (await page.locator('.wf-run-page__now').innerText()).trim()

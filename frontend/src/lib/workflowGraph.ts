@@ -21,6 +21,7 @@ export const WF_NODE_TYPES: WfNodeType[] = [
   'AGENT',
   'IF_ELSE',
   'TEMPLATE',
+  'HUMAN_APPROVAL',
   'END',
 ]
 
@@ -162,7 +163,7 @@ export function runState(status: string | undefined): string {
   if (status === 'FAILED') return 'failed'
   if (status === 'SKIPPED') return 'skipped'
   if (status === 'RUNNING') return 'running'
-  if (status === 'PENDING' || status === 'QUEUED') return 'pending'
+  if (status === 'PENDING' || status === 'QUEUED' || status === 'WAITING_APPROVAL') return 'pending'
   return 'idle'
 }
 

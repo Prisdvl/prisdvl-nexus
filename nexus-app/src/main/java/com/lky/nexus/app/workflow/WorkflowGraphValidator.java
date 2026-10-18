@@ -23,7 +23,7 @@ public class WorkflowGraphValidator {
 
     private static final Pattern VARIABLE = Pattern.compile("\\{\\{\\s*([^{}]+?)\\s*}}");
     private static final Set<String> TYPES = Set.of(
-            "START", "END", "KNOWLEDGE_RETRIEVAL", "LLM", "AGENT", "IF_ELSE", "TEMPLATE");
+            "START", "END", "KNOWLEDGE_RETRIEVAL", "LLM", "AGENT", "IF_ELSE", "TEMPLATE", "HUMAN_APPROVAL");
 
     public void validate(WorkflowGraph graph) {
         if (graph == null) {

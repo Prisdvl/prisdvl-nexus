@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle, BookOpen, Bot, CheckCircle2, Cpu, Flag, GitBranch, Maximize2, Play, Plus,
-  RefreshCw, Rocket, Save, ShieldCheck, Sparkles, Terminal, ZoomIn, ZoomOut,
+  RefreshCw, Rocket, Save, ShieldCheck, Sparkles, Terminal, UserCheck, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
 import { StateEmpty } from '@/components/Skeleton'
@@ -29,10 +29,11 @@ const ICONS: Record<WfNodeType, typeof Bot> = {
   AGENT: Bot,
   IF_ELSE: GitBranch,
   TEMPLATE: Terminal,
+  HUMAN_APPROVAL: UserCheck,
   END: Flag,
 }
 
-type Busy = '' | 'list' | 'load' | 'create' | 'save' | 'validate' | 'publish' | 'run' | 'debug'
+type Busy = '' | 'list' | 'load' | 'create' | 'save' | 'validate' | 'publish' | 'run' | 'debug' | 'approve' | 'retry'
 type LinkFrom = { source: string; handle: string | null }
 
 /** 运行历史每页条数：面板不宽，10 条够看且不用滚动太久。 */
@@ -387,6 +388,40 @@ export default function WorkflowPage() {
     void loadRuns(current.id, page)
   }
 
+  /** 人工审批：同意则从闸门之后续跑、拒绝则本次失败；两种都要刷新历史与轨迹（状态变了）。 */
+  const doApprove = async (runId: string, decision: 'APPROVE' | 'REJECT') => {
+    if (!current) return
+    setBusy('approve')
+    try {
+      await api.workflowRuns.approve(runId, { decision })
+      toast.success(decision === 'APPROVE' ? c.approvalDone : c.rejectDone)
+      await loadRuns(current.id, runsPage)
+      void loadTrace(runId)
+    } catch (e) {
+      toast.error(c.approvalFailed, errMessage(e))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  /** 从失败节点续跑；失败时拿不到新 runId，但新运行已落库 → 刷新历史并选中最新的那条。 */
+  const doRetry = async (runId: string) => {
+    if (!current) return
+    setBusy('retry')
+    try {
+      const r = await api.workflowRuns.retry(runId)
+      toast.success(c.retryDone, `${c.runMeta}: ${c.statuses[r.status] ?? r.status}`)
+      await loadRuns(current.id, 1)
+      void loadTrace(r.id)
+    } catch (e) {
+      toast.error(c.retryFailed, errMessage(e))
+      const list = await loadRuns(current.id, 1)
+      if (list.length > 0) void loadTrace(list[0].id)
+    } finally {
+      setBusy('')
+    }
+  }
+
   const doCreate = async () => {
     const name = newName.trim()
     if (!name) return
@@ -628,6 +663,9 @@ export default function WorkflowPage() {
             nodeRuns={nodeRuns}
             nodeRunsLoading={nodeRunsLoading}
             traceError={traceError}
+            onApprove={doApprove}
+            onRetry={doRetry}
+            actionBusy={busy === 'approve' || busy === 'retry'}
           />
         </>
       )}

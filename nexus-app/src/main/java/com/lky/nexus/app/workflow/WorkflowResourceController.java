@@ -4,6 +4,7 @@ import com.lky.nexus.app.auth.security.CurrentUser;
 import com.lky.nexus.app.workflow.model.dto.CreateWorkflowRequest;
 import com.lky.nexus.app.workflow.model.dto.RunWorkflowRequest;
 import com.lky.nexus.app.workflow.model.dto.SaveWorkflowDraftRequest;
+import com.lky.nexus.app.workflow.model.dto.UpdateWorkflowRequest;
 import com.lky.nexus.app.workflow.model.dto.WorkflowNodeRunResponse;
 import com.lky.nexus.app.workflow.model.dto.WorkflowResponse;
 import com.lky.nexus.app.workflow.model.dto.WorkflowRunResponse;
@@ -53,6 +54,13 @@ public class WorkflowResourceController {
     @GetMapping("/{workflowId}")
     public Result<WorkflowResponse> detail(@PathVariable Long workflowId) {
         return Result.ok(definitionService.detail(CurrentUser.requireId(), workflowId));
+    }
+
+    /** 改元信息（名称 / 描述）；局部更新，不产生新版本。 */
+    @PutMapping("/{workflowId}")
+    public Result<WorkflowResponse> update(@PathVariable Long workflowId,
+                                           @Valid @RequestBody UpdateWorkflowRequest request) {
+        return Result.ok(definitionService.update(CurrentUser.requireId(), workflowId, request));
     }
 
     @PutMapping("/{workflowId}/draft")

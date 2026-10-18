@@ -92,6 +92,9 @@ public final class ErrorCodeHttpStatusMapper {
             case CONVERSATION_MODE_UNSUPPORTED -> HttpStatus.CONFLICT;
             // Workflow：访问别人的工作流或运行不暴露存在性，统一 404
             case WORKFLOW_NOT_FOUND, WORKFLOW_RUN_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            // 审批 / 重试打到状态不对的运行 → 409（请求格式对，是资源当前状态不允许；
+            // 与 AGENT_RUN_STATE_INVALID / APPROVAL_NOT_PENDING 同一条理由）
+            case WORKFLOW_APPROVAL_NOT_PENDING, WORKFLOW_RETRY_NOT_ALLOWED -> HttpStatus.CONFLICT;
         };
     }
 }

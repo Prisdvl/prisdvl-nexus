@@ -7,6 +7,7 @@ import com.lky.nexus.app.workflow.mapper.WorkflowVersionMapper;
 import com.lky.nexus.app.workflow.model.WorkflowGraph;
 import com.lky.nexus.app.workflow.model.dto.CreateWorkflowRequest;
 import com.lky.nexus.app.workflow.model.dto.SaveWorkflowDraftRequest;
+import com.lky.nexus.app.workflow.model.dto.UpdateWorkflowRequest;
 import com.lky.nexus.app.workflow.model.dto.WorkflowResponse;
 import com.lky.nexus.app.workflow.model.dto.WorkflowValidationResponse;
 import com.lky.nexus.app.workflow.model.dto.WorkflowVersionResponse;
@@ -22,6 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.LocalDateTime;
@@ -80,6 +82,27 @@ public class WorkflowDefinitionService {
 
     public WorkflowResponse detail(Long userId, Long workflowId) {
         return toResponse(requireOwned(userId, workflowId));
+    }
+
+    /**
+     * 修改元信息（名称 / 描述）：局部更新，字段为 null 表示不改；description 传空串表示清空。
+     *
+     * <p>刻意<b>不产生新版本</b>：图与元信息是两件事，只有 {@link #saveDraft} 才生成不可变版本快照。
+     * 否则「改个名字」也会让 draftVersionNo 递增，版本列表会被改名噪声填满。
+     */
+    @Transactional
+    public WorkflowResponse update(Long userId, Long workflowId, UpdateWorkflowRequest request) {
+        WorkflowPO workflow = requireOwned(userId, workflowId);
+        if (StringUtils.hasText(request.name())) {
+            workflow.setName(request.name().trim());
+        }
+        if (request.description() != null) {
+            workflow.setDescription(StringUtils.hasText(request.description())
+                    ? request.description().trim() : null);
+        }
+        workflow.setUpdatedAt(LocalDateTime.now());
+        workflowMapper.updateById(workflow);
+        return toResponse(workflow);
     }
 
     @Transactional
