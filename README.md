@@ -219,6 +219,7 @@ prisdvl-nexus/
 | --- | --- |
 | 后端 `mvn -B test`（默认，无 LIVE 开关） | **832** 个用例：**0** 失败 / **0** 错误 / **33** 跳过，BUILD SUCCESS（分模块实测合计，2026-10-17/18：common 19 / ai 76 / knowledge 174 于波次 1–3；app **563** 于本次——app 较上轮 541 +22，其中 +11 恢复提交新增的 workflow 测试、+3 运行历史、+2 元信息更新、+5 人工审批与失败续跑、+1 预置模板） |
 | 前端 `npm run build`（`tsc --noEmit && vite build`） | exit 0（2026-10-17；仅有既存的 chunk 体积警告） |
+| 后端 **LIVE 套件**（需 Docker，各套件用 Testcontainers 自起容器） | **24 例实测通过**（2026-10-18，与默认套件分开跑）：`RedisEmailCodeStoreLiveTest` 9 / `MySqlJsonRoundTripTest` 2 / `LiveVectorStoreTest` 4（真实 pgvector + HNSW 排序）/ `LiveChunkIndexTest` 9（真实 ES，直接调 `_analyze` 验证 IK 中文分词）。这 24 例此前一直处于跳过状态，本轮首次实跑。详见下方说明 |
 | 工作流端到端（真浏览器 + 真后端） | `npm run verify:workflow` → **ALL OK 41/41**（2026-10-18；`--spring.profiles.active=standalone` + `npm run dev`，未启 Docker、未设 LIVE 变量、未连外部模型；退出码契约 0/1/2 与 `EXIT_CODE` 日志同时生效）。覆盖：创建/种子图、节点增删与连线（面板 8 类含 `HUMAN_APPROVAL`）、保存、校验、发布、运行、节点轨迹、运行历史（空态/累积/点行切换/浏览器内翻页）、失败运行（502+4006 落库与轨迹）、**人工审批（跑到闸门挂起成「待审批」→ 点「同意并继续」→ 运行继续至成功）**、**失败续跑（对失败运行点「重试运行」→ 新建一条 `RETRY` 运行，同样 502/4006）**。运行图覆盖 START / TEMPLATE / LLM / HUMAN_APPROVAL；`KNOWLEDGE_RETRIEVAL` 与 `AGENT` 仍需真实基础设施或模型 |
 | compose 配置校验 | `docker compose config --quiet` 通过（缺 3 个必填变量时拒绝启动，2026-10-14 复验） |
 | 前端其他 QA | 除 `verify-workflow.mjs` 外的 `verify:*` / `qa-*.mjs`：**NOT VERIFIED**（截图见 §1） |
@@ -226,6 +227,15 @@ prisdvl-nexus/
 默认 `mvn test` 跳过的用例是需要真实基础设施 / 真实模型的 **LIVE 测试**（Testcontainers 自起 ES/PG 的检索类、
 连真实模型的嵌入/对话类），由环境变量门控（如 `AI_SEARCH_LIVE=true`、`AI_VECTOR_LIVE=true`、
 `AI_EMBEDDING_LIVE=true`、或非空的 `AI_CHAT_API_KEY`）。**只要 shell 里设了 `AI_CHAT_API_KEY`（哪怕是占位值），对应 LIVE 套件就会执行**；无有效密钥时会失败——这不是默认 CI 口径。GitHub Actions 故意不注入任何模型密钥。
+
+那 33 个跳过项现在可以拆清楚了：**24 例**只依赖 Docker（Redis / MySQL / pgvector / ES+IK，各自用 Testcontainers 起容器），
+已实测通过；剩下 **9 例**确实需要真实模型 Key —— `LiveEmbeddingTest` 2（`AI_EMBEDDING_LIVE`）、
+`LiveModelCallTest` 2、`ChatStreamLiveTest` 3、`MultiTurnMemoryTest` 1、`AgentLoopTest` 1（后四个都看 `AI_CHAT_API_KEY`）。
+24 + 9 正好等于 33。跑 LIVE 套件要单独指定 `-Dtest=...`，否则会把默认 563 例一起再跑一遍。
+
+> 2026-10-18 跑 LIVE 时发现一处**测试漂移**并已修：`MySqlJsonRoundTripTest` 的注册请求只发
+> `username + password`，而注册接口自 `cb5ae96` 起强制要求 `email`，所以这两个用例以前即使开 flag 也必然 400。
+> 同样的漂移还存在于 `ChatStreamLiveTest` 与 `AgentLoopTest`（都需要模型 Key，本轮无法验证，未改）。
 
 ```bash
 # 与 CI 一致：先确保未导出 AI_CHAT_API_KEY / *_LIVE

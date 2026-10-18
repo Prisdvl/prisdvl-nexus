@@ -201,9 +201,12 @@ class MySqlJsonRoundTripTest {
     }
 
     private String registerAndLogin(String username) throws Exception {
+        // 注册接口自 cb5ae96 起强制要求 email（RegisterRequest 上 @NotBlank + @Email），
+        // 这里原来只发 username/password，会稳定 400 —— 属于测试漂移，不是被测代码的问题。
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"" + username + "\",\"password\":\"mysql123456\"}"))
+                        .content("{\"username\":\"" + username + "\",\"password\":\"mysql123456\","
+                                + "\"email\":\"" + username + "@example.com\"}"))
                 .andExpect(status().isOk());
         return JsonPath.read(mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
