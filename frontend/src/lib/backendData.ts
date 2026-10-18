@@ -90,6 +90,7 @@ export const toKbItem = (kb: KnowledgeBase): KbItem => ({
   docs: kb.docCount ?? 0,
   updated: relTime(kb.updatedAt ?? kb.createdAt),
   tone: toneOf(kb.id),
+  embeddingModel: kb.embeddingModel ?? undefined,
 })
 
 /** 后端文档状态 → 界面三态。 */

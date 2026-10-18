@@ -9,6 +9,8 @@ export interface KbItem {
   docs: number
   updated: string
   tone: string
+  /** 建库时冻结的嵌入模型（后端 `embeddingModel`）；演示数据没有该字段，界面按「—」处理 */
+  embeddingModel?: string
 }
 
 export const KBS: KbItem[] = [

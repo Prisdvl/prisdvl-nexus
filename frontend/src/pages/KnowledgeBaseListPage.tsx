@@ -19,14 +19,6 @@ interface Props {
 
 type Filter = 'all' | 'withDocs' | 'empty'
 
-/* 后端 KB 暂无 embedding / collection 字段，这里按序展示演示值，接后端后替换为真实字段 */
-const EMBEDDINGS = ['qwen-emb-8b', 'bge-m3', 'text-embedding-3-large']
-const COLLECTIONS = ['ragent', 'insurance', 'notes', 'algo', 'interview', 'soft-skills']
-const metaOf = (i: number) => ({
-  model: EMBEDDINGS[i % EMBEDDINGS.length],
-  collection: COLLECTIONS[i % COLLECTIONS.length],
-})
-
 export default function KnowledgeBaseListPage({ onOpen }: Props) {
   const reduce = useReducedMotion()
   const { locale } = useLocale()
@@ -168,11 +160,10 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
         <div className="panel kb-table-wrap">
           <table className="kb-table">
             <thead>
-              <tr><th>名称</th><th>Embedding 模型</th><th>Collection</th><th>文档数</th><th>更新时间</th><th aria-label="actions" /></tr>
+              <tr><th>名称</th><th>Embedding 模型</th><th>文档数</th><th>更新时间</th><th aria-label="actions" /></tr>
             </thead>
             <tbody>
-              {list.map((kb, i) => {
-                const meta = metaOf(i)
+              {list.map((kb) => {
                 return (
                   <tr key={kb.id} onClick={() => onOpen(kb)}>
                     <td>
@@ -181,8 +172,7 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
                         <span className="kb-cell__text"><b>{kb.name}</b><small>{kb.desc || t.kbList.noDesc}</small></span>
                       </div>
                     </td>
-                    <td><code className="kb-code">{meta.model}</code></td>
-                    <td><span className="badge" data-tone="accent">{meta.collection}</span></td>
+                    <td><code className="kb-code">{kb.embeddingModel ?? '—'}</code></td>
                     <td className="kb-num">{kb.docs}</td>
                     <td className="kb-time">{kb.updated}</td>
                     <td className="kb-row-actions">

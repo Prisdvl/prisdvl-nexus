@@ -111,6 +111,6 @@
   .kb-docs__toolbar-left { flex-wrap: wrap; }
   .kb-docs__toolbar-left .kb-docs__search { width: 100%; flex: 1 1 100%; }
   .kb-cell__text small { max-width: 180px; }
-  .kb-table th:nth-child(2), .kb-table td:nth-child(2),
-  .kb-table th:nth-child(3), .kb-table td:nth-child(3) { display: none; }
+  /* 窄屏隐藏 Embedding 模型列（列序：1 名称 / 2 Embedding 模型 / 3 文档数 / 4 更新时间 / 5 操作） */
+  .kb-table th:nth-child(2), .kb-table td:nth-child(2) { display: none; }
 }
