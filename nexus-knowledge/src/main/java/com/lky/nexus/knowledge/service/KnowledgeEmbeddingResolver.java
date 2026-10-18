@@ -38,7 +38,7 @@ import java.util.Optional;
  *
  * <h2>不变式（保持不变）</h2>
  * <b>查询模型必须等于知识库冻结模型</b>。用户换了自己的嵌入模型之后，旧知识库不会
- * "自动切过去"，而是直接 4006 拒绝——必须显式重建索引
+ * "自动切过去"，而是直接 4009 拒绝（409，可修复的资源冲突）——必须显式重建索引
  * （{@code POST /api/knowledge-bases/{id}/index/recreate}）或新建知识库。
  * "用自己的 Key"不是绕过冻结的理由：混用两种模型产生的向量会让检索静默错乱。
  *
@@ -80,8 +80,8 @@ public class KnowledgeEmbeddingResolver {
     /**
      * 解析某知识库该用的嵌入客户端。
      *
-     * @throws BusinessException 4006：生效配置与知识库冻结的嵌入模型/维度不一致 /
-     *                           用户自带的模型不在白名单内
+     * @throws BusinessException 4009：生效配置与知识库冻结的嵌入模型/维度不一致（409：可修复的资源冲突）；
+     *                           4006：用户自带的模型不在白名单内 / 维度不是平台允许的维度（服务端配置问题）
      */
     public EmbeddingClient resolve(KnowledgeBasePO knowledgeBase) {
         Optional<UserEmbeddingCredentials> userCredentials = findUserCredentials(knowledgeBase.getUserId());
@@ -118,7 +118,8 @@ public class KnowledgeEmbeddingResolver {
         // 例如全局曾经是 768 维、后来用户启用 1024 维的 BYOK：旧库不能拿新维度去查。
         if (knowledgeBase.getEmbeddingDim() != null
                 && effective.dimensions() != knowledgeBase.getEmbeddingDim()) {
-            throw new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
+            // 4009（不是 4006）：库的冻结维度与当前生效配置打架 → 409，可修复的冲突
+            throw new BusinessException(ErrorCode.EMBEDDING_FROZEN_MISMATCH,
                     ("用户自带的嵌入配置是 %d 维，而知识库冻结的维度是 %d。"
                             + "向量列与索引都按冻结维度建立，继续检索会得到错乱结果，因此拒绝执行。")
                             .formatted(effective.dimensions(), knowledgeBase.getEmbeddingDim()));
@@ -179,7 +180,9 @@ public class KnowledgeEmbeddingResolver {
     private void requireFrozen(KnowledgeBasePO knowledgeBase, String provider, String model, String source) {
         if (!provider.equals(knowledgeBase.getEmbeddingProvider())
                 || !model.equals(knowledgeBase.getEmbeddingModel())) {
-            throw new BusinessException(ErrorCode.MODEL_ROLE_NOT_CONFIGURED,
+            // 4009（不是 4006）：请求格式没问题、上游也没坏，是这个库按另一个模型建的 → 409。
+            // 用 4006/502 会让"用户可修复的冲突"在监控上被计成上游故障。
+            throw new BusinessException(ErrorCode.EMBEDDING_FROZEN_MISMATCH,
                     ("知识库冻结的嵌入模型是 %s:%s，而%s。"
                             + "同一个库里混用两种嵌入模型的向量会让检索结果错乱（且不会报错），"
                             + "因此拒绝执行。请恢复配置，或新建知识库。")

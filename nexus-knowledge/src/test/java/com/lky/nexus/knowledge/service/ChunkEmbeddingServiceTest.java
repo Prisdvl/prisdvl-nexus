@@ -137,7 +137,7 @@ class ChunkEmbeddingServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("冻结的嵌入模型")
                 .extracting(ex -> ((BusinessException) ex).getCode())
-                .isEqualTo(ErrorCode.MODEL_ROLE_NOT_CONFIGURED.getCode());
+                .isEqualTo(ErrorCode.EMBEDDING_FROZEN_MISMATCH.getCode());
         verify(vectorStore, never()).upsert(any());
     }
 

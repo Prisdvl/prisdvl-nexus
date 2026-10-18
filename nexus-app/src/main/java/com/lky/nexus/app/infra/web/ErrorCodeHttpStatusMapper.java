@@ -57,6 +57,11 @@ public final class ErrorCodeHttpStatusMapper {
             // 返回 401 会诱导前端去清 Token、跳登录页，那是完全错误的自救动作
             case TOKEN_LIMIT_EXCEEDED, EMBEDDING_FAILED, MODEL_ROLE_NOT_CONFIGURED,
                  MODEL_AUTH_FAILED, MODEL_BAD_REQUEST -> HttpStatus.BAD_GATEWAY;
+            // 4009：库的冻结模型与当前生效配置冲突 → 409 而不是 502。
+            // 502 的语义是"上游坏了、稍后重试"，而这里请求格式没问题、上游也没坏，
+            // 是资源状态与当前配置打架；用户可显式重建索引/恢复配置来修（与 AGENT_RUN_STATE_INVALID
+            // / WORKFLOW_APPROVAL_NOT_PENDING 同一条 409 理由）。
+            case EMBEDDING_FROZEN_MISMATCH -> HttpStatus.CONFLICT;
 
             // 5xxx / 6xxx / 9999：服务端自身问题
             case TOOL_EXECUTION_FAILED, AGENT_MAX_ITERATIONS_EXCEEDED, WORKFLOW_DEFINITION_INVALID,

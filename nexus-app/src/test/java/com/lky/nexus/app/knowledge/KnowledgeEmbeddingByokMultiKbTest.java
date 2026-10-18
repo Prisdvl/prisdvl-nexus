@@ -111,7 +111,7 @@ class KnowledgeEmbeddingByokMultiKbTest {
         assertThat(frozenV4.getEmbeddingModel()).isEqualTo("text-embedding-v4");
 
         BusinessException failure = searchManyFailure(userId, List.of(frozenV3.getId(), frozenV4.getId()));
-        assertThat(failure.getCode()).isEqualTo(ErrorCode.MODEL_ROLE_NOT_CONFIGURED.getCode());
+        assertThat(failure.getCode()).isEqualTo(ErrorCode.EMBEDDING_FROZEN_MISMATCH.getCode());
         // 报错必须能定位到具体库（否则多库场景下用户不知道去修哪一个）
         assertThat(failure.getMessage())
                 .contains("冻结在 v3 的库")
@@ -126,7 +126,7 @@ class KnowledgeEmbeddingByokMultiKbTest {
 
         // 反向顺序也点名对应的库（顺序敏感不是意外，是保序透传）
         BusinessException reversed = searchManyFailure(userId, List.of(frozenV4.getId(), frozenV3.getId()));
-        assertThat(reversed.getCode()).isEqualTo(ErrorCode.MODEL_ROLE_NOT_CONFIGURED.getCode());
+        assertThat(reversed.getCode()).isEqualTo(ErrorCode.EMBEDDING_FROZEN_MISMATCH.getCode());
     }
 
     @Test
@@ -150,7 +150,7 @@ class KnowledgeEmbeddingByokMultiKbTest {
 
         // 但旧库不会因为"关掉 BYOK"就自动切回全局模型——必须显式重建
         BusinessException stillRejected = searchManyFailure(userId, List.of(frozenV3.getId(), afterDisable.getId()));
-        assertThat(stillRejected.getCode()).isEqualTo(ErrorCode.MODEL_ROLE_NOT_CONFIGURED.getCode());
+        assertThat(stillRejected.getCode()).isEqualTo(ErrorCode.EMBEDDING_FROZEN_MISMATCH.getCode());
         assertThat(stillRejected.getMessage()).contains("旧模型库");
     }
 

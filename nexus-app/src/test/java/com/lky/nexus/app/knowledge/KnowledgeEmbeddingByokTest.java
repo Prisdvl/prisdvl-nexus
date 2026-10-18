@@ -123,7 +123,14 @@ class KnowledgeEmbeddingByokTest {
                 .hasMessageContaining("bailian:text-embedding-v3")
                 .hasMessageContaining("用户自带的嵌入配置使用的是 bailian:text-embedding-v4")
                 .extracting(ex -> ((BusinessException) ex).getCode())
-                .isEqualTo(ErrorCode.MODEL_ROLE_NOT_CONFIGURED.getCode());
+                .isEqualTo(ErrorCode.EMBEDDING_FROZEN_MISMATCH.getCode());
+
+        // HTTP 层：4009 → 409（不是 4006/502）。这条是"映射改动"唯一的对外证据：
+        // 502 会说"上游坏了、稍后重试"，而这里用户的正确动作是重建索引/恢复配置。
+        mockMvc.perform(post("/api/knowledge-bases/" + kb.getId() + "/embed")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(4009));
 
         // 关掉开关也不行：关掉之后回落全局 v4，同样不等于冻结值 v3
         saveConfig(token, GLOBAL_MODEL, false);
