@@ -945,24 +945,26 @@ curl -s -X POST localhost:8080/mcp \
 | POST | `/api/workflow-runs/{runId}/approval` | 人工确认节点放行 |
 | POST | `/api/workflow-runs/{runId}/retry` | 从失败节点重试 |
 
-> ⚠️ **除「预置工作流」一项外，本表均已实现**（`architecture.md` §0 的规矩仍适用：与代码冲突时以代码为准）。
+> ✅ **本表（连同下面的预置模板）均已实现**（`architecture.md` §0 的规矩仍适用：与代码冲突时以代码为准）。
 > 已实现：`POST/GET /api/workflows`、`GET /api/workflows/{id}`、`PUT /api/workflows/{id}`（仅元信息）、
 > `PUT /api/workflows/{id}/draft`（草稿）、`POST .../validate`、`POST .../publish`、`GET .../versions`、
 > `POST .../debug`（跑草稿）、`POST .../runs`（跑已发布）、`DELETE /api/workflows/{id}`、
+> `GET /api/workflows/presets` + `POST /api/workflows/presets/{code}`（预置模板），
 > `/api/workflow-runs` 的列表 / 详情 / 节点轨迹 / 取消，以及 **`/approval`（人工审批推进）** 与
 > **`/retry`（从失败节点续跑）**。
 >
-> **仍未实现：「预置工作流」三项**（`knowledge-gap-analysis` / `study-plan-7d` / `knowledge-report`）。
-> 缺的不是接口，而是它们的图依赖 `PARALLEL` / `TOOL` 节点，而实际枚举里没有这两个
-> （真实枚举见 `database.md` §7：`START/KNOWLEDGE_RETRIEVAL/LLM/AGENT/IF_ELSE/TEMPLATE/HUMAN_APPROVAL/END`）。
->
-> 两条容易搞错的契约事实：
+> 三条容易搞错的契约事实：
 > ① `/approval` 的 `decision` 只接受 `APPROVE` / `REJECT`（大小写不敏感），其他值 → `1001`；
 >    运行不在等待审批状态 → `6007` / 409（重复审批、已取消都在此列）。
 > ② `/retry` 只接受 `FAILED` / `CANCELLED` 的运行，否则 `6008` / 409；它沿用源运行的版本与入参，
 >    把已成功节点的输出复制进新运行的轨迹，只重跑未成功的节点。
+> ③ `/presets/{code}` 的 `code` 不存在 → `1001`；实例化只落**草稿**不自动发布，
+>    且检索节点的 `kbIds` 刻意留空，所以要用户先选知识库才能发布。
 
-**预置工作流**：`knowledge-gap-analysis`（知识分析）、`study-plan-7d`（7 天学习计划）、`knowledge-report`（知识报告生成）。
+**预置工作流**（`GET /api/workflows/presets` 列出，`POST /api/workflows/presets/{code}` 实例化）：
+`knowledge-gap-analysis`（知识缺口分析）、`study-plan-7d`（7 天学习计划，带人工审批闸门）、`knowledge-report`（知识报告生成）。
+⚠️ 它们是**用现有 8 种节点写出的顺序版**，不是 `architecture.md` §12 设计稿里那张带 `PARALLEL` 扇出的图——
+那套枚举没有实现，所以没有并行分析，也没有工具节点。
 
 ---
 

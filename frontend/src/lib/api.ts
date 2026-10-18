@@ -552,6 +552,11 @@ export const api = {
       http.post<Result<WorkflowRun>>(`/workflows/${id}/debug`, { inputs }).then((r) => r.data.data),
     run: (id: string, inputs: Record<string, unknown>) =>
       http.post<Result<WorkflowRun>>(`/workflows/${id}/runs`, { inputs }).then((r) => r.data.data),
+    /** 内置模板清单。 */
+    presets: () => http.get<Result<WorkflowPreset[]>>('/workflows/presets').then((r) => r.data.data),
+    /** 用内置模板新建：图为草稿，检索节点的知识库还需用户自己选才能发布。 */
+    instantiatePreset: (code: string) =>
+      http.post<Result<Workflow>>(`/workflows/presets/${code}`).then((r) => r.data.data),
   },
   workflowRuns: {
     /** 某工作流的运行历史（按 id 倒序分页）。
@@ -645,6 +650,14 @@ export interface WorkflowEdge {
   source: string
   target: string
   sourceHandle?: string | null
+}
+
+/** 内置工作流模板（清单项不含图，图在实例化时才写进草稿）。 */
+export interface WorkflowPreset {
+  code: string
+  name: string
+  description: string
+  nodeCount: number
 }
 
 export interface Workflow {

@@ -6,6 +6,7 @@ import com.lky.nexus.app.workflow.model.dto.RunWorkflowRequest;
 import com.lky.nexus.app.workflow.model.dto.SaveWorkflowDraftRequest;
 import com.lky.nexus.app.workflow.model.dto.UpdateWorkflowRequest;
 import com.lky.nexus.app.workflow.model.dto.WorkflowNodeRunResponse;
+import com.lky.nexus.app.workflow.model.dto.WorkflowPresetResponse;
 import com.lky.nexus.app.workflow.model.dto.WorkflowResponse;
 import com.lky.nexus.app.workflow.model.dto.WorkflowRunResponse;
 import com.lky.nexus.app.workflow.model.dto.WorkflowValidationResponse;
@@ -49,6 +50,18 @@ public class WorkflowResourceController {
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "20") int pageSize) {
         return Result.ok(definitionService.list(CurrentUser.requireId(), pageNum, pageSize));
+    }
+
+    /** 内置模板清单。字面量段优先于 /{workflowId}，不会把 presets 当成 id 解析。 */
+    @GetMapping("/presets")
+    public Result<List<WorkflowPresetResponse>> presets() {
+        return Result.ok(definitionService.presetList());
+    }
+
+    /** 用内置模板新建一个工作流（图为草稿，需先配置知识库才能发布）。 */
+    @PostMapping("/presets/{code}")
+    public Result<WorkflowResponse> instantiatePreset(@PathVariable String code) {
+        return Result.ok(definitionService.instantiatePreset(CurrentUser.requireId(), code));
     }
 
     @GetMapping("/{workflowId}")

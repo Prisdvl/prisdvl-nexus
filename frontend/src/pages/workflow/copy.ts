@@ -9,6 +9,7 @@ import type { WfNodeType } from '@/lib/workflowGraph'
 const zh = {
   eyebrow: 'Workflows', title: '工作流', sub: '把知识检索、模型、Agent 与条件分支编排成可发布、可运行的流程。',
   pickerLabel: '工作流', createPh: '新工作流名称', create: '新建', creating: '创建中…',
+  presetPick: '从模板新建…', presetCreated: '已从模板创建', presetFailed: '模板创建失败',
   emptyList: '还没有工作流', emptyListDesc: '新建一个后，画布会自动落一张 START → END 的最小可运行图。',
   pickHint: '从上方选择一个工作流开始编辑。',
   loadFailed: '加载失败', loadListFailed: '工作流列表加载失败', retry: '重试', loading: '加载中…',
@@ -66,6 +67,7 @@ const zh = {
 const en: typeof zh = {
   eyebrow: 'Workflows', title: 'Workflows', sub: 'Compose retrieval, models, agents and branches into a publishable, runnable flow.',
   pickerLabel: 'Workflow', createPh: 'New workflow name', create: 'New', creating: 'Creating…',
+  presetPick: 'New from template…', presetCreated: 'Created from template', presetFailed: 'Could not create from template',
   emptyList: 'No workflows yet', emptyListDesc: 'Create one and the canvas seeds a minimal START → END graph you can run immediately.',
   pickHint: 'Pick a workflow above to start editing.',
   loadFailed: 'Load failed', loadListFailed: 'Could not load workflows', retry: 'Retry', loading: 'Loading…',

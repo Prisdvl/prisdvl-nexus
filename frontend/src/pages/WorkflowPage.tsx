@@ -10,7 +10,7 @@ import { useLocale } from '@/lib/locale'
 import {
   api, errMessage,
   type BackendAgent, type KnowledgeBase, type Workflow, type WorkflowEdge,
-  type WorkflowNode, type WorkflowNodeRun, type WorkflowRun, type WorkflowValidation,
+  type WorkflowNode, type WorkflowNodeRun, type WorkflowPreset, type WorkflowRun, type WorkflowValidation,
 } from '@/lib/api'
 import {
   WF_NODE_TYPES, WF_UNARY_OPERATORS, canLink, defaultConfig, nextEdgeId, nextNodeId,
@@ -70,6 +70,7 @@ export default function WorkflowPage() {
   const [zoom, setZoom] = useState(1)
   const [kbs, setKbs] = useState<KnowledgeBase[]>([])
   const [agents, setAgents] = useState<BackendAgent[]>([])
+  const [presets, setPresets] = useState<WorkflowPreset[]>([])
   const [newName, setNewName] = useState('')
 
   /** 把服务端返回的图灌进画布。 */
@@ -131,6 +132,10 @@ export default function WorkflowPage() {
         const page = await api.agents.list(1, 100)
         if (alive) setAgents(page.list)
       } catch { /* Agent 不可用时节点会显示未配置 */ }
+      try {
+        const list = await api.workflows.presets()
+        if (alive) setPresets(list)
+      } catch { /* 模板清单拉不到时只是少一个入口，不影响已有工作流 */ }
     })()
     return () => { alive = false }
   }, [])
@@ -441,6 +446,22 @@ export default function WorkflowPage() {
     }
   }
 
+  /** 用内置模板新建：模板图已落成草稿，但检索节点还没选知识库，需要用户补配置才能发布。 */
+  const createFromPreset = async (code: string) => {
+    setBusy('create')
+    try {
+      const wf = await api.workflows.instantiatePreset(code)
+      setWorkflows((list) => [wf, ...list])
+      hydrate(wf)
+      setListState('ready')
+      toast.success(c.presetCreated, wf.name)
+    } catch (e) {
+      toast.error(c.presetFailed, errMessage(e))
+    } finally {
+      setBusy('')
+    }
+  }
+
   /* ---------------- 渲染 ---------------- */
 
   if (listState === 'error') {
@@ -508,6 +529,17 @@ export default function WorkflowPage() {
         >
           {workflows.length === 0 && <option value="">{c.emptyList}</option>}
           {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </select>
+        {/* 内置模板入口：选中即实例化（受控 value 固定为 ""，选完自动回到提示项） */}
+        <select
+          className="input wf-bar__select"
+          value=""
+          aria-label={c.presetPick}
+          onChange={(e) => { const code = e.target.value; if (code) void createFromPreset(code) }}
+          disabled={busy !== '' || presets.length === 0}
+        >
+          <option value="">{c.presetPick}</option>
+          {presets.map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}
         </select>
         <span className="wf-chip" data-tone={current?.status === 'PUBLISHED' ? 'ok' : 'draft'}>
           {current ? (current.status === 'PUBLISHED' ? c.published : 'DRAFT') : '—'}

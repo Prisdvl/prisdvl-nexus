@@ -150,7 +150,7 @@ MCP 端点留在 nexus-app 进程内复用鉴权与 Spring 上下文，**不存�
 | RAG | 同步 + SSE 流式问答、`[n]` 引用解析、引用随消息落库、多知识库并行检索与失败点名 | ✅ |
 | Agent | 配置化（落库 `agent` 表）、工具白名单、温度、回答策略（`KB_PREFERRED` / `KB_ONLY`）、多知识库绑定、Tool Trace 落库、流式 + 停止；**运行状态机 + 工具人工审批（`READ`/`WRITE`/`DANGEROUS` + `once`/`always`/`deny` + 授权撤销 + 调用审计）** | ✅ |
 | MCP | 进程内 `POST /mcp`（initialize / ping / tools/list / tools/call），JWT 鉴权，遵守用户工具启停 | ✅ |
-| 工作流 | 可编排 DAG：8 种节点（START / KNOWLEDGE_RETRIEVAL / LLM / AGENT / IF_ELSE / TEMPLATE / **HUMAN_APPROVAL** / END）、草稿与发布两套版本（每次保存生成版本快照）、元信息更新（`PUT /api/workflows/{id}`，局部更新且**不产生新版本**）、静态图校验（唯一 START、无环、START 可达、变量引用受限）、`debug` 跑草稿 / `runs` 跑已发布、**人工审批**（运行挂在 `HUMAN_APPROVAL` 上 → `WAITING_APPROVAL` → `POST .../approval` 同意则续跑、拒绝则失败）、**从失败节点续跑**（`POST .../retry`，已成功节点输出回灌）、**运行历史 `GET /api/workflow-runs?workflowId=`（倒序分页，失败运行也能找回）**、节点轨迹落库（成功与失败都留痕）；**前端设计器已接真实 API**（列表 / 画布增删节点与连线 / 逐类型配置 / 保存 / 校验 / 发布 / 运行 / 轨迹 / 运行历史 / 审批） | ✅ 后端 24 用例全绿；前端 `npm run build` 通过；**端到端已在 standalone 上实测**（浏览器 E2E **36/36** + 独立 API 闭环，含失败运行与运行历史翻页），覆盖 START / TEMPLATE / LLM 三类节点（见 §8） |
+| 工作流 | 可编排 DAG：8 种节点（START / KNOWLEDGE_RETRIEVAL / LLM / AGENT / IF_ELSE / TEMPLATE / **HUMAN_APPROVAL** / END）、草稿与发布两套版本（每次保存生成版本快照）、元信息更新（`PUT /api/workflows/{id}`，局部更新且**不产生新版本**）、**预置模板**（`GET /api/workflows/presets` 列出 3 个 + `POST .../presets/{code}` 实例化为草稿）、静态图校验（唯一 START、无环、START 可达、变量引用受限）、`debug` 跑草稿 / `runs` 跑已发布、**人工审批**（运行挂在 `HUMAN_APPROVAL` 上 → `WAITING_APPROVAL` → `POST .../approval` 同意则续跑、拒绝则失败）、**从失败节点续跑**（`POST .../retry`，已成功节点输出回灌）、**运行历史 `GET /api/workflow-runs?workflowId=`（倒序分页，失败运行也能找回）**、节点轨迹落库（成功与失败都留痕）；**前端设计器已接真实 API**（列表 / 模板新建 / 画布增删节点与连线 / 逐类型配置 / 保存 / 校验 / 发布 / 运行 / 轨迹 / 运行历史 / 审批） | ✅ 后端 25 用例全绿；前端 `npm run build` 通过；**端到端已在 standalone 上实测**（浏览器 E2E **41/41** + 独立 API 闭环），覆盖 START / TEMPLATE / LLM / HUMAN_APPROVAL 节点（见 §8） |
 | 用户与安全 | 注册（邮箱必填）/ 登录 / JWT（HS256）/ BCrypt / RBAC；**Refresh Token 轮转 + 服务端 logout（设备会话）**；邮箱验证 / 重置密码；令牌版本吊销、登录冻结、限流、每日配额 | ✅ |
 | 可观测 | 自建计数器 + Micrometer（`/actuator/metrics`）；无 Prometheus / 时间序列 | ◐ |
 | 部署 | 7 服务 docker compose、nginx 唯一对外入口、健康检查、数据卷持久化 | ✅ |
@@ -217,7 +217,7 @@ prisdvl-nexus/
 
 | 口径 | 结果 |
 | --- | --- |
-| 后端 `mvn -B test`（默认，无 LIVE 开关） | **831** 个用例：**0** 失败 / **0** 错误 / **33** 跳过，BUILD SUCCESS（分模块实测合计，2026-10-17：common 19 / ai 76 / knowledge 174 于波次 1–3；app **562** 于本次——app 较上轮 541 +21，其中 +11 恢复提交新增的 workflow 测试、+3 运行历史、+2 元信息更新、+5 人工审批与失败续跑） |
+| 后端 `mvn -B test`（默认，无 LIVE 开关） | **832** 个用例：**0** 失败 / **0** 错误 / **33** 跳过，BUILD SUCCESS（分模块实测合计，2026-10-17/18：common 19 / ai 76 / knowledge 174 于波次 1–3；app **563** 于本次——app 较上轮 541 +22，其中 +11 恢复提交新增的 workflow 测试、+3 运行历史、+2 元信息更新、+5 人工审批与失败续跑、+1 预置模板） |
 | 前端 `npm run build`（`tsc --noEmit && vite build`） | exit 0（2026-10-17；仅有既存的 chunk 体积警告） |
 | 工作流端到端（真浏览器 + 真后端） | `npm run verify:workflow` → **ALL OK 41/41**（2026-10-18；`--spring.profiles.active=standalone` + `npm run dev`，未启 Docker、未设 LIVE 变量、未连外部模型；退出码契约 0/1/2 与 `EXIT_CODE` 日志同时生效）。覆盖：创建/种子图、节点增删与连线（面板 8 类含 `HUMAN_APPROVAL`）、保存、校验、发布、运行、节点轨迹、运行历史（空态/累积/点行切换/浏览器内翻页）、失败运行（502+4006 落库与轨迹）、**人工审批（跑到闸门挂起成「待审批」→ 点「同意并继续」→ 运行继续至成功）**、**失败续跑（对失败运行点「重试运行」→ 新建一条 `RETRY` 运行，同样 502/4006）**。运行图覆盖 START / TEMPLATE / LLM / HUMAN_APPROVAL；`KNOWLEDGE_RETRIEVAL` 与 `AGENT` 仍需真实基础设施或模型 |
 | compose 配置校验 | `docker compose config --quiet` 通过（缺 3 个必填变量时拒绝启动，2026-10-14 复验） |

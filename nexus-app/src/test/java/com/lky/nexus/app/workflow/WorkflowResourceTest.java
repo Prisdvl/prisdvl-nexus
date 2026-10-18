@@ -469,6 +469,44 @@ class WorkflowResourceTest {
                 .andExpect(jsonPath("$.code").value(6006));
     }
 
+    @Test
+    @DisplayName("预置模板：清单可查、可实例化为草稿，配置知识库前校验不通过")
+    void listsAndInstantiatesPresets() throws Exception {
+        String token = registerAndLogin("workflow-presets");
+
+        mockMvc.perform(get("/api/workflows/presets")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(3))
+                .andExpect(jsonPath("$.data[0].code").value("knowledge-gap-analysis"))
+                .andExpect(jsonPath("$.data[1].code").value("study-plan-7d"))
+                .andExpect(jsonPath("$.data[2].code").value("knowledge-report"));
+
+        String created = mockMvc.perform(post("/api/workflows/presets/study-plan-7d")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.name").value("7 天学习计划"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"))
+                // 实例化即落草稿：版本号 1，图已写进去（6 个节点，含人工审批闸门）
+                .andExpect(jsonPath("$.data.draftVersionNo").value(1))
+                .andExpect(jsonPath("$.data.nodes.length()").value(6))
+                .andReturn().getResponse().getContentAsString();
+        String workflowId = JsonPath.read(created, "$.data.id");
+
+        // 模板是脚手架：kbIds 刻意留空，所以结构完整但校验会明确报缺什么
+        mockMvc.perform(post("/api/workflows/" + workflowId + "/validate")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.valid").value(false))
+                .andExpect(jsonPath("$.data.errors[0]").value(
+                        org.hamcrest.Matchers.containsString("kbIds")));
+
+        mockMvc.perform(post("/api/workflows/presets/not-a-preset")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(1001));
+    }
+
     private void check(boolean condition, String message) {
         if (!condition) {
             throw new AssertionError(message);

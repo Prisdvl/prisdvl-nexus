@@ -8,6 +8,7 @@ import com.lky.nexus.app.workflow.model.WorkflowGraph;
 import com.lky.nexus.app.workflow.model.dto.CreateWorkflowRequest;
 import com.lky.nexus.app.workflow.model.dto.SaveWorkflowDraftRequest;
 import com.lky.nexus.app.workflow.model.dto.UpdateWorkflowRequest;
+import com.lky.nexus.app.workflow.model.dto.WorkflowPresetResponse;
 import com.lky.nexus.app.workflow.model.dto.WorkflowResponse;
 import com.lky.nexus.app.workflow.model.dto.WorkflowValidationResponse;
 import com.lky.nexus.app.workflow.model.dto.WorkflowVersionResponse;
@@ -41,17 +42,43 @@ public class WorkflowDefinitionService {
     private final WorkflowGraphValidator graphValidator;
     private final WorkspaceService workspaceService;
     private final JsonMapper jsonMapper;
+    private final WorkflowPresets presets;
 
     public WorkflowDefinitionService(WorkflowMapper workflowMapper,
                                      WorkflowVersionMapper versionMapper,
                                      WorkflowGraphValidator graphValidator,
                                      WorkspaceService workspaceService,
-                                     JsonMapper jsonMapper) {
+                                     JsonMapper jsonMapper,
+                                     WorkflowPresets presets) {
         this.workflowMapper = workflowMapper;
         this.versionMapper = versionMapper;
         this.graphValidator = graphValidator;
         this.workspaceService = workspaceService;
         this.jsonMapper = jsonMapper;
+        this.presets = presets;
+    }
+
+    /** 内置模板清单（不含图）。 */
+    public List<WorkflowPresetResponse> presetList() {
+        return presets.all().stream()
+                .map(preset -> new WorkflowPresetResponse(preset.code(), preset.name(),
+                        preset.description(), preset.graph().nodes().size()))
+                .toList();
+    }
+
+    /**
+     * 用内置模板新建一个工作流：先按模板名建库，再把模板图落成草稿（不自动发布）。
+     *
+     * <p>刻意不自动发布：模板里的 `KNOWLEDGE_RETRIEVAL.kbIds` 是空的，用户得先选自己的知识库，
+     * 否则一发布就是个跑不起来的流程。
+     */
+    @Transactional
+    public WorkflowResponse instantiatePreset(Long userId, String code) {
+        WorkflowPresets.Preset preset = presets.require(code);
+        WorkflowResponse created = create(userId, new CreateWorkflowRequest(preset.name(), preset.description()));
+        saveDraft(userId, created.id(),
+                new SaveWorkflowDraftRequest(preset.graph().nodes(), preset.graph().edges()));
+        return detail(userId, created.id());
     }
 
     @Transactional
