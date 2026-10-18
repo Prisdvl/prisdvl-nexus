@@ -633,6 +633,13 @@ graph LR
 
 ## 12. Workflow 架构（Phase 8）
 
+> ⚠️ **本节是设计稿，不是实现现状。** 下面的图用 `AI / TOOL / PARALLEL / CONDITION / HUMAN_APPROVAL` 描述
+> 「知识缺口分析」这一类工作流；**实际实现的节点枚举是**
+> `START / KNOWLEDGE_RETRIEVAL / LLM / AGENT / IF_ELSE / TEMPLATE / HUMAN_APPROVAL / END`
+> （`WorkflowGraphValidator.TYPES`）—— 其中 `AI`→`LLM`、`CONDITION`→`IF_ELSE` 有对应物，
+> 而 **`PARALLEL` 与 `TOOL` 没有实现**，所以下面这张图用当前引擎表达不出来。
+> 看实现请对照 `docs/database.md` §7 与 `README §5`。
+
 ```mermaid
 graph LR
     S["START"] --> A1["AI 提取知识点"]
@@ -651,7 +658,7 @@ graph LR
 | --- | --- |
 | **自研轻量引擎**（约 10 个类），不引入 Flowable/Camunda | 需求是"AI 节点 + 人工确认 + 可回放"，不是 BPMN 全语义；引入重型引擎会让简历项目变成"配置工程师" |
 | 每个节点执行落库（`wf_node_run`） | 支持中断恢复、失败重跑、前端可视化执行轨迹 |
-| 节点类型枚举固定 6 种 | `START / AI / TOOL / CONDITION / PARALLEL / HUMAN_APPROVAL / END` |
+| 节点类型枚举固定 8 种（**实际实现**） | `START / KNOWLEDGE_RETRIEVAL / LLM / AGENT / IF_ELSE / TEMPLATE / HUMAN_APPROVAL / END`；设计稿里的 `PARALLEL` / `TOOL` 未实现 |
 | `PARALLEL` 用有界线程池 + 超时 | 并行分支必须能收敛，避免慢分支拖死整个 run |
 | 节点配置存 JSON（AI 节点存 prompt code + model role） | 工作流是"提示词 + 工具 + 控制流"的组合，配置化即可，不需要为每个节点写一个 Java 类 |
 

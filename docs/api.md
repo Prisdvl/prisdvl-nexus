@@ -937,7 +937,7 @@ curl -s -X POST localhost:8080/mcp \
 | POST | `/api/workflows` | 创建/导入工作流定义（nodes + edges） |
 | GET | `/api/workflows` | 工作流列表 |
 | GET | `/api/workflows/{id}` | 定义详情（含图结构与节点配置） |
-| PUT | `/api/workflows/{id}` | 更新（发布新版本） |
+| PUT | `/api/workflows/{id}` | 改元信息（名称 / 描述，局部更新；**不产生新版本**） |
 | POST | `/api/workflows/{id}/runs` | 触发执行 → `runId` |
 | GET | `/api/workflow-runs/{runId}` | 运行状态与当前节点 |
 | GET | `/api/workflow-runs/{runId}/nodes` | 各节点执行明细（输入/输出/耗时/重试次数） |
@@ -945,13 +945,22 @@ curl -s -X POST localhost:8080/mcp \
 | POST | `/api/workflow-runs/{runId}/approval` | 人工确认节点放行 |
 | POST | `/api/workflow-runs/{runId}/retry` | 从失败节点重试 |
 
-> ⚠️ **本表是 Phase 8 的设计意图，不是已实现清单**（与 `architecture.md` §0 同规矩）。
-> 实际实现以上表为准的部分只有：`POST/GET /api/workflows`、`GET /api/workflows/{id}`、
+> ⚠️ **除「预置工作流」一项外，本表均已实现**（`architecture.md` §0 的规矩仍适用：与代码冲突时以代码为准）。
+> 已实现：`POST/GET /api/workflows`、`GET /api/workflows/{id}`、`PUT /api/workflows/{id}`（仅元信息）、
 > `PUT /api/workflows/{id}/draft`（草稿）、`POST .../validate`、`POST .../publish`、`GET .../versions`、
-> `POST .../debug`（跑草稿）、`POST .../runs`（跑已发布）、`DELETE /api/workflows/{id}`，
-> 以及 `/api/workflow-runs` 的列表 / 详情 / 节点轨迹 / 取消。
-> **本表未实现的**：`PUT /api/workflows/{id}`（改名更新）、`/approval`、`/retry`，
-> 以及表的「预置工作流」三项；对不上时以代码与 README §5 为准。
+> `POST .../debug`（跑草稿）、`POST .../runs`（跑已发布）、`DELETE /api/workflows/{id}`、
+> `/api/workflow-runs` 的列表 / 详情 / 节点轨迹 / 取消，以及 **`/approval`（人工审批推进）** 与
+> **`/retry`（从失败节点续跑）**。
+>
+> **仍未实现：「预置工作流」三项**（`knowledge-gap-analysis` / `study-plan-7d` / `knowledge-report`）。
+> 缺的不是接口，而是它们的图依赖 `PARALLEL` / `TOOL` 节点，而实际枚举里没有这两个
+> （真实枚举见 `database.md` §7：`START/KNOWLEDGE_RETRIEVAL/LLM/AGENT/IF_ELSE/TEMPLATE/HUMAN_APPROVAL/END`）。
+>
+> 两条容易搞错的契约事实：
+> ① `/approval` 的 `decision` 只接受 `APPROVE` / `REJECT`（大小写不敏感），其他值 → `1001`；
+>    运行不在等待审批状态 → `6007` / 409（重复审批、已取消都在此列）。
+> ② `/retry` 只接受 `FAILED` / `CANCELLED` 的运行，否则 `6008` / 409；它沿用源运行的版本与入参，
+>    把已成功节点的输出复制进新运行的轨迹，只重跑未成功的节点。
 
 **预置工作流**：`knowledge-gap-analysis`（知识分析）、`study-plan-7d`（7 天学习计划）、`knowledge-report`（知识报告生成）。
 

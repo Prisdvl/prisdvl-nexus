@@ -628,17 +628,30 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 
 ---
 
-## 7. 工作流（Phase 8 预留）
+## 7. 工作流（Phase 8）
+
+> ⚠️ **本节已按实现重写。** 旧版本描述的是设计稿（`wf_definition` / `wf_node` / `wf_edge` 三张表 + `AI`/`TOOL`/`CONDITION`/`PARALLEL` 节点），
+> 而实际实现的是另外四张表（`V23__workflow_definition_and_run.sql`）：**图不拆表**，整张图快照进 `graph_json`。
 
 | 表 | 关键列 |
 | --- | --- |
-| `wf_definition` | `id`、`user_id`、`code`、`name`、`version`、`status`(`DRAFT`/`PUBLISHED`)、`input_schema`(JSON) |
-| `wf_node` | `id`、`definition_id`、`node_key`、`node_type`(`START`/`AI`/`TOOL`/`CONDITION`/`PARALLEL`/`HUMAN_APPROVAL`/`END`)、`config`(JSON：prompt/model/tool/条件表达式)、`position_x`、`position_y` |
-| `wf_edge` | `id`、`definition_id`、`from_node_key`、`to_node_key`、`condition`(可空) |
-| `wf_run` | `id`、`definition_id`、`definition_version`、`user_id`、`status`、`input`(JSON)、`output`(JSON)、`current_node_key`、`started_at`、`finished_at`、`error_msg` |
-| `wf_node_run` | `id`、`run_id`、`node_key`、`node_type`、`status`(`PENDING`/`RUNNING`/`WAITING_APPROVAL`/`DONE`/`FAILED`/`SKIPPED`)、`attempt`、`input`、`output`、`duration_ms`、`error_msg` |
+| `wf_workflow` | `id`、`user_id`、`workspace_id`、`name`、`description`、`draft_version_id`、`published_version_id`、`status`(`DRAFT`/`PUBLISHED`)、`deleted` |
+| `wf_version` | `id`、`workflow_id`、`version_no`（`(workflow_id, version_no)` 唯一）、`schema_version`、`graph_json`、`graph_hash`、`status`(`DRAFT`/`PUBLISHED`)、`created_by`、`published_at` |
+| `wf_run` | `id`、`workflow_id`、`version_id`、`user_id`、`status`(`QUEUED`/`RUNNING`/`SUCCEEDED`/`FAILED`/`CANCELLED`/**`WAITING_APPROVAL`**)、`trigger_type`(`MANUAL`/`DEBUG`/`RETRY`)、`input_json`、`output_json`、`error_code`、`error_message`、`started_at`、`finished_at`、`duration_ms` |
+| `wf_node_run` | `id`、`run_id`、`node_id`、`node_type`、`status`(`PENDING`/`RUNNING`/`SUCCEEDED`/`FAILED`/`SKIPPED`/**`WAITING_APPROVAL`**)、`attempt`、`input_json`、`output_json`、`error_code`、`error_message`、`latency_ms`、`started_at`、`finished_at` |
 
-> 设计原则：**每个节点执行都落库**，工作流可中断、可恢复、可回放。人工确认节点 = `status=WAITING_APPROVAL`，由 API 恢复。
+> **节点类型实际是 8 种**：`START / KNOWLEDGE_RETRIEVAL / LLM / AGENT / IF_ELSE / TEMPLATE / HUMAN_APPROVAL / END`
+> （`WorkflowGraphValidator.TYPES`）。设计稿里的 `AI` / `TOOL` / `CONDITION` / `PARALLEL` **没有实现**
+> （`AI`≈`LLM`、`CONDITION`≈`IF_ELSE` 有对应物；`PARALLEL` 与 `TOOL` 无）。
+>
+> `status` 列是 `VARCHAR(16)`：`WAITING_APPROVAL` 正好 16 个字符，已实测可写入——**不要加更长的状态名**，
+> 否则会被 MySQL 截断或直接报错。
+>
+> 设计原则不变：**每个节点执行都落库**，工作流可中断、可恢复、可回放。人工确认 = 运行与节点同时为
+> `WAITING_APPROVAL`，由 `POST /api/workflow-runs/{runId}/approval` 推进；失败/已取消的运行可由
+> `POST /api/workflow-runs/{runId}/retry` 从失败节点续跑（已成功节点的输出回灌为初始状态）。
+>
+> **已知缺口**：`wf_run` 没有「重试自哪次运行」的列，RETRY 只能靠 `trigger_type` 区分，无法回溯源运行（补它需要一次迁移）。
 
 ---
 
