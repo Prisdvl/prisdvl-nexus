@@ -233,9 +233,15 @@ prisdvl-nexus/
 `LiveModelCallTest` 2、`ChatStreamLiveTest` 3、`MultiTurnMemoryTest` 1、`AgentLoopTest` 1（后四个都看 `AI_CHAT_API_KEY`）。
 24 + 9 正好等于 33。跑 LIVE 套件要单独指定 `-Dtest=...`，否则会把默认 563 例一起再跑一遍。
 
-> 2026-10-18 跑 LIVE 时发现一处**测试漂移**并已修：`MySqlJsonRoundTripTest` 的注册请求只发
-> `username + password`，而注册接口自 `cb5ae96` 起强制要求 `email`，所以这两个用例以前即使开 flag 也必然 400。
-> 同样的漂移还存在于 `ChatStreamLiveTest` 与 `AgentLoopTest`（都需要模型 Key，本轮无法验证，未改）。
+> 2026-10-18 跑 LIVE 时发现一处**测试漂移**并已修：`MySqlJsonRoundTripTest`、`ChatStreamLiveTest`、
+> `AgentLoopTest` 的注册请求只发 `username + password`，而注册接口自 `cb5ae96` 起强制要求 `email`，
+> 所以这些用例以前即使开了 flag 也必然 400。三处都已补上 email，断言与其含义未改。
+>
+> **验证程度不同，不能一概而论**：`MySqlJsonRoundTripTest` 有 Docker 环境，修完 2/2 真的过了；
+> 另两个门控在 `AI_CHAT_API_KEY`，没有真 Key 就只能确认「失败点已从注册 400 后移到模型层」——
+> `AgentLoopTest` 现在注册与登录都通过，卡在 `POST /api/agent/ask` 的 **503（模型不可达）**；
+> `ChatStreamLiveTest` 三个用例都过了 `newSession`，卡在 SSE 事件断言（meta 需在 delta 之前、不应出现 error 事件）。
+> **要跑绿仍需要真实对话 Key**，所以这两套件本次不能标注为通过。
 
 ```bash
 # 与 CI 一致：先确保未导出 AI_CHAT_API_KEY / *_LIVE

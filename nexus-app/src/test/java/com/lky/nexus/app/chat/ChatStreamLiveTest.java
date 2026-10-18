@@ -223,9 +223,11 @@ class ChatStreamLiveTest {
     }
 
     private Session newSession(String username) throws Exception {
+        // 注册自 cb5ae96 起强制要求 email（RegisterRequest 上 @NotBlank + @Email）；
+        // 原来只发 username/password，开 flag 也必然 400 —— 测试漂移，不是被测代码的问题。
         post("/api/auth/register", """
-                {"username":"%s","password":"%s"}
-                """.formatted(username, PASSWORD), null);
+                {"username":"%s","password":"%s","email":"%s@example.com"}
+                """.formatted(username, PASSWORD, username), null);
 
         String loginBody = post("/api/auth/login", """
                 {"username":"%s","password":"%s"}

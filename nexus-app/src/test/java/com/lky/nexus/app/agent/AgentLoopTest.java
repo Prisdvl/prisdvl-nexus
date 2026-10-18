@@ -43,8 +43,8 @@ class AgentLoopTest {
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"%s","password":"%s"}
-                                """.formatted(USERNAME, PASSWORD)))
+                                {"username":"%s","password":"%s","email":"%s@example.com"}
+                                """.formatted(USERNAME, PASSWORD, USERNAME)))
                 .andExpect(result -> assertThat(result.getResponse().getStatus()).isIn(200, 409));
         String loginBody = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
