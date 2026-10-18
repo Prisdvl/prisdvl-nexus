@@ -220,7 +220,8 @@ prisdvl-nexus/
 | 后端 `mvn -B test`（默认，无 LIVE 开关） | **832** 个用例：**0** 失败 / **0** 错误 / **33** 跳过，BUILD SUCCESS（分模块实测合计，2026-10-17/18：common 19 / ai 76 / knowledge 174 于波次 1–3；app **563** 于本次——app 较上轮 541 +22，其中 +11 恢复提交新增的 workflow 测试、+3 运行历史、+2 元信息更新、+5 人工审批与失败续跑、+1 预置模板） |
 | 前端 `npm run build`（`tsc --noEmit && vite build`） | exit 0（2026-10-17；仅有既存的 chunk 体积警告） |
 | 后端 **LIVE 套件**（需 Docker，各套件用 Testcontainers 自起容器） | **24 例实测通过**（2026-10-18，与默认套件分开跑）：`RedisEmailCodeStoreLiveTest` 9 / `MySqlJsonRoundTripTest` 2 / `LiveVectorStoreTest` 4（真实 pgvector + HNSW 排序）/ `LiveChunkIndexTest` 9（真实 ES，直接调 `_analyze` 验证 IK 中文分词）。这 24 例此前一直处于跳过状态，本轮首次实跑。详见下方说明 |
-| 工作流端到端（真浏览器 + 真后端） | `npm run verify:workflow` → **ALL OK 41/41**（2026-10-18；`--spring.profiles.active=standalone` + `npm run dev`，未启 Docker、未设 LIVE 变量、未连外部模型；退出码契约 0/1/2 与 `EXIT_CODE` 日志同时生效）。覆盖：创建/种子图、节点增删与连线（面板 8 类含 `HUMAN_APPROVAL`）、保存、校验、发布、运行、节点轨迹、运行历史（空态/累积/点行切换/浏览器内翻页）、失败运行（502+4006 落库与轨迹）、**人工审批（跑到闸门挂起成「待审批」→ 点「同意并继续」→ 运行继续至成功）**、**失败续跑（对失败运行点「重试运行」→ 新建一条 `RETRY` 运行，同样 502/4006）**。运行图覆盖 START / TEMPLATE / LLM / HUMAN_APPROVAL；`KNOWLEDGE_RETRIEVAL` 与 `AGENT` 仍需真实基础设施或模型 |
+| 工作流端到端（**真实基础设施**，`local` profile） | 2026-10-18：compose 起 MySQL / Redis / pgvector / ES / RabbitMQ → 建知识库 → 上传 md（3 个切片）→ 建索引（`indexed=3/3`，562 ms）→ 工作流 `START → KNOWLEDGE_RETRIEVAL(bm25) → TEMPLATE → END` → `validate` **valid=true** → `publish` 200 → `run` **SUCCEEDED**，检索**命中 3 条**且排序正确（「缓存穿透」得分 2.329 排第一，「缓存雪崩 / 缓存击穿」各 0.401，中文经 IK 分词）。**全程零模型调用**：用占位 key + 把两个 base-url 指向死端口，检索只走 bm25。这条链路此前从未跑通过，本轮顺带修掉一个真 bug（见下） |
+| 工作流端到端（真浏览器 + 真后端） | `npm run verify:workflow` → **ALL OK 41/41**（2026-10-18；`--spring.profiles.active=standalone` + `npm run dev`，未启 Docker、未设 LIVE 变量、未连外部模型；退出码契约 0/1/2 与 `EXIT_CODE` 日志同时生效）。覆盖：创建/种子图、节点增删与连线（面板 8 类含 `HUMAN_APPROVAL`）、保存、校验、发布、运行、节点轨迹、运行历史（空态/累积/点行切换/浏览器内翻页）、失败运行（502+4006 落库与轨迹）、**人工审批（跑到闸门挂起成「待审批」→ 点「同意并继续」→ 运行继续至成功）**、**失败续跑（对失败运行点「重试运行」→ 新建一条 `RETRY` 运行，同样 502/4006）**。浏览器这一轮覆盖 START / TEMPLATE / LLM / HUMAN_APPROVAL；`KNOWLEDGE_RETRIEVAL` 由上一条（真实基础设施）覆盖；`AGENT` 仍缺模型 Key |
 | compose 配置校验 | `docker compose config --quiet` 通过（缺 3 个必填变量时拒绝启动，2026-10-14 复验） |
 | 前端其他 QA | 除 `verify-workflow.mjs` 外的 `verify:*` / `qa-*.mjs`：**NOT VERIFIED**（截图见 §1） |
 
@@ -242,6 +243,15 @@ prisdvl-nexus/
 > `AgentLoopTest` 现在注册与登录都通过，卡在 `POST /api/agent/ask` 的 **503（模型不可达）**；
 > `ChatStreamLiveTest` 三个用例都过了 `newSession`，卡在 SSE 事件断言（meta 需在 delta 之前、不应出现 error 事件）。
 > **要跑绿仍需要真实对话 Key**，所以这两套件本次不能标注为通过。
+
+> **2026-10-18 端到端跑工作流检索时挖出的真 bug（已修）**：`WorkflowGraphValidator.validateVariables`
+> 要求变量写成 `nodes.output.<节点id>`，而运行时的 `WorkflowVariableResolver` 按 `nodes.<节点id>.output.<路径>` 解析
+> —— 两者正好相反。后果是：**任何引用上游节点输出的图都无法发布**（`validate` 报「变量只能引用 input 或节点 output」，
+> `publish` 随之 500），刚加的三个预置模板里的 `{{ nodes.retrieval.output.documents }}` 也全部命中此坑。
+> 修法是让校验器与解析器对齐（`parts.length >= 4` 且 `parts[2] == "output"`，upstream 取 `parts[1]`）。
+> 原有测试 `rejectsUnknownVariableNode` 之所以「通过」，是因为报错信息回显了原始引用串、
+> `hasMessageContaining("missing")` 被巧合满足——现已改为断言「上游节点不存在」，并新增
+> `acceptsValidUpstreamVariable`（修复前必抛异常）作为真正的回归用例。
 
 ```bash
 # 与 CI 一致：先确保未导出 AI_CHAT_API_KEY / *_LIVE

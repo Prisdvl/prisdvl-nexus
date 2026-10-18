@@ -60,7 +60,27 @@ class WorkflowGraphValidatorTest {
 
         assertThatThrownBy(() -> validator.validate(graph))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("missing");
+                // 断言「上游节点不存在」这句，而不是只断言消息里含 "missing"：
+                // 旧实现的格式检查错误信息也会回显原引用串，于是 hasMessageContaining("missing")
+                // 会被巧合满足，让这条用例看起来是对的（实测踩过）。
+                .hasMessageContaining("上游节点不存在");
+    }
+
+    @Test
+    @DisplayName("合法的 nodes.<id>.output.<路径> 引用可以通过校验")
+    void acceptsValidUpstreamVariable() {
+        WorkflowGraph graph = graph(
+                node("start", "START", Map.of()),
+                node("tpl", "TEMPLATE", Map.of("template", "hello")),
+                node("llm", "LLM", Map.of("userPrompt", "{{ nodes.tpl.output.text }}")),
+                node("end", "END", Map.of()),
+                edge("e1", "start", "tpl", null),
+                edge("e2", "tpl", "llm", null),
+                edge("e3", "llm", "end", null)
+        );
+
+        // 修复前这里必然抛「变量只能引用 input 或节点 output」——合法的上游引用被误杀
+        assertThatCode(() -> validator.validate(graph)).doesNotThrowAnyException();
     }
 
     @Test

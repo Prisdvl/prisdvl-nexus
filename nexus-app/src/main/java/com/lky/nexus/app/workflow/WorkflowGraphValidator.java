@@ -166,10 +166,13 @@ public class WorkflowGraphValidator {
             if ("input".equals(parts[0])) {
                 continue;
             }
-            if (!"nodes".equals(parts[0]) || parts.length < 3 || !"output".equals(parts[1])) {
-                throw invalid("变量只能引用 input 或节点 output: " + reference);
+            // 引用格式必须与 WorkflowVariableResolver 一致：nodes.<节点id>.output.<路径>
+            // （旧实现要求 parts[1] == "output"，与解析器相反：合法的上游引用一律被判非法，
+            //  带 {{ nodes.x.output.y }} 的图根本发布不了。端到端跑检索节点时才暴露出来）
+            if (!"nodes".equals(parts[0]) || parts.length < 4 || !"output".equals(parts[2])) {
+                throw invalid("变量只能引用 input 或 nodes.<节点id>.output.<路径>: " + reference);
             }
-            String upstream = parts[2];
+            String upstream = parts[1];
             if (!nodes.containsKey(upstream) || !reachable.contains(upstream) || upstream.equals(nodeId)) {
                 throw invalid("变量引用的上游节点不存在: " + reference);
             }
