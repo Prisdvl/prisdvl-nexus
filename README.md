@@ -219,9 +219,9 @@ prisdvl-nexus/
 | --- | --- |
 | 后端 `mvn -B test`（默认，无 LIVE 开关） | **832** 个用例：**0** 失败 / **0** 错误 / **33** 跳过，BUILD SUCCESS（分模块实测合计，2026-10-17/18：common 19 / ai 76 / knowledge 174 于波次 1–3；app **563** 于本次——app 较上轮 541 +22，其中 +11 恢复提交新增的 workflow 测试、+3 运行历史、+2 元信息更新、+5 人工审批与失败续跑、+1 预置模板） |
 | 前端 `npm run build`（`tsc --noEmit && vite build`） | exit 0（2026-10-17；仅有既存的 chunk 体积警告） |
-| 后端 **LIVE 套件**（需 Docker，各套件用 Testcontainers 自起容器） | **24 例实测通过**（2026-10-18，与默认套件分开跑）：`RedisEmailCodeStoreLiveTest` 9 / `MySqlJsonRoundTripTest` 2 / `LiveVectorStoreTest` 4（真实 pgvector + HNSW 排序）/ `LiveChunkIndexTest` 9（真实 ES，直接调 `_analyze` 验证 IK 中文分词）。这 24 例此前一直处于跳过状态，本轮首次实跑。详见下方说明 |
-| 工作流端到端（**真实基础设施**，`local` profile） | 2026-10-18：compose 起 MySQL / Redis / pgvector / ES / RabbitMQ → 建知识库 → 上传 md（3 个切片）→ 建索引（`indexed=3/3`，562 ms）→ 工作流 `START → KNOWLEDGE_RETRIEVAL(bm25) → TEMPLATE → END` → `validate` **valid=true** → `publish` 200 → `run` **SUCCEEDED**，检索**命中 3 条**且排序正确（「缓存穿透」得分 2.329 排第一，「缓存雪崩 / 缓存击穿」各 0.401，中文经 IK 分词）。**全程零模型调用**：用占位 key + 把两个 base-url 指向死端口，检索只走 bm25。这条链路此前从未跑通过，本轮顺带修掉一个真 bug（见下） |
-| 工作流端到端（真浏览器 + 真后端） | `npm run verify:workflow` → **ALL OK 41/41**（2026-10-18；`--spring.profiles.active=standalone` + `npm run dev`，未启 Docker、未设 LIVE 变量、未连外部模型；退出码契约 0/1/2 与 `EXIT_CODE` 日志同时生效）。覆盖：创建/种子图、节点增删与连线（面板 8 类含 `HUMAN_APPROVAL`）、保存、校验、发布、运行、节点轨迹、运行历史（空态/累积/点行切换/浏览器内翻页）、失败运行（502+4006 落库与轨迹）、**人工审批（跑到闸门挂起成「待审批」→ 点「同意并继续」→ 运行继续至成功）**、**失败续跑（对失败运行点「重试运行」→ 新建一条 `RETRY` 运行，同样 502/4006）**。浏览器这一轮覆盖 START / TEMPLATE / LLM / HUMAN_APPROVAL；`KNOWLEDGE_RETRIEVAL` 由上一条（真实基础设施）覆盖；`AGENT` 仍缺模型 Key |
+| 后端 **LIVE 套件**（需 Docker；部分套件自起容器，部分连真实模型） | **31 例实测通过**（2026-10-18，与默认套件分开跑）：<br>· 只需 Docker **24 例**：`RedisEmailCodeStoreLiveTest` 9 / `MySqlJsonRoundTripTest` 2 / `LiveVectorStoreTest` 4（真实 pgvector + HNSW 排序）/ `LiveChunkIndexTest` 9（真实 ES，直接调 `_analyze` 验证 IK 分词）<br>· 需真实模型 Key **7 例**：`LiveModelCallTest` 2 / `ChatStreamLiveTest` 3（真实 SSE 流式）/ `MultiTurnMemoryTest` 1 / `AgentLoopTest` 1（真实工具循环，15.5 s）<br>· **仍未通过 2 例**：`LiveEmbeddingTest` —— 测试 profile 把 `embedding.default` 钉死为 `ollama:bge-m3`（`application-test.yml`），因此需要本机 Ollama，生产用的百炼 Key 在这条路径上不生效 |
+| 工作流端到端（**真实基础设施**，`local` profile） | 2026-10-18：compose 起 MySQL / Redis / pgvector / ES / RabbitMQ → 建知识库 → 上传 md（3 个切片）→ 建索引（`indexed=3/3`，562 ms）→ 工作流 `START → KNOWLEDGE_RETRIEVAL(bm25) → TEMPLATE → END` → `validate` **valid=true** → `publish` 200 → `run` **SUCCEEDED**，检索**命中 3 条**且排序正确（「缓存穿透」得分 2.329 排第一，「缓存雪崩 / 缓存击穿」各 0.401，中文经 IK 分词）。这条链路此前从未跑通过，本轮顺带修掉一个真 bug（见下）。<br>同日另一条：`AGENT` 节点 **建 Agent → 发布 → 工作流 `START → AGENT → TEMPLATE → END` → `run` SUCCEEDED**，agent 节点耗时 **2496 ms**（真实模型调用）、`usedTools=true`，回答 174 字并自带「以下内容不是来自你的笔记」的来源声明——至此 8 种节点中只剩 `IF_ELSE` 仅有单测、`KNOWLEDGE_RETRIEVAL` 与 `AGENT` 已双双端到端跑通 |
+| 工作流端到端（真浏览器 + 真后端） | `npm run verify:workflow` → **ALL OK 41/41**（2026-10-18；`--spring.profiles.active=standalone` + `npm run dev`，未启 Docker、未设 LIVE 变量、未连外部模型；退出码契约 0/1/2 与 `EXIT_CODE` 日志同时生效）。覆盖：创建/种子图、节点增删与连线（面板 8 类含 `HUMAN_APPROVAL`）、保存、校验、发布、运行、节点轨迹、运行历史（空态/累积/点行切换/浏览器内翻页）、失败运行（502+4006 落库与轨迹）、**人工审批（跑到闸门挂起成「待审批」→ 点「同意并继续」→ 运行继续至成功）**、**失败续跑（对失败运行点「重试运行」→ 新建一条 `RETRY` 运行，同样 502/4006）**。浏览器这一轮覆盖 START / TEMPLATE / LLM / HUMAN_APPROVAL；`KNOWLEDGE_RETRIEVAL` 与 `AGENT` 由上一条（真实基础设施）覆盖 |
 | compose 配置校验 | `docker compose config --quiet` 通过（缺 3 个必填变量时拒绝启动，2026-10-14 复验） |
 | 前端其他 QA | 除 `verify-workflow.mjs` 外的 `verify:*` / `qa-*.mjs`：**NOT VERIFIED**（截图见 §1） |
 
@@ -229,10 +229,16 @@ prisdvl-nexus/
 连真实模型的嵌入/对话类），由环境变量门控（如 `AI_SEARCH_LIVE=true`、`AI_VECTOR_LIVE=true`、
 `AI_EMBEDDING_LIVE=true`、或非空的 `AI_CHAT_API_KEY`）。**只要 shell 里设了 `AI_CHAT_API_KEY`（哪怕是占位值），对应 LIVE 套件就会执行**；无有效密钥时会失败——这不是默认 CI 口径。GitHub Actions 故意不注入任何模型密钥。
 
-那 33 个跳过项现在可以拆清楚了：**24 例**只依赖 Docker（Redis / MySQL / pgvector / ES+IK，各自用 Testcontainers 起容器），
-已实测通过；剩下 **9 例**确实需要真实模型 Key —— `LiveEmbeddingTest` 2（`AI_EMBEDDING_LIVE`）、
-`LiveModelCallTest` 2、`ChatStreamLiveTest` 3、`MultiTurnMemoryTest` 1、`AgentLoopTest` 1（后四个都看 `AI_CHAT_API_KEY`）。
-24 + 9 正好等于 33。跑 LIVE 套件要单独指定 `-Dtest=...`，否则会把默认 563 例一起再跑一遍。
+那 33 个跳过项现在几乎全部落地：**24 例**只依赖 Docker（Redis / MySQL / pgvector / ES+IK，各自用 Testcontainers 起容器），
+另有 **7 例**用 `deploy/.env` 的真实 Key 跑通（`LiveModelCallTest` 2 / `ChatStreamLiveTest` 3 /
+`MultiTurnMemoryTest` 1 / `AgentLoopTest` 1）。**只剩 2 例**没通过：`LiveEmbeddingTest` ——
+它走 `AI_EMBEDDING_LIVE`，但测试 profile 把 `embedding.default` 钉死成 `ollama:bge-m3`，
+而本机没有 Ollama 服务（11434 拒绝连接），生产用的百炼 Key 在这条路径上不生效。
+24 + 7 + 2 = 33。跑 LIVE 套件要单独指定 `-Dtest=...`，否则会把默认 563 例一起再跑一遍。
+
+> ⚠️ **别用 `-Dsurefire.failIfNoSpecifiedTests=false` 兜底**：它会把「`-Dtest` 没匹配到任何类」
+> 变成静默的 BUILD SUCCESS。第一次我用 `-Dtest=A+B+C`（`+` 不是 surefire 的分隔符）跑出过
+> 「零个测试却 EXIT=0」，改用逗号分隔并去掉该开关后才是真实结果。
 
 > 2026-10-18 跑 LIVE 时发现一处**测试漂移**并已修：`MySqlJsonRoundTripTest`、`ChatStreamLiveTest`、
 > `AgentLoopTest` 的注册请求只发 `username + password`，而注册接口自 `cb5ae96` 起强制要求 `email`，
