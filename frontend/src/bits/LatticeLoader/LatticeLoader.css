@@ -20,6 +20,11 @@
   font-family: inherit;
   font-size: var(--ll-font);
   line-height: 1;
+
+  /* 不把父容器撑宽：窄屏（手机 390px 档）下标签文字长于可用宽度时，
+     曾经顶出 1–3px 的横向滚动；这里允许收缩，溢出交给 label 自己裁掉。 */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .lattice-loader__grid {
@@ -119,6 +124,12 @@
   position: relative;
   display: inline-block;
   font-weight: 500;
+
+  /* flex 项默认 min-width:auto 不肯收缩到内容宽度以下，空间不够时会把文档撑宽；
+     放开收缩并裁掉溢出（`.lattice-loader__text` 是 nowrap 的）。 */
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .lattice-loader__text {
@@ -126,6 +137,7 @@
   top: 0;
   left: 0;
   white-space: nowrap;
+  max-width: 100%;
   opacity: 0;
   filter: blur(2px);
   transition:

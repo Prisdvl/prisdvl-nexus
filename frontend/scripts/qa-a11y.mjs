@@ -31,6 +31,10 @@ const login = async () => {
 
 /** 页面级结构审计 */
 async function audit(label) {
+  // 先等内容就绪再审计：懒加载分块与页面自己的数据请求都可能让 h1 晚于 networkidle 出现，
+  // runner 上比本机慢得多（CI 里曾因此把"还没渲染"读成"没有 h1"）。
+  // 这里只等"内容出现"，超时后照常审计——真的缺 h1 依然判 FAIL。
+  await page.waitForSelector('main h1', { timeout: 15000 }).catch(() => {})
   const r = await page.evaluate(() => {
     const visible = (el) => el.offsetParent !== null || getComputedStyle(el).position === 'fixed'
 

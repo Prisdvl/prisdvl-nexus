@@ -22,7 +22,16 @@ await page.locator('#li-p').fill('qa-runner-password')
   await page.waitForSelector('.shell', { timeout: 8000 })
   await page.waitForTimeout(1200)
 }
-const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
+/**
+ * 量横向溢出前先等页面离开加载态。
+ * 加载态里的 `.lattice-loader__text` 会比视口多出 1–3px（本机实测 391 vs 390），
+ * 常见的红是"量得太早"而不是布局真的溢出；超时也照量，真有溢出依然判 FAIL。
+ */
+const settle = (page) => page.locator('.lattice-loader').first().waitFor({ state: 'detached', timeout: 15000 }).catch(() => {})
+const overflow = async (page) => {
+  await settle(page)
+  return page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
+}
 const nav = (page, l) => page.locator('.sb-nav button.rubber-segment__item', { hasText: l }).first()
 
 /* ================= 桌面 1440 ================= */
