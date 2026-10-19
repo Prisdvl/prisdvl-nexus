@@ -59,14 +59,16 @@ public class UserEmbeddingConfigService {
             return new UserEmbeddingConfigResponse(null, null, null, required, false, false, null,
                     byokPolicy.allowedModels(), required);
         }
-        // 掩码必须打在**明文**上（与对话侧同一处理）：打在密文上会把密文片段当成 Key 回显出去
-        String plainKey = credentialCipher.decrypt(po.getApiKey());
+        // 掩码必须打在**明文**上（与对话侧同一处理）：打在密文上会把密文片段当成 Key 回显出去。
+        // 解不开也不让整个 GET 失败（与对话侧同一取舍，见 UserLlmConfigService#readablePlainKey）
+        String plainKey = readablePlainKey(po, false);
         upgradeLegacyRow(po, plainKey);
         return new UserEmbeddingConfigResponse(
                 po.getProvider(), po.getModelName(), po.getBaseUrl(),
                 po.getDimensions() == null ? required : po.getDimensions(),
                 Integer.valueOf(1).equals(po.getEnabled()),
-                StringUtils.hasText(plainKey),
+                // "有没有 Key"看库里有没有值，不看能不能解开（解不开时 apiKeyMasked 为 null）
+                StringUtils.hasText(po.getApiKey()),
                 UserLlmConfigService.mask(plainKey),
                 byokPolicy.allowedModels(), required);
     }
@@ -106,12 +108,17 @@ public class UserEmbeddingConfigService {
 
         // apiKey 留空 = 保留已有（历史明文行顺手升级为密文）；填了才覆盖。
         // 刻意不无脑重加密：GCM 用随机 IV，无脑重加密会让"只改了模型名"也换掉密文。
-        String plainKey = credentialCipher.decrypt(po.getApiKey());
+        // 顺序同样是契约：填了新 Key 的路径不得先去解旧密文——否则换过 KEK 之后
+        // 连"重新保存一次"都做不到（与对话侧同一 bug，见 UserLlmConfigService#upsert）。
+        String plainKey;
         if (StringUtils.hasText(request.apiKey())) {
             plainKey = request.apiKey().trim();
             po.setApiKey(credentialCipher.encrypt(plainKey));
-        } else if (StringUtils.hasText(plainKey) && !credentialCipher.isEncrypted(po.getApiKey())) {
-            po.setApiKey(credentialCipher.encrypt(plainKey));
+        } else {
+            plainKey = readablePlainKey(po, enabled);
+            if (StringUtils.hasText(plainKey) && !credentialCipher.isEncrypted(po.getApiKey())) {
+                po.setApiKey(credentialCipher.encrypt(plainKey));
+            }
         }
 
         if (enabled) {
@@ -127,6 +134,28 @@ public class UserEmbeddingConfigService {
         log.info("用户 {} 的自定义嵌入模型配置已保存：enabled={}, provider={}, model={}, dimensions={}",
                 userId, enabled, po.getProvider(), po.getModelName(), po.getDimensions());
         return get(userId);
+    }
+
+    /**
+     * 尽力解出已存凭据的明文；解不开时不让整条路径变成死结（与对话侧同一策略，
+     * 说明见 {@code UserLlmConfigService#readablePlainKey}）：
+     * 读取 / 关闭开关时不抛错（返回 {@code null} + WARN），要启用时抛 1001 并让用户重填 Key。
+     *
+     * <p>真正消费嵌入凭据的 {@link DbUserEmbeddingCredentialsProvider} 不做这个容错：
+     * 那里必须 fail-closed，否则会静默用平台全局 Key 去嵌入用户的库。
+     */
+    private String readablePlainKey(UserEmbeddingConfigPO po, boolean enabled) {
+        try {
+            return credentialCipher.decrypt(po.getApiKey());
+        } catch (BusinessException e) {
+            log.warn("用户 {} 的嵌入 Key 无法解密（服务端加密密钥可能已更换或未配置）：{}",
+                    po.getUserId(), e.getMessage());
+            if (enabled) {
+                throw new BusinessException(ErrorCode.PARAM_INVALID,
+                        "已保存的 API Key 无法解密（服务端加密密钥可能已更换），请重新填写 API Key 后再启用");
+            }
+            return null;
+        }
     }
 
     private void validateReady(String provider, String modelName, String baseUrl, String apiKey) {

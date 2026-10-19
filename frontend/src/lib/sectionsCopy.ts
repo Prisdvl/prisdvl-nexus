@@ -264,7 +264,11 @@ const ZH: SectionsCopy = {
     baseLabel: 'Base URL',
     baseHint: '任意 OpenAI 兼容端点：DeepSeek、百炼兼容模式、SiliconFlow、自建 vLLM 等。',
     keyLabel: 'API Key',
-    keyPhSet: (masked) => `已设置（${masked}），留空保持不变`,
+    // 有掩码 = 能解开；掩码为 null 且 hasApiKey 为真 = 库里那行解不开（服务端换了加密密钥）。
+    // 这时不能显示"已设置（null）"，要直接告诉用户唯一的自救动作：重新填一次。
+    keyPhSet: (masked) => masked
+      ? `已设置（${masked}），留空保持不变`
+      : '已保存的 Key 无法解密（服务端加密密钥可能已变更），请重新填写',
     keyHint: 'Key 仅保存在你的账号下，回显一律掩码；留空提交表示不改动已存的 Key。',
     modelLabel: '模型名',
     modelHint: '如 deepseek-chat / qwen-plus / glm-4-flash；需与所选端点的模型名一致。',
@@ -291,7 +295,11 @@ const ZH: SectionsCopy = {
     baseLabel: 'Base URL',
     baseHint: '你自己的 OpenAI 兼容嵌入端点，如百炼 compatible-mode。',
     keyLabel: 'API Key',
-    keyPhSet: (masked) => `已设置（${masked}），留空保持不变`,
+    // 有掩码 = 能解开；掩码为 null 且 hasApiKey 为真 = 库里那行解不开（服务端换了加密密钥）。
+    // 这时不能显示"已设置（null）"，要直接告诉用户唯一的自救动作：重新填一次。
+    keyPhSet: (masked) => masked
+      ? `已设置（${masked}），留空保持不变`
+      : '已保存的 Key 无法解密（服务端加密密钥可能已变更），请重新填写',
     keyHint: 'Key 加密后保存在你的账号下，回显一律掩码；留空提交表示不改动已存的 Key。',
     dimLabel: '向量维度',
     dimHint: (dim) => `平台固定为 ${dim} 维（向量列与知识库冻结维度都按它建立），不接受其他维度。`,
@@ -491,7 +499,9 @@ const EN: SectionsCopy = {
     baseLabel: 'Base URL',
     baseHint: 'Any OpenAI-compatible endpoint: DeepSeek, Bailian compatibility mode, SiliconFlow, self-hosted vLLM, etc.',
     keyLabel: 'API Key',
-    keyPhSet: (masked) => `Already set (${masked}) — leave blank to keep it`,
+    keyPhSet: (masked) => masked
+      ? `Already set (${masked}) — leave blank to keep it`
+      : 'The stored key cannot be decrypted (the server encryption key may have changed) — please enter it again',
     keyHint: 'The key is stored under your account only and is always masked when echoed back; submitting blank keeps the stored key.',
     modelLabel: 'Model name',
     modelHint: 'e.g. deepseek-chat / qwen-plus / glm-4-flash — must match the model name of the chosen endpoint.',
@@ -518,7 +528,9 @@ const EN: SectionsCopy = {
     baseLabel: 'Base URL',
     baseHint: 'Your own OpenAI-compatible embedding endpoint, e.g. Bailian compatibility mode.',
     keyLabel: 'API Key',
-    keyPhSet: (masked) => `Already set (${masked}) — leave blank to keep it`,
+    keyPhSet: (masked) => masked
+      ? `Already set (${masked}) — leave blank to keep it`
+      : 'The stored key cannot be decrypted (the server encryption key may have changed) — please enter it again',
     keyHint: 'The key is encrypted under your account and always masked when echoed back; submitting blank keeps the stored key.',
     dimLabel: 'Vector dimension',
     dimHint: (dim) => `Fixed at ${dim} by the platform (the vector column and every frozen base use it); other dimensions are rejected.`,
