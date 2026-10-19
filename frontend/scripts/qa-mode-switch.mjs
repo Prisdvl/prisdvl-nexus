@@ -53,31 +53,51 @@ const clearToasts = () => page.evaluate(() => {
   document.querySelectorAll('.toast-host .swipe-toast').forEach((el) => el.remove())
 })
 
-const modeSegValue = () => page.evaluate(() => {
-  const el = document.querySelector('.mode-seg .rubber-segment__item[aria-checked="true"]')
+// 模式切换现在是「会话配置」弹出层：按钮 + .session-config__pop 里的 .sc-opt（aria-pressed 表示选中）
+const openConfig = async () => {
+  if ((await page.locator('.session-config__pop').count()) === 0) {
+    await page.locator('.session-config__btn').first().click()
+  }
+  await page.waitForSelector('.session-config__pop', { timeout: 5000 })
+}
+const closeConfig = async () => {
+  if ((await page.locator('.session-config__pop').count()) > 0) await page.keyboard.press('Escape')
+}
+const modeOptValue = () => page.evaluate(() => {
+  const el = document.querySelector('.session-config__pop .sc-section:first-child .sc-opt[aria-pressed="true"]')
   return el?.textContent?.trim() ?? ''
 })
+const pickMode = async (label) => {
+  await openConfig()
+  await page.locator('.session-config__pop .sc-section:first-child .sc-opt', { hasText: label }).first().click()
+}
 
 try {
   await page.goto(`${BASE}/#/app/chat`, { waitUntil: 'networkidle' })
-  await page.waitForSelector('.mode-seg', { timeout: 15000 })
+  await page.waitForSelector('.session-config__btn', { timeout: 15000 })
   await page.waitForTimeout(800)
 
   /* ---------- 1. 模式切换控件存在 ---------- */
-  check('对话页有模式切换控件', (await page.locator('.mode-seg').count()) === 1)
-  const modeItems = await page.locator('.mode-seg button.rubber-segment__item').count()
-  check('模式分段含三项（普通对话/知识库问答/Agent）', modeItems === 3, `${modeItems} 项`)
-  check('模式分段有可访问名', (await page.locator('.mode-seg [aria-label="会话模式"]').count()) === 1)
+  check('对话页有模式切换控件', (await page.locator('.session-config__btn').count()) === 1)
+  await openConfig()
+  const modeItems = await page.locator('.session-config__pop .sc-section:first-child .sc-opt').count()
+  check('模式区含三项（普通对话/知识库问答/Agent）', modeItems === 3, `${modeItems} 项`)
+  check(
+    '模式按钮声明为弹出层触发（aria-haspopup=dialog）',
+    (await page.locator('.session-config__btn').first().getAttribute('aria-haspopup')) === 'dialog',
+  )
 
   /* ---------- 2. mock 分支允许切模式 ---------- */
-  const before = await modeSegValue()
+  const before = await modeOptValue()
   const targetLabel = before === '知识库问答' ? 'Agent' : '知识库问答'
   await clearToasts()
-  await page.locator('.mode-seg button.rubber-segment__item', { hasText: targetLabel }).click()
+  await pickMode(targetLabel)
   await page.waitForTimeout(1000)
+  await openConfig()
 
-  const after = await modeSegValue()
-  check('点模式分段后选中项变化', after === targetLabel, `${before} → ${after}`)
+  const after = await modeOptValue()
+  await closeConfig()
+  check('点模式项后选中项变化', after === targetLabel, `${before} → ${after}`)
 
   const t1 = await readToast()
   /*
@@ -100,7 +120,7 @@ try {
    * 这里用「切到普通对话」验证 —— 会话在 PLAIN 下本来就没有绑定，
    * 所以提示**不该**说"已清除"，否则就是在谎报。
    */
-  await page.locator('.mode-seg button.rubber-segment__item', { hasText: '普通对话' }).click()
+  await pickMode('普通对话')
   await page.waitForTimeout(1000)
   const t2 = await readToast()
   check('切回普通对话有提示', !!t2 && t2.title.startsWith('已切换'), t2?.title ?? '(无)')
