@@ -847,16 +847,25 @@ POST /api/agent/runs/9/approval
 `Bearer …`、`sk-…` 一律替换为 `***`）。
 `THINK` 只是阶段标记（"开始运行""等待人工确认"），**不落库也不外发模型的隐藏推理原文**。
 
+#### 工具调用审计查询（2026-10-19 已实现）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/tool-invocations` | 当前用户的工具调用审计流水：分页（`pageNum` / `pageSize`），可按 `toolCode` / `status`（`SUCCEEDED` / `FAILED` / `DENIED` / `CANCELLED` / `PENDING_APPROVAL`）/ `runId` 过滤，新到旧 |
+
+> **没有 userId 参数**：一律按登录用户收口（审计行里带着工具名、参数摘要与运行 id）。
+> 被拒绝、被取消、等待超时的调用同样在流水里——只记成功的审计等于把最需要复查的那部分抹掉。
+> 返回的 `argumentsDigest` / `resultDigest` 入库时已是脱敏摘要，接口不还原明文。
+
 ### 6.1 规划中（尚未实现）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/tools/{code}` | 工具详情（入参 JSON Schema、最近调用记录） |
-| GET | `/api/tool-invocations` | 工具调用审计流水（按时间/工具/成功与否过滤）；本轮只落库，未开查询接口 |
 
 > `POST /api/agent/runs` 的**流式**形态（把整个运行挂到 `POST /api/chat/stream` 上并复用同一条 SSE）
 > 仍未实现：本轮审批事件是通过对话流的工具拦截点真实发出的（`approval_required` 已可用），
-> 但运行状态机自身的接口是查询式的。`GET /api/tool-invocations` 的审计数据已经完整落库。
+> 但运行状态机自身的接口是查询式的；审计数据由 `GET /api/tool-invocations` 提供（见上）。
 
 ---
 

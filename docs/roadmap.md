@@ -33,7 +33,7 @@
 | 4 | **欢迎区示例问题只有一条** | ❌ 多库时应按库分别生成且须能命中真实资料 | P3 |
 | 5 | **E2E / LIVE 进 CI + 数据回收自动化** | ⚠️ 最小 CI 已覆盖默认 `mvn test` + `npm run build` + `compose config`；LIVE/真浏览器 E2E 与「跑完自动回收」仍未进流水线 | P3 |
 | 6 | **检索命中列表持久化** | ✅ **已修**（2026-10-19）：`retrieval` 事件负载随消息落进 `chat_message.metadata`（与 `toolCalls` / `citations` 同列，无新表新列），`GET /api/chat/messages/{id}` 返回 `retrieval`，前端历史消息把它映射回上下文胶囊——刷新后「命中 N 个片段 / 命中几篇文档」仍在。**仍欠**：知识库问答（`/ask/stream`）那侧命中明细只落在 `kb_qa_record`，该表没有对应列（加列＝改表），其历史回放仍看不到命中列表 | P2 |
-| 7 | **审批闭环的两条边界** | ⚠️ P0 已完成（状态机 / SSE 事件 / `once\|always\|deny` / 授权撤销 / 审计）。仍欠：等待审批的注册表只在内存（进程重启后该运行标 `FAILED` 而不是恢复）、`GET /api/tool-invocations` 审计查询接口未开、`POST /api/agent/runs` 没有自己的流式形态（事件走 `/api/chat/stream` 的工具拦截点） | P2 |
+| 7 | **审批闭环的两条边界** | ⚠️ P0 已完成（状态机 / SSE 事件 / `once\|always\|deny` / 授权撤销 / 审计）；**第 2 条已补**（2026-10-19）：`GET /api/tool-invocations` 审计查询接口已开（按登录用户分页，支持 `toolCode` / `status` / `runId` 过滤）。仍欠：等待审批的注册表只在内存（进程重启后该运行标 `FAILED` 而不是恢复）、`POST /api/agent/runs` 没有自己的流式形态（事件走 `/api/chat/stream` 的工具拦截点） | P2 |
 | 8 | **嵌入 BYOK（用户自带嵌入模型与大模型 Key）** | ✅ **路线 A 已完成**（2026-10-18）——P0 知识库列表展示编造值已修（改用接口真实 `embeddingModel`）；P1 凭证安全已完成（`user_llm_config` / `user_embedding_config` 的 `api_key` 均为 AES-GCM 密文落库）；**P1 路线 A 已完成**（V25 `user_embedding_config` + 按用户解析 + `ai.byok.embedding` 白名单与固定 1024 维 + 设置页新分区）。仅 P2 多维度仍待评估。完整计划见文末同名章节「[嵌入 BYOK（用户自带嵌入模型与大模型 Key）实施计划](#嵌入-byok用户自带嵌入模型与大模型-key实施计划)」 | P1 |
 
 **已不再需要的条目**（勿再捡回来）：

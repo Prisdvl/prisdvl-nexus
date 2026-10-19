@@ -1,13 +1,20 @@
 package com.lky.nexus.app.agent.approval;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lky.nexus.ai.agent.ToolPermission;
 import com.lky.nexus.app.agent.mapper.ToolInvocationMapper;
 import com.lky.nexus.app.agent.model.ToolInvocationStatus;
+import com.lky.nexus.app.agent.model.dto.ToolInvocationResponse;
 import com.lky.nexus.app.agent.model.entity.ToolInvocationPO;
+import com.lky.nexus.common.api.PageQuery;
+import com.lky.nexus.common.api.PageResult;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 工具调用审计（{@code ai_tool_invocation}，P0 §九）。
@@ -18,6 +25,10 @@ import java.time.LocalDateTime;
  *
  * <p>{@code permission} 存的是执行当时**数据库里生效**的权限，而不是代码声明：
  * "这次调用为什么被拦"事后要能只靠审计表复盘。
+ *
+ * <p>本类同时提供<b>只读查询</b>（roadmap 待办 #7 的第 2 条：原先只写不查，
+ * 审计落了库却没有任何接口能取回来）。查询一律按 {@code userId} 收口——
+ * 审计表里带着别人的工具名、参数摘要与运行 id，跨用户可读是不能接受的。
  */
 @Service
 public class ToolInvocationAuditService {
@@ -77,5 +88,49 @@ public class ToolInvocationAuditService {
         }
         row.setFinishedAt(LocalDateTime.now());
         mapper.updateById(row);
+    }
+
+    /**
+     * 查询当前用户的工具调用审计（新到旧）。
+     *
+     * <p>筛选条件都是可选的：{@code toolCode} / {@code status} / {@code runId}，
+     * 传空即不参与过滤。{@code status} 不做枚举校验——库里存的就是字符串，
+     * 传了不存在的值只会得到空页，不值得为一个只读筛选多抛一次 400。
+     */
+    public PageResult<ToolInvocationResponse> list(Long userId, String toolCode, String status,
+                                                   Long runId, int pageNum, int pageSize) {
+        int safePageNum = PageQuery.normalizePageNum(pageNum);
+        int safePageSize = PageQuery.normalizePageSize(pageSize);
+
+        Page<ToolInvocationPO> page = new Page<>(safePageNum, safePageSize);
+        Page<ToolInvocationPO> result = mapper.selectPage(page,
+                Wrappers.<ToolInvocationPO>lambdaQuery()
+                        .eq(ToolInvocationPO::getUserId, userId)
+                        .eq(StringUtils.hasText(toolCode), ToolInvocationPO::getToolCode, toolCode)
+                        .eq(StringUtils.hasText(status), ToolInvocationPO::getStatus, status)
+                        .eq(runId != null, ToolInvocationPO::getRunId, runId)
+                        // 雪花 id 递增：按 id 倒序即"最近发生的在前"，不额外依赖 started_at
+                        .orderByDesc(ToolInvocationPO::getId));
+
+        List<ToolInvocationResponse> list = result.getRecords().stream()
+                .map(ToolInvocationAuditService::toResponse)
+                .toList();
+        return PageResult.of(list, result.getTotal(), safePageNum, safePageSize);
+    }
+
+    private static ToolInvocationResponse toResponse(ToolInvocationPO row) {
+        return new ToolInvocationResponse(
+                row.getId(),
+                row.getRunId(),
+                row.getStepId(),
+                row.getToolCode(),
+                row.getPermission(),
+                row.getStatus(),
+                row.getApprovalId(),
+                row.getErrorCode(),
+                row.getArgumentsDigest(),
+                row.getResultDigest(),
+                row.getStartedAt(),
+                row.getFinishedAt());
     }
 }
