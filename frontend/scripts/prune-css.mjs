@@ -3,7 +3,7 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const ROOT = 'D:/develop/Prisma/frontend/src'
+const ROOT = join(import.meta.dirname, '..', 'src')
 const WRITE = process.argv.includes('--write')
 
 function walk(dir, out = []) {
@@ -17,7 +17,7 @@ function walk(dir, out = []) {
 const files = walk(ROOT)
 const cssFiles = files.filter((f) => f.endsWith('.css'))
 const hay = files.filter((f) => /\.(tsx?|jsx?)$/.test(f)).map((f) => readFileSync(f, 'utf8')).join('\n')
-  + readFileSync('D:/develop/Prisma/frontend/index.html', 'utf8')
+  + readFileSync(join(import.meta.dirname, '..', 'index.html'), 'utf8')
 
 /** 去掉注释后的文本（保留长度以便定位）——用空格替换注释内容 */
 const blank = (s) => s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))

@@ -1,9 +1,11 @@
 // 刷新修复证据：加载态仅骨架屏 / 修复后的知识库页（背景已调淡）
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? join(tmpdir(), 'prisma-recover-qa-shots')
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })

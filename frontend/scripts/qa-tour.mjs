@@ -1,4 +1,6 @@
 // 首次登录分步引导（Onboarding Tour）专项 QA
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 //
 // 注意：本套件**刻意不植入** nx-proto-tour-done 标记 —— 引导只在"首登且未看过"时出现，
 // 其他套件都植入了标记以免污染用例与截图，所以这里必须用干净的上下文来验证。
@@ -6,7 +8,7 @@ import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? join(tmpdir(), 'prisma-recover-qa-shots')
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })

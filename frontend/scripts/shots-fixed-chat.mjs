@@ -1,5 +1,7 @@
 import { chromium } from 'playwright-core'
-const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+const OUT = process.env.QA_SHOTS_OUT ?? join(tmpdir(), 'prisma-recover-qa-shots')
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 for (const v of [{ w: 1440, h: 900, n: 'desktop' }, { w: 390, h: 844, n: 'mobile' }]) {
   for (const theme of ['light', 'dark']) {

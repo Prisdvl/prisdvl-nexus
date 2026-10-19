@@ -12,6 +12,8 @@
  *   - 后端 standalone 在 8080（`-Dspring-boot.run.profiles=standalone`）
  *   - dev server **非** mock 模式（不加 VITE_USE_MOCK=true），且带 /api proxy
  */
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
 
 const BASE = 'http://localhost:5175'
@@ -151,7 +153,7 @@ try {
   check('无非预期的 console 错误', unexpected.length === 0, unexpected.slice(0, 2).join(' | '))
 } catch (e) {
   check('异常中断', false, e.message)
-  await page.screenshot({ path: `${process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'}/mode-switch-real-error.png` }).catch(() => {})
+  await page.screenshot({ path: `${process.env.QA_SHOTS_OUT ?? join(tmpdir(), 'prisma-recover-qa-shots')}/mode-switch-real-error.png` }).catch(() => {})
 } finally {
   console.log('\n--- 真实后端路径汇总 ---')
   console.log('API 调用：')

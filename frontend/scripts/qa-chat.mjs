@@ -1,9 +1,11 @@
 // 会话栏专项 QA：切换过渡 / 滚动位置记忆 / 紧凑密度 / 分组 / 悬停操作
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const BASE = process.env.NEXUS_BASE ?? 'http://localhost:5175'
-const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? join(tmpdir(), 'prisma-recover-qa-shots')
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })

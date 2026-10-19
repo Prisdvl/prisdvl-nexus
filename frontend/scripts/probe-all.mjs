@@ -1,10 +1,12 @@
 // 全面排查：所有路由 × 主题 × 视口，捕捉用户截图里描述的现象
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
 import { setTheme, setPalette } from './_theme.mjs'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/probe'
+const OUT = join(tmpdir(), 'prisma-recover-qa-probe')
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })

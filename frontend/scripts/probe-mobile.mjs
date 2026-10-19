@@ -1,10 +1,12 @@
 // 移动端 + 平板专项：定位顶部贯穿线、卡片化外框、抽屉
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
 import { setTheme, setPalette } from './_theme.mjs'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/probe'
+const OUT = join(tmpdir(), 'prisma-recover-qa-probe')
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })

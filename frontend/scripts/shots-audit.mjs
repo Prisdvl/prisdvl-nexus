@@ -1,6 +1,8 @@
 // 审计修复证据：文档导入流程与轮播指示点可见
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
-const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? join(tmpdir(), 'prisma-recover-qa-shots')
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 for (const theme of ['light', 'dark']) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1.5 })

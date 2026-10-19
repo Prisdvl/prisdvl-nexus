@@ -1,10 +1,12 @@
 // 主题矩阵诊断：逐配色×明暗抓取关键页面，采样顶边像素与关键元素样式
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
 import { setTheme, setPalette } from './_theme.mjs'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/matrix'
+const OUT = join(tmpdir(), 'prisma-recover-qa-matrix')
 mkdirSync(OUT, { recursive: true })
 
 const palettes = (process.env.PALETTES ?? 'turquoise,terracotta,lime').split(',')

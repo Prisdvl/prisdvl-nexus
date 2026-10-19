@@ -1,8 +1,9 @@
 import postcss from 'postcss'
+import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 
-const head = execSync('git show HEAD:frontend/src/styles/global.css', { cwd: 'D:/develop/Prisma', encoding: 'utf8', maxBuffer: 1 << 24 })
+const head = execSync('git show HEAD:frontend/src/styles/global.css', { cwd: join(import.meta.dirname, '..', '..'), encoding: 'utf8', maxBuffer: 1 << 24 })
 const cur = readFileSync('src/styles/global.css', 'utf8')
 
 const collect = (css) => {

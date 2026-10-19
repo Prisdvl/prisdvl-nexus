@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
-const ROOT = 'D:/develop/Prisma/frontend/src'
+const ROOT = join(import.meta.dirname, '..', 'src')
 
 function walk(dir, out = []) {
   for (const e of readdirSync(dir)) {
@@ -18,7 +18,7 @@ const files = walk(ROOT)
 const cssFiles = files.filter((f) => f.endsWith('.css'))
 const srcFiles = files.filter((f) => /\.(tsx?|jsx?|html)$/.test(f))
 const srcText = srcFiles.map((f) => readFileSync(f, 'utf8')).join('\n')
-const htmlText = readFileSync('D:/develop/Prisma/frontend/index.html', 'utf8')
+const htmlText = readFileSync(join(import.meta.dirname, '..', 'index.html'), 'utf8')
 const haystack = srcText + '\n' + htmlText
 
 const report = []

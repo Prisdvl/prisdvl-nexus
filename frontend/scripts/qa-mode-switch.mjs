@@ -9,6 +9,8 @@
  * 运行前提：dev server 必须以 mock 模式启动（`VITE_USE_MOCK=true`），
  * 否则 QA 脚本靠 legacy flag 预置登录会失效 → 等`.shell` 超时。
  */
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
 
 const BASE = 'http://localhost:5175'
@@ -121,7 +123,7 @@ try {
   check('无 console 错误', consoleErrors.length === 0, consoleErrors.slice(0, 2).join(' | '))
 } catch (e) {
   check('异常中断', false, e.message)
-  await page.screenshot({ path: `${process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'}/mode-switch-error.png` }).catch(() => {})
+  await page.screenshot({ path: `${process.env.QA_SHOTS_OUT ?? join(tmpdir(), 'prisma-recover-qa-shots')}/mode-switch-error.png` }).catch(() => {})
 } finally {
   console.log('\n--- 汇总 ---')
   if (issues.length === 0) {

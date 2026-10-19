@@ -1,11 +1,13 @@
 /**
  * 会话历史导航：高亮按提问序号，即使消息 id 撞车也只亮一根。
  */
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const BASE = process.env.QA_BASE ?? 'http://127.0.0.1:5188'
-const OUT = process.env.QA_SHOTS_OUT ?? 'D:/develop/Prisma/docs/prototypes/shots'
+const OUT = process.env.QA_SHOTS_OUT ?? join(tmpdir(), 'prisma-recover-qa-shots')
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })

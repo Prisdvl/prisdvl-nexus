@@ -1,10 +1,12 @@
 // 只读诊断：把用户截图里描述的现象逐条在真实渲染上核实
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
 import { setTheme, setPalette } from './_theme.mjs'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/probe'
+const OUT = join(tmpdir(), 'prisma-recover-qa-probe')
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })

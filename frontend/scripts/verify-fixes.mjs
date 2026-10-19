@@ -1,10 +1,12 @@
 // 整改验收：在真实渲染上逐条量测本轮修复的效果（只读，不改业务数据）
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { chromium } from 'playwright-core'
 import { setTheme, setPalette, readAppearance } from './_theme.mjs'
 import { mkdirSync } from 'node:fs'
 
 const BASE = 'http://localhost:5175'
-const OUT = 'D:/develop/Prisma/docs/prototypes/verify'
+const OUT = join(tmpdir(), 'prisma-recover-qa-verify')
 mkdirSync(OUT, { recursive: true })
 
 const log = (...a) => console.log(...a)

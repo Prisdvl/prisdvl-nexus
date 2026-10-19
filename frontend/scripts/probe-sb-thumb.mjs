@@ -1,4 +1,6 @@
 import { chromium } from 'playwright-core'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 const BASE = 'http://127.0.0.1:5175'
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -73,5 +75,5 @@ const motion = {
 }
 console.log('motion', JSON.stringify(motion, null, 2))
 
-await page.locator('.sidebar').screenshot({ path: 'D:/develop/Prisma/frontend/qa-sb-rubber-collapsed.png' })
+await page.locator('.sidebar').screenshot({ path: join(tmpdir(), 'prisma-recover-qa-shots', 'qa-sb-rubber-collapsed.png') })
 await browser.close()
