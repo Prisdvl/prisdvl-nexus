@@ -26,6 +26,7 @@ import { landingCopy, type LandingCopy } from '@/lib/landingCopy'
 import { useLocale } from '@/lib/locale'
 import type { PaletteName, ThemeMode } from '@/lib/types'
 import { isWebGL2Available } from '@/lib/webgl'
+import { LANDING_WAVE_COLOR, LANDING_WAVE_OPACITY, LANDING_WAVE_PARAMS } from '@/lib/landingWave'
 import { PRISDVL_ASCII } from '@/assets/prisdvlAscii'
 import {
   siDocker,
@@ -1190,16 +1191,7 @@ function Reveal({ children, delay = 0, className }: { children: ReactNode; delay
 }
 
 
-const WAVE_COLOR: Record<PaletteName, { light: string; dark: string }> = {
-  prisdvl: { light: '#193FA8', dark: '#3987EC' },
-  terracotta: { light: '#7a3a1f', dark: '#ffffff' },
-  turquoise: { light: '#14586b', dark: '#eafcff' },
-  lime: { light: '#3f6a0d', dark: '#f2ffd6' },
-  indigo: { light: '#312e81', dark: '#f3f1ff' },
-  ocean: { light: '#305478', dark: '#d8e6f0' },
-  violet: { light: '#701a75', dark: '#fff1fc' },
-  rose: { light: '#881337', dark: '#fff1f2' },
-}
+/* 波浪取色已移到 lib/landingWave.ts（落地页 hero 与「新对话」空态共用一份） */
 const ACCENT_HEX: Record<PaletteName, { light: string; dark: string }> = {
   prisdvl: { light: '#2457D6', dark: '#2457D6' },
   terracotta: { light: '#b4542a', dark: '#e8a077' },
@@ -1282,33 +1274,17 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
-  const waveColor = WAVE_COLOR[palette][theme]
   const accent = ACCENT_HEX[palette][theme]
 
   const heroBg = (
     <div style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }} aria-hidden="true">
       {webgl2Ok && (
+      /* 参数与取色见 lib/landingWave.ts：「新对话」空态共用同一份定义 */
       <Suspense fallback={null}>
       <PatternWaves
-        preset="ocean"
-        color={waveColor}
-        backgroundColor="transparent"
-        opacity={theme === 'dark' ? 0.22 : 0.16}
-        fade="edges"
-        fadeSize={0.95}
-        spacing={18}
-        markSize={0.62}
-        depth={0.4}
-        light={0}
-        shine={0.12}
-        contrast={0.85}
-        speed={0.18}
-        scale={1.2}
-        direction={30}
-        interactive
-        cursorSize={70}
-        cursorStrength={0.6}
-        intro
+        {...LANDING_WAVE_PARAMS}
+        color={LANDING_WAVE_COLOR[palette][theme]}
+        opacity={theme === 'dark' ? LANDING_WAVE_OPACITY.dark : LANDING_WAVE_OPACITY.light}
       />
       </Suspense>
       )}

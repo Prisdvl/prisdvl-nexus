@@ -16,12 +16,14 @@ import { toolPolicy } from '@/lib/toolPolicy'
 import '@/styles/reference.css'
 import PromptBar, { type PromptBarSource } from '@/bits/PromptBar/PromptBar'
 import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
+import PatternWaves from '@/bits/PatternWaves/PatternWaves'
 import AgentThoughtChain from '@/components/chat/AgentThoughtChain'
 import StatusMark from '@/bits/StatusMark/StatusMark'
 import RubberSegment from '@/bits/RubberSegment/RubberSegment'
 import Stepper, { Step } from '@/bits/Stepper/Stepper'
 import Modal from '@/components/Modal'
 import { StateEmpty, Skeleton } from '@/components/Skeleton'
+import ParticleTitle from '@/components/ui/particle-title'
 import { toast } from '@/lib/toast'
 import Markdown from '@/components/Markdown'
 import { KBS, type ChatCitationRef, type ChatMsg, type KbItem, type RunContext, type SessionItem, type ToolCall } from '@/data'
@@ -36,6 +38,9 @@ import { postSse } from '@/lib/sse'
 import { promptChatCommands, promptEfforts, promptModels } from '@/lib/promptBarPreset'
 import { pagesCopy } from '@/lib/pagesCopy'
 import { useLocale } from '@/lib/locale'
+import { useTheme } from '@/lib/theme'
+import { isWebGL2Available } from '@/lib/webgl'
+import { LANDING_WAVE_COLOR, LANDING_WAVE_OPACITY, LANDING_WAVE_PARAMS } from '@/lib/landingWave'
 import Loc from '@/components/Loc'
 
 const REPLY = `已在绑定的知识库中检索到相关内容，下面是**结构化回答**：
@@ -237,6 +242,13 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
   const actionAccent = useTokenColor('--primary-strong')
   /* 火花是画在 canvas 上的：canvas 不解析 var()，必须给具体色值 */
   const sparkAccent = useTokenColor('--primary')
+  /* 波浪背景的取色要按配色查表，路由只给了 theme，配色从主题 store 取 */
+  const { palette } = useTheme()
+  /*
+   * WebGL2 探测只做一次（与落地页同一道门，见 lib/webgl.ts 的说明）：
+   * 不支持就根本不挂背景层，退化为纯色底，而不是等 ogl 抛错再由错误边界兜。
+   */
+  const [webgl2Ok] = useState(() => isWebGL2Available())
   const C = theme === 'dark'
     ? { row: '#1b1b1f', drawer: '#2c2c33', sel: '#2a2a31', text: '#e8e8ec', del: '#e5484d', arch: '#9a9aa3' }
     : { row: '#ffffff', drawer: '#e9eaee', sel: '#f4efe8', text: '#1a1a1d', del: '#e5484d', arch: '#6f7782' }
@@ -1135,6 +1147,17 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
   const traceMeta: Record<string, TraceMeta> = Object.fromEntries(runMeta.current)
   const traceModel = [...active.messages].reverse().map((m) => runMeta.current.get(m.id)?.model).find(Boolean)
 
+  /**
+   * 「新对话」空态：有会话、但这条会话还没有消息。
+   *
+   * 它同时决定三件事，所以提成一个变量、不在三处各写一遍条件：
+   *   · `.chat-main-col` 的 `data-empty`（输入框居中、正文列收起）
+   *   · 标题的粒子动画（ParticleTitle）
+   *   · 落地页同款的波浪背景层
+   * 一旦发出第一条消息（或正在流式输出）就全部撤掉 ——「开始对话之后」不再铺背景。
+   */
+  const emptyChat = !loadingMessages && active.messages.length === 0 && !streaming
+
   if (isEmptyList) {
     return (
       <div className="chat-fixed">
@@ -1162,7 +1185,25 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
           那是截图里那个整屏外框的真实来源。
         */}
         <section className="chat-main">
-          <div className="chat-main-col" data-empty={!loadingMessages && active.messages.length === 0 && !streaming ? 'true' : undefined}>
+          {/*
+            新对话空态：铺一层**与落地页 hero 同款**的波浪背景。
+            参数/取色见 lib/landingWave.ts —— 两处共用一份定义，不各写一份。
+
+            为什么放在 .chat-main 内部而不是用全局 fixed 层：
+            对话区自己有 --bg 底色，fixed 层会被它整片盖住，只剩"两个背景叠加"的浑浊；
+            放在这里则是"底色 + 波浪"，与落地页的构成一致，也不会漫到侧栏底下。
+            一旦开始对话（emptyChat 为假）整层卸载，背景立刻收回。
+          */}
+          {emptyChat && webgl2Ok && (
+            <div className="chat-waves" aria-hidden="true">
+              <PatternWaves
+                {...LANDING_WAVE_PARAMS}
+                color={LANDING_WAVE_COLOR[palette][theme]}
+                opacity={theme === 'dark' ? LANDING_WAVE_OPACITY.dark : LANDING_WAVE_OPACITY.light}
+              />
+            </div>
+          )}
+          <div className="chat-main-col" data-empty={emptyChat ? 'true' : undefined}>
           <header className="chat-head">
             <div className="chat-head__id">
               <div data-testid="chat-title" className="chat-head__title">{active.title}</div>
@@ -1324,9 +1365,10 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                 <Skeleton w="45%" h={13} style={{ marginTop: 10 }} />
               </div>
             )}
-            {!loadingMessages && active.messages.length === 0 && !streaming && (
-              <div className="chat-empty-state">
-                <h2><Loc>{c.startTitle}</Loc></h2>
+            {emptyChat && (
+              <div className="chat-empty-state chat-empty-state--particle">
+                {/* 粒子标题：进入新对话播一次「散开 → 聚拢」，之后静止（见 components/ui/particle-title.tsx） */}
+                <ParticleTitle text={c.startTitle} />
                 <p><Loc>{c.startDesc}</Loc></p>
               </div>
             )}

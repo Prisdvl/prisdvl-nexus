@@ -1,0 +1,81 @@
+/* ============================================================
+ * ParticleTitle —— 粒子化标题（光雾 + 尘埃聚散）
+ * ------------------------------------------------------------
+ * 本仓库无 Tailwind（见 docs/design/tokens.json 与 registry/magicui 注释），
+ * 所以原组件里的原子类改成这里的语义类，颜色一律走设计令牌：
+ *   · 光雾色块（.pt__blob）的底色由 TSX 内联注入 —— 它必须跟随
+ *     `--primary / --primary-container / --primary-strong / --primary-text`
+ *     实时变化，写死在 CSS 里会与配色切换脱节。
+ *   · 标题文字颜色/字号/字距由外层上下文决定（对话页是 .chat-empty-state h2），
+ *     画布里的文字通过 getComputedStyle 读取同一份结果，保证"墨水"与主题一致。
+ * ============================================================ */
+
+.pt {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 360px;
+  overflow: hidden;
+}
+
+/* 柔光层：一圈色块，靠 mask 在四边淡出，避免出现"方形光斑"边界 */
+.pt__glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  -webkit-mask-image: radial-gradient(closest-side, #000 55%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 55%, transparent 100%);
+}
+
+.pt__blob {
+  position: absolute;
+  border-radius: var(--radius-pill);
+}
+
+/* 三块光雾的位置（与 TSX 里采样用的 fx/fy/fw/fh 必须一致） */
+.pt__blob--0 { left: 4%;  top: 8%;  width: 62%; height: 78%; }
+.pt__blob--1 { left: 44%; top: 22%; width: 54%; height: 70%; }
+.pt__blob--2 { left: 30%; top: 44%; width: 44%; height: 56%; }
+
+.pt__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* 默认标题样式：只在组件独立使用时生效（页面里由上下文类覆盖） */
+.pt__title {
+  position: relative;
+  z-index: 10;
+  margin: 0;
+  padding: 0 var(--space-6);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  text-align: center;
+}
+
+/*
+ * 动画运行期间的真实 <h2>：留在 DOM 里给读屏软件，
+ * 视觉上裁成 1px 避免和画布文字重影（画布画的是同一句话）。
+ */
+.pt__title--ghost {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

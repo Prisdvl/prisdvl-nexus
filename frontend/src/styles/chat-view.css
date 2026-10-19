@@ -641,6 +641,53 @@
   transform: translate(-50%, -6%);
 }
 
+/*
+ * 新对话空态的背景：与落地页 hero 同款波浪（参数见 lib/landingWave.ts）。
+ * 用 absolute 而不是全局 fixed 层 —— 它只该铺在对话区里，不漫到侧栏底下；
+ * 也不吃指针事件，鼠标该给输入框。
+ */
+.chat-waves {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+/*
+ * 空态下顶栏让出底色，背景才是一整块。
+ * .chat-head 默认带 var(--bg) 实底（见上方它的定义），不放开会在顶栏下沿
+ * 切出一道直边；只在空态放开，有消息时外观不变。
+ */
+.chat-main-col[data-empty='true'] > .chat-head { background: transparent; }
+
+/*
+ * 粒子标题版空对话（ChatPage 用 ParticleTitle 替代静态 h2）。
+ * 位置从原来的「top 绝对定位」改成「贴着输入框上沿对齐」：
+ * 动画需要一条有高度的光雾带，继续用 top 计算在窄屏会压到输入框。
+ * 双类名是为了压过上面的 `.chat-empty-state` 以及文件末尾媒体查询里的 top。
+ */
+.chat-empty-state.chat-empty-state--particle {
+  top: auto;
+  bottom: calc(50% + 76px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+/* 光雾带：宽度收到与输入框同列；高度只留动画需要的量 */
+.chat-empty-state--particle .pt {
+  width: min(100%, var(--chat-col));
+  height: 184px;
+}
+/* 画布里的标题在带子正中，负外边距把描述文案提上来贴近标题 */
+.chat-empty-state--particle p {
+  margin-top: -62px;
+}
+
+@media (max-width: 720px) {
+  .chat-empty-state--particle .pt { height: 150px; }
+  .chat-empty-state--particle p { margin-top: -48px; }
+  .chat-empty-state.chat-empty-state--particle { bottom: calc(50% + 82px); }
+}
+
 /* ---------- 5. 消息辅助层：引用 / 状态 / 操作 ---------- */
 .chat-main .thread .citation { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .chat-main .thread .cite-chip {
