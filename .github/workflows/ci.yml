@@ -46,8 +46,82 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
+      # 纯逻辑测试：不启浏览器、不连后端，node:test + --experimental-strip-types 直接跑 .mts。
+      # 这两个文件是导入进度与欢迎区示例问题的规则模块，属于"改错了就该红"的最小防线。
+      - name: Pure logic tests (node:test, no browser, no backend)
+        run: node --experimental-strip-types --test scripts/import-progress.test.mts scripts/kb-starters.test.mts
       - name: Typecheck + production build
         run: npm run build
+
+  # mock E2E：不开后端、不连外部 API，只跑"纯 mock"脚本（dev server 以 VITE_USE_MOCK=true 起）。
+  # 跑在 windows 上：脚本用 playwright-core + `channel: 'msedge'`（不下载浏览器），
+  # windows-latest 自带 Edge；ubuntu 上要另装 msedge，属于本项之外的新依赖。
+  #
+  # 这里的脚本清单是**实测筛过的**：2026-10-19 在本机以 mock 模式逐个跑，只有下面 10 个返回 0。
+  # 被排除的 10 个不是"看着麻烦就不放"，而是当前确实红，原因分三类（已记 docs/roadmap.md 待办）：
+  #   · 选择器漂移（等不到/找到多个元素）：qa-cards(.pixel-card)、qa-doc(.doc-actions 现在两个按钮)、
+  #     qa-mode-switch(.mode-seg 已换成 RubberSegment)、qa-interactions、qa-shots、qa-unify、qa-tour
+  #   · 断言失败：qa-theme「外观区含两组控件」、qa-palette「出现外来默认色」
+  #   · 需要真后端：qa-routing（直接打 http://localhost:8080/api/...）
+  # 修这些脚本 = 修别人的界面回归，不在本项范围内；先把绿的钉进基线，红的留在待办里，不许删断言。
+  frontend-e2e-mock:
+    name: Frontend (mock E2E)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Start mock dev server (VITE_USE_MOCK=true)
+        shell: pwsh
+        run: |
+          Start-Process -FilePath cmd.exe -ArgumentList '/c','set VITE_USE_MOCK=true&& npx vite --port 5175 --strictPort > vite-ci.log 2>&1' -PassThru | Out-Null
+          for ($i = 0; $i -lt 90; $i++) {
+            try { Invoke-WebRequest http://localhost:5175/ -UseBasicParsing -TimeoutSec 2 | Out-Null; Write-Host "vite up after ${i}s"; exit 0 } catch { Start-Sleep -Seconds 1 }
+          }
+          Write-Host "::error::mock dev server 未在 90s 内就绪"
+          Get-Content vite-ci.log -Tail 40 -ErrorAction SilentlyContinue
+          exit 1
+      - name: Run mock E2E suites
+        shell: pwsh
+        env:
+          # 截图一律写到 runner 临时目录：脚本默认落点会被 .gitignore 忽略，但 CI 里没必要污染工作区。
+          QA_SHOTS_OUT: ${{ runner.temp }}\qa-shots
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:QA_SHOTS_OUT | Out-Null
+          $scripts = @(
+            'qa-a11y.mjs', 'qa-features.mjs', 'qa-settings.mjs', 'qa-responsive.mjs', 'qa-chat.mjs',
+            'verify-kb.mjs', 'verify-chat-trace.mjs', 'verify-ops.mjs', 'verify-market.mjs', 'verify-agent-studio.mjs'
+          )
+          $failed = @()
+          foreach ($s in $scripts) {
+            Write-Host "::group::$s"
+            node "scripts/$s"
+            if ($LASTEXITCODE -ne 0) { $failed += "$s (exit $LASTEXITCODE)" }
+            Write-Host "::endgroup::"
+          }
+          Write-Host "共 $($scripts.Count) 个脚本，失败 $($failed.Count) 个"
+          if ($failed.Count -gt 0) {
+            Write-Host "::error::mock E2E 失败：$($failed -join '; ')"
+            exit 1
+          }
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mock-e2e-diagnostics
+          path: |
+            frontend/vite-ci.log
+            ${{ runner.temp }}/qa-shots
+          if-no-files-found: ignore
 
   compose-config:
     name: Docker Compose config

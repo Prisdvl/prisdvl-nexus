@@ -1,0 +1,220 @@
+# LIVE 验证：手动触发，不进基础 CI。
+#
+# 为什么单独一个工作流：这些用例的"门"是环境变量——`@EnabledIfEnvironmentVariable` 在没门控
+# 变量时**跳过**，而跳过在 surefire 汇总里就是绿。于是"没配 Key"和"真跑通了"在报告里长得一模一样。
+# 本工作流的每一步都靠「先 guard 缺少的凭据 → 再断言 tests>0 且 skipped==0」把这个差别钉死：
+# 缺 Secrets 时在跑之前就红，绝不会出现"0 个用例全绿"。
+#
+# 三组边界：
+#   infra        Testcontainers 自带 MySQL / ES / pgvector —— 无外部凭据，只要 Docker
+#   model        真模型网关 / 真嵌入 / 用户自带 BYOK 凭据 —— 需要 Secrets
+#   backend-e2e  真后端（standalone + H2，一次性库）+ 真前端浏览器（qa-embedding-byok.mjs）—— 无外部凭据
+#
+# 日志纪律：三个 job 都不打印 Key/KEK/JWT；GitHub 对 secrets 自动打码，仓库自带 sk- 守卫
+# （AgentTraceGuards），本文件也不回显 secrets.* 之外的任何值。
+name: LIVE (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: 要跑哪一组
+        type: choice
+        options: [infra, model, backend-e2e, all]
+        default: infra
+
+concurrency:
+  group: live-${{ github.ref }}-${{ inputs.suites }}
+  cancel-in-progress: false
+
+jobs:
+  infra:
+    name: LIVE infra (Testcontainers)
+    if: ${{ inputs.suites == 'infra' || inputs.suites == 'all' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # LiveInfrastructure 里 ES 用的是**本仓库自建**镜像（含 analysis-ik），
+      # 且刻意 withImagePullPolicy(image -> false) —— 必须先本地构建，标签与 compose 一致。
+      - name: Build the Elasticsearch image (tag must match LiveInfrastructure)
+        run: docker build -t nexus-elasticsearch:9.4.5 --build-arg ES_VERSION=9.4.5 deploy/elasticsearch
+
+      - name: Install modules (skip tests)
+        run: mvn -B -DskipTests install
+
+      - name: Run infrastructure-gated LIVE tests
+        env:
+          AI_SEARCH_LIVE: "true"   # LiveChunkIndexTest：MySQL + ES 容器
+          AI_VECTOR_LIVE: "true"   # LiveVectorStoreTest：MySQL + pgvector 容器
+          AI_MYSQL_LIVE: "true"    # MySqlJsonRoundTripTest：MySQL 容器
+          NEXUS_REDIS_LIVE: "true" # RedisEmailCodeStoreLiveTest：本机无 Redis 时自起容器
+        run: |
+          mvn -B -pl nexus-app test \
+            -Dtest=LiveChunkIndexTest,LiveVectorStoreTest,MySqlJsonRoundTripTest,RedisEmailCodeStoreLiveTest
+        # 容器随机端口、Ryuk 自动销毁；测试自带 @DynamicPropertySource，不连开发机上的栈。
+
+      - name: Assert the LIVE tests really ran (no silent skip)
+        run: |
+          sum() { grep -ho "$1=\"[0-9]*\"" nexus-app/target/surefire-reports/TEST-*.xml | grep -o '[0-9]*' | awk '{s+=$1} END{print s+0}'; }
+          T=$(sum tests); S=$(sum skipped); F=$(sum failures); E=$(sum errors)
+          echo "tests=$T skipped=$S failures=$F errors=$E"
+          [ "$T" -gt 0 ] || { echo "::error::没有任何用例被执行（门控变量没生效？）"; exit 1; }
+          [ "$S" -eq 0 ] || { echo "::error::$S 个用例被跳过 —— LIVE 轮不允许静默跳过"; exit 1; }
+          [ "$F" -eq 0 ] && [ "$E" -eq 0 ] || { echo "::error::失败 $F / 错误 $E"; exit 1; }
+
+      - name: Upload surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-infra-surefire
+          path: "**/target/surefire-reports/**"
+          if-no-files-found: ignore
+
+  model:
+    name: LIVE model / embedding / BYOK
+    if: ${{ inputs.suites == 'model' || inputs.suites == 'all' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # 缺 Key 就**在这里失败**，而不是让 JUnit 静默跳过（那会在报告里显示成绿）。
+      - name: Guard required secrets
+        env:
+          CHAT_KEY: ${{ secrets.AI_CHAT_API_KEY }}
+          EMB_KEY: ${{ secrets.AI_EMBEDDING_API_KEY }}
+          BYOK_KEY: ${{ secrets.BYOK_LIVE_EMBEDDING_KEY }}
+        run: |
+          missing=""
+          [ -z "$CHAT_KEY" ] && missing="$missing AI_CHAT_API_KEY(secrets)"
+          [ -z "$EMB_KEY" ] && missing="$missing AI_EMBEDDING_API_KEY(secrets)"
+          [ -z "$BYOK_KEY" ] && missing="$missing BYOK_LIVE_EMBEDDING_KEY(secrets)"
+          if [ -n "$missing" ]; then
+            echo "::error::缺少$missing —— LIVE 轮不允许把'没配凭据'伪装成通过；请在仓库 Settings → Secrets 配置后再跑。"
+            exit 1
+          fi
+
+      - name: Install modules (skip tests)
+        run: mvn -B -DskipTests install
+
+      - name: Run model / embedding / BYOK LIVE tests
+        env:
+          # 非密值走 Variables（可改），端点/模型名都不算敏感；Key 只从 Secrets 来。
+          AI_CHAT_BASE_URL: ${{ vars.AI_CHAT_BASE_URL || 'https://opencode.ai/zen/go/v1' }}
+          AI_CHAT_MODEL: ${{ vars.AI_CHAT_MODEL || 'deepseek-v4-flash' }}
+          AI_JUDGE_MODEL: ${{ vars.AI_JUDGE_MODEL || 'deepseek-v4-flash' }}
+          AI_EMBEDDING_BASE_URL: ${{ vars.AI_EMBEDDING_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1' }}
+          AI_EMBEDDING_MODEL: ${{ vars.AI_EMBEDDING_MODEL || 'text-embedding-v4' }}
+          AI_CHAT_API_KEY: ${{ secrets.AI_CHAT_API_KEY }}
+          AI_EMBEDDING_API_KEY: ${{ secrets.AI_EMBEDDING_API_KEY }}
+          AI_EMBEDDING_LIVE: "true"                     # LiveEmbeddingTest
+          BYOK_LIVE_EMBEDDING_KEY: ${{ secrets.BYOK_LIVE_EMBEDDING_KEY }}  # EmbeddingByokLiveTest
+          BYOK_LIVE_EMBEDDING_BASE_URL: ${{ vars.AI_EMBEDDING_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1' }}
+        run: |
+          mvn -B -pl nexus-app test \
+            -Dtest=LiveModelCallTest,AgentLoopTest,ChatStreamLiveTest,MultiTurnMemoryTest,LiveEmbeddingTest,EmbeddingByokLiveTest
+
+      - name: Assert the LIVE tests really ran (no silent skip)
+        run: |
+          sum() { grep -ho "$1=\"[0-9]*\"" nexus-app/target/surefire-reports/TEST-*.xml | grep -o '[0-9]*' | awk '{s+=$1} END{print s+0}'; }
+          T=$(sum tests); S=$(sum skipped); F=$(sum failures); E=$(sum errors)
+          echo "tests=$T skipped=$S failures=$F errors=$E"
+          [ "$T" -gt 0 ] || { echo "::error::没有任何用例被执行（门控变量没生效？）"; exit 1; }
+          [ "$S" -eq 0 ] || { echo "::error::$S 个用例被跳过 —— LIVE 轮不允许静默跳过"; exit 1; }
+          [ "$F" -eq 0 ] && [ "$E" -eq 0 ] || { echo "::error::失败 $F / 错误 $E"; exit 1; }
+
+      - name: Upload surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-model-surefire
+          path: "**/target/surefire-reports/**"
+          if-no-files-found: ignore
+
+  backend-e2e:
+    name: LIVE backend + browser E2E (no external keys)
+    if: ${{ inputs.suites == 'backend-e2e' || inputs.suites == 'all' }}
+    # 跑在 windows 上：现有浏览器脚本用 playwright-core + channel 'msedge'（不下载浏览器），
+    # windows-latest 自带 Edge；ubuntu 上要另装 msedge，属于本项之外的新依赖。
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the backend jar
+        run: mvn -B -DskipTests package
+
+      - name: Start the backend (standalone, H2)
+        shell: pwsh
+        env:
+          # 与 application-test.yml 同一个测试 KEK（仓库里本就公开），只用于本次一次性 H2 库。
+          NEXUS_SECURITY_CRYPTO_KEK: FBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u0=
+        run: |
+          $args = @(
+            '-jar', 'nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar',
+            '--spring.profiles.active=standalone',
+            '--ai.byok.embedding.allowed-models=bailian:text-embedding-v4,bailian:text-embedding-v3',
+            '--ai.byok.embedding.required-dimensions=1024'
+          )
+          Start-Process -FilePath java -ArgumentList $args -RedirectStandardOutput backend-ci.log -RedirectStandardError backend-ci.err.log -PassThru | Out-Null
+          for ($i = 0; $i -lt 120; $i++) {
+            try { Invoke-WebRequest http://localhost:8080/actuator/health -UseBasicParsing -TimeoutSec 2 | Out-Null; Write-Host "backend up after ${i}s"; exit 0 } catch { Start-Sleep -Seconds 1 }
+          }
+          Write-Host "::error::后端未在 120s 内就绪"
+          Get-Content backend-ci.log -Tail 60 -ErrorAction SilentlyContinue
+          Get-Content backend-ci.err.log -Tail 60 -ErrorAction SilentlyContinue
+          exit 1
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Start the frontend (proxy → localhost:8080)
+        shell: pwsh
+        working-directory: frontend
+        run: |
+          Start-Process -FilePath cmd.exe -ArgumentList '/c','npx vite --port 5175 --strictPort > vite-ci.log 2>&1' -PassThru | Out-Null
+          for ($i = 0; $i -lt 90; $i++) {
+            try { Invoke-WebRequest http://localhost:5175/ -UseBasicParsing -TimeoutSec 2 | Out-Null; Write-Host "vite up after ${i}s"; exit 0 } catch { Start-Sleep -Seconds 1 }
+          }
+          Write-Host "::error::vite 未就绪"; Get-Content vite-ci.log -Tail 40 -ErrorAction SilentlyContinue; exit 1
+
+      - name: Run BYOK settings E2E against the real backend
+        shell: pwsh
+        working-directory: frontend
+        run: node scripts/qa-embedding-byok.mjs
+        # 该脚本注册临时用户、保存一次嵌入配置并建库，断言白名单下拉/掩码/冻结；
+        # 不需要任何外部 Key —— 它不发起真实嵌入调用。
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-backend-e2e-diagnostics
+          path: |
+            backend-ci.log
+            backend-ci.err.log
+            frontend/vite-ci.log
+          if-no-files-found: ignore
