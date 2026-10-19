@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { lazy, Suspense, useMemo } from 'react'
 import { createHashRouter, Navigate, RouterProvider, useNavigate, useSearchParams, useParams } from 'react-router'
 import AppShell from '@/components/AppShell'
 import { RedirectIfAuthenticated, RequireAuth } from '@/components/RequireAuth'
@@ -11,24 +11,42 @@ import type { PaletteName, ThemeMode } from '@/lib/types'
 import type { ChatCitationRef } from '@/data'
 import { useEffect, useState } from 'react'
 import LandingPage from '@/pages/LandingPage'
-import AuthPage from '@/pages/AuthPage'
-import ForgotPasswordPage from '@/pages/ForgotPasswordPage'
-import WorkbenchPage from '@/pages/WorkbenchPage'
-import KnowledgeBaseListPage from '@/pages/KnowledgeBaseListPage'
-import KnowledgeBaseDetailPage from '@/pages/KnowledgeBaseDetailPage'
-import ChatPage from '@/pages/ChatPage'
-import AgentsPage from '@/pages/AgentsPage'
-import AutomationsPage from '@/pages/AutomationsPage'
-import WorkflowPage from '@/pages/WorkflowPage'
-import PluginsPage from '@/pages/PluginsPage'
-import AgentCommunityPage from '@/pages/AgentCommunityPage'
-import AccountPage from '@/pages/AccountPage'
+/*
+ * 路由级按需加载（首包瘦身）。
+ *
+ * 只有落地页 `/` 保持同步 import —— 它是未登录访客看到的第一个画面，不该先等 chunk；
+ * 其余页面各切独立 chunk，进入对应路由时才下载。被这些页面连带引入的重型依赖
+ * （gsap / simple-icons / 各种演示组件）因此不再进入口包。
+ *
+ * 外壳（AppShell / 侧栏 / 守卫 / Toast / 配色控件）保持同步：切页时只有内容区出现骨架，
+ * 外壳不闪。占位见下面的 `pageFallback`。
+ */
+const AuthPage = lazy(() => import('@/pages/AuthPage'))
+const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'))
+const WorkbenchPage = lazy(() => import('@/pages/WorkbenchPage'))
+const KnowledgeBaseListPage = lazy(() => import('@/pages/KnowledgeBaseListPage'))
+const KnowledgeBaseDetailPage = lazy(() => import('@/pages/KnowledgeBaseDetailPage'))
+const ChatPage = lazy(() => import('@/pages/ChatPage'))
+const AgentsPage = lazy(() => import('@/pages/AgentsPage'))
+const AutomationsPage = lazy(() => import('@/pages/AutomationsPage'))
+const WorkflowPage = lazy(() => import('@/pages/WorkflowPage'))
+const PluginsPage = lazy(() => import('@/pages/PluginsPage'))
+const AgentCommunityPage = lazy(() => import('@/pages/AgentCommunityPage'))
+const AccountPage = lazy(() => import('@/pages/AccountPage'))
 import CornerControls from '@/components/Appearance'
 import { useTheme } from '@/lib/theme'
 import ToastHost from '@/components/ToastHost'
 import AppError from '@/components/AppError'
 import RouteFade from '@/components/RouteFade'
 import Loc from '@/components/Loc'
+import { SkeletonRows } from '@/components/Skeleton'
+
+/** 按需页面下载期间的占位：高度留够，避免内容就绪时布局跳动 */
+const pageFallback = (
+  <div className="page" style={{ minHeight: '60vh' }}>
+    <SkeletonRows rows={5} />
+  </div>
+)
 
 /* ---------------- 主题/配色（原型级，放这里供所有路由共享） ---------------- */
 
@@ -190,7 +208,9 @@ export default function App() {
           element: (
             <RedirectIfAuthenticated>
               <RouteFade>
-                <LoginRoute theme={theme} palette={palette} />
+                <Suspense fallback={pageFallback}>
+                  <LoginRoute theme={theme} palette={palette} />
+                </Suspense>
               </RouteFade>
             </RedirectIfAuthenticated>
           ),
@@ -200,7 +220,9 @@ export default function App() {
           element: (
             <RedirectIfAuthenticated>
               <RouteFade>
-                <ForgotPasswordRoute theme={theme} palette={palette} />
+                <Suspense fallback={pageFallback}>
+                  <ForgotPasswordRoute theme={theme} palette={palette} />
+                </Suspense>
               </RouteFade>
             </RedirectIfAuthenticated>
           ),

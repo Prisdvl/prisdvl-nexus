@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react'
 import { ArrowDown, ArrowRight, ArrowUp, Bot, Code2, FileText, Plus, Search, Wrench } from 'lucide-react'
-import PatternWaves from '@/bits/PatternWaves/PatternWaves'
+/* 两个 WebGL 装饰件按需加载：hero 背景与「关于」弹层里的水晶球都不是首屏必要内容，
+ * 且都已由 webgl2Ok 门控（无 WebGL2 时本来就不挂载），所以延迟加载不新增降级路径；
+ * 它们与 WavesBg 共用 ogl，静态导入会把整个 ogl 拉进入口包。 */
+const PatternWaves = lazy(() => import('@/bits/PatternWaves/PatternWaves'))
 import SkipLink from '@/components/SkipLink'
 import TechText from '@/bits/TechText/TechText'
-import CrystalizedBall from '@/bits/CrystalizedBall/CrystalizedBall'
+const CrystalizedBall = lazy(() => import('@/bits/CrystalizedBall/CrystalizedBall'))
 import SlingButton, { type SlingSendDetail } from '@/bits/SlingButton/SlingButton'
 import OptionWheel from '@/bits/OptionWheel/OptionWheel'
 import CallChip, { type CallChipStatus } from '@/bits/CallChip/CallChip'
@@ -1285,6 +1288,7 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
   const heroBg = (
     <div style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }} aria-hidden="true">
       {webgl2Ok && (
+      <Suspense fallback={null}>
       <PatternWaves
         preset="ocean"
         color={waveColor}
@@ -1306,6 +1310,7 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
         cursorStrength={0.6}
         intro
       />
+      </Suspense>
       )}
     </div>
   )
@@ -1586,6 +1591,7 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
         <div className="lp-about">
           <div className="lp-about-orb">
             {webgl2Ok && (
+              <Suspense fallback={null}>
               <CrystalizedBall
                 preset="plasma"
                 color="#302b2e"
@@ -1599,6 +1605,7 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
                 hoverStrength={0.7}
                 paused={!!reduceMotion}
               />
+              </Suspense>
             )}
             <img className="lp-about-avatar" src="/img/Prisdvl.png" alt={t.avatarAlt} width={52} height={52} />
           </div>

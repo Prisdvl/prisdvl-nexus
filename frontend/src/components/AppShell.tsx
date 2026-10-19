@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router'
 import Sidebar from '@/components/Sidebar'
 import MobileBar from '@/components/MobileBar'
 import RouteFade from '@/components/RouteFade'
 import SkipLink from '@/components/SkipLink'
+import { SkeletonRows } from '@/components/Skeleton'
 import OnboardingTour from '@/components/OnboardingTour'
 import WavesBg from '@/components/WavesBg'
 import type { PageKey, ThemeMode, PaletteName } from '@/lib/types'
@@ -70,7 +71,13 @@ export default function AppShell({ theme, palette }: ShellProps) {
       <OnboardingTour />
       <main id="main-content" tabIndex={-1} className="shell-main">
         <RouteFade>
-          <Outlet />
+          {/*
+           * 页面按需加载的边界放在内容区：外壳（侧栏 / 顶栏 / 背景）先渲染，
+           * 只有内容区显示骨架，切页时不会整屏空白。
+           */}
+          <Suspense fallback={<div className="page" style={{ minHeight: '60vh' }}><SkeletonRows rows={5} /></div>}>
+            <Outlet />
+          </Suspense>
         </RouteFade>
       </main>
     </div>

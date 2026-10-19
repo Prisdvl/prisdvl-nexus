@@ -1,8 +1,16 @@
-import PatternWaves from '@/bits/PatternWaves/PatternWaves'
-import Aurora from '@/bits/Aurora/Aurora'
-import Threads from '@/bits/Threads/Threads'
-import DotGrid from '@/bits/DotGrid/DotGrid'
-import Ribbons from '@/bits/Ribbons/Ribbons'
+import { lazy, Suspense } from 'react'
+/*
+ * 背景层按需加载。
+ *
+ * 五种背景都是装饰性 Canvas/WebGL（容器 pointerEvents:none + aria-hidden），
+ * 但同步 import 会把 ogl（四个变体）与 gsap（DotGrid）整包拖进首包。
+ * 改成 lazy 后只有当前路由真正用到的那一种才会被下载。
+ */
+const PatternWaves = lazy(() => import('@/bits/PatternWaves/PatternWaves'))
+const Aurora = lazy(() => import('@/bits/Aurora/Aurora'))
+const Threads = lazy(() => import('@/bits/Threads/Threads'))
+const DotGrid = lazy(() => import('@/bits/DotGrid/DotGrid'))
+const Ribbons = lazy(() => import('@/bits/Ribbons/Ribbons'))
 import type { PaletteName, ThemeMode } from '@/lib/types'
 import { isWebGL2Available } from '@/lib/webgl'
 
@@ -133,7 +141,11 @@ export default function WavesBg({ theme, palette, hero = false, variant = 'waves
       }}
       aria-hidden="true"
     >
-      {layer}
+      {/*
+        * 背景 chunk 未就绪时渲染 null：页面底色仍在，只是动效晚一点出现，
+        * 避免"骨架 → 背景"的双重闪烁。
+        */}
+      <Suspense fallback={null}>{layer}</Suspense>
     </div>
   )
 }
