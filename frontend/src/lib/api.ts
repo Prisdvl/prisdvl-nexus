@@ -520,10 +520,25 @@ export const api = {
     list: (kbId: string, pageNum = 1, pageSize = 100) =>
       http.get<Result<PageResult<KbDocument>>>(`/knowledge-bases/${kbId}/documents`, { params: { pageNum, pageSize } })
         .then((r) => r.data.data),
-    upload: (kbId: string, file: File) => {
+    /**
+     * 上传单个文件：一个文件一个导入任务（与后端一致，多个文件就是多次调用）。
+     *
+     * <p>`onProgress` 的百分比来自浏览器上报的"已发送字节数 / 总字节数"——
+     * 这是"上传"这一步唯一真实的百分比来源；浏览器没给 total 时回调 null，
+     * 调用方据此走不确定进度条（见 lib/importProgress.ts）。
+     */
+    upload: (kbId: string, file: File, onProgress?: (percent: number | null) => void) => {
       const fd = new FormData()
       fd.append('file', file)
-      return http.post<Result<ImportTask>>(`/knowledge-bases/${kbId}/documents`, fd).then((r) => r.data.data)
+      return http.post<Result<ImportTask>>(`/knowledge-bases/${kbId}/documents`, fd, {
+        onUploadProgress: onProgress
+          ? (event) => onProgress(
+              typeof event.total === 'number' && event.total > 0
+                ? Math.round((event.loaded / event.total) * 100)
+                : null,
+            )
+          : undefined,
+      }).then((r) => r.data.data)
     },
     get: (kbId: string, docId: string) =>
       http.get<Result<DocumentDetail>>(`/knowledge-bases/${kbId}/documents/${docId}`).then((r) => r.data.data),
@@ -541,6 +556,19 @@ export const api = {
   },
   importTasks: {
     get: (taskId: string) => http.get<Result<ImportTask>>(`/import-tasks/${taskId}`).then((r) => r.data.data),
+    /**
+     * 逐文件明细：失败 / 跳过的原因写在 message 里。
+     *
+     * <p>`action` 走服务端过滤而不是拉全量再前端筛：一个 Vault 上千条明细，
+     * 失败的可能只有 3 条，靠 limit 截断根本取不到它们。
+     */
+    items: (taskId: string, opts: { action?: string; limit?: number } = {}) =>
+      http.get<Result<ImportTaskItem[]>>(`/import-tasks/${taskId}/items`, {
+        params: {
+          ...(opts.action ? { action: opts.action } : {}),
+          ...(opts.limit ? { limit: opts.limit } : {}),
+        },
+      }).then((r) => r.data.data),
   },
   stats: {
     /** 工作台汇总：趋势(14) + 热力(30) + 最近活动(8)。
@@ -750,13 +778,34 @@ export interface ChunkRow { id: string; content?: string; heading?: string | nul
 
 export interface ImportTask {
   id: string
+  /** QUEUED / RUNNING / PARTIAL / DONE / FAILED / CANCELLED */
   status: string
   totalFiles?: number
   createdCount?: number
   updatedCount?: number
+  skippedCount?: number
+  deletedCount?: number
   failedCount?: number
   totalChunks?: number
+  /** 后端真实进度：已处理文件数 / 总文件数 ×100；运行期封顶 99，结束才 100 */
+  progress?: number
   errorMsg?: string | null
+  startedAt?: string | null
+  finishedAt?: string | null
+}
+
+/** 导入任务明细：一个文件一条（GET /import-tasks/{id}/items） */
+export interface ImportTaskItem {
+  id?: string
+  sourcePath?: string
+  /** CREATED / UPDATED / SKIPPED / DELETED / FAILED */
+  action?: string
+  documentId?: string | null
+  chunkCount?: number
+  durationMs?: number
+  /** SKIPPED 时是"为什么没进来"，FAILED 时是异常原因 */
+  message?: string | null
+  createdAt?: string | null
 }
 
 export interface RagCitation { documentId?: string; documentName?: string; chunkId?: string; score?: number; snippet?: string }

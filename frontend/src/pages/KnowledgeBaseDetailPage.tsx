@@ -21,7 +21,10 @@ import { toast } from '@/lib/toast'
 import { download } from '@/lib/download'
 import { EFFORT_TO_TOPK, promptEfforts, promptKbCommands } from '@/lib/promptBarPreset'
 import { DOCS, type DocItem } from '@/data'
-import { api, USE_MOCK, errMessage, type ChunkView, type DocumentLinks, type KnowledgeBase, type RelatedDoc, type SearchHit } from '@/lib/api'
+import { api, USE_MOCK, errMessage, type ChunkView, type DocumentLinks, type ImportTask, type KnowledgeBase, type RelatedDoc, type SearchHit } from '@/lib/api'
+import {
+  barOf, isTerminalStatus, phaseOfAction, phaseOfStatus, pickItem, type ImportPhase,
+} from '@/lib/importProgress'
 import { fetchDocs } from '@/lib/backendData'
 import type { ThemeMode } from '@/lib/types'
 import '@/components/chat/ToolTrace.css'
@@ -128,6 +131,28 @@ function isAcceptedFile(file: File) {
   return ACCEPT_EXTS.some((ext) => lower.endsWith(ext))
 }
 
+/**
+ * 导入弹窗里的一行 = 一个文件。每个文件一条后端任务（上传接口本身就是"一个文件一个任务"），
+ * 所以每行的状态各自演进、互不覆盖。
+ */
+interface ImportRow {
+  key: string
+  file: File
+  phase: ImportPhase
+  /** 真实百分比（上传字节数 / 多文件任务的文件比例）；null = 只能给不确定态 */
+  percent: number | null
+  message?: string | null
+}
+
+/**
+ * 轮询节奏：每 1s 问一次，最多等 5 分钟。
+ *
+ * <p>这两个数只决定"什么时候停止等待"，<b>不参与百分比计算</b>——
+ * 把轮询次数换算成进度条就是在编造处理进度。
+ */
+const POLL_INTERVAL_MS = 1000
+const POLL_MAX_TRIES = 300
+
 export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlightDoc = null, onClearHighlight }: Props) {
   const reduce = useReducedMotion()
   const { locale } = useLocale()
@@ -150,7 +175,10 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const [chunkDoc, setChunkDoc] = useState<DocItem | null>(null)
   const [docEnabled, setDocEnabled] = useState<Record<string, boolean>>({})
   const [docStatus, setDocStatus] = useState<'all' | 'done' | 'indexing' | 'failed'>('all')
-  const [picked, setPicked] = useState<File | null>(null)
+  const [picked, setPicked] = useState<File[]>([])
+  /* 导入进度：一行一个文件；新一批上传是追加而不是覆盖，已出的结果不会被后来的文件顶掉 */
+  const [importRows, setImportRows] = useState<ImportRow[]>([])
+  const importRowSeq = useRef(0)
   const [dragOver, setDragOver] = useState(false)
   const [searchQ, setSearchQ] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
@@ -207,6 +235,11 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
 
   const MODE_MAP: Record<string, string> = { '向量检索': 'vector', 'BM25': 'bm25', '混合检索': 'hybrid' }
   const thinking = turns.some((t) => t.thinking)
+  const importActive = importRows.some(
+    (row) => row.phase === 'queued' || row.phase === 'uploading' || row.phase === 'processing',
+  )
+  const importDoneCount = importRows.filter((row) => row.phase === 'done').length
+  const importFailedCount = importRows.filter((row) => row.phase === 'failed').length
   const qaEmpty = turns.length === 0 && !thinking
   const activeDocId = contextDocId ?? docs[0]?.id ?? null
   const activeDoc = docs.find((d) => d.id === activeDocId) ?? null
@@ -223,14 +256,20 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
     },
   ]
 
-  const pickFile = (file: File | null | undefined) => {
-    if (!file) return
-    if (!isAcceptedFile(file)) {
+  /**
+   * 选择 / 拖入文件：支持多选。
+   * 只要有一个文件格式不合法就整体不接受——沿用原来的"只认这几种格式"语义，
+   * 不静默丢掉其中几个（用户看不出少了谁）。
+   */
+  const pickFiles = (files: FileList | File[] | null | undefined) => {
+    const list = files ? Array.from(files) : []
+    if (list.length === 0) return
+    if (list.some((file) => !isAcceptedFile(file))) {
       setUploadError(t.kb.errBadType)
-      setPicked(null)
+      setPicked([])
       return
     }
-    setPicked(file)
+    setPicked(list)
     setUploadError('')
   }
 
@@ -238,29 +277,110 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
     e.preventDefault()
     setDragOver(false)
     if (uploading) return
-    pickFile(e.dataTransfer.files?.[0])
+    pickFiles(e.dataTransfer.files)
+  }
+
+  const stageLabel = (phase: ImportPhase) => {
+    switch (phase) {
+      case 'queued': return t.kb.importStageQueued
+      case 'uploading': return t.kb.importStageUploading
+      case 'processing': return t.kb.importStageProcessing
+      case 'done': return t.kb.importStageDone
+      case 'skipped': return t.kb.importStageSkipped
+      default: return t.kb.importStageFailed
+    }
+  }
+
+  const patchRow = (key: string, patch: Partial<ImportRow>) => {
+    setImportRows((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)))
+  }
+
+  const closeImport = () => {
+    setImportOpen(false)
+    setUploadError('')
+    setPicked([])
+    setImportRows([])
+    setDragOver(false)
+  }
+
+  /**
+   * 等一个文件的后端任务走到终态。
+   *
+   * <p>返回 null 表示等超时了：此时行状态保持"处理中"，不猜结果、不把轮询次数换算成百分比。
+   * 单次轮询失败也不改状态——网络抖一下不该把一个正在处理的文件说成失败。
+   */
+  const awaitTask = async (taskId: string, rowKey: string) => {
+    for (let attempt = 0; attempt < POLL_MAX_TRIES; attempt++) {
+      await new Promise((resolve) => { window.setTimeout(resolve, POLL_INTERVAL_MS) })
+      let task: ImportTask
+      try {
+        task = await api.importTasks.get(taskId)
+      } catch {
+        continue
+      }
+      const bar = barOf({ task })
+      patchRow(rowKey, { percent: bar.kind === 'determinate' ? bar.percent : null })
+      if (isTerminalStatus(task.status)) return task
+    }
+    return null
+  }
+
+  /** 一个文件：上传 → 等任务 → 用明细里属于它的那一条定结果（明细优先于任务级状态） */
+  const importOneFile = async (row: ImportRow) => {
+    patchRow(row.key, { phase: 'uploading', percent: null, message: null })
+    let task: ImportTask
+    try {
+      task = await api.documents.upload(kbId, row.file, (percent) => patchRow(row.key, { percent }))
+    } catch (error) {
+      patchRow(row.key, { phase: 'failed', percent: null, message: errMessage(error) })
+      return 'failed' as const
+    }
+    patchRow(row.key, { phase: 'processing', percent: null })
+    const finished = await awaitTask(task.id, row.key)
+    const items = await api.importTasks.items(task.id).catch(() => null)
+    const item = pickItem(items, row.file.name)
+    const phase = item ? phaseOfAction(item.action) : phaseOfStatus(finished?.status ?? task.status)
+    const failure = finished?.errorMsg ?? task.errorMsg ?? null
+    patchRow(row.key, {
+      phase,
+      percent: null,
+      message: item?.message
+        ?? (phase === 'failed' ? failure : phase === 'processing' ? t.kb.importTimeout : null),
+    })
+    if (phase === 'done') return 'done' as const
+    return phase === 'failed' ? ('failed' as const) : ('other' as const)
   }
 
   const uploadDocument = async () => {
     if (uploading) return
-    if (!picked) { setUploadError(t.kb.errPickFile); return }
+    if (picked.length === 0) { setUploadError(t.kb.errPickFile); return }
     if (USE_MOCK) {
       setUploadError(t.kb.errMockUpload)
       return
     }
     setUploadError('')
     setUploading(true)
-    try {
-      const task = await api.documents.upload(kbId, picked)
-      setImportOpen(false)
-      setPicked(null)
-      toast.task(t.kb.importTitle, t.kb.importSubmitted(task.id))
-      setDocs(await fetchDocs(kbId))
-    } catch (error) {
-      setUploadError(errMessage(error))
-    } finally {
-      setUploading(false)
+    const rows: ImportRow[] = picked.map((file) => {
+      importRowSeq.current += 1
+      return { key: `row-${importRowSeq.current}`, file, phase: 'queued', percent: null }
+    })
+    setImportRows((current) => [...current, ...rows])
+    /* 串行上传：一个文件的失败或超时不该影响另一个文件的排队、结果与错误信息 */
+    let done = 0
+    let failed = 0
+    for (const row of rows) {
+      const outcome = await importOneFile(row)
+      if (outcome === 'done') done += 1
+      if (outcome === 'failed') failed += 1
     }
+    setUploading(false)
+    setPicked([])
+    try {
+      setDocs(await fetchDocs(kbId))
+    } catch {
+      /* 文档列表刷新失败不影响已经拿到的逐文件结果 */
+    }
+    toast.task(t.kb.importTitle, t.kb.importSummary(done, failed))
   }
 
   const openMetaEditor = () => {
@@ -680,7 +800,7 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   }, [activeDoc, linkData, related, docs])
 
   const kbDesc = kbInfo?.description?.trim() || ''
-  const PickedIcon = picked ? fileKindIcon(picked.name) : Upload
+  const PickedIcon = picked.length > 0 ? fileKindIcon(picked[0].name) : Upload
 
   return (
     <div className="kb-fixed">
@@ -722,7 +842,7 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
             <motion.button
               className="btn btn-primary btn-sm"
               type="button"
-              onClick={() => { setImportOpen(true); setUploadError(''); setPicked(null); setDragOver(false) }}
+              onClick={() => { setImportOpen(true); setUploadError(''); setPicked([]); setDragOver(false) }}
               whileHover={reduce ? undefined : { y: -1 }}
               whileTap={reduce ? undefined : { scale: 0.97 }}
             >
@@ -1412,22 +1532,35 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
       <Modal
         open={importOpen}
         title={t.kb.importTitle}
-        onClose={() => { if (!uploading) { setImportOpen(false); setUploadError(''); setPicked(null); setDragOver(false) } }}
+        onClose={() => { if (!uploading) closeImport() }}
         shouldBlockClose={() => uploading}
         width={560}
         footer={(
           <>
-            <button className="btn btn-ghost" type="button" onClick={() => { setImportOpen(false); setPicked(null) }} disabled={uploading}>{t.common.cancel}</button>
-            <motion.button
-              className="btn btn-primary"
-              type="button"
-              onClick={() => { void uploadDocument() }}
-              disabled={uploading || !picked}
-              whileHover={reduce || uploading || !picked ? undefined : { y: -1 }}
-              whileTap={reduce || uploading || !picked ? undefined : { scale: 0.97 }}
-            >
-              {uploading ? t.kb.importing : t.kb.importSubmit}
-            </motion.button>
+            <button className="btn btn-ghost" type="button" onClick={closeImport} disabled={uploading}>{t.common.cancel}</button>
+            {importRows.length > 0 ? (
+              <motion.button
+                className="btn btn-primary"
+                type="button"
+                onClick={closeImport}
+                disabled={importActive}
+                whileHover={reduce || importActive ? undefined : { y: -1 }}
+                whileTap={reduce || importActive ? undefined : { scale: 0.97 }}
+              >
+                {importActive ? t.kb.importing : t.common.close}
+              </motion.button>
+            ) : (
+              <motion.button
+                className="btn btn-primary"
+                type="button"
+                onClick={() => { void uploadDocument() }}
+                disabled={uploading || picked.length === 0}
+                whileHover={reduce || uploading || picked.length === 0 ? undefined : { y: -1 }}
+                whileTap={reduce || uploading || picked.length === 0 ? undefined : { scale: 0.97 }}
+              >
+                {uploading ? t.kb.importing : t.kb.importSubmit}
+              </motion.button>
+            )}
           </>
         )}
       >
@@ -1437,10 +1570,11 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
             id="kb-import-file"
             className="sr-only"
             type="file"
+            multiple
             accept={ACCEPT_MIME}
             disabled={uploading}
             onChange={(event) => {
-              pickFile(event.target.files?.[0])
+              pickFiles(event.target.files)
               event.target.value = ''
             }}
           />
@@ -1448,7 +1582,7 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
           <motion.div
             className="kb-drop"
             data-over={dragOver ? '' : undefined}
-            data-has={picked ? '' : undefined}
+            data-has={picked.length > 0 ? '' : undefined}
             data-busy={uploading ? '' : undefined}
             role="button"
             tabIndex={uploading ? -1 : 0}
@@ -1468,11 +1602,11 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
             whileTap={reduce || uploading ? undefined : { scale: 0.985 }}
             animate={dragOver && !reduce ? { scale: 1.015 } : { scale: 1 }}
             transition={soft}
-            aria-label={picked ? t.kb.dropReselect : t.kb.dropAria}
+            aria-label={picked.length > 0 ? t.kb.dropReselect : t.kb.dropAria}
             aria-disabled={uploading || undefined}
           >
             {/* 同上：mode="wait" 在 motion 14.0.0 下失效，picked/空态改为 key 直接切换 */}
-            {picked ? (
+            {picked.length > 0 ? (
                 <motion.div
                   key="picked"
                   className="kb-drop__picked"
@@ -1491,24 +1625,21 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
                     <PickedIcon size={22} />
                   </motion.span>
                   <div className="kb-drop__meta">
-                    <div className="kb-drop__name">{picked.name}</div>
-                    <div className="kb-drop__size">{formatBytes(picked.size)}</div>
-                    {uploading && (
-                      <div className="kb-drop__progress" role="progressbar" aria-valuetext={t.kb.importProgressAria}>
-                        <motion.span
-                          className="kb-drop__progress-bar"
-                          initial={reduce ? false : { scaleX: 0 }}
-                          animate={{ scaleX: 1 }}
-                          transition={reduce ? { duration: 0 } : { duration: 1.6, ease: [0.22, 1, 0.36, 1], repeat: Infinity }}
-                        />
-                      </div>
-                    )}
+                    <div
+                      className="kb-drop__name"
+                      title={picked.map((file) => file.name).join('\n')}
+                    >
+                      {picked.length === 1
+                        ? picked[0].name
+                        : t.kb.importPickedMany(picked.length, formatBytes(picked.reduce((sum, file) => sum + file.size, 0)))}
+                    </div>
+                    {picked.length === 1 && <div className="kb-drop__size">{formatBytes(picked[0].size)}</div>}
                   </div>
                   {!uploading && (
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
-                      onClick={(e) => { e.stopPropagation(); setPicked(null); setUploadError('') }}
+                      onClick={(e) => { e.stopPropagation(); setPicked([]); setUploadError('') }}
                     >
                       {t.kb.swapFile}
                     </button>
@@ -1539,44 +1670,93 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
               )}
           </motion.div>
 
-          <div className="kb-import__types" aria-label={t.kb.typesAria}>
-            {([
-              { t: 'MD', tip: t.kb.typeMd },
-              { t: 'TXT', tip: t.kb.typeTxt },
-              { t: 'PDF', tip: t.kb.typePdf },
-              { t: 'DOCX', tip: t.kb.typeDocx },
-            ] as const).map((item, i) => (
-              <motion.span
-                key={item.t}
-                className="kb-import__type"
-                title={item.tip}
-                initial={reduce ? false : { opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ ...soft, delay: reduce ? 0 : 0.04 * i }}
-              >
-                {item.t}
-              </motion.span>
-            ))}
-          </div>
+          {importRows.length > 0 ? (
+            <div className="kb-import__rows" role="list" aria-label={t.kb.importRowsAria}>
+              {importRows.map((row) => {
+                const bar = barOf({ uploadPercent: row.percent })
+                const RowIcon = fileKindIcon(row.file.name)
+                return (
+                  <div className="kb-import__row" role="listitem" key={row.key} data-phase={row.phase}>
+                    <span className="kb-import__row-icon" aria-hidden><RowIcon size={15} /></span>
+                    <div className="kb-import__row-main">
+                      <div className="kb-import__row-name" title={row.file.name}>{row.file.name}</div>
+                      <div className="kb-import__row-meta">
+                        <span>{formatBytes(row.file.size)}</span>
+                        <span className="kb-import__row-stage" data-phase={row.phase}>{stageLabel(row.phase)}</span>
+                        {bar.kind === 'determinate' && <span className="kb-import__row-pct">{bar.percent}%</span>}
+                      </div>
+                      {/* 只有"还在动"的两态才画进度条：有真数才给刻度，没有就只留不确定态 */}
+                      {(row.phase === 'uploading' || row.phase === 'processing') && (
+                        <div
+                          className="kb-import__row-track"
+                          role="progressbar"
+                          data-indeterminate={bar.kind === 'indeterminate' ? '' : undefined}
+                          aria-valuenow={bar.kind === 'determinate' ? bar.percent : undefined}
+                          aria-valuetext={stageLabel(row.phase)}
+                        >
+                          {bar.kind === 'determinate' ? (
+                            <motion.span
+                              className="kb-import__row-fill"
+                              initial={false}
+                              animate={{ scaleX: bar.percent / 100 }}
+                              transition={reduce ? { duration: 0 } : { duration: 0.25, ease: 'easeOut' }}
+                            />
+                          ) : (
+                            <span className="kb-import__row-fill" />
+                          )}
+                        </div>
+                      )}
+                      {row.message && <p className="kb-import__row-msg">{row.message}</p>}
+                    </div>
+                  </div>
+                )
+              })}
+              <p className="kb-import__summary">
+                {importActive ? t.kb.importPendingClose : t.kb.importSummary(importDoneCount, importFailedCount)}
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="kb-import__types" aria-label={t.kb.typesAria}>
+                {([
+                  { t: 'MD', tip: t.kb.typeMd },
+                  { t: 'TXT', tip: t.kb.typeTxt },
+                  { t: 'PDF', tip: t.kb.typePdf },
+                  { t: 'DOCX', tip: t.kb.typeDocx },
+                ] as const).map((item, i) => (
+                  <motion.span
+                    key={item.t}
+                    className="kb-import__type"
+                    title={item.tip}
+                    initial={reduce ? false : { opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ ...soft, delay: reduce ? 0 : 0.04 * i }}
+                  >
+                    {item.t}
+                  </motion.span>
+                ))}
+              </div>
 
-          <ol className="kb-import__steps" aria-label={t.kb.stepsAria}>
-            {[
-              { n: 1, t: t.kb.step1 },
-              { n: 2, t: t.kb.step2 },
-              { n: 3, t: t.kb.step3 },
-            ].map((s, i) => (
-              <motion.li
-                key={s.n}
-                data-on={uploading && i === 0 ? '' : picked && !uploading && i === 0 ? '' : undefined}
-                initial={reduce ? false : { opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ ...soft, delay: reduce ? 0 : 0.06 + i * 0.05 }}
-              >
-                <span className="kb-import__step-n">{s.n}</span>
-                <span>{s.t}</span>
-              </motion.li>
-            ))}
-          </ol>
+              <ol className="kb-import__steps" aria-label={t.kb.stepsAria}>
+                {[
+                  { n: 1, t: t.kb.step1 },
+                  { n: 2, t: t.kb.step2 },
+                  { n: 3, t: t.kb.step3 },
+                ].map((s, i) => (
+                  <motion.li
+                    key={s.n}
+                    data-on={uploading && i === 0 ? '' : picked.length > 0 && !uploading && i === 0 ? '' : undefined}
+                    initial={reduce ? false : { opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ ...soft, delay: reduce ? 0 : 0.06 + i * 0.05 }}
+                  >
+                    <span className="kb-import__step-n">{s.n}</span>
+                    <span>{s.t}</span>
+                  </motion.li>
+                ))}
+              </ol>
+            </>
+          )}
 
           {uploadError && <p className="form-error active" role="alert">{uploadError}</p>}
         </div>

@@ -1142,21 +1142,6 @@
   font-size: 12px;
   color: var(--text-3);
 }
-.kb-drop__progress {
-  margin-top: 10px;
-  height: 3px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--primary) 16%, var(--surface));
-  overflow: hidden;
-}
-.kb-drop__progress-bar {
-  display: block;
-  width: 100%;
-  height: 100%;
-  transform-origin: left center;
-  background: var(--primary);
-  border-radius: inherit;
-}
 .kb-import__types {
   display: flex;
   flex-wrap: wrap;
@@ -1208,6 +1193,123 @@
 .kb-import__steps li[data-on] .kb-import__step-n {
   background: var(--primary-container);
   color: var(--primary-text);
+}
+
+/* ---------- 导入进度：一行一个文件（状态互不覆盖） ---------- */
+.kb-import__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 296px;
+  overflow-y: auto;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--surface-muted);
+}
+.kb-import__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.kb-import__row-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  margin-top: 1px;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-3);
+}
+.kb-import__row-main { flex: 1; min-width: 0; }
+.kb-import__row-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-import__row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.kb-import__row-stage {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-weight: 600;
+}
+.kb-import__row-stage[data-phase='done'] {
+  background: var(--primary-container);
+  color: var(--primary-text);
+}
+.kb-import__row-stage[data-phase='skipped'] {
+  background: var(--warning-container);
+  color: var(--warning);
+}
+.kb-import__row-stage[data-phase='failed'] {
+  background: var(--danger-container);
+  color: var(--danger);
+}
+.kb-import__row-pct {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+.kb-import__row-track {
+  position: relative;
+  margin-top: 7px;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 16%, var(--surface));
+  overflow: hidden;
+}
+.kb-import__row-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transform-origin: left center;
+}
+/* 不确定态：没有真数就不给刻度，只让光带匀速扫过（不暗示"快到头了"） */
+.kb-import__row-track[data-indeterminate] .kb-import__row-fill {
+  width: 40%;
+  transform: none;
+  animation: kb-import-sweep 1.4s ease-in-out infinite;
+}
+.kb-import__row-msg {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--danger);
+  word-break: break-word;
+}
+.kb-import__row[data-phase='skipped'] .kb-import__row-msg { color: var(--text-2); }
+.kb-import__summary {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+@keyframes kb-import-sweep {
+  from { transform: translateX(-45%); }
+  to   { transform: translateX(255%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kb-import__row-track[data-indeterminate] .kb-import__row-fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
 }
 
 @keyframes kb-panel-in {

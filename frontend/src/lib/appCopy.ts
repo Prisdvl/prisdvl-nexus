@@ -231,7 +231,6 @@ export interface AppCopy {
     errPickFile: string
     errBadType: string
     errMockUpload: string
-    importSubmitted: (id: string | number) => string
     indexRebuilt: string
     indexQueued: string
     indexFail: string
@@ -269,7 +268,18 @@ export interface AppCopy {
     swapFile: string
     typesAria: string
     stepsAria: string
-    importProgressAria: string
+    /* —— 逐文件导入进度（每个文件一行，状态互不覆盖） —— */
+    importRowsAria: string
+    importStageQueued: string
+    importStageUploading: string
+    importStageProcessing: string
+    importStageDone: string
+    importStageSkipped: string
+    importStageFailed: string
+    importSummary: (done: number, failed: number) => string
+    importPendingClose: string
+    importTimeout: string
+    importPickedMany: (count: number, size: string) => string
     askFailPrefix: string
     backlinkWhy: (linkType: string) => string
     relatedWhy: string
@@ -648,7 +658,7 @@ const ZH: AppCopy = {
     importing: '正在上传…',
     dropChoose: '拖入文件，或点击选择',
     dropRelease: '松开以放入文件',
-    dropHint: '单次一个文件 · 最大体积以服务端配置为准',
+    dropHint: '支持多选，逐个排队上传 · 单文件上限以服务端配置为准',
     dropReselect: '更换',
     dropAria: '选择或拖入文件',
     typeMd: 'Markdown',
@@ -661,7 +671,6 @@ const ZH: AppCopy = {
     errPickFile: '请选择或拖入一个文件。',
     errBadType: '仅支持 Markdown、TXT、PDF、DOCX。',
     errMockUpload: '离线测试模式不会上传或保存文件。请连接真实后端后重试。',
-    importSubmitted: (id) => `任务 ${id} 已进入解析队列`,
     indexRebuilt: '索引已重建',
     indexQueued: '索引任务已提交',
     indexFail: '建索引失败',
@@ -696,7 +705,17 @@ const ZH: AppCopy = {
     swapFile: '更换',
     typesAria: '支持的格式',
     stepsAria: '导入流程',
-    importProgressAria: '上传中',
+    importRowsAria: '导入进度',
+    importStageQueued: '等待上传',
+    importStageUploading: '上传中',
+    importStageProcessing: '处理中',
+    importStageDone: '成功',
+    importStageSkipped: '已跳过',
+    importStageFailed: '失败',
+    importSummary: (done, failed) => (failed > 0 ? `完成 ${done} 个 · 失败 ${failed} 个` : `完成 ${done} 个`),
+    importPendingClose: '还有文件在处理，完成后可关闭',
+    importTimeout: '仍在后端处理，稍后刷新文档列表查看',
+    importPickedMany: (count, size) => `已选择 ${count} 个文件 · 合计 ${size}`,
     askFailPrefix: '检索/生成失败',
     backlinkWhy: (linkType) => `反向链接${linkType ? ` · ${linkType}` : ''}`,
     relatedWhy: '相关推荐',
@@ -1035,7 +1054,7 @@ const EN: AppCopy = {
     importing: 'Uploading…',
     dropChoose: 'Drop a file here, or click to choose',
     dropRelease: 'Release to add the file',
-    dropHint: 'One file at a time · size limit follows server config',
+    dropHint: 'Select multiple files — they queue up one by one · per-file size limit follows server config',
     dropReselect: 'Replace',
     dropAria: 'Choose or drop a file',
     typeMd: 'Markdown',
@@ -1048,7 +1067,6 @@ const EN: AppCopy = {
     errPickFile: 'Please choose or drop a file.',
     errBadType: 'Only Markdown, TXT, PDF, and DOCX are supported.',
     errMockUpload: 'Offline demo mode does not upload or save files. Please connect a real backend.',
-    importSubmitted: (id) => `Task ${id} entered the parse queue`,
     indexRebuilt: 'Index rebuilt',
     indexQueued: 'Index task submitted',
     indexFail: 'Indexing failed',
@@ -1083,7 +1101,17 @@ const EN: AppCopy = {
     swapFile: 'Replace',
     typesAria: 'Supported formats',
     stepsAria: 'Import flow',
-    importProgressAria: 'Uploading',
+    importRowsAria: 'Import progress',
+    importStageQueued: 'Waiting',
+    importStageUploading: 'Uploading',
+    importStageProcessing: 'Processing',
+    importStageDone: 'Done',
+    importStageSkipped: 'Skipped',
+    importStageFailed: 'Failed',
+    importSummary: (done, failed) => (failed > 0 ? `${done} done · ${failed} failed` : `${done} done`),
+    importPendingClose: 'Still processing — you can close once it finishes',
+    importTimeout: 'Still processing on the server — refresh the document list later',
+    importPickedMany: (count, size) => `${count} files · ${size} total`,
     askFailPrefix: 'Retrieval/generation failed',
     backlinkWhy: (linkType) => `Backlink${linkType ? ` · ${linkType}` : ''}`,
     relatedWhy: 'Related suggestion',
