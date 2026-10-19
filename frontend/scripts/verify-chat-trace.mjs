@@ -128,7 +128,7 @@ await chain.locator('.thought-chain__head').click()
 check('再次点击展开整条链路', (await chain.locator('.thought-chain__body').count()) >= 1)
 
 // 会话内「轨迹」视图
-await page.locator('.chat-view-tab', { hasText: /轨迹|Trace/ }).click()
+await page.locator('.chat-view-tabs button.rubber-segment__item', { hasText: /轨迹|Trace/ }).click()
 await page.waitForSelector('.trace-layout')
 const trace = await page.evaluate(() => ({
   layout: !!document.querySelector('.trace-layout'),

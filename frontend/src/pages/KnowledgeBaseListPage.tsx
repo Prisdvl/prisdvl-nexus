@@ -2,6 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { ChevronRight, Database, FileText, Files, Pencil, Plus, RefreshCw, Search, SearchX } from 'lucide-react'
 import Modal from '@/components/Modal'
+import RubberSegment from '@/bits/RubberSegment/RubberSegment'
 import { Skeleton, StateEmpty } from '@/components/Skeleton'
 import { KBS, type KbItem } from '@/data'
 import { api, USE_MOCK, errMessage } from '@/lib/api'
@@ -123,11 +124,18 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
         <div className="stat-card"><div className="label"><FileText size={13} /> 含文档知识库</div><div className="num">{withDocs}</div><div className="sub">已有可检索内容</div></div>
       </div>
 
-      <div className="filter-row kb-filters">
-        {([['all', `全部 ${rows.length}`], ['withDocs', `含文档 ${withDocs}`], ['empty', `空知识库 ${rows.length - withDocs}`]] as const).map(([key, label]) => (
-          <button key={key} type="button" className={`chip filter-chip${filter === key ? ' filter-chip--on' : ''}`} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</button>
-        ))}
-      </div>
+      <RubberSegment
+        className="kb-filters"
+        size="sm"
+        items={[
+          { value: 'all', label: `全部 ${rows.length}` },
+          { value: 'withDocs', label: `含文档 ${withDocs}` },
+          { value: 'empty', label: `空知识库 ${rows.length - withDocs}` },
+        ]}
+        value={filter}
+        onChange={(v) => setFilter(v as Filter)}
+        aria-label={t.kbList.filterAria}
+      />
 
       {error && <div className="kb-list-empty"><StateEmpty icon={<SearchX size={20} />} title={t.kbList.loadFailTitle} desc={error} action={<button className="btn btn-sm" type="button" onClick={() => void reload()}>{t.common.retry}</button>} /></div>}
 

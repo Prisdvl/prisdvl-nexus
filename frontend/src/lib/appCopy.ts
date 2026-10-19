@@ -129,6 +129,7 @@ export interface AppCopy {
     addCard: string
     addCardHint: string
     newAria: string
+    filterAria: string
   }
   kb: {
     back: string
@@ -558,6 +559,7 @@ const ZH: AppCopy = {
     addCard: '新建知识库',
     addCardHint: '为一个主题建立专属资料库',
     newAria: '新建知识库',
+    filterAria: '知识库筛选',
   },
   kb: {
     back: '返回',
@@ -944,6 +946,7 @@ const EN: AppCopy = {
     addCard: 'New knowledge base',
     addCardHint: 'Build a library around one topic',
     newAria: 'Create a knowledge base',
+    filterAria: 'Filter knowledge bases',
   },
   kb: {
     back: 'Back',

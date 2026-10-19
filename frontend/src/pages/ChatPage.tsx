@@ -1208,26 +1208,17 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
             <div className="chat-head__id">
               <div data-testid="chat-title" className="chat-head__title">{active.title}</div>
               <div data-testid="chat-meta" className="chat-head__meta">{c.metaLine(active.messages.length, active.updated)}</div>
-              <div className="chat-view-tabs" role="tablist" aria-label={tr.viewTrace}>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={chatView === 'chat'}
-                  className={`chat-view-tab${chatView === 'chat' ? ' is-on' : ''}`}
-                  onClick={() => setChatView('chat')}
-                >
-                  {tr.viewChat}
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={chatView === 'trace'}
-                  className={`chat-view-tab${chatView === 'trace' ? ' is-on' : ''}`}
-                  onClick={() => setChatView('trace')}
-                >
-                  {tr.viewTrace}
-                </button>
-              </div>
+              <RubberSegment
+                className="chat-view-tabs"
+                size="sm"
+                items={[
+                  { value: 'chat', label: tr.viewChat },
+                  { value: 'trace', label: tr.viewTrace },
+                ]}
+                value={chatView}
+                onChange={(v) => setChatView(v as 'chat' | 'trace')}
+                aria-label={`${tr.viewChat} / ${tr.viewTrace}`}
+              />
             </div>
 
             <div className="chat-head__tools">

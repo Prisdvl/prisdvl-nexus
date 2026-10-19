@@ -41,7 +41,7 @@ await page.screenshot({ path: 'qa-automations.png' })
 await page.setViewportSize({ width: 390, height: 844 })
 await page.goto(`${BASE}/#/app/chat`, { waitUntil: 'networkidle' })
 await page.waitForTimeout(800)
-await page.locator('.chat-view-tab', { hasText: /轨迹|Trace/ }).click()
+await page.locator('.chat-view-tabs button.rubber-segment__item', { hasText: /轨迹|Trace/ }).click()
 await page.waitForTimeout(500)
 await page.screenshot({ path: 'qa-chat-trace-mobile.png' })
 

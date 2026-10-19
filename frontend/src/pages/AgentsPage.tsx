@@ -292,9 +292,9 @@ export default function AgentsPage() {
                 </div>
                 <p className="ds">{a.desc}</p>
                 <div className="tags">
-                  <span className="chip" style={{ fontSize: 11 }}>{a.model}</span>
-                  {a.tools.slice(0, 2).map((t) => <span className="badge" data-tone="accent" key={t}>{t}</span>)}
-                  {a.tools.length > 2 && <span className="badge">+{a.tools.length - 2}</span>}
+                  <span className="chip" style={{ fontSize: 11 }} title={a.model}>{a.model}</span>
+                  {a.tools.slice(0, 2).map((t) => <span className="badge" data-tone="accent" key={t} title={t}>{t}</span>)}
+                  {a.tools.length > 2 && <span className="badge" title={a.tools.join(' · ')}>+{a.tools.length - 2}</span>}
                 </div>
                 <p className="agent-kb" title={`${g.boundKb(a.kb)}`}>{g.boundKb(a.kb)}</p>
               </div>

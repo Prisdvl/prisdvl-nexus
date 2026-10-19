@@ -591,9 +591,11 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
 .composer .send:hover { background: var(--primary-hover); }
 .composer .send.stop { background: var(--danger-container); color: var(--danger); }/* Agent 网格 */
 .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(238px, 1fr)); gap: 14px; }
-.agent-inner { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; padding: 14px; }
-/* 内容区可压缩：描述与标签超出时裁切，绝不把操作栏顶出卡片 */
-.agent-inner > div:first-child { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+/* 高度交给内容：原先固定 200px + 内容区 overflow:hidden，把标签行与绑定信息静默裁掉。
+   height:100% 只为让同一行里较高的卡片把操作栏压到底部；解析不到时等价于 auto。 */
+.agent-inner { position: relative; height: 100%; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; padding: 14px; min-height: 172px; }
+/* 内容区只负责撑开高度：不再 overflow:hidden，避免标签/绑定信息被静默裁切 */
+.agent-inner > div:first-child { flex: 1 1 auto; min-height: 0; min-width: 0; }
 .agent-inner .nm { margin: 0; font-size: 14.5px; font-weight: 600; }
 .agent-inner .ds {
   margin: 5px 0 0;
@@ -605,7 +607,11 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.agent-inner .tags { display: flex; flex-wrap: nowrap; gap: 5px; margin-top: 8px; overflow: hidden; }
+/* 标签换行而不是横排裁切；单项过长时内部省略，不再溢出卡片 */
+.agent-inner .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; min-width: 0; }
+.agent-inner .tags > * { min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* chip / badge 都是定高控件，多行文本会在控件内溢出 → 强制单行 */
+.agent-inner .tags .chip, .agent-inner .tags .badge { flex: 0 1 auto; }
 .agent-kb {
   margin: 6px 0 0;
   font-size: 11.5px;
@@ -614,7 +620,7 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.agent-inner .acts { display: flex; gap: 4px; margin-top: 10px; flex: none; flex-wrap: nowrap; }
+.agent-inner .acts { display: flex; gap: 4px; margin-top: 10px; flex: none; flex-wrap: wrap; row-gap: 6px; }
 .agent-inner .acts .btn { flex: none; }
 .agent-inner .acts .btn { min-height: 28px; padding: 0 8px; font-size: 12px; gap: 5px; }
 
@@ -762,7 +768,12 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
 .kb-grid .pixel-card:focus-within, .agent-grid .pixel-card:focus-within {
   background: var(--surface-muted);
 }
-.agent-grid .pixel-card { height: 200px; }
+/* 卡片高度交给内容（详见 .agent-inner）；--pixel-card-active-color 置空 =
+   去掉 PixelCard 悬停时的那块中心高光，Agent 卡片只保留粒子动效 */
+.agent-grid .pixel-card { height: auto; min-height: 200px; aspect-ratio: auto; display: block; --pixel-card-active-color: transparent; }
+/* 粒子画布脱离文档流：卡片高度由 .agent-inner 决定，否则 canvas 的 height:100%
+   会与 ResizeObserver 写入的像素高度互相触发，造成高度抖动 */
+.agent-grid .pixel-card > .pixel-canvas { position: absolute; inset: 0; }
 
 /* ============================================================
  * 侧栏与内容区（骨架）
@@ -3046,31 +3057,8 @@ main:focus { outline: none; }
   min-height: 0;
 }
 
-/* 对话 / 轨迹 切换：轻量文字页签，不做卡片 */
-.chat-view-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  margin-top: 8px;
-}
-.chat-view-tab {
-  appearance: none;
-  height: 28px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: var(--radius-pill, 999px);
-  background: transparent;
-  color: var(--text-3);
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-.chat-view-tab:hover { background: var(--ui-hover); color: var(--text); }
-.chat-view-tab:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-.chat-view-tab.is-on { background: var(--ui-selected); color: var(--text); font-weight: 600; }
+/* 对话 / 轨迹 切换：与知识库筛选、详情页页签共用同一套 RubberSegment 分段控件 */
+.chat-view-tabs { margin-top: 8px; }
 
 /* ============================================================
  * 搜索栏统一：轻表面容器 + 聚焦抬升 + 柔光描边 + 图标响应
