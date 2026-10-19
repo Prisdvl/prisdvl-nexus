@@ -65,6 +65,12 @@ public class DisabledChunkIndex implements ChunkIndex {
     }
 
     @Override
+    public void deleteIndexFor(Long knowledgeBaseId) {
+        // 没有索引就没有要删的结构（与"未启用时写入明确报错"不冲突：删除是清理动作，
+        // 让删库在没开检索索引的环境里也能走完，比抛错更有用）
+    }
+
+    @Override
     public long countByKnowledgeBase(Long knowledgeBaseId) {
         return 0;
     }

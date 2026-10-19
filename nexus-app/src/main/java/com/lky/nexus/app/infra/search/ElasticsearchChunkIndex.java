@@ -311,6 +311,36 @@ public class ElasticsearchChunkIndex implements ChunkIndex {
     }
 
     @Override
+    public void deleteIndexFor(Long knowledgeBaseId) {
+        if (knowledgeBaseId == null) {
+            return;
+        }
+        String knowledgeBaseAlias = aliasFor(knowledgeBaseId);
+        try {
+            // 通配只能用在"查"上，绝不能进删除接口：ES 的 action.destructive_requires_name 默认为 true，
+            // 通配表达式会被拒（illegal_argument_exception: Wildcard expressions or all indices are
+            // not allowed）。本仓库已经踩过这个坑——早先测试清理代码写的就是通配删除，
+            // 在本机 compose 那套 ES 上从来没跑通过（见 LiveChunkIndexTest#dropIndexes）。
+            // 因此先按通配 resolve 出物理索引名，再按名字精确删除。
+            // 通配里的下划线不能省：库 1 的索引是 nexus_chunk_1_...，不会匹配到库 12 的 nexus_chunk_12_...
+            // 也刻意不覆盖"不带库 id 的旧全局索引"——宁可留下一个孤儿索引，也不能误删别的库的数据。
+            var found = client.indices().get(g -> g
+                    .index(knowledgeBaseAlias + "_*")
+                    .ignoreUnavailable(true));
+            if (found.indices().isEmpty()) {
+                // 没有索引（建库时索引就没建起来、或已经删过）：幂等返回
+                return;
+            }
+            // 删物理索引会连带删掉绑定在它上面的别名，不需要单独删别名
+            client.indices().delete(d -> d.index(List.copyOf(found.indices().keySet())));
+            log.info("知识库 {} 的检索索引已删除（别名 {}，物理索引 {} 个）",
+                    knowledgeBaseId, knowledgeBaseAlias, found.indices().size());
+        } catch (IOException ex) {
+            throw new IllegalStateException("删除 ES 索引失败：" + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
     public long countByKnowledgeBase(Long knowledgeBaseId) {
         try {
             return client.count(c -> c

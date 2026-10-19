@@ -79,8 +79,23 @@ public interface ChunkIndex {
      */
     void deleteByDocumentIds(List<Long> documentIds);
 
-    /** 按知识库删除。 */
+    /** 按知识库删除文档（清空内容，保留索引结构）。 */
     void deleteByKnowledgeBase(Long knowledgeBaseId);
+
+    /**
+     * 删除指定知识库的<b>索引结构本身</b>（连同它的别名与其中所有文档）。
+     *
+     * <p><b>为什么不能只 {@link #deleteByKnowledgeBase}</b>：那个方法清的是文档，索引与别名会留下。
+     * 残留的空索引是个隐性坑——它按库分片、物理名带时间戳，所以不会与将来新建的库撞名，
+     * 但它真实存在于集群里：占着分片与集群状态，且任何按别名查询的路径都会命中一个"存在的空索引"，
+     * 于是"这个知识库已经被删了"在检索侧看不出来（本该是查无此索引，而不是查得到但 0 条）。
+     * 2026-10-19 的 Docker 端到端验收就留下过两个这样的空索引（当时手工删掉）。
+     *
+     * <p>与 {@link #deleteByDocumentIds} 的分工：那个方法跨库删文档、保留结构；
+     * 这个方法只针对一个库，并且把结构一起删掉——它对应的语义是"这个知识库永久消失了"，
+     * 而不是"这个库暂时没有内容"。幂等：库里没有索引时不应报错。
+     */
+    void deleteIndexFor(Long knowledgeBaseId);
 
     /** 统计某知识库的文档数（对账用）。 */
     long countByKnowledgeBase(Long knowledgeBaseId);

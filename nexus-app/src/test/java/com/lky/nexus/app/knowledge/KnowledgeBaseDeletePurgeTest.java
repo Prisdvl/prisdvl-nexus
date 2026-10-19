@@ -115,6 +115,9 @@ class KnowledgeBaseDeletePurgeTest {
         // ③ 外部存储：按库清理（这正是此前完全缺失的一步——TODO 写在那里很久了）
         verify(vectorStore).deleteByKnowledgeBase(kbId);
         verify(chunkIndex).deleteByKnowledgeBase(kbId);
+        // 索引结构（物理索引 + 别名）也必须一起删：否则 ES 里留下一个空索引，
+        // "库没了"在检索侧就变成了"查得到但 0 条"（E2E 里真留过两个，手工删的）
+        verify(chunkIndex).deleteIndexFor(kbId);
 
         // ④ 磁盘上的原始文件
         for (DocumentPO document : documents) {

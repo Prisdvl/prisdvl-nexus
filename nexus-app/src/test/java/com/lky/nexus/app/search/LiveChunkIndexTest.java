@@ -270,6 +270,39 @@ class LiveChunkIndexTest {
         assertThat(chunkIndex.search(OTHER_KB_ID, "缓存击穿", 5)).isEmpty();
     }
 
+    @Test
+    @DisplayName("删索引：物理索引与别名一起消失，别的库不受影响，重复删不报错")
+    void deleteIndexForRemovesIndexAndAlias() throws Exception {
+        // 这条用例补的是删库路径的最后一步：只 deleteByQuery 会留下一个真实存在的空索引与别名，
+        // 于是"库已删除"在检索侧变成"查得到但 0 条"（2026-10-19 的 E2E 里真留下过两个空索引）。
+        // 它同时钉住一个实现细节：删除接口不接受通配表达式（destructive_requires_name 默认 true），
+        // 必须 resolve 后按名字删——通配版本在真机上会直接抛 illegal_argument_exception。
+        indexAndRefresh(List.of(
+                chunk(61L, TEST_KB_ID, "标题", null, "这条内容会随索引一起消失。"),
+                chunk(62L, OTHER_KB_ID, "标题", null, "别的库的内容应当留着。")));
+
+        assertThat(aliasExists(TEST_KB_ID)).isTrue();
+        assertThat(aliasExists(OTHER_KB_ID)).isTrue();
+        assertThat(chunkIndex.countByKnowledgeBase(TEST_KB_ID)).isEqualTo(1);
+
+        chunkIndex.deleteIndexFor(TEST_KB_ID);
+
+        // 别名依附于物理索引，索引没了别名也没了
+        assertThat(aliasExists(TEST_KB_ID)).as("别名应随索引消失").isFalse();
+        assertThat(physicalIndexExists(TEST_KB_ID)).as("物理索引应被删除").isFalse();
+        // 删了索引之后：count 是 0、search 是空，而不是 404/异常（ignoreUnavailable 的意义）
+        assertThat(chunkIndex.countByKnowledgeBase(TEST_KB_ID)).isZero();
+        assertThat(chunkIndex.search(TEST_KB_ID, "内容", 5)).isEmpty();
+
+        // 幂等：再删一次不报错（删库可能重试）
+        chunkIndex.deleteIndexFor(TEST_KB_ID);
+
+        assertThat(aliasExists(OTHER_KB_ID)).as("别的库的索引不该受影响").isTrue();
+        assertThat(chunkIndex.countByKnowledgeBase(OTHER_KB_ID)).isEqualTo(1);
+        assertThat(chunkIndex.search(OTHER_KB_ID, "别的库", 5))
+                .extracting(ChunkSearchHit::chunkId).contains(62L);
+    }
+
     // ------------------------------------------------------------------
 
     /**
@@ -298,6 +331,18 @@ class LiveChunkIndexTest {
         return client.indices().getAlias(g -> g.name(chunkIndex.aliasFor(knowledgeBaseId)))
                 .aliases().keySet().stream().findFirst()
                 .orElseThrow(() -> new IllegalStateException("知识库 " + knowledgeBaseId + " 没有索引"));
+    }
+
+    /** 该知识库的别名是否存在。 */
+    private boolean aliasExists(Long knowledgeBaseId) throws IOException {
+        return client.indices().existsAlias(e -> e.name(chunkIndex.aliasFor(knowledgeBaseId))).value();
+    }
+
+    /** 该知识库是否还有物理索引（通配只匹配 {@code <别名>_<时间戳>_<序号>} 形式的物理索引）。 */
+    private boolean physicalIndexExists(Long knowledgeBaseId) throws IOException {
+        return !client.indices().get(g -> g
+                .index(chunkIndex.aliasFor(knowledgeBaseId) + "_*")
+                .ignoreUnavailable(true)).indices().isEmpty();
     }
 
     /**

@@ -477,6 +477,11 @@ class ChunkSearchServiceParityTest {
         }
 
         @Override
+        public void deleteIndexFor(Long knowledgeBaseId) {
+            throw new UnsupportedOperationException("本测试不涉及写入");
+        }
+
+        @Override
         public long countByKnowledgeBase(Long knowledgeBaseId) {
             return byKnowledgeBase.getOrDefault(knowledgeBaseId, List.of()).size();
         }

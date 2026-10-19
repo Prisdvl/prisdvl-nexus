@@ -200,6 +200,7 @@ cp deploy/.env.example deploy/.env
 | 类别 | 变量 | 缺失时的行为 |
 | --- | --- | --- |
 | **必须自己填** | `JWT_SECRET`、`AI_CHAT_API_KEY`、`AI_EMBEDDING_API_KEY` | **`docker compose config` 直接报错退出**，连容器都不会创建 |
+| **强烈建议填** | `NEXUS_SECURITY_CRYPTO_KEK`（base64 的 16/24/32 字节） | 应用**能启动**（compose 层是可选的），但「保存模型 Key / 嵌入 Key」会失败（`9999`），已保存的密文也解不开 |
 | 端口 | `NEXUS_FRONTEND_PORT` 等 | 有开发默认值 |
 | 开发口令 | `NEXUS_MYSQL_PASSWORD`、`NEXUS_PG_PASSWORD`、`NEXUS_RABBITMQ_PASSWORD`、`NEXUS_MYSQL_ROOT_PASSWORD` | 有默认值（与 `application-local.yml` 一致，**仅限本机**） |
 | 模型网关 | `AI_CHAT_BASE_URL`、`AI_CHAT_MODEL`、`AI_JUDGE_MODEL`、`AI_EMBEDDING_BASE_URL`、`AI_EMBEDDING_MODEL`、`AI_EMBEDDING_DIM` | 有默认值（嵌入默认指向百炼 `text-embedding-v4` / 1024 维） |

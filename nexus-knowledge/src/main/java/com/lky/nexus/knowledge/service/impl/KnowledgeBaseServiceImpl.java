@@ -225,7 +225,12 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         // 知识库行已经没了，向量库里还留着它的向量，检索命中却翻不出任何文档。
         // 与单篇文档删除同一取舍：外部清理在前、且清不掉就整体失败（详见 DocumentPersistService.delete）。
         vectorStore.deleteByKnowledgeBase(knowledgeBaseId);
+        // 两步：先清文档、再删索引结构。只清文档会留下真实存在的空索引与别名，
+        // "库已删除"在检索侧就看不出来（按别名查命中一个空索引，而不是查无此索引）。
+        // 保留第一步是因为它先让"内容不在了"成立：即使第二步失败（整体回滚），
+        // 也不会出现"文档还在、结构已丢"的中间态。
         chunkIndex.deleteByKnowledgeBase(knowledgeBaseId);
+        chunkIndex.deleteIndexFor(knowledgeBaseId);
 
         // 磁盘上的原始文件先记下来，等数据库这部分做完再删。
         // 顺序与外部存储相反是有理由的：向量清不掉会污染检索，所以宁可删不掉；
