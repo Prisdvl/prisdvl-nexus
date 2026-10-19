@@ -28,7 +28,7 @@
 | # | 待办 | 现状（2026-10-14） | 优先级 |
 |---|---|---|---|
 | 1 | **用户中止后后端误报"未预期异常"** | ✅ **已修**（2026-10-19，commit `3f06b5f`）：客户端断开时 `send()` 不再被包成 `IllegalStateException` 上抛，改为与会话流式（`ChatStreamServiceImpl#abandon`）同口径——置位 aborted、dispose 上游（否则模型继续生成、继续计费）、保留已生成的部分并只记 INFO，不再走失败分支；真失败路径（error 帧 + FailureClassifier 分类 + 部分内容落库）行为不变 | P2 |
-| 2 | **前端首包体积** | ❌ 未处理。2026-10-14 `npm run build`：`elk-*.js` **≈1.46 MB**（gzip 456 KB）、`index-*.js` **≈1.18 MB**（gzip 392 KB）。主因 mermaid/elk 与 markdown 链 | P3 |
+| 2 | **前端首包体积** | ✅ **已处理**（2026-10-19）：① 路由级按需加载 —— `App.tsx` 里 12 个页面改 `lazy()`，`AppShell` 内容区加 `Suspense` 骨架（外壳不闪）；② WebGL 装饰件按需加载 —— `WavesBg` 的五种背景、`LandingPage` 的 hero 波浪与「关于」水晶球改 `lazy()`（都由 `webgl2Ok` 门控，无新增降级路径）。实测：入口 `index-*.js` **1,438,946 B → 739,419 B**（−699,527 B，−48.6%；新入口 gzip 252.32 kB），入口 CSS 259,256 B → 201,905 B；`elk-*.js` 1,462,935 B 保持异步未动（`mermaid` / `cytoscape` / `katex` 本就是动态导入）；入口内已无 `ogl`（命中数 0），`gsap` 仍在入口（落地页导航 `CardNav` 保持同步，导航不该闪）。**注意**：本轮只做构建与静态产物验证，未跑浏览器 E2E（运行时未验证）。**仍未做**：`motion` / `simple-icons` / `lucide` 等仍随落地页同步进首包 | P3 |
 | 3 | **导入任务逐文件进度 UI** | ❌ 后端 `GET /api/import-tasks/{id}/items` 已有；前端仍偏「按知识库单槽」 | P3 |
 | 4 | **欢迎区示例问题只有一条** | ❌ 多库时应按库分别生成且须能命中真实资料 | P3 |
 | 5 | **E2E / LIVE 进 CI + 数据回收自动化** | ⚠️ 最小 CI 已覆盖默认 `mvn test` + `npm run build` + `compose config`；LIVE/真浏览器 E2E 与「跑完自动回收」仍未进流水线 | P3 |
