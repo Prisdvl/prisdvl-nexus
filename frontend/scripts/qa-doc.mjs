@@ -100,7 +100,8 @@ await page.keyboard.press('Escape')
 await page.waitForTimeout(400)
 
 /* ---------- 6. 删除按钮不误触预览 ---------- */
-await page.locator('.doc-row').first().locator('.doc-actions button').click()
+// 行内动作现在有两个按钮（分块管理 / 删除），按可访问名点删除，别落到"第一个"上
+await page.locator('.doc-row').first().locator('.doc-actions button[aria-label^="删除 "]').click()
 await page.waitForTimeout(500)
 check('点删除不会打开预览抽屉', (await page.locator('.drawer').count()) === 0)
 check('删除仍弹出撤销提示', (await page.locator('.toast-host button', { hasText: '撤销' }).count()) > 0)

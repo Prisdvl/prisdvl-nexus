@@ -27,7 +27,8 @@ const noOverflow = async (where) => {
   if (o) issues.push(`横向溢出: ${where}`)
 }
 const nav = (label) => page.locator('.sb-nav button.rubber-segment__item', { hasText: label }).first()
-const kbtab = (label) => page.locator('.page .rubber-segment button.rubber-segment__item', { hasText: label }).first()
+// 知识库详情页的根容器是 .kb-fixed，tab 在 .kb-top__tabs 里（不再有 .page 包裹）
+const kbtab = (label) => page.locator('.kb-top__tabs button.rubber-segment__item', { hasText: label }).first()
 
 // ============ 入口页 ============
 await page.goto(BASE, { waitUntil: 'networkidle' })
@@ -67,7 +68,7 @@ await page.waitForTimeout(900)
 await shot('lp-full-light', { fullPage: true })
 
 // ============ 登录 → 应用内 ============
-await page.locator('.lp-pill button', { hasText: '登录' }).first().click()
+await page.locator('.floating-nav__action .btn-primary').first().click()
 await page.waitForSelector('.auth-card')
 await page.waitForTimeout(1500)
 await shot('p-auth-light-terracotta')
@@ -102,16 +103,16 @@ await page.waitForTimeout(1400)
 await shot('p-kb-list-light')
 await noOverflow('kb-list')
 
-await page.locator('.kb-inner').first().click()
+await page.locator('.kb-table tbody tr').first().click()
 await page.waitForTimeout(1400)
 await shot('p-kb-detail-docs-light')
 await noOverflow('kb-detail')
 
 await kbtab('问答').click()
 await page.waitForTimeout(600)
-const qaInput = page.locator('input[placeholder*="B+ 树为什么"]')
-await qaInput.fill('B+ 树为什么适合做索引？')
-await page.getByRole('button', { name: '提问', exact: true }).click()
+// 问答空态现在是三枚「示例问题」按钮（placeholder 已换成通用文案），点第一枚即发起提问
+const starter = page.locator('.kb-qa__starter').first()
+await starter.click()
 await page.waitForTimeout(1300)
 await shot('p-kb-qa-thinking')
 await page.waitForTimeout(2300)
@@ -141,9 +142,10 @@ await nav('Agent').click()
 await page.waitForTimeout(1600)
 await shot('p-agents-light')
 await noOverflow('agents')
-const testIn = page.locator('input[placeholder*="帮我出一道"]')
+// 测试台输入已从单行 input 换成 .bench-form 里的 textarea（aria-label 由文案提供）
+const testIn = page.locator('.bench-form textarea')
 await testIn.fill('出一道 JVM 调优题并讲解')
-await page.getByRole('button', { name: '运行', exact: true }).click()
+await page.locator('.bench-form button[type="submit"]').click()
 await page.waitForTimeout(1200)
 await shot('p-agents-testing')
 await page.waitForTimeout(1500)

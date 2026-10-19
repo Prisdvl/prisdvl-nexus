@@ -35,13 +35,14 @@ await page.waitForTimeout(250)
 const skWhileLoading = await page.locator('.sk').count()
 check('加载时显示骨架屏', skWhileLoading > 0, `骨架元素 ${skWhileLoading} 个`)
 await page.waitForTimeout(1200)
-check('加载完成后替换为卡片', (await page.locator('.sk').count()) === 0 && (await page.locator('.kb-inner').count()) > 0)
+check('加载完成后替换为表格行', (await page.locator('.sk').count()) === 0 && (await page.locator('.kb-table tbody tr').count()) > 0)
 
 /* ---------- 2. 空状态（搜索无结果） ---------- */
 await page.locator('input[placeholder="搜索知识库"]').fill('zzz-不存在')
 await page.waitForTimeout(400)
-check('搜索无结果显示空状态', (await page.locator('.state-empty').count()) === 1)
-check('空状态带标题说明', (await page.locator('.state-empty .se-title').innerText()).includes('zzz-不存在'))
+// 列表改成表格后，空状态由 .kb-filter-empty 承载（不再套 StateEmpty 的 .state-empty/.se-title）
+check('搜索无结果显示空状态', (await page.locator('.kb-filter-empty').count()) === 1)
+check('空状态带标题说明', (await page.locator('.kb-filter-empty').innerText()).includes('zzz-不存在'))
 await page.locator('input[placeholder="搜索知识库"]').fill('')
 await page.waitForTimeout(300)
 
@@ -52,8 +53,8 @@ let sawSkeleton = false
 for (let i = 0; i < 24; i++) {
   const s = await page.evaluate(() => ({
     sk: document.querySelectorAll('.sk').length,
-    // 判据必须是"真实卡片内容"（.kb-inner）；骨架屏自己也包在 .kb-grid 里，用它当判据会误报
-    real: document.querySelectorAll('.kb-inner').length,
+    // 判据必须是"真实内容行"（tbody tr）；骨架屏自己也包在列表容器里，用它当判据会误报
+    real: document.querySelectorAll('.kb-table tbody tr').length,
   }))
   if (s.sk > 0) sawSkeleton = true
   if (s.sk > 0 && s.real > 0) { bothVisible = true; break }
@@ -65,7 +66,7 @@ await page.waitForTimeout(1200)
 
 /* ---------- 2.2 [hidden] 兜底必须真生效（历史 bug：被 display:grid 覆盖） ---------- */
 const hiddenDisplay = await page.evaluate(() => {
-  const g = document.querySelector('.kb-grid')
+  const g = document.querySelector('.kb-table-wrap')
   if (!g) return 'no-grid'
   g.setAttribute('hidden', '')
   const d = getComputedStyle(g).display
@@ -75,9 +76,64 @@ const hiddenDisplay = await page.evaluate(() => {
 check('[hidden] 属性真正生效（display:none）', hiddenDisplay === 'none', String(hiddenDisplay))
 
 
-/* ---------- 2.3 卡片悬停不得出现近黑遮罩（历史 bug：PixelCard 默认活性色 #09090b） ---------- */
+/* ---------- 2.3 PixelCard 悬停检查已随界面迁移：知识库列表改为表格，卡片只存在于 Agent 网格 ---------- */
+/* 该组断言见第 7.1 节（Agent 页的 .agent-grid .pixel-card）。 */
+
+/* ---------- 3. StatusMark：文档状态位 ---------- */
+await page.locator('.kb-table tbody tr').first().click()
+await page.waitForTimeout(1500)
+check('URL 进入知识库详情', (await page.evaluate(() => location.hash)).includes('/app/kb/1'))
+const docMarks = await page.locator('.doc-row .status-mark').count()
+check('文档行使用 StatusMark 状态位', docMarks >= 6, `状态位 ${docMarks} 个`)
+check('存在"解析中"运行态', (await page.locator('.doc-row .status-mark[data-status="running"]').count()) > 0)
+check('存在"失败"态', (await page.locator('.doc-row .status-mark[data-status="failed"]').count()) > 0)
+
+/* ---------- 4. 删除文档 → 提示带撤销 → 撤销恢复 ---------- */
+const docsBefore = await page.locator('.doc-row').count()
+// 行内动作有两个按钮（分块管理 / 删除），按可访问名点删除
+await page.locator('.doc-row').first().locator('.doc-actions button[aria-label^="删除 "]').click()
+await page.waitForTimeout(600)
+const toastCount = await page.locator('.toast-host .swipe-toast').count()
+check('删除后弹出提示', toastCount > 0, `提示 ${toastCount} 条`)
+check('提示里带「撤销」按钮', (await page.locator('.toast-host button', { hasText: '撤销' }).count()) > 0)
+check('文档已从列表移除', (await page.locator('.doc-row').count()) === docsBefore - 1)
+await page.locator('.toast-host button', { hasText: '撤销' }).first().click()
+await page.waitForTimeout(700)
+check('点撤销后文档恢复', (await page.locator('.doc-row').count()) === docsBefore)
+
+/* ---------- 5. 导入弹窗：Esc 关闭 + 焦点陷阱 ---------- */
+await page.getByRole('button', { name: /^导入$/ }).click()
+await page.waitForTimeout(500)
+check('导入弹窗打开（Modal）', (await page.locator('.dialog[role="dialog"]').count()) === 1)
+const focusInside = await page.evaluate(() => !!document.querySelector('.dialog[role="dialog"]')?.contains(document.activeElement))
+check('打开后焦点在弹窗内', focusInside)
+await page.keyboard.press('Escape')
+await page.waitForTimeout(400)
+check('Esc 可关闭弹窗', (await page.locator('.dialog[role="dialog"]').count()) === 0)
+
+/* ---------- 6. 工作台：文档处理卡（StatusMark + 任务行 + LatticeLoader） ---------- */
+await nav('工作台').click()
+await page.waitForTimeout(1600)
+// 卡片标题改成了「最近文档处理」，按标题文案找会绑死语言 → 改用结构判据
+check('工作台有文档处理卡（含状态位）', (await page.locator('.wb-card .status-mark').count()) >= 4)
+check('任务行存在（每行一个状态位）', (await page.locator('.wb-card .task-row').count()) >= 2)
+check('任务卡里有 LatticeLoader', (await page.locator('.wb-card .lattice-loader').count()) >= 1)
+
+/* ---------- 7. Agent 测试：StatusMark 运行 → 完成 ---------- */
+await nav('Agent').click()
+await page.waitForTimeout(1400)
+// 测试台输入已从单行 input 换成 .bench-form 里的 textarea
+const testInput = page.locator('.bench-form textarea')
+await testInput.fill('出一道 JVM 调优题')
+await page.locator('.bench-form button[type="submit"]').click()
+await page.waitForTimeout(600)
+check('测试中显示运行态 StatusMark', (await page.locator('.status-mark[data-status="running"]').count()) > 0)
+await page.waitForTimeout(2200)
+check('测试完成显示完成态', (await page.locator('.status-mark[data-status="done"]').count()) > 0)
+
+/* ---------- 7.1 PixelCard 悬停不得出现近黑遮罩（历史 bug：默认活性色 #09090b） ---------- */
 const hoverProbe = async () => page.evaluate(() => {
-  const c = document.querySelector('.kb-grid .pixel-card')
+  const c = document.querySelector('.agent-grid .pixel-card')
   const before = getComputedStyle(c, '::before')
   const alpha = (before.backgroundImage.match(/\/\s*([\d.]+)\)/) || [])[1]
   return {
@@ -89,63 +145,13 @@ const hoverProbe = async () => page.evaluate(() => {
   }
 })
 const idle = await hoverProbe()
-await page.locator('.kb-grid .pixel-card').first().hover()
+await page.locator('.agent-grid .pixel-card').first().hover()
 await page.waitForTimeout(900)
 const hovered = await hoverProbe()
 check('卡片活性色已配置（不是默认近黑）', hovered.active.length > 0 && !hovered.active.includes('#09090b'), hovered.active || '(空)')
 check('悬停遮罩不含近黑 rgb(9, 9, 11)', !hovered.bg.includes('rgb(9, 9, 11)'), hovered.bg.slice(0, 90))
 check('悬停遮罩透明度很低（≤0.3，不挡文字）', hovered.alpha !== null && hovered.alpha <= 0.3, `alpha=${hovered.alpha}`)
 check('悬停有边框反馈', hovered.border !== idle.border, `${idle.border} → ${hovered.border}`)
-
-/* ---------- 3. StatusMark：文档状态位 ---------- */
-await page.locator('.kb-inner').first().click()
-await page.waitForTimeout(1500)
-check('URL 进入知识库详情', (await page.evaluate(() => location.hash)).includes('/app/kb/1'))
-const docMarks = await page.locator('.doc-row .status-mark').count()
-check('文档行使用 StatusMark 状态位', docMarks >= 6, `状态位 ${docMarks} 个`)
-check('存在"解析中"运行态', (await page.locator('.doc-row .status-mark[data-status="running"]').count()) > 0)
-check('存在"失败"态', (await page.locator('.doc-row .status-mark[data-status="failed"]').count()) > 0)
-
-/* ---------- 4. 删除文档 → 提示带撤销 → 撤销恢复 ---------- */
-const docsBefore = await page.locator('.doc-row').count()
-await page.locator('.doc-row').first().locator('.doc-actions button').click()
-await page.waitForTimeout(600)
-const toastCount = await page.locator('.toast-host .swipe-toast').count()
-check('删除后弹出提示', toastCount > 0, `提示 ${toastCount} 条`)
-check('提示里带「撤销」按钮', (await page.locator('.toast-host button', { hasText: '撤销' }).count()) > 0)
-check('文档已从列表移除', (await page.locator('.doc-row').count()) === docsBefore - 1)
-await page.locator('.toast-host button', { hasText: '撤销' }).first().click()
-await page.waitForTimeout(700)
-check('点撤销后文档恢复', (await page.locator('.doc-row').count()) === docsBefore)
-
-/* ---------- 5. 导入弹窗：Esc 关闭 + 焦点陷阱 ---------- */
-await page.getByRole('button', { name: /导入文档/ }).click()
-await page.waitForTimeout(500)
-check('导入弹窗打开（Modal）', (await page.locator('.dialog[role="dialog"]').count()) === 1)
-const focusInside = await page.evaluate(() => !!document.querySelector('.dialog[role="dialog"]')?.contains(document.activeElement))
-check('打开后焦点在弹窗内', focusInside)
-await page.keyboard.press('Escape')
-await page.waitForTimeout(400)
-check('Esc 可关闭弹窗', (await page.locator('.dialog[role="dialog"]').count()) === 0)
-
-/* ---------- 6. 工作台：导入任务卡（StatusMark + 进度 + LatticeLoader） ---------- */
-await nav('工作台').click()
-await page.waitForTimeout(1600)
-check('导入任务卡存在', (await page.locator('.wb-card-title', { hasText: '导入任务' }).count()) === 1)
-check('任务卡里有 StatusMark 状态位', (await page.locator('.wb-card .status-mark').count()) >= 4)
-check('任务进度条存在', (await page.locator('.task-progress i').count()) >= 1)
-check('任务卡里有 LatticeLoader', (await page.locator('.wb-card .lattice-loader').count()) >= 1)
-
-/* ---------- 7. Agent 测试：StatusMark 运行 → 完成 ---------- */
-await nav('Agent').click()
-await page.waitForTimeout(1400)
-const testInput = page.locator('input[placeholder*="帮我出一道"]')
-await testInput.fill('出一道 JVM 调优题')
-await page.getByRole('button', { name: '运行', exact: true }).click()
-await page.waitForTimeout(600)
-check('测试中显示运行态 StatusMark', (await page.locator('.status-mark[data-status="running"]').count()) > 0)
-await page.waitForTimeout(2200)
-check('测试完成显示完成态', (await page.locator('.status-mark[data-status="done"]').count()) > 0)
 
 /* ---------- 8. 删除 Agent → 撤销恢复 ---------- */
 const agentsBefore = await page.locator('.agent-grid .pixel-card').count()

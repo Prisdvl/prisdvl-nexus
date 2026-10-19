@@ -51,7 +51,7 @@ await page.addInitScript(() => { localStorage.removeItem('nx-proto-tour-done') }
 /* 登录流程与其它套件一致：落地页 → 登录页 → 演示账号 → 登录 */
 await page.goto(BASE, { waitUntil: 'networkidle' })
 await page.waitForTimeout(2200)
-await page.locator('.lp-pill button', { hasText: '登录' }).first().click()
+await page.locator('.floating-nav__action .btn-primary').first().click()
 await page.waitForSelector('.auth-card')
 await page.locator('#li-u').fill('qa-runner')
 await page.locator('#li-p').fill('qa-runner-password')

@@ -111,12 +111,25 @@ await page.waitForTimeout(1200)
 await page.locator('.settings-item', { hasText: '外观' }).first().click()
 await page.waitForTimeout(600)
 check('设置页有「外观」分区', (await page.locator('.settings-head h2', { hasText: '外观' }).count()) === 1)
-const settingsSegs = await page.locator('.appearance .rubber-segment').count()
-check('外观区含两组控件', settingsSegs === 2, `${settingsSegs} 组`)
+// 外观区两个控件组：主题（prisdvl 配色下是 .theme-control 拟物开关，其它配色是分段控件）+ 配色（.accent-swatches）
+const themeRow = page.locator('.appearance .appearance-row').first()
+const themeSwitch = await themeRow.locator('.theme-control').count()
+const themeSegment = await themeRow.locator('.rubber-segment').count()
+const accentGroups = await page.locator('.appearance .accent-swatches').count()
+check(
+  '外观区含主题与配色两组控件',
+  (await page.locator('.appearance .appearance-row').count()) === 2 && themeSwitch + themeSegment === 1 && accentGroups === 1,
+  `主题开关 ${themeSwitch} / 主题分段 ${themeSegment} / 配色 ${accentGroups}`,
+)
 await page.screenshot({ path: `${OUT}/y2-settings-appearance-light.png` })
 console.log('ok   y2-settings-appearance-light（截图）')
 
-await page.locator('.appearance .appearance-row').first().locator('button.rubber-segment__item', { hasText: '暗色' }).click()
+// 切到暗色：拟物开关是一枚按钮（亮→暗），分段控件则点「暗色」项
+if (themeSwitch > 0) {
+  await themeRow.locator('.theme-control__btn').click()
+} else {
+  await themeRow.locator('button.rubber-segment__item', { hasText: '暗色' }).click()
+}
 await page.waitForTimeout(500)
 check('在设置页切暗色生效', (await appearance()).theme === 'dark')
 await page.screenshot({ path: `${OUT}/y2-settings-appearance-dark.png` })
