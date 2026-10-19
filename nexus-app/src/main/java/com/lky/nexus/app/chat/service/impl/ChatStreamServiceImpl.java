@@ -368,6 +368,14 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         private final List<List<ChunkSearchService.SearchHit>> retrievalGroups =
                 Collections.synchronizedList(new ArrayList<>());
 
+        /**
+         * 最近一次 {@code retrieval} 事件的负载（RAG 模式才有）。
+         *
+         * <p>事件只在流里发一次，刷新页面就没了。这份负载随消息落进 metadata，
+         * 历史回放时才能把"检索到 N 个片段"那张卡片原样画回来（roadmap 待办 #6）。
+         */
+        private volatile Map<String, Object> retrievalPayload;
+
         private volatile Usage lastUsage;
         private volatile String model;
         private volatile String finishReason;
@@ -407,7 +415,10 @@ public class ChatStreamServiceImpl implements ChatStreamService {
          * 必须在第一个 delta 之前发出。
          */
         private void sendRetrieval(List<Long> knowledgeBaseIds, PreparedAnswer prepared) {
-            send(SseEventNames.RETRIEVAL, RetrievalEvent.of(knowledgeBaseIds, prepared));
+            Map<String, Object> payload = RetrievalEvent.of(knowledgeBaseIds, prepared);
+            // 先记后发：落库要用的就是这一份，推流失败不该让历史回放缺一张卡片
+            this.retrievalPayload = payload;
+            send(SseEventNames.RETRIEVAL, payload);
         }
 
         /**
@@ -646,6 +657,9 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                     // 引用同理：检索事件只在流里发一次，不落库的话刷新页面就没了——
                     // "这条回答是照着什么说的"在历史回放里无从查证（update.txt §五）
                     .citations(citations.isEmpty() ? null : citations)
+                    // 检索命中明细同理：命中但没被引用的片段只存在这里，
+                    // 不落库的话刷新后就只剩"引用了哪几段"（roadmap 待办 #6）
+                    .retrieval(retrievalPayload)
                     .build());
             // 端到端耗时（5.9 六）：从请求进来到这一轮落库为止，含检索 + 全部模型往返 + 工具调用。
             // 记在这里而不是 sendUsage 里，是因为四条终止路径（正常/停止/异常/断开）都汇到 persist，

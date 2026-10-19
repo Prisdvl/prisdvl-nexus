@@ -240,6 +240,14 @@ export interface BackendMessage {
   createdAt: string
   toolCalls: unknown[]
   citations: unknown[]
+  /**
+   * 本轮检索命中明细（形状与流里的 `retrieval` 事件一致）；无检索的普通对话为 null。
+   *
+   * 后端把它与 citations 一起塞进 `chat_message.metadata`：两者回答的不是同一个问题——
+   * citations 是"最终用了哪几段"，retrieval 是"检索到了哪几段、分数多少、是否重排"。
+   * 刷新后只看得到前者的话，"命中 6 个片段但只引用了 2 个"这件事就消失了。
+   */
+  retrieval?: Record<string, unknown> | null
 }
 
 /* ------------------------------------------------------------------ *

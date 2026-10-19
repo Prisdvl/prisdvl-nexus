@@ -58,6 +58,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     /** metadata JSON 里引用明细的字段名（与前端约定，改这里等于改协议）。 */
     private static final String CITATIONS_FIELD = "citations";
 
+    /** metadata JSON 里检索命中明细的字段名（与前端约定，改这里等于改协议）。 */
+    private static final String RETRIEVAL_FIELD = "retrieval";
+
     private final ChatMessageMapper messageMapper;
     private final ChatConversationMapper conversationMapper;
     private final ConversationService conversationService;
@@ -125,7 +128,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         message.setRequestId(draft.requestId());
         message.setErrorMsg(draft.errorMsg());
         message.setStatus(StringUtils.hasText(draft.status()) ? draft.status() : MessageStatus.DONE.name());
-        message.setMetadata(toMetadata(draft.toolCalls(), draft.citations()));
+        message.setMetadata(toMetadata(draft.toolCalls(), draft.citations(), draft.retrieval()));
         message.setCreatedAt(LocalDateTime.now());
         messageMapper.insert(message);
 
@@ -184,8 +187,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         // 痕迹与引用共用 metadata 这一列：任意一个非 null 就整列重写。
         // 只写其中一个会把另一个抹掉——而流式落库时两者是同时拿到的（见 ChatStreamServiceImpl.persist），
         // 所以"只给了一半"只可能来自别的调用方，那时按"这一半就是全部"处理才是对的
-        if (draft.toolCalls() != null || draft.citations() != null) {
-            message.setMetadata(toMetadata(draft.toolCalls(), draft.citations()));
+        if (draft.toolCalls() != null || draft.citations() != null || draft.retrieval() != null) {
+            message.setMetadata(toMetadata(draft.toolCalls(), draft.citations(), draft.retrieval()));
         }
         // 刻意不调用 touchConversation：这条消息在流开始时已经计入 messageCount，
         // 否则"先插 STREAMING 再更新"会让计数翻倍。
@@ -258,7 +261,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 message.getErrorMsg(),
                 message.getCreatedAt(),
                 parseToolCalls(message.getMetadata()),
-                parseCitations(message.getMetadata()));
+                parseCitations(message.getMetadata()),
+                parseRetrieval(message.getMetadata()));
     }
 
     /**
@@ -271,10 +275,13 @@ public class ChatMessageServiceImpl implements ChatMessageService {
      * <p>序列化失败时返回 null 而不是抛异常：留档是<b>附加价值</b>，
      * 不能因为它失败就让一条已经生成好的回答落不了库。
      */
-    private String toMetadata(List<MessageToolCall> toolCalls, List<RagAnswer.RagCitation> citations) {
+    private String toMetadata(List<MessageToolCall> toolCalls,
+                              List<RagAnswer.RagCitation> citations,
+                              Map<String, Object> retrieval) {
         boolean hasToolCalls = toolCalls != null && !toolCalls.isEmpty();
         boolean hasCitations = citations != null && !citations.isEmpty();
-        if (!hasToolCalls && !hasCitations) {
+        boolean hasRetrieval = retrieval != null && !retrieval.isEmpty();
+        if (!hasToolCalls && !hasCitations && !hasRetrieval) {
             return null;
         }
         try {
@@ -285,6 +292,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             }
             if (hasCitations) {
                 metadata.put(CITATIONS_FIELD, citations);
+            }
+            if (hasRetrieval) {
+                metadata.put(RETRIEVAL_FIELD, retrieval);
             }
             return jsonMapper.writeValueAsString(metadata);
         } catch (Exception ex) {
@@ -309,6 +319,31 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         } catch (Exception ex) {
             log.warn("消息 metadata 里的引用解析失败，按无引用处理：{}", ex.getMessage());
             return List.of();
+        }
+    }
+
+    /**
+     * metadata JSON → 检索命中明细（形状与流里的 {@code retrieval} 事件一致）。
+     *
+     * <p>刻意返回 {@code Map<String,Object>} 而不是新造一个类型：这份负载的产出方是
+     * {@code RetrievalEvent.of(...)}，落库与推流必须是同一份形状——再造一个平行的类型，
+     * 就等于给"流里发的"和"库里读的"留下分叉的机会，而分叉一旦发生，
+     * 前端两套渲染逻辑里只会改一套（这正是 roadmap 待办 #6 的成因）。
+     *
+     * <p>解析失败返回 {@code null} 而不是空 Map：{@code null} 表达"这条消息没有检索信息"
+     * （普通对话），空 Map 会让人以为"检索了但一条都没命中"（那是 {@code empty=true} 的合法负载）。
+     */
+    private Map<String, Object> parseRetrieval(String metadata) {
+        JsonNode node = metadataNode(metadata, RETRIEVAL_FIELD);
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        try {
+            return jsonMapper.readValue(node.toString(), new TypeReference<Map<String, Object>>() {
+            });
+        } catch (Exception ex) {
+            log.warn("消息 metadata 里的检索命中明细解析失败，按无检索信息处理：{}", ex.getMessage());
+            return null;
         }
     }
 

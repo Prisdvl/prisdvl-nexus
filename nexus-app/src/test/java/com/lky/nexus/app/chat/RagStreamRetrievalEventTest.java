@@ -38,7 +38,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -212,6 +214,50 @@ class RagStreamRetrievalEventTest {
                 .as("『有库没搜成』不能被说成『资料中没有』——后者是一个与事实不符的断言")
                 .contains(RagAnswerService.RETRIEVAL_FAILED_ANSWER)
                 .doesNotContain(RagAnswerService.EMPTY_ANSWER);
+    }
+
+    /**
+     * 待办 #6：命中明细随消息落库。
+     *
+     * <p><b>为什么这条必须用"重新拉历史"来断言</b>：不能断言"流里发过 retrieval"
+     * （上面三条用例已经覆盖了），要断言的是"刷新之后还在"。所以这里从头到尾不复用
+     * 流响应体里的数据，而是像前端刷新那样重新请求一次消息分页接口——
+     * 落库没做的话，这条路径上只会读到 {@code null}。
+     */
+    @Test
+    @DisplayName("检索命中明细随消息落库：重新拉历史（＝刷新页面）仍看得到『命中 N 个片段』")
+    void retrievalHitsArePersistedWithTheMessage() throws Exception {
+        String token = registerAndLogin("rag-stream-persist");
+        String kbId = createKnowledgeBase(token, "落库检索库");
+        String conversationId = createRagConversation(token, kbId);
+
+        when(ragAnswerService.prepareMany(any(), any(), anyString(), any(), any())).thenReturn(preparedWithHits(kbId));
+        when(ragAnswerService.systemPrompt()).thenReturn("SYSTEM-PROMPT");
+        when(ragAnswerService.userMessage(anyString(), any(), any())).thenReturn("USER-PROMPT");
+        stubModel("缓存击穿", "可以用互斥锁。");
+
+        streamBody(token, "/api/chat/stream", """
+                {"conversationId":%s,"content":"缓存击穿怎么解决？"}
+                """.formatted(conversationId));
+
+        String history = mockMvc.perform(get("/api/chat/messages/" + conversationId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                // 用户消息 + 助手消息
+                .andExpect(jsonPath("$.data.list.length()").value(2))
+                .andExpect(jsonPath("$.data.list[1].retrieval.count").value(2))
+                .andExpect(jsonPath("$.data.list[1].retrieval.hits[0].documentTitle").value("缓存击穿.md"))
+                .andExpect(jsonPath("$.data.list[1].retrieval.hits[0].headingPath")
+                        .value("Redis > 缓存 > 缓存击穿"))
+                // 分数与来源是"命中列表"区别于"引用列表"的地方：引用列表里没有它们
+                .andExpect(jsonPath("$.data.list[1].retrieval.hits[0].score").value(0.83))
+                .andExpect(jsonPath("$.data.list[1].retrieval.hits[0].source").value("hybrid"))
+                .andExpect(jsonPath("$.data.list[1].retrieval.reranked").value(true))
+                .andExpect(jsonPath("$.data.list[1].retrieval.knowledgeBaseIds[0]").value(kbId))
+                .andReturn().getResponse().getContentAsString();
+
+        // 用户消息没有检索信息：null = "这一轮没检索"，而空 Map 会被读成"检索了但一条没命中"
+        assertThat(JsonPath.<Object>read(history, "$.data.list[0].retrieval")).isNull();
     }
 
     // ------------------------------------------------------------------ 辅助

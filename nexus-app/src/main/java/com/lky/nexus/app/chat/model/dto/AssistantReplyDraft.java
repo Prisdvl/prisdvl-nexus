@@ -3,6 +3,7 @@ package com.lky.nexus.app.chat.model.dto;
 import com.lky.nexus.knowledge.rag.RagAnswer;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 助手回复的落库草稿（Step 1.6 的 AI 链路使用）。
@@ -30,7 +31,10 @@ public record AssistantReplyDraft(
         // 引用的资料片段（无检索的对话为 null）：同样落进 chat_message.metadata。
         // 用 RagAnswer.RagCitation 而不是另一个"聊天专用引用"类型——编号规则必须与
         // 知识库问答那一侧完全一致（见 Citations 的类注释）
-        List<RagAnswer.RagCitation> citations) {
+        List<RagAnswer.RagCitation> citations,
+        // 本轮检索命中明细（无检索的对话为 null）：形状与流里的 retrieval 事件负载一致，
+        // 原样落 chat_message.metadata，刷新后前端用同一份渲染逻辑画"检索到 N 个片段"
+        Map<String, Object> retrieval) {
 
     /** 全部字段可空的构建器式工厂：先建骨架，边生成边补。 */
     public static AssistantReplyDraftBuilder builder() {
@@ -53,6 +57,7 @@ public record AssistantReplyDraft(
         private String errorMsg;
         private List<MessageToolCall> toolCalls;
         private List<RagAnswer.RagCitation> citations;
+        private Map<String, Object> retrieval;
 
         public AssistantReplyDraftBuilder content(String value) {
             this.content = value;
@@ -112,10 +117,15 @@ public record AssistantReplyDraft(
             return this;
         }
 
+        public AssistantReplyDraftBuilder retrieval(Map<String, Object> value) {
+            this.retrieval = value;
+            return this;
+        }
+
         public AssistantReplyDraft build() {
             return new AssistantReplyDraft(content, model, provider, promptTokens, completionTokens,
                     totalTokens, latencyMs, firstTokenMs, finishReason, requestId, status, errorMsg,
-                    toolCalls, citations);
+                    toolCalls, citations, retrieval);
         }
     }
 }

@@ -64,7 +64,7 @@ function mapRole(role: string): ChatMsg['role'] {
  * 后端消息 → 前端 `ChatMsg`。
  *
  * 后端有 16 个字段，前端只有 7 个，这里只映射语义明确的：
- *   content → text / citations → cites
+ *   content → text / citations → cites / retrieval → context
  *
  * ⚠️ **未映射的字段是有原因的**，不是遗漏：
  *   - `role` 之外的 `agentId`：前端 `ChatMsg` 没有这个概念
@@ -72,6 +72,11 @@ function mapRole(role: string): ChatMsg['role'] {
  *     真实值要走 SSE 事件流才有意义，历史消息回放时这些数字意义不大
  *   - `status` / `errorMsg`：前端目前有自己的一套"已停止/超时"本地状态机，
  *     两套并存会打架，等 P1-2 真实流式接入时统一
+ *
+ * `retrieval` 映射成 `context`（而不是新加一个字段）：流式那一侧显示的
+ * 「命中 N 个片段」本来就是 ContextChips 读 `context` 画出来的，
+ * 历史消息只要把同一份数据填回同一个字段，刷新前后就是同一张卡片，
+ * 不必为"回放"再写一套渲染（roadmap 待办 #6 的成因正是没有把它落库）。
  */
 export function toChatMsg(m: BackendMessage): ChatMsg {
   const citationRefs = (m.citations as ChatMsg['citationRefs'] | undefined) ?? []
@@ -81,6 +86,33 @@ export function toChatMsg(m: BackendMessage): ChatMsg {
     text: m.content ?? '',
     cites: citationRefs.map((citation) => citation.documentTitle ?? '未知来源'),
     citationRefs,
+    ...(toRunContext(m.retrieval) ? { context: toRunContext(m.retrieval)! } : {}),
+  }
+}
+
+/**
+ * `retrieval` 事件负载 → 历史消息的上下文胶囊。
+ *
+ * 只取能算准的三个量：命中切片数、命中涉及的文档数、因预算被丢弃的段数——
+ * 其余（历史轮数、联网开关）在回放时没有可信来源，一律给"无"，
+ * 不用编造的数字把胶囊填满（前端宁可少显示一个胶囊，也不要显示假的）。
+ */
+function toRunContext(retrieval: BackendMessage['retrieval']): ChatMsg['context'] | null {
+  if (!retrieval || typeof retrieval !== 'object') return null
+  const count = typeof retrieval.count === 'number' ? retrieval.count : 0
+  const hits = Array.isArray(retrieval.hits) ? (retrieval.hits as Record<string, unknown>[]) : []
+  const usedDocs = new Set(
+    hits.map((hit) => hit.documentTitle).filter((v): v is string => typeof v === 'string' && !!v),
+  ).size
+  const truncated = typeof retrieval.truncated === 'number' ? retrieval.truncated : 0
+  return {
+    kbs: [],
+    retrieved: count,
+    usedDocs,
+    scannedDocs: count,
+    historyTurns: 0,
+    web: false,
+    ...(truncated > 0 ? { truncated } : {}),
   }
 }
 
