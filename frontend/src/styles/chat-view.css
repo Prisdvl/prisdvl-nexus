@@ -688,6 +688,56 @@
   .chat-empty-state.chat-empty-state--particle { bottom: calc(50% + 82px); }
 }
 
+/*
+ * 欢迎区示例问题：按用户自己的知识库生成（规则见 lib/kbStarters.ts，文案在 pagesCopy）。
+ * 关键一点：父级 .chat-empty-state 是 pointer-events:none，这里必须自己打开，
+ * 否则按钮渲染出来却点不动 —— 这种"看着能点"的 bug 最难在截图里发现。
+ */
+.chat-starters {
+  margin: 16px auto 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  max-width: min(100%, var(--chat-col));
+  pointer-events: auto;
+}
+.chat-starters__item {
+  max-width: 100%;
+  min-height: 28px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.chat-starters__item:hover { background: var(--ui-hover); color: var(--text); }
+.chat-starters__item:focus-visible { outline: 2px solid var(--primary-text); outline-offset: 2px; }
+/* 列表拉不到 / 没有库 / 库是空的时候只有一句说明 + 一个出口，形状与提示语一致 */
+.chat-starters__note {
+  margin: 14px auto 0;
+  max-width: 420px;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.7;
+  pointer-events: auto;
+}
+.chat-starters__note .btn { margin-left: 4px; }
+/*
+ * 矮屏（< 700px 高）：欢迎块是底部对齐的，多出两行示例问题会把它顶到视口外，
+ * 反而把粒子标题切掉。宁可先不显示示例问题 —— 输入框始终可用，不阻塞提问。
+ * ⚠️ 这条只在构建层面成立，真实观感未做浏览器验证。
+ */
+@media (max-height: 700px) {
+  .chat-starters { display: none; }
+}
+
 /* ---------- 5. 消息辅助层：引用 / 状态 / 操作 ---------- */
 .chat-main .thread .citation { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .chat-main .thread .cite-chip {

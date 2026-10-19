@@ -217,6 +217,15 @@ export interface PagesCopy {
     newChat: string
     startTitle: string
     startDesc: string
+    /* —— 欢迎区示例问题（按真实知识库生成，规则见 lib/kbStarters.ts） —— */
+    startersAria: string
+    starterOverview: (kb: string) => string
+    starterPitfalls: (kb: string) => string
+    starterTopic: (topic: string, kb: string) => string
+    starterNoKb: string
+    starterEmptyKb: string
+    starterListFailed: string
+    starterGoImport: string
     /* —— 页头 —— */
     metaLine: (n: number, updated: string) => string
     h1Title: (title: string) => string
@@ -850,6 +859,14 @@ const ZH: PagesCopy = {
     newChat: '新对话',
     startTitle: '一问一答皆学问',
     startDesc: '回答将保存在当前会话中，可随时继续或切换模式。',
+    startersAria: '示例问题',
+    starterOverview: (kb) => `《${kb}》里主要讲了什么？`,
+    starterPitfalls: (kb) => `《${kb}》里有哪些容易踩的坑？`,
+    starterTopic: (topic, kb) => `关于「${topic}」，《${kb}》里是怎么说的？`,
+    starterNoKb: '还没有知识库——导入资料后，示例问题会按你的资料生成。',
+    starterEmptyKb: '知识库还没有资料——先导入，示例问题才有东西可问。',
+    starterListFailed: '知识库列表没加载出来，示例问题暂时不生成；可以直接提问。',
+    starterGoImport: '去导入资料',
     metaLine: (n, updated) => `${n} 条消息 · ${updated}`,
     h1Title: (title) => `对话 · ${title}`,
     configTitle: '会话设置：模式 / Agent / 知识库',
@@ -1473,6 +1490,14 @@ const EN: PagesCopy = {
     newChat: 'New chat',
     startTitle: 'In every question, a lesson',
     startDesc: 'Answers are kept in this chat — continue anytime or switch modes.',
+    startersAria: 'Example questions',
+    starterOverview: (kb) => `What does “${kb}” cover?`,
+    starterPitfalls: (kb) => `What are the common pitfalls covered in “${kb}”?`,
+    starterTopic: (topic, kb) => `What does “${kb}” say about “${topic}”?`,
+    starterNoKb: 'No knowledge base yet — once you import material, examples are generated from it.',
+    starterEmptyKb: 'Your knowledge base has no material yet — import something and examples will follow.',
+    starterListFailed: 'The knowledge base list could not be loaded, so no examples are shown; you can still ask directly.',
+    starterGoImport: 'Import material',
     metaLine: (n, updated) => `${n} ${n === 1 ? 'message' : 'messages'} · ${updated}`,
     h1Title: (title) => `Chat · ${title}`,
     configTitle: 'Chat settings: mode / agent / knowledge base',

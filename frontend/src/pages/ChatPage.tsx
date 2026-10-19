@@ -41,6 +41,8 @@ import { useLocale } from '@/lib/locale'
 import { useTheme } from '@/lib/theme'
 import { isWebGL2Available } from '@/lib/webgl'
 import { LANDING_WAVE_COLOR, LANDING_WAVE_OPACITY, LANDING_WAVE_PARAMS } from '@/lib/landingWave'
+import { buildStarters, type StarterDraft } from '@/lib/kbStarters'
+import { useNavigate } from 'react-router'
 import Loc from '@/components/Loc'
 
 const REPLY = `已在绑定的知识库中检索到相关内容，下面是**结构化回答**：
@@ -112,6 +114,8 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
   const { locale } = useLocale()
   const c = pagesCopy(locale).chat
   const tr = pagesCopy(locale).trace
+  /* 知识库为空时给一个「去导入资料」的出口：对话页自己不占路由，借 App 的导航跳过去 */
+  const navigate = useNavigate()
 
   /* 会话数据来自共享 store：侧栏的「最近会话」与这里读写同一份 */
   const {
@@ -429,8 +433,10 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
    * 并重算 modelRole。**提示文案必须按"实际真的清理了什么"生成**——
    * 若某项本来就没绑定，就不提它，否则就是在撒谎。
    */
-  const switchMode = async (mode: ConversationMode) => {
-    if (!active || (active.mode ?? 'PLAIN') === mode) return
+  /** 返回"切完之后是不是这个模式"：点示例问题要靠它决定能不能接着绑库、提问。 */
+  const switchMode = async (mode: ConversationMode): Promise<boolean> => {
+    if (!active) return false
+    if ((active.mode ?? 'PLAIN') === mode) return true
     const prevMode = (active.mode ?? 'PLAIN') as ConversationMode
 
     if (USE_MOCK || isTempId(active.id)) {
@@ -441,7 +447,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         kbs: mode === 'RAG' ? s.kbs : [],
       }))
       toast.success(c.modeSwitchedTitle, c.modeSwitchedMock(prevMode, mode))
-      return
+      return true
     }
 
     /* 切到 AGENT 但一个 Agent 都没有：先说清下一步，不假装绑定成功 */
@@ -450,7 +456,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         c.modeNoAgentTitle,
         c.modeNoAgentBody,
       )
-      return
+      return false
     }
 
     try {
@@ -486,7 +492,9 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     } catch (e) {
       toast.error(c.switchFailTitle, errMessage(e))
       /* 本地不动：不先显示成功再等后端 */
+      return false
     }
+    return true
   }
 
   /* 每个会话各自记忆滚动位置：切走时存、切回时恢复（没记录过就落在最新一条） */
@@ -1069,27 +1077,81 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
     URL.revokeObjectURL(a.href)
   }
 
-  const toggleKb = async (kb: KbItem) => {
+  /**
+   * 绑定 / 解绑知识库，返回"现在是不是已经处在目标状态"。
+   *
+   * 抽成带方向的版本，是因为点示例问题需要**幂等绑定**：那里不能"再点一下反而解绑"，
+   * 也不能让问题看起来带着库问了、实际没绑上（所以失败返回 false，调用方就不再发问）。
+   * 模式校验、鉴权、后端调用全部沿用原来那一份，没有另开捷径。
+   */
+  const setKbBound = async (kb: KbItem, bound: boolean): Promise<boolean> => {
     const key = kbKey(kb)
-    const next = active.kbs.includes(key)
-      ? active.kbs.filter((item) => item !== key)
-      : [...active.kbs, key]
+    const has = active.kbs.includes(key)
+    if (bound === has) return true
+    const next = bound
+      ? Array.from(new Set([...active.kbs, key]))
+      : active.kbs.filter((item) => item !== key)
 
     if (!USE_MOCK && !isTempId(active.id)) {
       if ((active.mode ?? 'PLAIN') !== 'RAG') {
         toast.error(c.kbModeTitle, c.kbModeBody)
-        return
+        return false
       }
       try {
         const updated = await api.conversations.update(active.id, { kbIds: next })
         patch(active.id, (session) => ({ ...session, kbs: updated.kbIds ?? next }))
       } catch (error) {
         toast.error(c.kbBindFailTitle, errMessage(error))
+        return false
       }
-      return
+      return true
     }
 
     patch(active.id, (session) => ({ ...session, kbs: next }))
+    return true
+  }
+
+  const toggleKb = async (kb: KbItem) => {
+    await setKbBound(kb, !active.kbs.includes(kbKey(kb)))
+  }
+
+  /*
+   * 欢迎区示例问题：输入只有用户自己的知识库（名字 / 描述 / 有没有资料），
+   * 规则在 lib/kbStarters.ts，文案在 pagesCopy —— 这里只做两件事：拼当前语言的问句、执行点击。
+   * 不进 useMemo：kbOptions 在 mock 下是模块常量、真实下是 useLoad 的 state，
+   * 过滤+切片只有几个元素，不值得为它引依赖。
+   */
+  const starterKbs = kbOptions.map((kb) => ({ key: kbKey(kb), name: kb.name, desc: kb.desc, docs: kb.docs }))
+  const starters = buildStarters(starterKbs)
+
+  /*
+   * 只有真实后端才谈得上"列表加载中 / 拉取失败"：mock 下 kbOptions 就是本地常量 KBS，
+   * 套用失败态会在离线演示里凭空报一句"列表没加载出来"。
+   */
+  const startersPending = !USE_MOCK && kbsLoading
+  const startersFailed = !USE_MOCK && Boolean(kbsError)
+
+  /** 草稿 → 当前语言的问句：模板到文案的映射只写在这里，别处不再重复一遍。 */
+  const starterText = (draft: StarterDraft): string =>
+    draft.template === 'topic'
+      ? c.starterTopic(draft.topic ?? '', kbName(draft.kbKey))
+      : draft.template === 'pitfalls'
+        ? c.starterPitfalls(kbName(draft.kbKey))
+        : c.starterOverview(kbName(draft.kbKey))
+
+  /**
+   * 点示例问题 = 切模式 → 绑库 → 发消息，三步都走现成路径（含权限与后端校验）。
+   *
+   * 任何一步没成功就停下：不能出现"问题按知识库生成、实际没绑定"的假象。
+   * 失败时 setKbBound / switchMode 已按原有规则弹出提示（含"必须切到知识库问答模式"）。
+   */
+  const useStarter = async (draft: StarterDraft) => {
+    const kb = kbOptions.find((item) => kbKey(item) === draft.kbKey)
+    if (kb) {
+      if ((active.mode ?? 'PLAIN') !== 'RAG' && !(await switchMode('RAG'))) return
+      if (!(await setKbBound(kb, true))) return
+    }
+    sendText(starterText(draft))
   }
 
   const createConversation = async () => {
@@ -1361,6 +1423,43 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                 {/* 粒子标题：进入新对话播一次「散开 → 聚拢」，之后静止（见 components/ui/particle-title.tsx） */}
                 <ParticleTitle text={c.startTitle} />
                 <p><Loc>{c.startDesc}</Loc></p>
+                {/*
+                  示例问题：按用户自己的知识库生成（规则 lib/kbStarters.ts，文案 pagesCopy）。
+                  列表还在加载时什么都不显示 —— 宁可晚半秒出现，也不先摆一组跟他资料无关的问题。
+                  三种"给不出问题"的情况各自说清下一步，且都不挡输入框：
+                  拉取失败 → 可重试；没有库 / 库是空的 → 去导入资料。
+                */}
+                {!startersPending && (
+                  starters.length > 0 ? (
+                    <div className="chat-starters" aria-label={c.startersAria}>
+                      {starters.map((draft) => (
+                        <button
+                          key={`${draft.kbKey}-${draft.template}`}
+                          type="button"
+                          className="chat-starters__item"
+                          onClick={() => void useStarter(draft)}
+                        >
+                          {starterText(draft)}
+                        </button>
+                      ))}
+                    </div>
+                  ) : startersFailed ? (
+                    <p className="chat-starters__note">
+                      <Loc>{c.starterListFailed}</Loc>{' '}
+                      <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}><Loc>{c.retry}</Loc></button>
+                    </p>
+                  ) : starterKbs.length === 0 ? (
+                    <p className="chat-starters__note">
+                      <Loc>{c.starterNoKb}</Loc>{' '}
+                      <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigate('/app/kb')}><Loc>{c.starterGoImport}</Loc></button>
+                    </p>
+                  ) : (
+                    <p className="chat-starters__note">
+                      <Loc>{c.starterEmptyKb}</Loc>{' '}
+                      <button className="btn btn-ghost btn-sm" type="button" onClick={() => navigate('/app/kb')}><Loc>{c.starterGoImport}</Loc></button>
+                    </p>
+                  )
+                )}
               </div>
             )}
             {(() => {
