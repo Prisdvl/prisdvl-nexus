@@ -42,7 +42,13 @@ await page.screenshot({ path: 'qa-kb-list.png' })
 
 /* ---------- 文档列表 ---------- */
 await page.locator('.kb-table tbody tr').first().click()
-await page.waitForTimeout(1200)
+/*
+ * 等文档区真的就绪再断言，而不是"睡 1200ms 后立刻 count()"。
+ * count() 不等待：CI 的慢 runner 上曾读到"行还没渲染"，可同一批断言里紧接着的点
+ * `.doc-row`、找分块表都成功——说明只是量得太早。超时后照常断言，真的没有行依然判 FAIL。
+ */
+await page.locator('.kb-docs__toolbar').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {})
+await page.locator('.doc-row').first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {})
 check('文档筛选含状态与刷新', (await page.locator('.kb-docs__toolbar select, .kb-docs__toolbar button').count()) >= 2)
 check('文档行含启用开关', (await page.locator('.doc-row .doc-switch').count()) >= 1)
 check('文档行含分块数', (await page.locator('.doc-row .kb-num').count()) >= 1)

@@ -23,11 +23,18 @@ await page.locator('#li-p').fill('qa-runner-password')
   await page.waitForTimeout(1200)
 }
 /**
- * 量横向溢出前先等页面离开加载态。
- * 加载态里的 `.lattice-loader__text` 会比视口多出 1–3px（本机实测 391 vs 390），
- * 常见的红是"量得太早"而不是布局真的溢出；超时也照量，真有溢出依然判 FAIL。
+ * 量横向溢出前先等页面就绪。
+ * 不能等 `.lattice-loader` 退场：工作台在 mock 下它是常驻的（本机实测 >16s 不退场），
+ * 15s 超时纯属空等。改用"main h1 已可见"这个页面就绪信号（各路由的 h1 都在 `main#main-content` 内），
+ * 稳定等待总计不超过 3s；超时也照量——真有溢出依然判 FAIL，判据 scrollWidth > clientWidth + 1 不放宽。
  */
-const settle = (page) => page.locator('.lattice-loader').first().waitFor({ state: 'detached', timeout: 15000 }).catch(() => {})
+const SETTLE_MAX_MS = 3000
+const settle = async (page) => {
+  const started = Date.now()
+  await page.locator('main h1').first().waitFor({ state: 'visible', timeout: SETTLE_MAX_MS }).catch(() => {})
+  const left = SETTLE_MAX_MS - (Date.now() - started)
+  if (left > 0) await page.waitForTimeout(Math.min(300, left))
+}
 const overflow = async (page) => {
   await settle(page)
   return page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)

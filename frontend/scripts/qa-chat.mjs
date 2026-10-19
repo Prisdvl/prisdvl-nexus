@@ -717,15 +717,24 @@ const qState = () => page.evaluate(() => ({
   users: document.querySelectorAll('.thread .msg.user').length,
   busy: !!document.querySelector('.thought-chain[data-working]'),
 }))
+/** 这一轮是否仍在跑：`.thought-chain[data-working]` 就是 ChatPage 里 streaming 的 DOM 投影。 */
+const workingNow = () => page.evaluate(() => !!document.querySelector('.thought-chain[data-working]'))
 await page.locator('.sb-session').first().click()
 await page.waitForTimeout(700)
 await page.locator('.prompt-bar__input').fill('排队：第一条')
 await page.locator('.prompt-bar__input').press('Enter')
-await page.waitForTimeout(1000)
+/*
+ * 不等固定延时，等"确实在跑"这个信号出现再断言。
+ * mock 流一轮约 4.8s（ChatPage step()：800+800+1400+1400+400），固定 1000ms 再加几次往返，
+ * 在 CI 的慢 runner 上会把窗口耗掉——上一版就是这么红的（第二条直接发出去了）。
+ */
+await page.waitForFunction(() => !!document.querySelector('.thought-chain[data-working]'), null, { timeout: 5000 }).catch(() => {})
 const q0 = await qState()
 check('忙时第一条正常发出', q0.busy === true && q0.queue.length === 0)
 
 // 忙的时候连发两条 → 进队列，且**不产生新消息**
+// 先证"这一轮还在跑"再发：窗口只有几秒，把前提单独报出来，红了也能直接看出红在哪。
+check('发送第二条前第一条仍在运行', await workingNow())
 await page.locator('.prompt-bar__input').fill('排队：第二条')
 await page.locator('.prompt-bar__input').press('Enter')
 await page.waitForTimeout(250)
