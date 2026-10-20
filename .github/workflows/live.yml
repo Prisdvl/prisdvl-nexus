@@ -208,6 +208,13 @@ jobs:
         # 该脚本注册临时用户、保存一次嵌入配置并建库，断言白名单下拉/掩码/冻结；
         # 不需要任何外部 Key —— 它不发起真实嵌入调用。
 
+      - name: Run routing QA against the real backend
+        shell: pwsh
+        working-directory: frontend
+        run: node scripts/qa-routing.mjs
+        # 该脚本直连 http://localhost:8080/api/knowledge-bases 取真实 kbId，再断深链
+        # ?doc= 的定位与高亮。mock 环境没有 /api，所以它只能在本作业里跑（不在基础 CI 里）。
+
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4

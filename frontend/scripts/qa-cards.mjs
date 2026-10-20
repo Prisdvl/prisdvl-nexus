@@ -19,16 +19,17 @@ const check = (name, ok, extra = '') => {
   if (!ok) issues.push(name)
 }
 
-/** 悬停一张卡片，采样画布里已绘制像素的平均色（粒子色） */
+/** 悬停一张卡片，采样画布里已绘制像素的平均色（粒子色）
+ *  知识库列表已改成表格，带粒子画布的卡片只剩 Agent 网格（.agent-grid .pixel-card）。 */
 async function sampleParticles(index = 0) {
-  const card = page.locator('.kb-grid .pixel-card').nth(index)
+  const card = page.locator('.agent-grid .pixel-card').nth(index)
   await card.scrollIntoViewIfNeeded()
   await page.mouse.move(4, 4)   // 先移开，保证重新触发 mouseenter（否则粒子不会重绘）
   await page.waitForTimeout(120)
   await card.hover()
   await page.waitForTimeout(1100)
   return page.evaluate((i) => {
-    const c = document.querySelectorAll('.kb-grid .pixel-card canvas')[i]
+    const c = document.querySelectorAll('.agent-grid .pixel-card canvas')[i]
     if (!c) return null
     const ctx = c.getContext('2d')
     const { data } = ctx.getImageData(0, 0, c.width, c.height)
@@ -47,10 +48,16 @@ await page.addInitScript(() => {
   localStorage.setItem('nx-proto-theme-mode', 'light')
   localStorage.setItem('nx-proto-palette', 'terracotta')
 })
-await page.goto(BASE + '/#/app/kb', { waitUntil: 'networkidle' })
+await page.goto(BASE + '/#/app/agents', { waitUntil: 'networkidle' })
 await page.waitForTimeout(1800)
 
-/* ---------- 1. 粒子随配色变化（画布采样） ---------- */
+/* ---------- 1. 粒子随配色变化（画布采样，取样自 Agent 网格） ---------- */
+// 显式设一次配色/明暗，别只依赖 localStorage 的初始值（首帧可能还没应用）
+await page.evaluate(() => {
+  window.__nxTheme.setPalette('terracotta')
+  window.__nxTheme.setMode('light')
+})
+await page.waitForTimeout(600)
 const warm = await sampleParticles(0)
 check('卡片粒子确实绘制了像素', warm !== null && warm.n > 50, JSON.stringify(warm))
 check('陶土橘配色下粒子偏暖（r > b）', warm && warm.r > warm.b, JSON.stringify(warm))
@@ -79,24 +86,34 @@ check('明暗切换后粒子颜色跟随变化', lightWarm && darkWarm && (Math.
 await page.evaluate(() => window.__nxTheme.setMode('light'))
 await page.waitForTimeout(400)
 
-/* ---------- 2. 徽标中性、圆点强调色 ---------- */
+/* ---------- 2. 表格里的文档数用纯文本、更新时间用次级文字色 ----------
+ * 卡片时代的「中性徽标 + 强调色圆点」随卡片一起消失，表格改为：
+ * 文档数是 .kb-num（无 data-tone、无底色），更新时间是 .kb-time（--text-3）。
+ * 判据强度不变：仍然要求“计数不带 accent、时间不与强调色混用”。 */
+await page.goto(BASE + '/#/app/kb', { waitUntil: 'networkidle' })
+await page.waitForSelector('.kb-table tbody tr', { timeout: 15000 }).catch(() => {})
+await page.waitForTimeout(800)
 const decor = await page.evaluate(() => {
-  const badge = document.querySelector('.kb-inner .badge')
-  const dot = document.querySelector('.kb-inner .meta .dot')
+  const num = document.querySelector('.kb-table .kb-num')
+  const time = document.querySelector('.kb-table .kb-time')
   const probe = document.createElement('span')
   document.body.appendChild(probe)
-  probe.style.background = 'var(--primary)'
-  const primary = getComputedStyle(probe).backgroundColor
+  probe.style.color = 'var(--text-3)'
+  const text3 = getComputedStyle(probe).color
   probe.remove()
   return {
-    badgeTone: badge ? badge.getAttribute('data-tone') : 'missing',
-    badgeBg: badge ? getComputedStyle(badge).backgroundColor : null,
-    dotBg: dot ? getComputedStyle(dot).backgroundColor : null,
-    primary,
+    numTone: num ? num.getAttribute('data-tone') : 'missing',
+    numBg: num ? getComputedStyle(num).backgroundColor : null,
+    timeColor: time ? getComputedStyle(time).color : 'missing',
+    text3,
   }
 })
-check('文档数徽标已中性（无 accent tone）', decor.badgeTone === null, String(decor.badgeTone))
-check('更新时间圆点 = 主题强调色', decor.dotBg === decor.primary, `dot=${decor.dotBg} primary=${decor.primary}`)
+check(
+  '文档数以纯文本呈现（无 accent tone、无底色徽标）',
+  decor.numTone === null && (decor.numBg === 'rgba(0, 0, 0, 0)' || decor.numBg === 'transparent'),
+  `tone=${String(decor.numTone)} bg=${String(decor.numBg)}`,
+)
+check('更新时间使用次级文字色（不与强调色混用）', decor.timeColor === decor.text3, `time=${String(decor.timeColor)} text3=${decor.text3}`)
 
 /* ---------- 3. 引用高亮：进入即亮 → 2.5s 后取消并清 URL ---------- */
 await page.goto(BASE + '/#/app/kb/1?doc=' + encodeURIComponent('集合框架.md'), { waitUntil: 'networkidle' })
