@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -48,6 +49,12 @@ class MultiKnowledgeRetrieverTest {
 
     private static final Long KB_A = 1001L;
     private static final Long KB_B = 1002L;
+
+    /**
+     * 闩等待的上界。<b>不是 5 秒</b>：2 核 runner 上虚拟线程的调度与唤醒可以被拖到秒级，
+     * 5 秒会把"任务没并行"和"runner 太慢"混成同一个红。
+     */
+    private static final long AWAIT_SECONDS = 10;
 
     private RetrievalDefaults defaults;
     private ObservabilityRegistry registry;
@@ -111,6 +118,7 @@ class MultiKnowledgeRetrieverTest {
     @Test
     @DisplayName("双库：真的并行（两个任务同时在跑），且两边的结果都回来")
     void twoKnowledgeBasesRunInParallel() {
+        relaxFanoutBound();
         AtomicInteger running = new AtomicInteger();
         AtomicInteger maxRunning = new AtomicInteger();
         CountDownLatch bothArrived = new CountDownLatch(2);
@@ -119,15 +127,15 @@ class MultiKnowledgeRetrieverTest {
                 List.of(knowledgeBase(KB_A), knowledgeBase(KB_B)), kb -> {
                     int now = running.incrementAndGet();
                     maxRunning.accumulateAndGet(now, Math::max);
-                    // 抵达后等对方也抵达：两个任务因此必须同时在场，串行时前一个会在这里空等 5 秒
+                    // 抵达后等对方也抵达：两个任务因此必须同时在场，串行时前一个会在这里空等到上界
                     bothArrived.countDown();
-                    awaitQuietly(bothArrived, 5);
+                    awaitQuietly(bothArrived, AWAIT_SECONDS);
                     running.decrementAndGet();
                     return kb.getName();
                 });
 
         assertThat(maxRunning.get())
-                .as("同时最多只跑 1 个任务就说明还是串行——把它退化成 for 循环，这条必须红")
+                .as("任务没有同时在飞：同时最多只跑 1 个任务就说明退化成串行——把它改成 for 循环，这条必须红")
                 .isGreaterThanOrEqualTo(2);
         assertThat(fanOut.failures()).as("并行执行不该产生失败").isEmpty();
         // 两个库都回来了，顺序与输入一致
@@ -136,28 +144,42 @@ class MultiKnowledgeRetrieverTest {
 
     @Test
     @DisplayName("后提交的库先完成：结果仍按输入顺序装配（不随完成时序抖动）")
-    void resultsFollowInputOrderNotCompletionOrder() throws Exception {
-        CountDownLatch bFinished = new CountDownLatch(1);
+    void resultsFollowInputOrderNotCompletionOrder() {
+        // 扇出超时必须盖过两次闩等待，否则慢 runner 上会先整体超时把 A 取消掉
+        relaxFanoutBound();
+
+        CountDownLatch bStarted = new CountDownLatch(1);    // B 已进入任务体
+        CountDownLatch bRecorded = new CountDownLatch(1);   // B 已写下自己的完成次序
+        AtomicBoolean bStartedInTime = new AtomicBoolean();
         AtomicReference<String> finishOrder = new AtomicReference<>("");
-        Object lock = new Object();
 
         Function<KnowledgeBasePO, String> recall = kb -> {
-            if (KB_A.equals(kb.getId())) {
-                // A 先提交，但要等 B 完成之后才返回 ⇒ 完成顺序是 B、A
-                awaitQuietly(bFinished, 5);
-            } else {
-                bFinished.countDown();
-            }
-            synchronized (lock) {
+            if (KB_B.equals(kb.getId())) {
+                // 后提交的 B：先宣告"已开始"，写下自己的完成次序，最后才放行 A。
+                // 顺序不能反：若先放行再写，A 的唤醒和 B 取锁就是赛跑，多核上 A 可能抢先，
+                // 前提断言就成了"看运气"。
+                bStarted.countDown();
                 finishOrder.set(finishOrder.get() + kb.getId() + ",");
+                bRecorded.countDown();
+                return kb.getName();
             }
+            // 先提交的 A：等的是「B 已开始」而不是「B 已完成」——前者只要求 B 被调度过一次，
+            // 2 核 runner 上不会因为核少而等不到；等到 B 写下次序后 A 才返回 ⇒ 完成顺序必然 B、A。
+            // 两笔写入之间由闩建立了发生在先关系，不再需要额外的锁。
+            bStartedInTime.set(awaitQuietly(bStarted, AWAIT_SECONDS));
+            awaitQuietly(bRecorded, AWAIT_SECONDS);
+            finishOrder.set(finishOrder.get() + kb.getId() + ",");
             return kb.getName();
         };
 
         MultiKnowledgeRetriever.FanOut<String> fanOut =
                 retriever.retrieve(List.of(knowledgeBase(KB_A), knowledgeBase(KB_B)), recall);
 
-        assertThat(finishOrder.get()).as("前提：完成顺序确实是 B 在前").startsWith(KB_B + ",");
+        assertThat(bStartedInTime.get())
+                .as("前提：B 必须在 %d 秒内开始——等不到就是任务没有同时在飞，与装配顺序无关", AWAIT_SECONDS)
+                .isTrue();
+        assertThat(finishOrder.get()).as("前提：完成顺序确实是 B 在前")
+                .isEqualTo(KB_B + "," + KB_A + ",");
         assertThat(fanOut.ordered())
                 .as("装配顺序必须与输入一致——下游归并排序是稳定的，同分次序不能随网络抖动而变")
                 .containsExactly("库1001", "库1002");
@@ -338,11 +360,25 @@ class MultiKnowledgeRetrieverTest {
         return entity;
     }
 
-    private static void awaitQuietly(CountDownLatch latch, long seconds) {
+    /**
+     * 把扇出整体超时放到"盖过所有闩等待"的长度。
+     *
+     * <p>默认的 10 秒恰好等于 {@link #AWAIT_SECONDS}：慢 runner 上闩还没等完，整体超时就会先
+     * {@code cancel(true)} 掉任务，用例于是败在"全部库失败 → 4005"上，而真正想断言的
+     * "任务没有并行 / 完成顺序反了"那条信息永远出不来——那不是同一个缺陷，却报成同一个红。
+     * 所以凡是靠闩制造时序的用例都先调这里。
+     */
+    private void relaxFanoutBound() {
+        defaults.setFanoutTimeout(Duration.ofSeconds(3 * AWAIT_SECONDS));
+    }
+
+    /** @return 闩在时限内被放行；超时或被打断则返回 {@code false}（中断标记会带回去） */
+    private static boolean awaitQuietly(CountDownLatch latch, long seconds) {
         try {
-            latch.await(seconds, TimeUnit.SECONDS);
+            return latch.await(seconds, TimeUnit.SECONDS);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+            return false;
         }
     }
 
@@ -358,7 +394,7 @@ class MultiKnowledgeRetrieverTest {
     /** 任务体在这里停住，直到测试收尾才放行——用来制造"调用方等不下去了"的场景。 */
     private static void awaitQuietly(CountDownLatch latch) {
         try {
-            latch.await(5, TimeUnit.SECONDS);
+            latch.await(AWAIT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         }
