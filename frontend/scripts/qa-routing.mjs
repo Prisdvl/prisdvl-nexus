@@ -64,28 +64,49 @@ check('刷新后仍是已登录（未被踢回登录页）', (await page.locator
 check('刷新后账号页内容在', (await page.locator('.page-title').first().innerText()).includes('设置'))
 
 /* ---------- 5. 深链：知识库详情 + 引用定位 ---------- */
-// 动态获取 qa-runner 的知识库 ID（不硬编码）
-const kbListResp = await page.request.get('http://localhost:8080/api/knowledge-bases', {
-  headers: { Authorization: 'Bearer ' + await page.evaluate(() => localStorage.getItem('nx-token')) }
-})
-const kbList = await kbListResp.json()
-const kbId = kbList.data?.list?.[0]?.id ?? kbList.data?.records?.[0]?.id ?? kbList.data?.[0]?.id
-if (!kbId) { console.log('SKIP 深链：qa-runner 无知识库') }
-else {
-await page.goto(BASE + '/#/app/kb/' + kbId + '?doc=' + encodeURIComponent('集合框架.md'), { waitUntil: 'networkidle' })
-await page.waitForSelector('.page-title', { timeout: 10000 })
-await page.waitForTimeout(1200)
-check('深链直达知识库详情', (await page.locator('.page-title').first().innerText()).includes('Java'))
-check('深链带上 doc 参数即高亮目标文档', (await page.locator('.doc-row[data-hl]').count()) > 0)
+/* 以前这里硬编码 http://localhost:8080 取库 ID：mock 模式下没有真后端，必然
+ * ECONNREFUSED（AggregateError，就是这个脚本进不了基础 CI 的原因）。
+ * 改成「从列表页点第一行进详情、再从 URL 取 ID」——真栈与 mock 两种模式都成立，
+ * 而且库名与文档名都从页面上读，不绑死种子数据。 */
+await page.goto(BASE + '/#/app/kb', { waitUntil: 'networkidle' })
+await page.waitForTimeout(1400)
+const firstRow = page.locator('.kb-table tbody tr').first()
+let kbId = null
+let kbName = ''
+if ((await firstRow.count()) > 0) {
+  const cellText = await firstRow.locator('.kb-cell').first().innerText().catch(() => '')
+  kbName = (cellText || '').split('\n')[0].trim()
+  await firstRow.click()
+  await page.waitForTimeout(1400)
+  const m = (await url()).match(/\/app\/kb\/([^/?#]+)/)
+  if (m) kbId = m[1]
 }
+if (!kbId) {
+  console.log('SKIP 深链：列表里没有可用的知识库')
+} else {
+  await page.waitForSelector('.doc-row', { timeout: 10000 }).catch(() => {})
+  const docName = ((await page.locator('.doc-row').first().innerText().catch(() => '')) || '').split('\n')[0].trim()
+  await page.goto(BASE + '/#/app/kb/' + kbId + (docName ? '?doc=' + encodeURIComponent(docName) : ''), { waitUntil: 'networkidle' })
+  await page.waitForSelector('.kb-top__title-row', { timeout: 10000 })
+  await page.waitForTimeout(1200)
+  const detailTitle = await page.locator('.kb-top__title-row').first().innerText()
+  check(
+    '深链直达知识库详情',
+    kbName ? detailTitle.includes(kbName) : detailTitle.trim().length > 0,
+    kbName || detailTitle.replace(/\s+/g, ' ').slice(0, 40),
+  )
+  if (docName) {
+    check('深链带上 doc 参数即高亮目标文档', (await page.locator('.doc-row[data-hl]').count()) > 0, docName)
+  }
 
 /* ---------- 6. 知识库详情 tab 为横向橡皮分段且无黑框残留 ---------- */
-const kbTabs = await page.locator('.page .rubber-segment button.rubber-segment__item').count()
+const kbTabs = await page.locator('.kb-top__tabs button.rubber-segment__item').count()
 check('KB 详情 tab 是橡皮分段（4 项）', kbTabs === 4, `实际 ${kbTabs}`)
 check('页面中已无 GooeyNav 黑框层', (await page.locator('.gooey-nav-container').count()) === 0)
-await page.locator('.page .rubber-segment button.rubber-segment__item', { hasText: '问答' }).click()
+await page.locator('.kb-top__tabs button.rubber-segment__item', { hasText: '问答' }).click()
 await page.waitForTimeout(600)
-check('切到问答 tab 生效', (await page.locator('input[placeholder*="B+ 树为什么"]').count()) === 1)
+check('切到问答 tab 生效', (await page.locator('input[placeholder*="提问"], .kb-qa__starters').count()) >= 1)
+}
 
 /* ---------- 7. 浏览器前进/后退可用 ---------- */
 await nav('工作台').click()

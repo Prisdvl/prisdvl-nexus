@@ -99,7 +99,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:QA_SHOTS_OUT | Out-Null
           $scripts = @(
             'qa-a11y.mjs', 'qa-features.mjs', 'qa-settings.mjs', 'qa-responsive.mjs', 'qa-chat.mjs',
-            'verify-kb.mjs', 'verify-chat-trace.mjs', 'verify-ops.mjs', 'verify-market.mjs', 'verify-agent-studio.mjs'
+            'verify-kb.mjs', 'verify-chat-trace.mjs', 'verify-ops.mjs', 'verify-market.mjs', 'verify-agent-studio.mjs',
+            'qa-routing.mjs'
           )
           $failed = @()
           foreach ($s in $scripts) {
