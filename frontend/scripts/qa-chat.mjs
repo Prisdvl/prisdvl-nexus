@@ -737,21 +737,40 @@ check('忙时第一条正常发出', q0.busy === true && q0.queue.length === 0)
 // 忙的时候连发两条 → 进队列，且**不产生新消息**
 // 先证"这一轮还在跑"再发：窗口只有几秒，把前提单独报出来，红了也能直接看出红在哪。
 check('发送第二条前第一条仍在运行', await workingNow())
+/*
+ * 队列窗口 = 当前这一轮流式（mock 约 4.8s）。流一结束 ChatPage 立刻出队一条并发出去
+ * （ChatPage.tsx:883-889），所以这里一律等条件、不睡固定时间：慢 runner 上三段固定
+ * sleep（250+500+400）会把这轮睡光，删掉队首后剩下的那条被出队，断言就读到 []。
+ */
+const waitQueueLen = (want) => page
+  .waitForFunction((n) => document.querySelectorAll('.queue__item .queue__text').length === n, want, { timeout: 5000 })
+  .catch(() => {})
 await page.locator('.prompt-bar__input').fill('排队：第二条')
 await page.locator('.prompt-bar__input').press('Enter')
-await page.waitForTimeout(250)
+await waitQueueLen(1)
 await page.locator('.prompt-bar__input').fill('排队：第三条')
 await page.locator('.prompt-bar__input').press('Enter')
-await page.waitForTimeout(500)
+await waitQueueLen(2)
 const q1 = await qState()
 check('busy 时消息进入待发送队列', q1.queue.length === 2, JSON.stringify(q1.queue))
 check('排队期间不新增消息（不会插队打断当前回答）', q1.users === q0.users, `${q0.users} → ${q1.users}`)
 
-// 移除队首
-await page.locator('.queue__del').first().click()
-await page.waitForTimeout(400)
+/*
+ * 移除「队尾」那条，不是队首：队首正是出队的目标（这一轮结束就自动发出去），
+ * 删队首和"它自己跑掉了"在 DOM 上不可区分，窗口一耗尽这条断言就会假绿。
+ * 删队尾后，成功 = 队列剩 1 条（且就是原队首）+ 用户消息数没变；任一项被出队污染即红。
+ */
+const firstQueued = q1.queue[0]
+const lastQueued = q1.queue[1]
+check('移除前这一轮仍在跑且队列有 2 条', q1.busy && q1.queue.length === 2, JSON.stringify({ queue: q1.queue, busy: q1.busy }))
+await page.locator('.queue__item', { hasText: lastQueued }).locator('.queue__del').first().click({ timeout: 2000 }).catch(() => {})
+await page.waitForFunction(
+  (text) => Array.from(document.querySelectorAll('.queue__item .queue__text')).every((e) => e.textContent.trim() !== text),
+  lastQueued, { timeout: 3000 }).catch(() => {})
 const q2 = await qState()
-check('可以移除排队中的某一条', q2.queue.length === 1 && q2.queue[0].includes('第三条'), JSON.stringify(q2.queue))
+check('可以移除排队中的某一条',
+  q2.queue.length === 1 && q2.queue[0] === firstQueued && q2.users === q1.users,
+  JSON.stringify({ queue: q2.queue, users: `${q1.users} → ${q2.users}` }))
 
 // 当前这轮结束后，队首自动发出
 await page.waitForFunction(() => !document.querySelector('.thought-chain[data-working]'), null, { timeout: 25000 }).catch(() => {})
