@@ -115,8 +115,11 @@ check('Esc 可关闭弹窗', (await page.locator('.dialog[role="dialog"]').count
 await nav('工作台').click()
 await page.waitForTimeout(1600)
 // 卡片标题改成了「最近文档处理」，按标题文案找会绑死语言 → 改用结构判据
-check('工作台有文档处理卡（含状态位）', (await page.locator('.wb-card .status-mark').count()) >= 4)
 check('任务行存在（每行一个状态位）', (await page.locator('.wb-card .task-row').count()) >= 2)
+const wbMarks = await page.locator('.wb-card .task-row .status-mark').count()
+const wbRows = await page.locator('.wb-card .task-row').count()
+/* 判据从「至少 4 个状态位」改成「每一行都有状态位」：行数随真实数据变，写死总数会随数据翻红 */
+check('任务行各带一个状态位', wbRows >= 2 && wbMarks === wbRows, `状态位 ${wbMarks} / 任务行 ${wbRows}`)
 check('任务卡里有 LatticeLoader', (await page.locator('.wb-card .lattice-loader').count()) >= 1)
 
 /* ---------- 7. Agent 测试：StatusMark 运行 → 完成 ---------- */
@@ -140,6 +143,7 @@ const hoverProbe = async () => page.evaluate(() => {
     active: getComputedStyle(c).getPropertyValue('--pixel-card-active-color').trim(),
     bg: before.backgroundImage,
     alpha: alpha ? Number(alpha) : null,
+    bgc: getComputedStyle(c).backgroundColor,
     border: getComputedStyle(c).borderColor,
     opacity: before.opacity,
   }
@@ -148,10 +152,17 @@ const idle = await hoverProbe()
 await page.locator('.agent-grid .pixel-card').first().hover()
 await page.waitForTimeout(900)
 const hovered = await hoverProbe()
+const rgbOf = (s) => (s.match(/\d+/g) || []).map(Number)
 check('卡片活性色已配置（不是默认近黑）', hovered.active.length > 0 && !hovered.active.includes('#09090b'), hovered.active || '(空)')
-check('悬停遮罩不含近黑 rgb(9, 9, 11)', !hovered.bg.includes('rgb(9, 9, 11)'), hovered.bg.slice(0, 90))
-check('悬停遮罩透明度很低（≤0.3，不挡文字）', hovered.alpha !== null && hovered.alpha <= 0.3, `alpha=${hovered.alpha}`)
-check('悬停有边框反馈', hovered.border !== idle.border, `${idle.border} → ${hovered.border}`)
+/* 改版后卡片不再叠「近黑遮罩 + 边框高亮」：活性色是 transparent，
+ * 反馈改成背景色轻微提亮（本机实测 rgb(16,21,34) → rgb(23,31,49)）。
+ * 判据跟着改成「有反馈、克制、绝不出现近黑」，而不是继续找不存在的遮罩层。 */
+check('悬停反馈不是近黑色', !hovered.bg.includes('rgb(9, 9, 11)') && hovered.bgc !== 'rgb(9, 9, 11)', `${hovered.bg.slice(0, 40)} / ${hovered.bgc}`)
+check('悬停有背景色反馈', hovered.bgc !== idle.bgc, `${idle.bgc} → ${hovered.bgc}`)
+const dIdle = rgbOf(idle.bgc)
+const dHover = rgbOf(hovered.bgc)
+const delta = dIdle.length === 3 && dHover.length === 3 ? Math.max(...[0, 1, 2].map((i) => Math.abs(dHover[i] - dIdle[i]))) : 999
+check('悬停提亮幅度克制（单通道 ≤40，不压文字）', delta <= 40, `最大通道差 ${delta}`)
 
 /* ---------- 8. 删除 Agent → 撤销恢复 ---------- */
 const agentsBefore = await page.locator('.agent-grid .pixel-card').count()
@@ -167,8 +178,12 @@ await page.goto('http://localhost:5175/#/app/account', { waitUntil: 'networkidle
 await page.waitForTimeout(1500)
 await page.locator('.settings-item', { hasText: '邮箱验证' }).first().click()
 await page.waitForTimeout(500)
-check('无验证码 API 时邮箱验证按钮禁用', await page.locator('.settings-body button[disabled]', { hasText: '暂不可用' }).count() === 1)
-check('邮箱验证明确说明服务端能力限制', (await page.locator('.settings-body').innerText()).includes('没有发送或校验邮箱验证码的接口'))
+/* 邮箱验证已经接上真实能力（发码 + 6 位数字 + 服务端冷却限流），不再是「暂不可用」占位。
+ * 判据改成「入口与说明都在」：能发码、能填码、并明说限流由服务端强制。 */
+const mailText = await page.locator('.settings-body').innerText()
+check('邮箱验证提供验证码输入框', (await page.locator('.settings-body input').count()) >= 1)
+check('邮箱验证提供发送入口', mailText.includes('发送验证码'), mailText.replace(/\s+/g, ' ').slice(0, 60))
+check('邮箱验证说明限流由服务端强制', mailText.includes('冷却与限流'))
 
 /* ---------- 10. 保存资料 → 成功提示（「保存」在「公开资料」分区里） ---------- */
 await page.locator('.settings-item', { hasText: '公开资料' }).first().click()
@@ -192,24 +207,47 @@ await page.locator('#rg-p2').fill('Password123')
 await page.locator('#rg-e').fill('qa@example.com')
 await page.locator('form button[type="submit"]', { hasText: '创建账号' }).click()
 await page.waitForTimeout(300)
-check('离线测试模式注册不假报成功', (await page.locator('.auth-card [role="alert"]').innerText()).includes('注册需要真实后端'))
+/* 判据不变（不能假报成功），但不再绑死某句文案：离线时后端会回「请求失败，请稍后重试」 */
+const regAlerts = await page.locator('.auth-card [role="alert"], .auth-card .form-error').allInnerTexts()
+const landedInShell = (await page.locator('.shell').count()) > 0
+check(
+  '离线测试模式注册不假报成功',
+  regAlerts.length > 0 && !landedInShell,
+  `提示：${(regAlerts.join(' | ') || '(无)').replace(/\s+/g, ' ').slice(0, 32)}；进入应用=${landedInShell}`,
+)
 
 /* ---------- 12. 校验时机：未失焦不报错，失焦才报 ---------- */
-await page.locator('.auth-card .rubber-segment button.rubber-segment__item', { hasText: '注册' }).click()
-await page.waitForTimeout(300)
-await page.locator('#rg-u').fill('x')
-const errBeforeBlur = await page.locator('#rg-u').evaluate((el) => {
+/* 为什么单开一个 context：上一步已经提交过一次注册表单（submitted 之后边输边报是
+ * 正确行为），而且本脚本的 addInitScript 每次导航都会重新写入本地登录态，
+ * 在同一个 page 里 clear localStorage 也压不掉这个状态。
+ * 校验时机是「表单」的属性，与登录态无关，因此用一个干净的 context 测最合适。 */
+const cleanCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+await cleanCtx.addInitScript(() => {
+  try {
+    localStorage.setItem('nx-proto-tour-done', '1')
+  } catch {
+    /* 忽略：清理失败也不该让用例直接崩 */
+  }
+})
+const cleanPage = await cleanCtx.newPage()
+await cleanPage.goto(BASE + '/#/login', { waitUntil: 'networkidle' })
+await cleanPage.waitForSelector('.auth-card', { timeout: 10000 })
+await cleanPage.locator('.auth-card button.rubber-segment__item', { hasText: '注册' }).first().click()
+await cleanPage.waitForSelector('#rg-u', { timeout: 5000 }).catch(() => {})
+await cleanPage.locator('#rg-u').fill('x')
+const errBeforeBlur = await cleanPage.locator('#rg-u').evaluate((el) => {
   const f = el.closest('.field')
   const e = f && f.querySelector('.err')
   return e ? getComputedStyle(e).display : 'missing'
 })
-await page.locator('#rg-u').blur()
-await page.waitForTimeout(300)
-const errAfterBlur = await page.locator('#rg-u').evaluate((el) => {
+await cleanPage.locator('#rg-u').blur()
+await cleanPage.waitForTimeout(300)
+const errAfterBlur = await cleanPage.locator('#rg-u').evaluate((el) => {
   const f = el.closest('.field')
   const e = f && f.querySelector('.err')
   return e ? getComputedStyle(e).display : 'missing'
 })
+await cleanCtx.close()
 check('输入中不显示错误（未失焦）', errBeforeBlur === 'none', `display=${errBeforeBlur}`)
 check('失焦后显示错误', errAfterBlur !== 'none', `display=${errAfterBlur}`)
 
