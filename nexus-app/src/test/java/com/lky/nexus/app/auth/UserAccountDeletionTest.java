@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.jayway.jsonpath.JsonPath;
@@ -11,6 +12,8 @@ import com.lky.nexus.app.auth.mapper.SysUserMapper;
 import com.lky.nexus.app.auth.mapper.SysUserSessionMapper;
 import com.lky.nexus.app.auth.model.entity.SysUserPO;
 import com.lky.nexus.app.auth.model.entity.SysUserSessionPO;
+import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;
+import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +37,7 @@ class UserAccountDeletionTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private SysUserMapper userMapper;
     @Autowired private SysUserSessionMapper sessionMapper;
+    @Autowired private KnowledgeBaseMapper knowledgeBaseMapper;
 
     private static final String PASSWORD = "Passw0rd!23";
 
@@ -75,6 +79,42 @@ class UserAccountDeletionTest {
 
     private long countSessions(long userId) {
         return sessionMapper.selectCount(Wrappers.<SysUserSessionPO>query().eq("user_id", userId));
+    }
+
+    @Test
+    @DisplayName("注销会连知识库一起删掉（走服务层，库行不再可见）")
+    void deleteMeRemovesKnowledgeBases() throws Exception {
+        registerAndLogin("acct-kb", "acct-kb@example.com");
+        String token = tokenOf("acct-kb");
+        long uid = ((Number) tokenAndIdRaw("acct-kb")[1]).longValue();
+
+        // 建库前先冻结嵌入配置：真实链路里 create() 会读用户级嵌入凭据
+        mockMvc.perform(put("/api/users/me/embedding-config")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"provider\":\"bailian\",\"modelName\":\"text-embedding-v4\","
+                        + "\"baseUrl\":\"https://dashscope.aliyuncs.com/compatible-mode/v1\","
+                        + "\"apiKey\":\"sk-test-dummy-000000000000\",\"dimensions\":1024,\"enabled\":true}"));
+
+        MvcResult created = mockMvc.perform(post("/api/knowledge-bases")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"acct-kb-probe\"}"))
+                .andReturn();
+        String createBody = created.getResponse().getContentAsString();
+        assertThat(JsonPath.<Integer>read(createBody, "$.code"))
+                .as("建库应成功，实际响应：" + createBody)
+                .isZero();
+        assertThat(knowledgeBaseMapper.selectCount(
+                Wrappers.<KnowledgeBasePO>query().eq("user_id", uid))).as("注销前应有 1 个库").isEqualTo(1);
+
+        mockMvc.perform(delete("/api/users/me").header("Authorization", "Bearer " + token))
+                .andExpect(r -> assertThat(JsonPath.<Integer>read(
+                        r.getResponse().getContentAsString(), "$.code")).isZero());
+
+        assertThat(knowledgeBaseMapper.selectCount(
+                Wrappers.<KnowledgeBasePO>query().eq("user_id", uid)))
+                .as("注销后该用户的知识库应查不到").isZero();
     }
 
     private long registerAndLogin(String username, String email) throws Exception {
