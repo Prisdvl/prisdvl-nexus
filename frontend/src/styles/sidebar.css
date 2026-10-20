@@ -198,6 +198,24 @@
 .sb-section--toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .sb-section--toggle > svg { margin-left: auto; color: var(--text-3); transition: transform var(--dur-ui) var(--ease-out); }
 .sb-section--toggle > svg.rot90 { transform: rotate(90deg); }
+/*
+ * 分组头里的条数：收起时也能一眼看出里面有几条。
+ * 数字必须是"现算"的（直接读 store 的数组长度），不缓存、不落 localStorage ——
+ * 缓存快照正是"新建会话后计数还是旧值、刷新才对"的来源。
+ * 用 tabular-nums 让 1 和 11 宽度一致，避免数字变化时标题左右跳。
+ */
+.sb-section__count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--ui-selected);
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .sb-recent-list {
   display: flex;
   flex-direction: column;

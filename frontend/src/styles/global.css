@@ -204,6 +204,44 @@ a { color: var(--primary-text); }
 .input:disabled { background: var(--surface-muted); color: var(--text-3); cursor: not-allowed; }
 .input[readonly] { background: var(--surface-muted); }
 
+/*
+ * 原生下拉框：默认外观会带系统箭头 + 系统配色的弹出列表，跟这套深色界面完全不同源
+ * （工作流工具条上一度出现「两个同类控件两种底色 + 一个白底黑字下拉」）。
+ * 这里统一三件事：
+ *   1. appearance:none 去掉系统箭头，换成随主题的 chevron，给右侧留出箭头位；
+ *   2. 禁用态**沿用**输入框底色，只压低文字对比度 —— 否则同一行里禁用的那个
+ *      会变成另一块颜色，看起来像另一种控件；
+ *   3. option 显式给底色/字色，让展开后的列表也跟着主题走（Chromium 会照此绘制）。
+ */
+select.input {
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%238b93a7' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 8px;
+  cursor: pointer;
+}
+html[data-theme='light'] select.input {
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%236b7280' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+}
+/*
+ * 上面 `.input:disabled` 用的是 background 简写，会把 image/repeat/position/size 一起重置，
+ * 这里（选择器更具体）把箭头整套属性重新写一遍，禁用态才不会变成"平铺一行的箭头"。
+ */
+select.input:disabled {
+  background-color: var(--input-bg);
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 8px;
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+select.input option { background: var(--surface); color: var(--text); }
+
 textarea.input { height: auto; resize: vertical; padding: 10px 13px; line-height: 1.55; }
 
 /* ---------- 分段控件 / tabs ---------- */

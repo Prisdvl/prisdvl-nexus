@@ -677,14 +677,19 @@
   width: min(100%, var(--chat-col));
   height: 184px;
 }
-/* 画布里的标题在带子正中，负外边距把描述文案提上来贴近标题 */
-.chat-empty-state--particle p {
+/*
+ * 画布里的标题在带子正中，负外边距把描述文案提上来贴近标题。
+ * 只能作用在**紧跟光雾带的第一段**：空态里还有「示例问题 / 没有知识库」这类提示段落，
+ * 早先写成 `.chat-empty-state--particle p` 时它们同样吃到 -62px，
+ * 于是第二段被顶进标题字形里，两行字叠在一起。
+ */
+.chat-empty-state--particle .pt + p {
   margin-top: -62px;
 }
 
 @media (max-width: 720px) {
   .chat-empty-state--particle .pt { height: 150px; }
-  .chat-empty-state--particle p { margin-top: -48px; }
+  .chat-empty-state--particle .pt + p { margin-top: -48px; }
   .chat-empty-state.chat-empty-state--particle { bottom: calc(50% + 82px); }
 }
 

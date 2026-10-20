@@ -1220,6 +1220,108 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
    */
   const emptyChat = !loadingMessages && active.messages.length === 0 && !streaming
 
+  /*
+   * 新建会话向导必须**在这里**就定义好：下面 isEmptyList 分支会提前 return，
+   * 若向导只挂在正常分支的 JSX 里，0 会话（刚注册的新账号）点「新对话」时
+   * 只会 setWizard(true)，而页面上根本没有那个 Modal —— 表现就是按钮完全没反应。
+   */
+  const wizardModal = (
+    <Modal
+      open={wizard}
+      title={c.wizardTitle}
+      onClose={() => { if (!creatingSession) setWizard(false) }}
+      shouldBlockClose={() => creatingSession}
+    >
+      <Stepper
+        backButtonText={c.stepBack}
+        nextButtonText={c.stepNext}
+        finalButtonText={c.wizardCreate}
+        onFinalStepCompleted={() => { void createConversation() }}
+      >
+        <Step>
+          <div className="wizard-field">
+            <label><Loc>{c.wizardModeLabel}</Loc></label>
+            <RubberSegment
+              items={MODE_OPTIONS.map((option) => option.label)}
+              value={MODE_OPTIONS.find((option) => option.value === wizMode)?.label ?? MODE_OPTIONS[0].label}
+              onChange={(label) => {
+                const option = MODE_OPTIONS.find((item) => item.label === label)
+                if (option) setWizMode(option.value)
+              }}
+              size="sm"
+              equalSlots
+              trackColor="var(--surface-muted)"
+              thumbColor="var(--primary-container)"
+              textColor="var(--text-2)"
+              activeTextColor="var(--primary-text)"
+              aria-label={c.wizardModeAria}
+            />
+            <p className="hint" style={{ marginTop: 9 }}>
+              <Loc>{c.wizardModeHint}</Loc>
+            </p>
+          </div>
+
+          {wizMode === 'AGENT' && (
+            <div className="wizard-field" style={{ marginTop: 18 }}>
+              <label><Loc>{c.wizardAgentLabel}</Loc></label>
+              <div className="wizard-opts">
+                {agentOptions.map((option) => (
+                  <button
+                    key={option.id ?? '__default__'}
+                    type="button"
+                    className="chip wizard-chip"
+                    data-on={option.id === wizAgent ? '' : undefined}
+                    aria-pressed={option.id === wizAgent}
+                    onClick={() => setWizAgent(option.id)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {wizMode === 'RAG' && (
+            <div className="wizard-field" style={{ marginTop: 18 }}>
+              <label><Loc>{c.wizardKbLabel}</Loc></label>
+              {kbsLoading && <p className="hint">{c.wizardKbLoading}</p>}
+              {kbsError && <p className="form-error active" role="alert">{kbsError} <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}><Loc>{c.retry}</Loc></button></p>}
+              {!kbsLoading && !kbsError && kbOptions.length === 0 && <p className="hint"><Loc>{c.wizardKbEmpty}</Loc></p>}
+              <div className="wizard-opts">
+                {kbOptions.map((kb) => {
+                  const key = kbKey(kb)
+                  return (
+                    <button
+                      key={kb.id}
+                      type="button"
+                      className="chip wizard-chip"
+                      data-on={wizKbs.includes(key) ? '' : undefined}
+                      aria-pressed={wizKbs.includes(key)}
+                      onClick={() => setWizKbs((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])}
+                    >
+                      {kb.name}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </Step>
+        <Step>
+          <p style={{ margin: 0 }}><Loc>{c.wizardConfirm(MODE_OPTIONS.find((option) => option.value === wizMode)?.label ?? '')}</Loc></p>
+          <p className="hint" style={{ marginTop: 10 }}>
+            {wizMode === 'RAG'
+              ? <Loc>{c.wizardBindCount(wizKbs.length)}</Loc>
+              : wizMode === 'AGENT'
+                ? <Loc>{c.wizardUseAgent(agentNameOf(wizAgent))}</Loc>
+                : <Loc>{c.wizardPlainReady}</Loc>}
+          </p>
+          {creatingSession && <p role="status" className="hint"><Loc>{c.wizardCreating}</Loc></p>}
+        </Step>
+      </Stepper>
+    </Modal>
+  )
+
   if (isEmptyList) {
     return (
       <div className="chat-fixed">
@@ -1231,6 +1333,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
             action={<button className="btn btn-primary" type="button" onClick={() => requestCreate()}><Loc>{c.newChat}</Loc></button>}
           />
         </div>
+        {wizardModal}
       </div>
     )
   }
@@ -1667,101 +1770,7 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         </section>
       </div>
 
-      {/* ---------- 新建会话向导 ---------- */}
-      <Modal
-        open={wizard}
-        title={c.wizardTitle}
-        onClose={() => { if (!creatingSession) setWizard(false) }}
-        shouldBlockClose={() => creatingSession}
-      >
-        <Stepper
-          backButtonText={c.stepBack}
-          nextButtonText={c.stepNext}
-          finalButtonText={c.wizardCreate}
-          onFinalStepCompleted={() => { void createConversation() }}
-        >
-          <Step>
-            <div className="wizard-field">
-              <label><Loc>{c.wizardModeLabel}</Loc></label>
-              <RubberSegment
-                items={MODE_OPTIONS.map((option) => option.label)}
-                value={MODE_OPTIONS.find((option) => option.value === wizMode)?.label ?? MODE_OPTIONS[0].label}
-                onChange={(label) => {
-                  const option = MODE_OPTIONS.find((item) => item.label === label)
-                  if (option) setWizMode(option.value)
-                }}
-                size="sm"
-                equalSlots
-                trackColor="var(--surface-muted)"
-                thumbColor="var(--primary-container)"
-                textColor="var(--text-2)"
-                activeTextColor="var(--primary-text)"
-                aria-label={c.wizardModeAria}
-              />
-              <p className="hint" style={{ marginTop: 9 }}>
-                <Loc>{c.wizardModeHint}</Loc>
-              </p>
-            </div>
-
-            {wizMode === 'AGENT' && (
-              <div className="wizard-field" style={{ marginTop: 18 }}>
-                <label><Loc>{c.wizardAgentLabel}</Loc></label>
-                <div className="wizard-opts">
-                  {agentOptions.map((option) => (
-                    <button
-                      key={option.id ?? '__default__'}
-                      type="button"
-                      className="chip wizard-chip"
-                      data-on={option.id === wizAgent ? '' : undefined}
-                      aria-pressed={option.id === wizAgent}
-                      onClick={() => setWizAgent(option.id)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {wizMode === 'RAG' && (
-              <div className="wizard-field" style={{ marginTop: 18 }}>
-                <label><Loc>{c.wizardKbLabel}</Loc></label>
-                {kbsLoading && <p className="hint">{c.wizardKbLoading}</p>}
-                {kbsError && <p className="form-error active" role="alert">{kbsError} <button className="btn btn-ghost btn-sm" type="button" onClick={reloadKbs}><Loc>{c.retry}</Loc></button></p>}
-                {!kbsLoading && !kbsError && kbOptions.length === 0 && <p className="hint"><Loc>{c.wizardKbEmpty}</Loc></p>}
-                <div className="wizard-opts">
-                  {kbOptions.map((kb) => {
-                    const key = kbKey(kb)
-                    return (
-                      <button
-                        key={kb.id}
-                        type="button"
-                        className="chip wizard-chip"
-                        data-on={wizKbs.includes(key) ? '' : undefined}
-                        aria-pressed={wizKbs.includes(key)}
-                        onClick={() => setWizKbs((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])}
-                      >
-                        {kb.name}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-          </Step>
-          <Step>
-            <p style={{ margin: 0 }}><Loc>{c.wizardConfirm(MODE_OPTIONS.find((option) => option.value === wizMode)?.label ?? '')}</Loc></p>
-            <p className="hint" style={{ marginTop: 10 }}>
-              {wizMode === 'RAG'
-                ? <Loc>{c.wizardBindCount(wizKbs.length)}</Loc>
-                : wizMode === 'AGENT'
-                  ? <Loc>{c.wizardUseAgent(agentNameOf(wizAgent))}</Loc>
-                  : <Loc>{c.wizardPlainReady}</Loc>}
-            </p>
-            {creatingSession && <p role="status" className="hint"><Loc>{c.wizardCreating}</Loc></p>}
-          </Step>
-        </Stepper>
-      </Modal>
+      {wizardModal}
     </div>
   )
 }

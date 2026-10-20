@@ -609,6 +609,8 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
                   onClick={() => setPinnedOpen((v) => !v)}
                 >
                   <span><Loc>{t.nav.pinned}</Loc></span>
+                  {/* 计数直接由 store 现算 —— 收起时也能看出里面有几条，且不依赖任何缓存快照 */}
+                  <span className="sb-section__count" aria-hidden="true">{pinned.length}</span>
                   <ChevronRight size={14} className={pinnedOpen ? 'rot90' : ''} />
                 </button>
                 {pinnedOpen && <div className="session-list sb-recent-list">{pinned.map(renderSession)}</div>}
@@ -623,6 +625,7 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
                   onClick={() => setRecentOpen((v) => !v)}
                 >
                   <span><Loc>{t.nav.recent}</Loc></span>
+                  {recent.length > 0 && <span className="sb-section__count" aria-hidden="true">{recent.length}</span>}
                   <ChevronRight size={14} className={recentOpen ? 'rot90' : ''} />
                 </button>
               {recentOpen && <div className="session-list sb-recent-list">{recent.map(renderSession)}</div>}
