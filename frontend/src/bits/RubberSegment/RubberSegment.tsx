@@ -91,10 +91,13 @@ const RubberSegment: React.FC<RubberSegmentProps> = ({
   value,
   defaultValue,
   onChange,
-  trackColor = '#27272a',
-  thumbColor = '#fafafa',
-  textColor = '#fafafa',
-  activeTextColor = '#18181b',
+  /* 默认色走主题 token：这两条控件以前固定用近黑 #27272a / #fafafa，
+   * 在浅色主题下会变成一块“外来默认色”（qa-palette 的 6 条红就是它）。
+   * 取值与知识库详情页的页签一致：轨道比底色更暗一档，拇指是卡片色。 */
+  trackColor = 'color-mix(in oklab, var(--text) 6%, var(--surface-muted))',
+  thumbColor = 'var(--surface)',
+  textColor = 'var(--text-2)',
+  activeTextColor = 'var(--text)',
   size = 'md',
   radius = 10,
   inset = 3,
