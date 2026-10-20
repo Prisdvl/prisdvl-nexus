@@ -147,9 +147,11 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
     }
   }
 
-  /** 传稳定 id 而不是文案，避免切换语言后判断失效 */
+  /** 传稳定 id 而不是文案，避免切换语言后判断失效。
+   *  注意：分段控件的 items 传的是「显示文案」，onChange 回传的也是文案，
+   *  所以必须同时认 id 与文案——只认 'register' 会让「注册」标签点了没反应。 */
   const switchTab = (label: string) => {
-    const id = label === 'register' ? 'register' : 'login'
+    const id = label === 'register' || label === a.registerTab ? 'register' : 'login'
     if (id === tab) return
     tabDir.current = id === 'register' ? 1 : -1
     setTab(id)
