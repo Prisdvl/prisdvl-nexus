@@ -16,6 +16,8 @@ import DocPreview, { mockDocContent } from '@/components/DocPreview'
 import Markdown from '@/components/Markdown'
 import Loc from '@/components/Loc'
 import { appCopy } from '@/lib/appCopy'
+import { buildStarters } from '@/lib/kbStarters'
+import { pagesCopy } from '@/lib/pagesCopy'
 import { useLocale } from '@/lib/locale'
 import { toast } from '@/lib/toast'
 import { download } from '@/lib/download'
@@ -157,6 +159,10 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const reduce = useReducedMotion()
   const { locale } = useLocale()
   const t = appCopy(locale)
+  /* 问答空态的示例问题按当前库生成（库名 / 描述 / 文档数），不再固定三条 JVM 题：
+   * 与「新对话」欢迎区共用 lib/kbStarters 的规则，文案复用 pagesCopy.chat 的同一组。
+   * 库里还没有文档时 buildStarters 返回空数组，只留标题与说明，不编造问题。 */
+  const pc = pagesCopy(locale).chat
   const tabItems = TAB_ORDER.map((k) => ({ value: k, label: t.kb.tabs[k] }))
   /* 检索模式内部仍以中文名作 value（MODE_MAP 依赖），label 随语言切换 */
   const modeItems = [
@@ -1021,21 +1027,37 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
                         <h2>{t.kb.qaTitle}</h2>
                         <p>{t.kb.qaSub}</p>
                         <div className="kb-qa__starters">
-                          {t.kb.starters.map((q, i) => (
+                          {buildStarters([
+                            {
+                              key: String(kbInfo?.id ?? ''),
+                              name: kbInfo?.name ?? '',
+                              desc: kbInfo?.description ?? '',
+                              docs: docs.length,
+                            },
+                          ]).map((d, i) => {
+                            const kbName = kbInfo?.name ?? ''
+                            const text =
+                              d.template === 'topic' && d.topic
+                                ? pc.starterTopic(d.topic, kbName)
+                                : d.template === 'pitfalls'
+                                  ? pc.starterPitfalls(kbName)
+                                  : pc.starterOverview(kbName)
+                            return (
                             <motion.button
-                              key={q}
+                              key={d.kbKey + ':' + d.template}
                               type="button"
                               className="kb-qa__starter"
-                              onClick={() => void ask(q)}
+                              onClick={() => void ask(text)}
                               initial={reduce ? false : { opacity: 0, y: 6 }}
                               animate={{ opacity: 1, y: 0 }}
                               transition={{ ...soft, delay: reduce ? 0 : 0.05 + i * 0.04 }}
                               whileHover={reduce ? undefined : { y: -1 }}
                               whileTap={reduce ? undefined : { scale: 0.98 }}
                             >
-                              {q}
+                              {text}
                             </motion.button>
-                          ))}
+                            )
+                          })}
                         </div>
                       </div>
                     )}
