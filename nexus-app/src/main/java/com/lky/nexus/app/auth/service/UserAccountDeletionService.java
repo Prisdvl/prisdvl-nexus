@@ -103,7 +103,7 @@ public class UserAccountDeletionService {
         conversationMapper.delete(Wrappers.<ChatConversationPO>query().eq("user_id", userId));
 
         agentRunMapper.delete(Wrappers.<AgentRunPO>query().eq("user_id", userId));
-        agentMapper.delete(Wrappers.<AgentPO>query().eq("user_id", userId));
+        agentMapper.delete(Wrappers.<AgentPO>query().eq("owner_id", userId));
 
         workflowRunMapper.delete(Wrappers.<WorkflowRunPO>query().eq("user_id", userId));
         workflowVersionMapper.delete(Wrappers.<WorkflowVersionPO>lambdaQuery()
