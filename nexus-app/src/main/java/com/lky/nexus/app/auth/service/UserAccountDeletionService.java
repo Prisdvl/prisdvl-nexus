@@ -23,6 +23,9 @@ import com.lky.nexus.app.workflow.mapper.WorkflowVersionMapper;
 import com.lky.nexus.app.workflow.model.entity.WorkflowPO;
 import com.lky.nexus.app.workflow.model.entity.WorkflowRunPO;
 import com.lky.nexus.app.workflow.model.entity.WorkflowVersionPO;
+import com.lky.nexus.knowledge.mapper.KnowledgeBaseMapper;
+import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
+import com.lky.nexus.knowledge.service.KnowledgeBaseService;
 import java.util.Date;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +62,8 @@ public class UserAccountDeletionService {
     private final WorkflowMapper workflowMapper;
     private final WorkflowVersionMapper workflowVersionMapper;
     private final WorkflowRunMapper workflowRunMapper;
+    private final KnowledgeBaseMapper knowledgeBaseMapper;
+    private final KnowledgeBaseService knowledgeBaseService;
 
     public UserAccountDeletionService(
             SysUserMapper sysUserMapper,
@@ -71,7 +76,9 @@ public class UserAccountDeletionService {
             AgentRunMapper agentRunMapper,
             WorkflowMapper workflowMapper,
             WorkflowVersionMapper workflowVersionMapper,
-            WorkflowRunMapper workflowRunMapper) {
+            WorkflowRunMapper workflowRunMapper,
+            KnowledgeBaseMapper knowledgeBaseMapper,
+            KnowledgeBaseService knowledgeBaseService) {
         this.sysUserMapper = sysUserMapper;
         this.sessionMapper = sessionMapper;
         this.llmConfigMapper = llmConfigMapper;
@@ -83,6 +90,8 @@ public class UserAccountDeletionService {
         this.workflowMapper = workflowMapper;
         this.workflowVersionMapper = workflowVersionMapper;
         this.workflowRunMapper = workflowRunMapper;
+        this.knowledgeBaseMapper = knowledgeBaseMapper;
+        this.knowledgeBaseService = knowledgeBaseService;
     }
 
     /**
@@ -96,6 +105,13 @@ public class UserAccountDeletionService {
         if (user == null) {
             return;
         }
+        // 知识库必须走服务层删除：它同时清 pgvector、ES 索引（deleteIndexFor）与三张 kb_* 表。
+        // 直接用 mapper 删行会留下没人认领的向量与空索引——这正是之前修过的那个洞。
+        for (KnowledgeBasePO kb : knowledgeBaseMapper.selectList(
+                Wrappers.<KnowledgeBasePO>query().eq("user_id", userId))) {
+            knowledgeBaseService.delete(userId, kb.getId());
+        }
+
         // 顺序：先删「引用别人的」再删「被引用的」，避免留下悬挂外键
         messageMapper.delete(Wrappers.<ChatMessagePO>lambdaQuery()
                 .inSql(ChatMessagePO::getConversationId,
