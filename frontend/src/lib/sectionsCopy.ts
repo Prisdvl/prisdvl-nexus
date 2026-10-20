@@ -100,6 +100,10 @@ export interface SectionsCopy {
   security: {
     title: string
     desc: string
+    pwLabel: string
+    pwHint: string
+    pwExpand: string
+    pwCollapse: string
     curPwLabel: string
     newPwLabel: string
     newPwHint: string
@@ -319,7 +323,7 @@ const ZH: SectionsCopy = {
     title: '账号偏好',
     desc: '默认落地页、语言与时区偏好保存在此浏览器。',
     langLabel: '界面语言',
-    langHint: '应用全局即时切换：导航栏、知识库与落地页文案会同步更新（也可用侧栏的地球按钮快速切换）。',
+    langHint: '应用全局即时切换：导航栏、知识库与落地页文案会同步更新。',
     tzLabel: '时区',
     tzHint: '时间文本当前按浏览器本地时区格式化，此值仅保存为偏好。',
     landingLabel: '登录后默认打开',
@@ -335,6 +339,10 @@ const ZH: SectionsCopy = {
   security: {
     title: '密码与登录',
     desc: '修改密码会吊销此账号的全部令牌；其他设备也需要重新登录。',
+    pwLabel: '登录密码',
+    pwHint: '展开后才会出现三个输入框，收起时只是一行摘要。',
+    pwExpand: '修改密码',
+    pwCollapse: '收起',
     curPwLabel: '当前密码',
     newPwLabel: '新密码',
     newPwHint: '8–64 位',
@@ -550,7 +558,7 @@ const EN: SectionsCopy = {
     title: 'Preferences',
     desc: 'Default landing page, language and timezone preferences are stored in this browser.',
     langLabel: 'Interface language',
-    langHint: 'Applied instantly across the app: sidebar, knowledge base and landing-page copy all update together (the globe button in the sidebar switches it too).',
+    langHint: 'Applied instantly across the app: sidebar, knowledge base and landing-page copy all update together.',
     tzLabel: 'Timezone',
     tzHint: 'Time text is currently formatted in your browser’s local timezone; this value is stored as a preference only.',
     landingLabel: 'Default page after sign-in',
@@ -566,6 +574,10 @@ const EN: SectionsCopy = {
   security: {
     title: 'Password & sign-in',
     desc: 'Changing your password revokes every token on this account; other devices must sign in again.',
+    pwLabel: 'Sign-in password',
+    pwHint: 'Expands on demand — the three fields appear only when you ask to change it.',
+    pwExpand: 'Change password',
+    pwCollapse: 'Collapse',
     curPwLabel: 'Current password',
     newPwLabel: 'New password',
     newPwHint: '8–64 characters',

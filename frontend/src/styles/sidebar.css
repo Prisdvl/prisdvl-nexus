@@ -291,8 +291,7 @@
   padding: 8px 8px 10px;
   pointer-events: none;
 }
-.sb-row--settings,
-.sb-row--lang {
+.sb-row--settings {
   pointer-events: auto;
   width: auto;
   max-width: 100%;
@@ -304,12 +303,7 @@
   gap: 10px;
   white-space: nowrap;
 }
-.sb-row--lang { flex: none; }
-.sb-row--settings > svg,
-.sb-row--lang > svg,
-.sb-row--lang .react-useanimations,
-/* LangToggle 把 Lottie 包在 .lang-globe 里，宽度要锁住否则文字会随动画抖动 */
-.sb-row--lang .lang-globe {
+.sb-row--settings > svg {
   flex: none;
   width: 16px;
   height: 16px;
@@ -390,8 +384,7 @@
   gap: 6px;
   padding: 8px 0 10px;
 }
-.sidebar[data-collapsed] .sb-row--settings,
-.sidebar[data-collapsed] .sb-row--lang {
+.sidebar[data-collapsed] .sb-row--settings {
   width: 36px;
   min-width: 36px;
   max-width: 36px;

@@ -1299,8 +1299,8 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
     },
   }))
 
-  /* 语言入口与侧栏共用 LangToggle；落地页只保留小图标，文字占比尽量小 */
-  const langBtn = <LangToggle variant="icon" className="lp-lang" size={16} />
+  /* 全站唯一的语言入口：落地页导航栏里的小地球，未登录页面不再重复放 */
+  const langBtn = <LangToggle className="lp-lang" size={16} />
 
   const floatingNav = (
     <FloatingNav

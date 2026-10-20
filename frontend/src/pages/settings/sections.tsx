@@ -294,10 +294,10 @@ export function EmbeddingKeySection() {
           value={apiKey} onChange={(e) => setApiKey(e.target.value)} maxLength={320} />
         <p className="hint"><Loc>{s.embeddingKey.keyHint}</Loc></p>
       </div>
+      {/* 维度由平台与向量列决定，不是用户可选项：只给结论，不给假输入框 */}
       <div className="field">
-        <label htmlFor="ek-dim"><Loc>{s.embeddingKey.dimLabel}</Loc></label>
-        <input id="ek-dim" className="input" value={String(cfg?.requiredDimensions ?? 1024)} disabled readOnly />
-        <p className="hint"><Loc>{s.embeddingKey.dimHint(cfg?.requiredDimensions ?? 1024)}</Loc></p>
+        <span className="field-label">{s.embeddingKey.dimLabel}</span>
+        <p className="field-static"><Loc>{s.embeddingKey.dimHint(cfg?.requiredDimensions ?? 1024)}</Loc></p>
       </div>
       <div className="settings-inline" style={{ margin: '4px 0 16px' }}>
         <div>
@@ -332,24 +332,17 @@ export function PrefsSection() {
   return <section className="panel panel-pad">
     <SectionHead title={s.prefs.title} desc={s.prefs.desc} />
     <div className="field">
-      <span className="field-label" id="ac-lang-label"><Loc>{s.prefs.langLabel}</Loc></span>
-      <div className="prefs-lang-row" role="radiogroup" aria-labelledby="ac-lang-label">
-        {(['简体中文', 'English'] as const).map((v) => {
-          const active = lang === v
-          return (
-            <button
-              key={v}
-              type="button"
-              className={`prefs-lang-opt${active ? ' prefs-lang-opt--on' : ''}`}
-              aria-pressed={active}
-              lang={v === 'English' ? 'en' : 'zh-CN'}
-              onClick={() => { setLang(v); writeLocale(normalizeLocale(v)) }}
-            >
-              {v}
-            </button>
-          )
-        })}
-      </div>
+      <label htmlFor="ac-lang"><Loc>{s.prefs.langLabel}</Loc></label>
+      {/* 语言切换与其它偏好项统一成下拉框；选中即生效（与保存按钮解耦，和原来的按钮行为一致） */}
+      <select
+        id="ac-lang"
+        className="input"
+        value={lang}
+        onChange={(e) => { setLang(e.target.value); writeLocale(normalizeLocale(e.target.value)) }}
+      >
+        <option value="简体中文" lang="zh-CN">简体中文</option>
+        <option value="English" lang="en">English</option>
+      </select>
       <p className="hint"><Loc>{s.prefs.langHint}</Loc></p>
     </div>
     <div className="field"><label htmlFor="ac-tz"><Loc>{s.prefs.tzLabel}</Loc></label><select id="ac-tz" className="input" value={tz} onChange={(e) => setTz(e.target.value)}><option>Asia/Shanghai</option><option>UTC</option></select><p className="hint"><Loc>{s.prefs.tzHint}</Loc></p></div>
@@ -383,6 +376,7 @@ export function SecuritySection() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const { logout } = useAuth()
+  const [pwOpen, setPwOpen] = useState(false)
   const changePassword = async (e: FormEvent) => {
     e.preventDefault()
     if (saving) return
@@ -399,13 +393,29 @@ export function SecuritySection() {
   }
   return <section className="panel panel-pad">
     <SectionHead title={s.security.title} desc={s.security.desc} />
-    <form onSubmit={changePassword}>
+    {/* 默认只给一行摘要 + 展开按钮：一进设置页就被三个密码框怼脸是反人类的 */}
+    <div className="settings-inline" style={{ marginTop: 0 }}>
+      <div>
+        <strong style={{ fontSize: 13.5 }}><Loc>{s.security.pwLabel}</Loc></strong>
+        <p className="hint" style={{ margin: '4px 0 0' }}><Loc>{s.security.pwHint}</Loc></p>
+      </div>
+      <button
+        className="btn btn-ghost btn-sm"
+        type="button"
+        aria-expanded={pwOpen}
+        aria-controls="ac-pw-form"
+        onClick={() => setPwOpen((v) => !v)}
+      >
+        <KeyRound size={14} /> <Loc>{pwOpen ? s.security.pwCollapse : s.security.pwExpand}</Loc>
+      </button>
+    </div>
+    {pwOpen && <form id="ac-pw-form" onSubmit={changePassword} style={{ marginTop: 14 }}>
       {error && <p className="form-error active" role="alert">{error}</p>}
       <div className="field"><label htmlFor="ac-cur-pw"><Loc>{s.security.curPwLabel}</Loc></label><input id="ac-cur-pw" className="input" type="password" autoComplete="current-password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} required /></div>
       <div className="field"><label htmlFor="ac-new-pw"><Loc>{s.security.newPwLabel}</Loc></label><input id="ac-new-pw" className="input" type="password" autoComplete="new-password" minLength={8} maxLength={64} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required /><p className="hint"><Loc>{s.security.newPwHint}</Loc></p></div>
       <div className="field"><label htmlFor="ac-new-pw2"><Loc>{s.security.confirmPwLabel}</Loc></label><input id="ac-new-pw2" className="input" type="password" autoComplete="new-password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required /></div>
       <button className="btn btn-primary" type="submit" disabled={USE_MOCK || saving || !oldPassword || !newPassword || !confirmPassword}><KeyRound size={15} /> {USE_MOCK ? <Loc>{s.security.submitDisabledMock}</Loc> : saving ? <Loc>{s.security.submitting}</Loc> : <Loc>{s.security.submit}</Loc>}</button>
-    </form>
+    </form>}
     <hr className="divider" />
     <div className="settings-inline"><div><strong style={{ fontSize: 13.5 }}><Loc>{s.security.twoFactorLabel}</Loc></strong><p className="hint" style={{ margin: '4px 0 0' }}><Loc>{s.security.twoFactorHint}</Loc></p></div><button className="btn btn-ghost btn-sm" type="button" disabled aria-disabled="true"><Loc>{s.security.unavailable}</Loc></button></div>
     <hr className="divider" />

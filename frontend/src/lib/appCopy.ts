@@ -40,7 +40,6 @@ export interface AppCopy {
     recent: string
     archived: (n: number) => string
     restore: string
-    noSessions: string
     noMatch: (q: string) => string
     openNav: string
     collapse: string
@@ -497,7 +496,7 @@ const ZH: AppCopy = {
     newChat: '新对话', searchSessions: '搜索会话', settings: '设置', settingsAria: '设置',
     pinned: '置顶', recent: '最近',
     archived: (n) => `已归档（${n}）`, restore: '恢复',
-    noSessions: '还没有会话', noMatch: (q) => `没有匹配「${q}」的会话`,
+    noMatch: (q) => `没有匹配「${q}」的会话`,
     openNav: '打开导航', collapse: '折叠侧栏', expand: '展开侧栏',
     switchLang: '切换到 English',
     renameTitle: '重命名聊天', renameHint: '保持简短且易于识别', renameAria: '会话名称',
@@ -893,7 +892,7 @@ const EN: AppCopy = {
     newChat: 'New chat', searchSessions: 'Search chats', settings: 'Settings', settingsAria: 'Settings',
     pinned: 'Pinned', recent: 'Recent',
     archived: (n) => `Archived (${n})`, restore: 'Restore',
-    noSessions: 'No chats yet', noMatch: (q) => `No chats match “${q}”`,
+    noMatch: (q) => `No chats match “${q}”`,
     openNav: 'Open navigation', collapse: 'Collapse sidebar', expand: 'Expand sidebar',
     switchLang: 'Switch to 简体中文',
     renameTitle: 'Rename chat', renameHint: 'Keep it short and recognizable', renameAria: 'Chat name',

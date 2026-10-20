@@ -631,8 +631,10 @@ export default function Sidebar({ page, open = false, onClose }: SidebarProps) {
               {recentOpen && <div className="session-list sb-recent-list">{recent.map(renderSession)}</div>}
             </section>
 
-            {visibleAll.length === 0 && (
-              <p className="sb-empty">{query ? t.nav.noMatch(query) : t.nav.noSessions}</p>
+            {/* 空列表不再塞一句「还没有会话」：没有对齐规则的一行文案只会显得突兀；
+                只有搜索无结果时才需要提示（否则用户会以为是筛坏了） */}
+            {visibleAll.length === 0 && query && (
+              <p className="sb-empty">{t.nav.noMatch(query)}</p>
             )}
           </div>
         )}

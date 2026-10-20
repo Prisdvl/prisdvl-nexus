@@ -131,46 +131,12 @@ a { color: var(--primary-text); }
 .field > label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--text-2); }
 .field .hint { margin-top: 5px; font-size: 12px; color: var(--text-3); }
 .field-label { display: inline-block; margin-bottom: 6px; font-size: 13px; font-weight: 500; }
-.prefs-lang-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.prefs-lang-opt {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 86px;
-  height: 34px;
-  padding: 0 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+/* 只读结论行（例如由系统决定的向量维度）：读起来是说明文字，不是一个假输入框 */
+.field-static {
+  margin: 0;
+  padding-top: 8px;
+  font-size: 13.5px;
   color: var(--text-2);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  transition:
-    border-color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-.prefs-lang-opt:hover {
-  border-color: var(--border-strong);
-  background: var(--surface-muted);
-  color: var(--text);
-}
-.prefs-lang-opt:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-.prefs-lang-opt--on {
-  border-color: var(--primary);
-  background: var(--primary-container);
-  color: var(--primary-text);
-  font-weight: 600;
 }
 .field-optional { color: var(--text-3); font-weight: 400; }
 /*
@@ -2321,22 +2287,19 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
 .lp-pill .rubber-segment__item { min-width: 0; font-size: 13.5px; }
 
 /* ============================================================
- * 语言切换（LangToggle）—— 侧栏 / 移动顶栏 / 落地页 / 登录页共用
+ * 语言切换（LangToggle）—— 只在落地页导航栏出现
  * ------------------------------------------------------------
- * 图标统一来自 react-useanimations 的 globe（Lottie），
- * 三处复用同一个组件，避免出现两套图标风格。
- * 宽度会随语言文字变化，.lang-label 上挂 motion 的 layout，
- * 由 motion 在两帧之间补间，而不是等重排后突然跳一下。
+ * 图标统一来自 react-useanimations 的 globe（Lottie）；
+ * 不放目标语言文字，按钮固定 34px 见方，切换时不会有宽度跳动。
  * ============================================================ */
-.lang-toggle,
-.sb-row--lang {
+.lang-toggle {
   appearance: none;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-2);
   font: inherit;
   cursor: pointer;
-  /* 尺寸/描边/背景统一在这层定义，各 variant 只改排布 */
+  /* 尺寸/描边/背景统一在这层定义 */
   transition:
     color var(--dur-fast, 0.15s) var(--ease-out, ease),
     background var(--dur-fast, 0.15s) var(--ease-out, ease),
@@ -2350,28 +2313,18 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
   line-height: 0;
 }
 .lang-globe [data-useanimations] { display: block; }
-/* 目标语言文字 */
-.lang-label {
-  display: inline-block;
-  white-space: nowrap;
-  overflow: hidden;
-}
 
 .lang-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  width: 34px;
   height: 34px;
-  padding: 0 11px;
+  padding: 0;
   border-radius: var(--radius-pill, 999px);
   font-size: 12.5px;
   font-weight: 600;
   letter-spacing: 0.01em;
-}
-.lang-toggle--icon {
-  width: 34px;
-  padding: 0;
 }
 .lang-toggle:hover {
   color: var(--text);
@@ -2383,11 +2336,7 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
   outline-offset: 2px;
 }
 
-/* 登录页页脚：语言入口与条款声明并排，窄屏竖排 */
-.auth-lang {
-  align-self: center;
-  margin-bottom: 8px;
-}
+/* 登录页页脚：只剩条款声明 */
 .auth-foot {
   display: flex;
   flex-wrap: wrap;

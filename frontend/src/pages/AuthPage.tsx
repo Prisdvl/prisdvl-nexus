@@ -8,7 +8,6 @@ import { errMessage } from '@/lib/api'
 import { useLocation, useNavigate } from 'react-router'
 import BrandMark from '@/components/BrandMark'
 import WavesBg from '@/components/WavesBg'
-import LangToggle from '@/components/LangToggle'
 import Loc from '@/components/Loc'
 import { appCopy } from '@/lib/appCopy'
 import { useLocale } from '@/lib/locale'
@@ -411,7 +410,6 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
             animate={{ opacity: 1 }}
             transition={{ ...soft, delay: reduceMotion ? 0 : 0.28 }}
           >
-            <LangToggle variant="compact" className="auth-lang" />
             <span className="auth-terms">{a.terms}</span>
           </motion.p>
         </motion.section>
