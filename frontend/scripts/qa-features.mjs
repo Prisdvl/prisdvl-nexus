@@ -251,6 +251,13 @@ await page.waitForTimeout(300)
 
 /* ---------- 5. Agent 页卡片不再裁切 ---------- */
 await page.locator('.sb-nav button.rubber-segment__item', { hasText: /^Agent$/ }).click()
+/*
+ * 等真节点出现再量，而不是靠固定等待：Agent 列表来自一次数据请求，runner 上比本机慢得多，
+ * 1.2s 之后卡片可能还没挂上去（CI 上就是这样把"还没渲染"读成"未找到节点"的）。
+ * 超时也照量——真的没有节点，下面的 check 依然判 FAIL。
+ */
+await page.locator('.agent-grid .pixel-card').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
+await page.locator('.agent-inner .acts').first().waitFor({ state: 'attached', timeout: 15000 }).catch(() => {})
 await page.waitForTimeout(1200)
 const clipped = await page.evaluate(() => {
   const acts = document.querySelector('.agent-inner .acts')
