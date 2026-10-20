@@ -217,9 +217,9 @@ prisdvl-nexus/
 
 | 口径 | 结果 |
 | --- | --- |
-| 后端 `mvn -B test`（默认，无 LIVE 开关） | **833** 个用例：**0** 失败 / **0** 错误 / **33** 跳过，BUILD SUCCESS（分模块实测合计，2026-10-17/18：common 19 / ai 76 / knowledge 174 于波次 1–3；app **564** 于本次——app 较上轮 541 +23，其中 +11 恢复提交新增的 workflow 测试、+3 运行历史、+2 元信息更新、+5 人工审批与失败续跑、+1 预置模板、+1 变量校验回归） |
+| 后端 `mvn -B test`（默认，无 LIVE 开关） | **883** 个用例：**0** 失败 / **0** 错误 / **35** 跳过，BUILD SUCCESS（2026-10-20 全仓实测，**分档跑与全量跑结论一致**：common 19 / ai 82 / knowledge 174 / app 608；上一轮 2026-10-17/18 为 833 例 / 33 跳过、app 564——app 较其上轮 541 +23，其中 +11 恢复提交新增的 workflow 测试、+3 运行历史、+2 元信息更新、+5 人工审批与失败续跑、+1 预置模板、+1 变量校验回归） |
 | 前端 `npm run build`（`tsc --noEmit && vite build`） | exit 0（2026-10-17；仅有既存的 chunk 体积警告） |
-| 后端 **LIVE 套件**（需 Docker；部分套件自起容器，部分连真实模型） | **33 例全部实测通过**（2026-10-18，与默认套件分开跑）：<br>· 只需 Docker **24 例**：`RedisEmailCodeStoreLiveTest` 9 / `MySqlJsonRoundTripTest` 2 / `LiveVectorStoreTest` 4（真实 pgvector + HNSW 排序）/ `LiveChunkIndexTest` 9（真实 ES，直接调 `_analyze` 验证 IK 分词）<br>· 需真实模型 Key **9 例**：`LiveModelCallTest` 2 / `ChatStreamLiveTest` 3（真实 SSE 流式）/ `MultiTurnMemoryTest` 1 / `AgentLoopTest` 1（真实工具循环，15.5 s）/ `LiveEmbeddingTest` 2（百炼 `text-embedding-v4`，1024 维、中文语义排序正确，12.8 s） |
+| 后端 **LIVE 套件**（需 Docker；部分套件自起容器，部分连真实模型） | **33 例全部实测通过**（2026-10-18，与默认套件分开跑）：<br>· 只需 Docker **24 例**：`RedisEmailCodeStoreLiveTest` 9 / `MySqlJsonRoundTripTest` 2 / `LiveVectorStoreTest` 4（真实 pgvector + HNSW 排序）/ `LiveChunkIndexTest` 9（真实 ES，直接调 `_analyze` 验证 IK 分词）<br>· 需真实模型 Key **9 例**：`LiveModelCallTest` 2 / `ChatStreamLiveTest` 3（真实 SSE 流式）/ `MultiTurnMemoryTest` 1 / `AgentLoopTest` 1（真实工具循环，15.5 s）/ `LiveEmbeddingTest` 2（百炼 `text-embedding-v4`，1024 维、中文语义排序正确，12.8 s）<br>**默认套件的跳过清单现已增至 35 例**（2026-10-20 实测：只需 Docker **25** + 需模型 Key **10**）——`LiveChunkIndexTest` 现为 10 例（原 9），另增 `EmbeddingByokLiveTest` 1 例（`BYOK_LIVE_EMBEDDING_KEY`）；**这两例未做 LIVE 复跑**（2026-10-20 未连 Docker），上表仍是 2026-10-18 那次 33 例的实测结论 |
 | 工作流端到端（**真实基础设施**，`local` profile） | 2026-10-18：compose 起 MySQL / Redis / pgvector / ES / RabbitMQ → 建知识库 → 上传 md（3 个切片）→ 建索引（`indexed=3/3`，562 ms）→ 工作流 `START → KNOWLEDGE_RETRIEVAL(bm25) → TEMPLATE → END` → `validate` **valid=true** → `publish` 200 → `run` **SUCCEEDED**，检索**命中 3 条**且排序正确（「缓存穿透」得分 2.329 排第一，「缓存雪崩 / 缓存击穿」各 0.401，中文经 IK 分词）。这条链路此前从未跑通过，本轮顺带修掉一个真 bug（见下）。<br>同日另一条：`AGENT` 节点 **建 Agent → 发布 → 工作流 `START → AGENT → TEMPLATE → END` → `run` SUCCEEDED**，agent 节点耗时 **2496 ms**（真实模型调用）、`usedTools=true`，回答 174 字并自带「以下内容不是来自你的笔记」的来源声明。<br>再一条（standalone 即可，无需 Docker）：`IF_ELSE` 分支路由 `START → IF_ELSE → true/false 两个 TEMPLATE → END`，`flag=yes` 时 `branch=True, yes=SUCCEEDED, no=SKIPPED`；`flag=no` 时反之——**运行时的分支选择（activeEdges）被真正验证**。至此 **8 种节点全部有真机证据** |
 | 工作流端到端（真浏览器 + 真后端） | `npm run verify:workflow` → **ALL OK 41/41**（2026-10-18；`--spring.profiles.active=standalone` + `npm run dev`，未启 Docker、未设 LIVE 变量、未连外部模型；退出码契约 0/1/2 与 `EXIT_CODE` 日志同时生效）。覆盖：创建/种子图、节点增删与连线（面板 8 类含 `HUMAN_APPROVAL`）、保存、校验、发布、运行、节点轨迹、运行历史（空态/累积/点行切换/浏览器内翻页）、失败运行（502+4006 落库与轨迹）、**人工审批（跑到闸门挂起成「待审批」→ 点「同意并继续」→ 运行继续至成功）**、**失败续跑（对失败运行点「重试运行」→ 新建一条 `RETRY` 运行，同样 502/4006）**。浏览器这一轮覆盖 START / TEMPLATE / LLM / HUMAN_APPROVAL；`KNOWLEDGE_RETRIEVAL` 与 `AGENT` 由上一条（真实基础设施）覆盖 |
 | compose 配置校验 | `docker compose config --quiet` 通过（缺 3 个必填变量时拒绝启动，2026-10-14 复验） |
@@ -229,10 +229,12 @@ prisdvl-nexus/
 连真实模型的嵌入/对话类），由环境变量门控（如 `AI_SEARCH_LIVE=true`、`AI_VECTOR_LIVE=true`、
 `AI_EMBEDDING_LIVE=true`、或非空的 `AI_CHAT_API_KEY`）。**只要 shell 里设了 `AI_CHAT_API_KEY`（哪怕是占位值），对应 LIVE 套件就会执行**；无有效密钥时会失败——这不是默认 CI 口径。GitHub Actions 故意不注入任何模型密钥。
 
-那 33 个跳过项现在**全部落地**：**24 例**只依赖 Docker（Redis / MySQL / pgvector / ES+IK，各自用 Testcontainers 起容器），
+那 35 个跳过项里已有 **33 例**落地（2026-10-18 那次 LIVE 复跑全部通过）：**24 例**只依赖 Docker（Redis / MySQL / pgvector / ES+IK，各自用 Testcontainers 起容器），
 **9 例**用 `deploy/.env` 的真实 Key 跑通（`LiveModelCallTest` 2 / `ChatStreamLiveTest` 3 /
-`MultiTurnMemoryTest` 1 / `AgentLoopTest` 1 / `LiveEmbeddingTest` 2）。24 + 9 = 33。
-跑 LIVE 套件要单独指定 `-Dtest=...`，否则会把默认 564 例一起再跑一遍。
+`MultiTurnMemoryTest` 1 / `AgentLoopTest` 1 / `LiveEmbeddingTest` 2）。2026-10-20 默认套件实测跳过 **35** 例，
+即 **25 例**只需 Docker + **10 例**需模型 Key；比 33 多出的 2 例是 `LiveChunkIndexTest` 新增的 1 例
+与 `EmbeddingByokLiveTest` 1 例（`BYOK_LIVE_EMBEDDING_KEY`），**尚未做 LIVE 复跑**。
+跑 LIVE 套件要单独指定 `-Dtest=...`，否则会把默认 608 例一起再跑一遍。
 
 > **`ollama:bge-m3` 只是已弃用的历史方案**：生产/local 早已是百炼 `text-embedding-v4`（1024 维），
 > 只有 test profile 还钉着旧的 ollama 角色。现已把 test profile 也改成
