@@ -424,7 +424,6 @@ export default function AgentsPage() {
                   onClick={runStreamed}
                   disabled={!testIn.trim() || testing || USE_MOCK}
                   title={USE_MOCK ? 'mock 模式没有后端流式端点' : g.benchHint}
-                  title={g.benchHint}
                 >
                   <Play size={14} /> {streaming ? g.running : locale === 'en' ? 'Run (stream)' : '流式运行'}
                 </button>
