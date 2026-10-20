@@ -104,6 +104,11 @@ const kbTabs = await page.locator('.kb-top__tabs button.rubber-segment__item').c
 check('KB 详情 tab 是橡皮分段（4 项）', kbTabs === 4, `实际 ${kbTabs}`)
 check('页面中已无 GooeyNav 黑框层', (await page.locator('.gooey-nav-container').count()) === 0)
 await page.locator('.kb-top__tabs button.rubber-segment__item', { hasText: '问答' }).click()
+/*
+ * 等问答面板真的挂上再断言：切 tab 后内容是一次渲染的结果，runner 上比本机慢，
+ * 不等就会把"还没渲染"读成"切 tab 没生效"（CI 上就是这样红的）。超时后照旧断言。
+ */
+await page.locator('.kb-qa__starters, input[placeholder*="提问"]').first().waitFor({ state: 'attached', timeout: 15000 }).catch(() => {})
 await page.waitForTimeout(600)
 check('切到问答 tab 生效', (await page.locator('input[placeholder*="提问"], .kb-qa__starters').count()) >= 1)
 }
