@@ -14,6 +14,7 @@ import { toast } from '@/lib/toast'
 import { useParticleColors } from '@/lib/palette'
 import { AGENTS, type AgentItem, type ToolCall } from '@/data'
 import { api, USE_MOCK, errMessage, type ToolInfo } from '@/lib/api'
+import { streamAgentRun } from '@/lib/agentStream'
 import { fetchAgents, fetchKbs } from '@/lib/backendData'
 import type { KbItem } from '@/data'
 import { pagesCopy } from '@/lib/pagesCopy'
@@ -52,6 +53,60 @@ export default function AgentsPage() {
   const [wizTestOut, setWizTestOut] = useState('')
   const [wizTesting, setWizTesting] = useState(false)
   const [testCalls, setTestCalls] = useState<ToolCall[]>([])
+  const [streaming, setStreaming] = useState(false)
+
+  /**
+   * 走 Agent 自己的流式端点（`POST /api/agent/runs/stream`），把每帧按行追加到输出区。
+   *
+   * 与会话流不同：这里的帧是 meta / status / step / done，没有 delta 文本增量，
+   * 所以宁可如实显示“第几步在做什么”，也不伪造逐字打字效果。
+   * 失败（草稿 5008、模型未注册 4006 等）可能落在 done 帧的 errorMsg 里，也可能是
+   * 直接的 HTTP 错误——两条路都按失败展示。
+   */
+  async function runStreamed() {
+    if (!testAgent || streaming) return
+    setStreaming(true)
+    setTesting(true)
+    setTestFailed(false)
+    setTestOut('')
+    setTestCalls([])
+    let text = ''
+    const push = (line: string) => {
+      text = text ? text + '\n' + line : line
+      setTestOut(text)
+    }
+    try {
+      await streamAgentRun(
+        { agentId: testAgent.id, question: testIn.trim() },
+        {
+          onFrame: (f) => {
+            const d = f.data ?? {}
+            if (f.event === 'meta') push('[meta] runId=' + String(d.runId ?? ''))
+            else if (f.event === 'status') push('[status] ' + String(d.status ?? ''))
+            else if (f.event === 'step')
+              push(
+                '[' + String(d.type ?? 'step') + ' #' + String(d.seq ?? '?') + '] ' +
+                  String(d.output ?? d.errorMsg ?? ''),
+              )
+            else if (f.event === 'done') {
+              push('[done] ' + String(d.status ?? '') + (d.errorMsg ? ' — ' + String(d.errorMsg) : ''))
+              if (d.status !== 'SUCCEEDED') setTestFailed(true)
+            }
+          },
+          onError: (m) => {
+            setTestFailed(true)
+            push(m)
+          },
+        },
+      )
+    } catch (err) {
+      setTestFailed(true)
+      push(errMessage(err))
+    } finally {
+      setStreaming(false)
+      setTesting(false)
+    }
+  }
   const [busy, setBusy] = useState(false)
   const [wizard, setWizard] = useState(false)
   /* 编辑既有 Agent（名称/描述；后端局部更新，null 字段不改） */
@@ -363,6 +418,16 @@ export default function AgentsPage() {
                   aria-label={g.benchInputAria}
                   onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit() } }}
                 />
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={runStreamed}
+                  disabled={!testIn.trim() || testing || USE_MOCK}
+                  title={USE_MOCK ? 'mock 模式没有后端流式端点' : g.benchHint}
+                  title={g.benchHint}
+                >
+                  <Play size={14} /> {streaming ? g.running : locale === 'en' ? 'Run (stream)' : '流式运行'}
+                </button>
                 <button className="btn btn-primary" type="submit" disabled={!testIn.trim() || testing}>
                   <Play size={14} /> {testing ? g.running : g.run}
                 </button>
