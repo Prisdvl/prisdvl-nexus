@@ -108,9 +108,18 @@ await page.locator('.kb-top__tabs button.rubber-segment__item', { hasText: '问�
  * 等问答面板真的挂上再断言：切 tab 后内容是一次渲染的结果，runner 上比本机慢，
  * 不等就会把"还没渲染"读成"切 tab 没生效"（CI 上就是这样红的）。超时后照旧断言。
  */
-await page.locator('.kb-qa__starters, input[placeholder*="提问"]').first().waitFor({ state: 'attached', timeout: 15000 }).catch(() => {})
-await page.waitForTimeout(600)
-check('切到问答 tab 生效', (await page.locator('input[placeholder*="提问"], .kb-qa__starters').count()) >= 1)
+/*
+ * 等面板根节点 `.kb-qa` 出现：空态 starters 只在库里有文档时才渲染（roadmap #9 之后），
+ * 拿它当"切成功"的证据在空库上必然落空——改成面板根节点 + tab 的 aria-pressed，
+ * 与库里有没有文档无关（橡皮分段是 radio 语义，选中态在 aria-checked 而不是 aria-pressed）；失败时把观测值打出来，省得下次再猜。
+ */
+await page.locator(".kb-qa").first().waitFor({ state: "visible", timeout: 15000 }).catch(() => {})
+const qaTab = page.locator(".kb-top__tabs button.rubber-segment__item", { hasText: "问答" })
+const qaVisible = await page.locator(".kb-qa").first().isVisible().catch(() => false)
+const qaPressed = await qaTab.getAttribute("aria-checked").catch(() => null)
+const qaComposer = await page.locator(".kb-qa input, .kb-qa textarea").count()
+const qaStarters = await page.locator(".kb-qa__starters").count()
+check('切到问答 tab 生效', qaVisible && qaPressed === 'true', `visible=${qaVisible} pressed=${qaPressed} composer=${qaComposer} starters=${qaStarters}`)
 }
 
 /* ---------- 7. 浏览器前进/后退可用 ---------- */
