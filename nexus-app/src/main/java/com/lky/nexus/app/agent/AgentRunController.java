@@ -12,12 +12,14 @@ import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.api.Result;
 import com.lky.nexus.common.exception.BusinessException;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 
@@ -33,9 +35,11 @@ import java.util.List;
 public class AgentRunController {
 
     private final AgentRunService agentRunService;
+    private final AgentRunStreamService agentRunStreamService;
 
-    public AgentRunController(AgentRunService agentRunService) {
+    public AgentRunController(AgentRunService agentRunService, AgentRunStreamService agentRunStreamService) {
         this.agentRunService = agentRunService;
+        this.agentRunStreamService = agentRunStreamService;
     }
 
     /** 发起一次运行，返回 runId（String）。 */
@@ -43,6 +47,20 @@ public class AgentRunController {
     public Result<StartAgentRunResponse> start(@Valid @RequestBody StartAgentRunRequest request) {
         Long runId = agentRunService.start(CurrentUser.requireId(), request);
         return Result.ok(new StartAgentRunResponse(String.valueOf(runId)));
+    }
+
+    /**
+     * 发起一次运行并把它自己的状态/步骤推成 SSE（roadmap 待办 #7 第 3 条）。
+     *
+     * <p>与 {@link #start} 的区别只在"观察方式"：运行同样在这条链路里真的跑起来、
+     * 同样落库，只是客户端不必轮询 {@code GET} + {@code /steps}，也不必借聊天流的工具拦截点。
+     * 流里只有真实存在的事实（状态机当前值与按序追加的 step 行），没有估算进度。
+     *
+     * <p>返回 200 即代表运行已受理；发起阶段的失败（Agent 不存在、额度、参数非法）仍是普通错误响应。
+     */
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream(@Valid @RequestBody StartAgentRunRequest request) {
+        return agentRunStreamService.stream(CurrentUser.requireId(), request);
     }
 
     /** 运行详情（含当前待审批，刷新后可恢复现场）。 */

@@ -783,6 +783,7 @@ PUT /api/agents/12
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/agent/runs` | 发起一次运行 → `{"runId":"9"}`（异步；不阻塞 HTTP 线程） |
+| POST | `/api/agent/runs/stream` | 发起一次运行并推 SSE（meta → status → step* → approval? → done），见下 |
 | GET | `/api/agent/runs/{runId}` | 运行详情：状态 + `pendingApproval`（等待审批时非空，刷新后可据此恢复现场） |
 | GET | `/api/agent/runs/{runId}/steps` | 运行轨迹，按 `seq` 升序 |
 | POST | `/api/agent/runs/{runId}/approval` | 提交审批决策 → 返回决策后的运行详情 |
@@ -863,7 +864,21 @@ POST /api/agent/runs/9/approval
 | --- | --- | --- |
 | GET | `/api/tools/{code}` | 工具详情（入参 JSON Schema、最近调用记录） |
 
-> `POST /api/agent/runs` 的**流式**形态（把整个运行挂到 `POST /api/chat/stream` 上并复用同一条 SSE）
+> ~~`POST /api/agent/runs` 的**流式**形态（把整个运行挂到 `POST /api/chat/stream` 上并复用同一条 SSE）~~
+> **已实现（2026-10-20）**：`POST /api/agent/runs/stream` 有了自己的流式形态，不再需要借聊天链路的工具拦截点。
+>
+> 事件（内容型，各帧 name 即下面这五个）：
+>
+> | 事件 | 载荷 | 何时发 |
+> |------|------|--------|
+> | `meta` | `{"runId":"9"}` | 连上先告诉客户端在看哪次运行 |
+> | `status` | `{"runId":"9","status":"RUNNING"}` | 状态机换值时发一次（同一状态不重复刷） |
+> | `step` | 与 `GET /api/agent/runs/{runId}/steps` 同一形态 | 每有新落库的 step 行就推一条 |
+> | `approval` | `pendingApproval` 对象 | 状态进入 `WAITING_APPROVAL` 时发，决策仍走 `/approval` |
+> | `done` | `{"runId","status","answer","errorCode","errorMsg","finishedAt"}` | 终态（DONE/FAILED/CANCELLED）发一次并结束 |
+>
+> 边界：流只承载真实落库的事实（状态值 + step 行），没有估算进度；断连只停推送，
+> 运行照旧跑完并落库，重连用 `GET` 补现场。
 > 仍未实现：本轮审批事件是通过对话流的工具拦截点真实发出的（`approval_required` 已可用），
 > 但运行状态机自身的接口是查询式的；审计数据由 `GET /api/tool-invocations` 提供（见上）。
 
