@@ -119,18 +119,18 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
       </div>
 
       <div className="stat-grid kb-stats">
-        <div className="stat-card"><div className="label"><Database size={13} /> 知识库总数</div><div className="num">{rows.length}</div><div className="sub">全部实例</div></div>
-        <div className="stat-card accent"><div className="label"><Files size={13} /> 文档数</div><div className="num">{totalDocs}</div><div className="sub">已入库文档</div></div>
-        <div className="stat-card"><div className="label"><FileText size={13} /> 含文档知识库</div><div className="num">{withDocs}</div><div className="sub">已有可检索内容</div></div>
+        <div className="stat-card"><div className="label"><Database size={13} /> {t.kbList.statsKbs}</div><div className="num">{rows.length}</div><div className="sub">{t.kbList.statsKbsSub}</div></div>
+        <div className="stat-card accent"><div className="label"><Files size={13} /> {t.kbList.statsDocs}</div><div className="num">{totalDocs}</div><div className="sub">{t.kbList.statsDocsSub}</div></div>
+        <div className="stat-card"><div className="label"><FileText size={13} /> {t.kbList.statsWithDocs}</div><div className="num">{withDocs}</div><div className="sub">{t.kbList.statsWithDocsSub}</div></div>
       </div>
 
       <RubberSegment
         className="kb-filters"
         size="sm"
         items={[
-          { value: 'all', label: `全部 ${rows.length}` },
-          { value: 'withDocs', label: `含文档 ${withDocs}` },
-          { value: 'empty', label: `空知识库 ${rows.length - withDocs}` },
+          { value: 'all', label: t.kbList.filterAll(rows.length) },
+          { value: 'withDocs', label: t.kbList.filterWithDocs(withDocs) },
+          { value: 'empty', label: t.kbList.filterEmpty(rows.length - withDocs) },
         ]}
         value={filter}
         onChange={(v) => setFilter(v as Filter)}
@@ -168,7 +168,7 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
         <div className="panel kb-table-wrap">
           <table className="kb-table">
             <thead>
-              <tr><th>名称</th><th>Embedding 模型</th><th>文档数</th><th>更新时间</th><th aria-label="actions" /></tr>
+              <tr><th>{t.kbList.tableName}</th><th>{t.kbList.tableModel}</th><th>{t.kbList.tableDocs}</th><th>{t.kbList.tableUpdated}</th><th aria-label="actions" /></tr>
             </thead>
             <tbody>
               {list.map((kb) => {

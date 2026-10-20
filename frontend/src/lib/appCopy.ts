@@ -129,6 +129,20 @@ export interface AppCopy {
     addCardHint: string
     newAria: string
     filterAria: string
+    /* 顶部统计卡与筛选条（此前写死在页面里，切英文后仍是中文） */
+    statsKbs: string
+    statsKbsSub: string
+    statsDocs: string
+    statsDocsSub: string
+    statsWithDocs: string
+    statsWithDocsSub: string
+    filterAll: (n: number) => string
+    filterWithDocs: (n: number) => string
+    filterEmpty: (n: number) => string
+    tableName: string
+    tableModel: string
+    tableDocs: string
+    tableUpdated: string
   }
   kb: {
     back: string
@@ -569,6 +583,19 @@ const ZH: AppCopy = {
     addCardHint: '为一个主题建立专属资料库',
     newAria: '新建知识库',
     filterAria: '知识库筛选',
+    statsKbs: '知识库总数',
+    statsKbsSub: '全部实例',
+    statsDocs: '文档数',
+    statsDocsSub: '已入库文档',
+    statsWithDocs: '含文档知识库',
+    statsWithDocsSub: '已有可检索内容',
+    filterAll: (n) => `全部 ${n}`,
+    filterWithDocs: (n) => `含文档 ${n}`,
+    filterEmpty: (n) => `空知识库 ${n}`,
+    tableName: '名称',
+    tableModel: 'Embedding 模型',
+    tableDocs: '文档数',
+    tableUpdated: '更新时间',
   },
   kb: {
     back: '返回',
@@ -965,6 +992,19 @@ const EN: AppCopy = {
     addCardHint: 'Build a library around one topic',
     newAria: 'Create a knowledge base',
     filterAria: 'Filter knowledge bases',
+    statsKbs: 'Knowledge bases',
+    statsKbsSub: 'All instances',
+    statsDocs: 'Documents',
+    statsDocsSub: 'Indexed documents',
+    statsWithDocs: 'With documents',
+    statsWithDocsSub: 'Searchable content ready',
+    filterAll: (n) => `All ${n}`,
+    filterWithDocs: (n) => `With docs ${n}`,
+    filterEmpty: (n) => `Empty ${n}`,
+    tableName: 'Name',
+    tableModel: 'Embedding model',
+    tableDocs: 'Documents',
+    tableUpdated: 'Updated',
   },
   kb: {
     back: 'Back',

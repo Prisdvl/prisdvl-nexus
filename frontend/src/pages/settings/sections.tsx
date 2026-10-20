@@ -14,10 +14,11 @@ import { AppearanceControls } from '@/components/Appearance'
 import { toast } from '@/lib/toast'
 import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserEmbeddingConfig, type UserSession } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { ACCOUNT_PREFS_KEY, readAccountPreferences } from '@/lib/preferences'
+import { LANDING_KEYS, readAccountPreferences, writeAccountPreferences, type LandingKey } from '@/lib/preferences'
 import { writeLocale, normalizeLocale, useLocale } from '@/lib/locale'
 import { sectionsCopy } from '@/lib/sectionsCopy'
 import { appCopy } from '@/lib/appCopy'
+import { pagesCopy } from '@/lib/pagesCopy'
 import Loc from '@/components/Loc'
 
 async function fetchAllPages<T>(load: (page: number) => Promise<PageResult<T>>): Promise<T[]> {
@@ -323,9 +324,15 @@ export function PrefsSection() {
   const [initial] = useState(readAccountPreferences)
   const [lang, setLang] = useState(initial.language)
   const [tz, setTz] = useState(initial.timezone)
-  const [landing, setLanding] = useState<string>(initial.landing)
+  const [landing, setLanding] = useState<LandingKey>(initial.landing)
+  const p = pagesCopy(locale).common
+  const landingLabel: Record<LandingKey, string> = {
+    workbench: p.landingWorkbench,
+    chat: p.landingChat,
+    kb: p.landingKb,
+  }
   const save = () => {
-    localStorage.setItem(ACCOUNT_PREFS_KEY, JSON.stringify({ language: lang, timezone: tz, landing }))
+    writeAccountPreferences({ language: lang, timezone: tz, landing })
     writeLocale(normalizeLocale(lang))
     toast.success(s.prefs.savedTitle, s.prefs.savedBody)
   }
@@ -346,7 +353,8 @@ export function PrefsSection() {
       <p className="hint"><Loc>{s.prefs.langHint}</Loc></p>
     </div>
     <div className="field"><label htmlFor="ac-tz"><Loc>{s.prefs.tzLabel}</Loc></label><select id="ac-tz" className="input" value={tz} onChange={(e) => setTz(e.target.value)}><option>Asia/Shanghai</option><option>UTC</option></select><p className="hint"><Loc>{s.prefs.tzHint}</Loc></p></div>
-    <div className="field"><label htmlFor="ac-landing"><Loc>{s.prefs.landingLabel}</Loc></label><select id="ac-landing" className="input" value={landing} onChange={(e) => setLanding(e.target.value)}><option value="工作台">{appCopy(locale).nav.workbench}</option><option value="对话">{appCopy(locale).nav.chat}</option><option value="知识库">{appCopy(locale).nav.kb}</option></select></div>
+    {/* 值是与语言无关的 code；label 才跟语言走 —— 老版本存的中文由 readAccountPreferences 迁移 */}
+    <div className="field"><label htmlFor="ac-landing"><Loc>{s.prefs.landingLabel}</Loc></label><select id="ac-landing" className="input" value={landing} onChange={(e) => setLanding(e.target.value as LandingKey)}>{LANDING_KEYS.map((k) => <option key={k} value={k}>{landingLabel[k]}</option>)}</select></div>
     <button className="btn btn-primary" type="button" onClick={save}><Save size={15} /> <Loc>{s.prefs.save}</Loc></button>
   </section>
 }

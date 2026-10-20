@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ACCOUNT_PREFS_KEY, readAccountPreferences } from '@/lib/preferences'
+import { ACCOUNT_PREFS_KEY, readAccountPreferences, writeAccountPreferences } from '@/lib/preferences'
 
 export type Locale = 'zh' | 'en'
 
@@ -17,11 +17,8 @@ export function readLocale(): Locale {
 }
 
 export function writeLocale(locale: Locale) {
-  const prefs = readAccountPreferences()
-  localStorage.setItem(ACCOUNT_PREFS_KEY, JSON.stringify({
-    ...prefs,
-    language: locale === 'en' ? 'English' : '简体中文',
-  }))
+  /* 走统一的写入口，避免这里手写 JSON 时把 landing 之类的偏好字段改坏 */
+  writeAccountPreferences({ language: locale === 'en' ? 'English' : '简体中文' })
   applyDocumentLang(locale)
   window.dispatchEvent(new CustomEvent(LOCALE_EVENT, { detail: locale }))
 }

@@ -7,6 +7,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, USE_MOCK, errMessage, type BackendAgent, type KbDocument, type KnowledgeBase } from '@/lib/api'
+import { readLocale } from '@/lib/locale'
+import { pagesCopy } from '@/lib/pagesCopy'
 import type { AgentItem, DocItem, KbItem } from '@/data'
 
 /* ---------------- 通用异步状态 ---------------- */
@@ -55,16 +57,17 @@ export function relTime(iso: string | null | undefined): string {
   if (!iso) return ''
   const t = Date.parse(iso)
   if (Number.isNaN(t)) return ''
+  const c = pagesCopy(readLocale()).common
   const diff = Date.now() - t
   const min = Math.floor(diff / 60000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟前`
+  if (min < 1) return c.relJustNow
+  if (min < 60) return c.relMinutes(min)
   const h = Math.floor(min / 60)
-  if (h < 24) return `${h} 小时前`
+  if (h < 24) return c.relHours(h)
   const d = Math.floor(h / 24)
-  if (d === 1) return '昨天'
-  if (d < 30) return `${d} 天前`
-  return `${Math.floor(d / 30)} 个月前`
+  if (d === 1) return c.relYesterday
+  if (d < 30) return c.relDays(d)
+  return c.relMonths(Math.floor(d / 30))
 }
 
 const TONES = ['terracotta', 'turquoise', 'lime'] as const
@@ -118,7 +121,7 @@ export const toAgentItem = (a: BackendAgent): AgentItem => ({
   desc: a.description ?? '',
   model: a.modelRole ?? 'auto',
   tools: a.toolCodes ?? [],
-  kb: a.kbIds?.length ? `${a.kbIds.length} 个知识库` : '无',
+  kb: a.kbIds?.length ? pagesCopy(readLocale()).common.kbCount(a.kbIds.length) : pagesCopy(readLocale()).common.none,
 })
 
 /* ---------------- 拉取（含排序） ---------------- */
@@ -156,7 +159,7 @@ export async function fetchRecentImports(): Promise<RecentImportItem[]> {
       name: doc.fileName,
       knowledgeBase: kb.name,
       status: docStatus(doc.status) === 'done' ? 'done' as const : docStatus(doc.status) === 'failed' ? 'failed' as const : 'running' as const,
-      detail: `${doc.chunkCount} 个切片 · ${doc.status}`,
+      detail: pagesCopy(readLocale()).common.docChunkDetail(doc.chunkCount, doc.status),
       updated: doc.updatedAt,
     }))
   }))

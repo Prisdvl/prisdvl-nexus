@@ -27,6 +27,8 @@
  * 本地新建但尚未落库的会话用 `tmp_` 前缀标记，见`isTempId`。
  */
 import { api, type Conversation, type BackendMessage } from '@/lib/api'
+import { readLocale } from '@/lib/locale'
+import { pagesCopy } from '@/lib/pagesCopy'
 import type { ChatMsg, SessionItem } from '@/data'
 
 /** 本地临时 id 前缀：未落库的乐观态会话不会拿去调后端 */
@@ -84,7 +86,7 @@ export function toChatMsg(m: BackendMessage): ChatMsg {
     id: m.id,
     role: mapRole(m.role),
     text: m.content ?? '',
-    cites: citationRefs.map((citation) => citation.documentTitle ?? '未知来源'),
+    cites: citationRefs.map((citation) => citation.documentTitle ?? pagesCopy(readLocale()).common.unknownSource),
     citationRefs,
     ...(toRunContext(m.retrieval) ? { context: toRunContext(m.retrieval)! } : {}),
   }
@@ -130,17 +132,19 @@ function formatRelative(iso: string | null | undefined): string {
   if (!iso) return ''
   const t = new Date(iso)
   if (Number.isNaN(t.getTime())) return ''
+  /* 相对时间也要跟语言走：英文界面里出现「3 分钟前」比不显示更糟 */
+  const c = pagesCopy(readLocale()).common
   const diff = Date.now() - t.getTime()
   const min = Math.floor(diff / 60_000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟前`
+  if (min < 1) return c.relJustNow
+  if (min < 60) return c.relMinutes(min)
   const hour = Math.floor(min / 60)
-  if (hour < 24) return `${hour} 小时前`
+  if (hour < 24) return c.relHours(hour)
   const day = Math.floor(hour / 24)
-  if (day < 30) return `${day} 天前`
+  if (day < 30) return c.relDays(day)
   const month = Math.floor(day / 30)
-  if (month < 12) return `${month} 个月前`
-  return `${Math.floor(month / 12)} 年前`
+  if (month < 12) return c.relMonths(month)
+  return c.relYears(Math.floor(month / 12))
 }
 
 /**
@@ -153,7 +157,7 @@ function formatRelative(iso: string | null | undefined): string {
 export function toSessionItem(c: Conversation): SessionItem {
   return {
     id: c.id,
-    title: c.title ?? '未命名会话',
+    title: c.title ?? pagesCopy(readLocale()).common.untitledSession,
     /** 决策 4：存 id，null = 用内置默认 Agent */
     agentId: c.agentId,
     mode: (c.mode as 'PLAIN' | 'RAG' | 'AGENT') ?? 'PLAIN',

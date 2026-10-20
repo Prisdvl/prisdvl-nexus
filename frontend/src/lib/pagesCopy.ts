@@ -664,6 +664,51 @@ export interface PagesCopy {
     overviewKb: string
     legend: string
   }
+  /**
+   * 跨页面的零散文案：相对时间、缺省名、错误提示、反馈原因、落地页偏好选项。
+   *
+   * 这些字符串出现在 `lib/` 的纯函数里（没有组件上下文，拿不到 hook），
+   * 所以单独成一个命名空间，由 lib 侧用 `readLocale()` 取当前语言 ——
+   * 不给每个工具函数都加一个 locale 参数，避免改动几十个调用点。
+   */
+  common: {
+    /* 相对时间（会话列表 / 文档列表 / 项目） */
+    relJustNow: string
+    relMinutes: (n: number) => string
+    relHours: (n: number) => string
+    relYesterday: string
+    relDays: (n: number) => string
+    relMonths: (n: number) => string
+    relYears: (n: number) => string
+    /* 缺省名（后端字段为空时的兜底，不是业务数据） */
+    untitledSession: string
+    unknownSource: string
+    untitledProject: string
+    defaultAgentName: string
+    summaryEmpty: string
+    /* 请求层错误提示 */
+    errTimeout: string
+    errNetwork: string
+    errGeneric: string
+    errGenerate: string
+    /* 计数类说明 */
+    kbCount: (n: number) => string
+    docChunkDetail: (chunks: number, status: string) => string
+    none: string
+    /* 设置 → 账号偏好：落地页选项（存储值是与语言无关的 code） */
+    landingWorkbench: string
+    landingChat: string
+    landingKb: string
+    /* 回答反馈的原因标签（存储值仍是中文枚举，见 lib/feedback.ts） */
+    feedbackReasons: {
+      wrongFact: string
+      wrongCite: string
+      missedPoint: string
+      verbose: string
+      badFormat: string
+      other: string
+    }
+  }
 }
 
 const ZH: PagesCopy = {
@@ -1294,6 +1339,38 @@ const ZH: PagesCopy = {
     overviewMode: '模式',
     overviewKb: '知识库',
     legend: '图例',
+  },
+  common: {
+    relJustNow: '刚刚',
+    relMinutes: (n) => `${n} 分钟前`,
+    relHours: (n) => `${n} 小时前`,
+    relYesterday: '昨天',
+    relDays: (n) => `${n} 天前`,
+    relMonths: (n) => `${n} 个月前`,
+    relYears: (n) => `${n} 年前`,
+    untitledSession: '未命名会话',
+    unknownSource: '未知来源',
+    untitledProject: '未命名项目',
+    defaultAgentName: '默认助手',
+    summaryEmpty: '（暂无文本内容）',
+    errTimeout: '请求超时，请检查后端是否在运行',
+    errNetwork: '连不上后端服务，请确认 8080 端口的进程已启动',
+    errGeneric: '请求失败，请稍后重试',
+    errGenerate: '生成失败',
+    kbCount: (n) => `${n} 个知识库`,
+    docChunkDetail: (chunks, status) => `${chunks} 个切片 · ${status}`,
+    none: '无',
+    landingWorkbench: '工作台',
+    landingChat: '对话',
+    landingKb: '知识库',
+    feedbackReasons: {
+      wrongFact: '事实错误',
+      wrongCite: '引用不对',
+      missedPoint: '没答到点',
+      verbose: '太啰嗦',
+      badFormat: '格式差',
+      other: '其他',
+    },
   },
 }
 
@@ -1928,6 +2005,38 @@ const EN: PagesCopy = {
     overviewMode: 'Mode',
     overviewKb: 'Knowledge bases',
     legend: 'Legend',
+  },
+  common: {
+    relJustNow: 'just now',
+    relMinutes: (n) => `${n} min ago`,
+    relHours: (n) => `${n} h ago`,
+    relYesterday: 'yesterday',
+    relDays: (n) => `${n} d ago`,
+    relMonths: (n) => `${n} mo ago`,
+    relYears: (n) => `${n} y ago`,
+    untitledSession: 'Untitled chat',
+    unknownSource: 'Unknown source',
+    untitledProject: 'Untitled project',
+    defaultAgentName: 'Default agent',
+    summaryEmpty: '(no text content)',
+    errTimeout: 'Request timed out — check whether the backend is running',
+    errNetwork: 'Cannot reach the backend — is the process on port 8080 up?',
+    errGeneric: 'Request failed, please try again',
+    errGenerate: 'Generation failed',
+    kbCount: (n) => `${n} knowledge base${n === 1 ? '' : 's'}`,
+    docChunkDetail: (chunks, status) => `${chunks} chunk${chunks === 1 ? '' : 's'} · ${status}`,
+    none: 'None',
+    landingWorkbench: 'Workbench',
+    landingChat: 'Chat',
+    landingKb: 'Knowledge base',
+    feedbackReasons: {
+      wrongFact: 'Factually wrong',
+      wrongCite: 'Wrong citation',
+      missedPoint: 'Missed the point',
+      verbose: 'Too verbose',
+      badFormat: 'Poor formatting',
+      other: 'Other',
+    },
   },
 }
 

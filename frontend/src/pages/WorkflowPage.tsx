@@ -18,7 +18,7 @@ import {
 } from '@/lib/workflowGraph'
 import Inspector from '@/pages/workflow/Inspector'
 import RunPanels from '@/pages/workflow/RunPanels'
-import { WORKFLOW_COPY } from '@/pages/workflow/copy'
+import { WORKFLOW_COPY, presetNameOf } from '@/pages/workflow/copy'
 import '@/styles/plugins.css'
 import '@/styles/workflow.css'
 
@@ -539,7 +539,7 @@ export default function WorkflowPage() {
           disabled={busy !== '' || presets.length === 0}
         >
           <option value="">{c.presetPick}</option>
-          {presets.map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}
+          {presets.map((p) => <option key={p.code} value={p.code}>{presetNameOf(c, p.code, p.name)}</option>)}
         </select>
         <span className="wf-chip" data-tone={current?.status === 'PUBLISHED' ? 'ok' : 'draft'}>
           {current ? (current.status === 'PUBLISHED' ? c.published : 'DRAFT') : '—'}
