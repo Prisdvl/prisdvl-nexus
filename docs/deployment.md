@@ -1075,7 +1075,7 @@ for (Long convId : convIds) {
 
 这一次工具**在容器内运行**（`docker exec nexus-backend java -jar /app/app.jar
 --spring.profiles.active=local,cleanup`），因为运行实例的存储根是 `/app/data`（命名卷
-`backend-data`），宿主侧的 `D:\develop\Prisma\data` 是另一份——在宿主跑会"数据库级联成功、
+`backend-data`），宿主侧的 `D:\develop\Prisma-recover\data` 是另一份——在宿主跑会"数据库级联成功、
 磁盘原文一个都没删"，而这属于**静默失败**（工具会打印警告，但退出码仍是 0）。
 在容器内跑则 `NEXUS_STORAGE_ROOT` 天然一致，DB 主机名 `mysql` 由容器网络解析。
 
