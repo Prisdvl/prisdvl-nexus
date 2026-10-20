@@ -15,6 +15,9 @@ import { toast } from '@/lib/toast'
 import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserEmbeddingConfig, type UserSession } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { LANDING_KEYS, readAccountPreferences, writeAccountPreferences, type LandingKey } from '@/lib/preferences'
+import ActivityHeatmap, { type HeatmapDay } from '@/components/ui/activity-heatmap'
+import { mockUsageDays, toHeatmapDays } from '@/components/ui/activity-heatmap-utils/usage-heatmap'
+import { Skeleton } from '@/components/Skeleton'
 import { writeLocale, normalizeLocale, useLocale } from '@/lib/locale'
 import { sectionsCopy } from '@/lib/sectionsCopy'
 import { appCopy } from '@/lib/appCopy'
@@ -714,20 +717,36 @@ export function UsageSection() {
   const [kbCount, setKbCount] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [heatDays, setHeatDays] = useState<HeatmapDay[]>([])
+  const [pickedDay, setPickedDay] = useState<string | null>(null)
   useEffect(() => {
     let alive = true
     if (USE_MOCK) {
       setQuota({ requestUsed: 182, requestLimit: 500, tokenUsed: 48200, tokenLimit: 200000, resetAt: new Date(Date.now() + 86400000).toISOString() })
       setKbCount(6); setLoading(false)
+      setHeatDays(mockUsageDays(365))
       return () => { alive = false }
     }
     Promise.all([api.users.quota(), api.knowledge.list(1, 1)])
       .then(([q, k]) => { if (alive) { setQuota(q); setKbCount(k.total) } })
       .catch((e) => { if (alive) setError(errMessage(e)) })
       .finally(() => { if (alive) setLoading(false) })
+    /* 热力图数据单独拉：统计接口挂了不该影响配额展示（反过来说配额挂了也不该拖没热力图） */
+    api.stats.summary()
+      .then((summary) => { if (alive) setHeatDays(toHeatmapDays(summary.heat, 365)) })
+      .catch(() => { if (alive) setHeatDays(toHeatmapDays([], 365)) })
     return () => { alive = false }
   }, [])
   const pct = (used: number, limit: number) => limit > 0 ? `${Math.min(100, Math.round(used / limit * 100))}%` : '0%'
+  const heatLabels = {
+    title: s.usage.heatTitle,
+    less: s.usage.heatLess,
+    more: s.usage.heatMore,
+    summary: s.usage.heatSummary,
+    dayLabel: s.usage.heatDayLabel,
+    dayValue: s.usage.heatDayValue,
+    hint: s.usage.heatHint,
+  }
   return <section className="panel panel-pad">
     <SectionHead title={s.usage.title} desc={USE_MOCK ? s.usage.descMock : s.usage.descReal} />
     {loading && <p className="hint" role="status"><Loc>{s.usage.loading}</Loc></p>}
@@ -738,7 +757,18 @@ export function UsageSection() {
       <p className="hint"><Loc>{s.usage.resetAt(new Date(quota.resetAt).toLocaleString())}</Loc></p>
     </>}
     {kbCount !== null && <div className="usage-row"><div className="top"><span><Loc>{s.usage.kbLabel}</Loc></span><span><strong>{kbCount}</strong></span></div></div>}
-    <p className="hint" style={{ margin: 0 }}><Loc>{s.usage.footHint}</Loc></p>
+    {/* 热力图：固定高度容器，数据没到时也有骨架高度，避免设置页 CLS */}
+    <div className="usage-heat">
+      {heatDays.length > 0
+        ? <ActivityHeatmap days={heatDays} labels={heatLabels} selected={pickedDay} onSelect={(d) => setPickedDay(d?.date ?? null)} />
+        : <div className="usage-heat__skeleton" role="status" aria-label={s.usage.heatTitle}>
+            <Skeleton w="38%" h={13} />
+            <Skeleton w="100%" h={97} radius={4} />
+            <Skeleton w="26%" h={11} />
+          </div>}
+    </div>
+    <p className="hint" style={{ marginBottom: 0 }}><Loc>{s.usage.heatFootHint}</Loc></p>
+    <p className="hint" style={{ margin: '10px 0 0' }}><Loc>{s.usage.footHint}</Loc></p>
   </section>
 }
 /* ---------------- 数据与用量 · 数据导出 ---------------- */

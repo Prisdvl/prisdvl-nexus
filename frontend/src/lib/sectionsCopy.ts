@@ -201,6 +201,15 @@ export interface SectionsCopy {
     resetAt: (time: string) => string
     kbLabel: string
     footHint: string
+    /* 近 365 天热力图 */
+    heatTitle: string
+    heatLess: string
+    heatMore: string
+    heatSummary: (total: number, activeDays: number) => string
+    heatDayLabel: (date: string, value: number) => string
+    heatDayValue: (value: number) => string
+    heatHint: string
+    heatFootHint: string
   }
   export: {
     title: string
@@ -440,6 +449,14 @@ const ZH: SectionsCopy = {
     resetAt: (time) => `额度重置：${time}`,
     kbLabel: '知识库',
     footHint: '文件存储容量没有服务端统计接口，因此不显示估算值。',
+    heatTitle: '近 365 天用量',
+    heatLess: '少',
+    heatMore: '多',
+    heatSummary: (total, activeDays) => `共 ${total.toLocaleString()} 条 · ${activeDays} 天有记录`,
+    heatDayLabel: (date, value) => (value > 0 ? `${date}，${value} 条` : `${date}，无记录`),
+    heatDayValue: (value) => (value > 0 ? `${value} 条用量` : '无记录'),
+    heatHint: '悬停或点选任意一天查看当天用量',
+    heatFootHint: '以每日会话消息条数统计（后端暂未按天聚合 token 消耗）；点某天后可在上方查看当天数值。',
   },
   export: {
     title: '数据导出',
@@ -675,6 +692,14 @@ const EN: SectionsCopy = {
     resetAt: (time) => `Quota resets: ${time}`,
     kbLabel: 'Knowledge bases',
     footHint: 'There is no server-side API for file storage size, so no estimate is shown.',
+    heatTitle: 'Last 365 days',
+    heatLess: 'Less',
+    heatMore: 'More',
+    heatSummary: (total, activeDays) => `${total.toLocaleString()} total · ${activeDays} active days`,
+    heatDayLabel: (date, value) => (value > 0 ? `${date}, ${value}` : `${date}, no activity`),
+    heatDayValue: (value) => (value > 0 ? `${value} requests` : 'No activity'),
+    heatHint: 'Hover or select a day to see its usage',
+    heatFootHint: 'Counted per daily chat messages (token usage is not yet aggregated by day on the server); selecting a day shows its value above.',
   },
   export: {
     title: 'Data export',

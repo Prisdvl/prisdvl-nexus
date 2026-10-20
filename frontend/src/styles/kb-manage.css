@@ -17,6 +17,20 @@
 .kb-filter-empty .btn { margin-left: auto; }
 
 .kb-table-wrap { padding: 6px 8px; overflow-x: auto; }
+
+/* 加载骨架：几何对齐真实表格（表头 10px 内边距 + 行高 52 + 图标 30）。
+   旧版是 5 条 h=16 的细条，数据到达后行高 16→52、表头才出现，正是列表页 CLS 的来源 */
+.kb-skeleton { min-height: 372px; }
+.kb-skeleton__head { display: flex; align-items: center; gap: 32px; padding: 10px 12px; }
+.kb-skeleton__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  padding: 0 12px;
+  border-top: 1px solid color-mix(in oklab, var(--text-3) 12%, transparent);
+}
+.kb-skeleton__lines { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
 .kb-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .kb-table th {
   padding: 10px 12px;

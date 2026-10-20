@@ -1,0 +1,148 @@
+/**
+ * ActivityHeatmap 的样式。
+ *
+ * 全站只有全局 CSS（类名前缀约定），这里是第一份 CSS Module —— 组件要复用、
+ * 又不能让 `.cell` 这种通用名污染全局，Module 的局部作用域正好对上这个需求。
+ * 颜色全部走 CSS 变量，因此暗色/亮色与主题切换（含 view-transition 圆形扩散）
+ * 都自动跟随，不需要组件里判断主题。
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.01em;
+}
+
+.summary {
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 53 周 × 7 天：列优先流动，一行代表一个工作日位置 */
+.grid {
+  --cell: 11px;
+  --gap: 3px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, var(--cell));
+  grid-auto-columns: var(--cell);
+  gap: var(--gap);
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.cell {
+  width: var(--cell);
+  height: var(--cell);
+  padding: 0;
+  border: 0;
+  border-radius: 2.5px;
+  background: var(--ui-selected);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+/* 月份之外的占位格：不可交互，只撑住对齐 */
+.blank {
+  width: var(--cell);
+  height: var(--cell);
+  border-radius: 2.5px;
+  background: transparent;
+}
+
+/* 色阶：0 级刻意做得很淡（只是「这里有一天」的底），否则 365 格里绝大多数
+   没有记录的日子会连成一片灰墙，真正有数据的那几天反而看不出来 */
+.cell[data-level='0'] {
+  background: color-mix(in oklab, var(--text-3) 12%, transparent);
+}
+
+.cell[data-level='1'] {
+  background: color-mix(in oklab, var(--primary) 26%, var(--ui-selected));
+}
+
+.cell[data-level='2'] {
+  background: color-mix(in oklab, var(--primary) 46%, var(--ui-selected));
+}
+
+.cell[data-level='3'] {
+  background: color-mix(in oklab, var(--primary) 68%, var(--ui-selected));
+}
+
+.cell[data-level='4'] {
+  background: var(--primary);
+}
+
+.cell:hover {
+  box-shadow: 0 0 0 1.5px var(--text-3);
+}
+
+.cell:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1.5px;
+}
+
+.cell[aria-pressed='true'] {
+  box-shadow: 0 0 0 1.5px var(--text);
+}
+
+/* 图例：少 ▢▢▢▢▢ 多 */
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.legendSwatches {
+  display: flex;
+  gap: 3px;
+}
+
+.legendSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2.5px;
+}
+
+/* 选中那天的详情：一条窄带，不撑高面板 */
+.detail {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.detailDay {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.detailValue {
+  color: var(--text-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cell {
+    transition: none;
+  }
+}

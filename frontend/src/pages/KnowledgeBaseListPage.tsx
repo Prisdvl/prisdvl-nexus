@@ -140,8 +140,25 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
       {error && <div className="kb-list-empty"><StateEmpty icon={<SearchX size={20} />} title={t.kbList.loadFailTitle} desc={error} action={<button className="btn btn-sm" type="button" onClick={() => void reload()}>{t.common.retry}</button>} /></div>}
 
       {loading ? (
-        <div className="panel panel-pad" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {Array.from({ length: 5 }, (_, i) => <Skeleton key={i} w={`${100 - i * 6}%`} h={16} />)}
+        /* 骨架按真实表格的几何来：行高 52、图标 30、两行文字 —— 数据到达时表头与行高都不变，页面不跳 */
+        <div className="panel kb-table-wrap kb-skeleton" role="status" aria-label={t.kbList.loadingAria}>
+          <div className="kb-skeleton__head">
+            <Skeleton w={120} h={12} />
+            <Skeleton w={92} h={12} />
+            <Skeleton w={56} h={12} />
+            <Skeleton w={84} h={12} />
+          </div>
+          {Array.from({ length: 6 }, (_, i) => (
+            <div className="kb-skeleton__row" key={i}>
+              <Skeleton w={30} h={30} radius={8} />
+              <div className="kb-skeleton__lines">
+                <Skeleton w={`${46 + ((i * 7) % 20)}%`} h={13} />
+                <Skeleton w={`${28 + ((i * 5) % 16)}%`} h={11} />
+              </div>
+              <Skeleton w={64} h={12} />
+              <Skeleton w={56} h={12} />
+            </div>
+          ))}
         </div>
       ) : list.length === 0 && rows.length === 0 ? (
         <div className="kb-list-empty">

@@ -143,6 +143,7 @@ export interface AppCopy {
     tableModel: string
     tableDocs: string
     tableUpdated: string
+    loadingAria: string
   }
   kb: {
     back: string
@@ -596,6 +597,7 @@ const ZH: AppCopy = {
     tableModel: 'Embedding 模型',
     tableDocs: '文档数',
     tableUpdated: '更新时间',
+    loadingAria: '知识库列表加载中',
   },
   kb: {
     back: '返回',
@@ -1005,6 +1007,7 @@ const EN: AppCopy = {
     tableModel: 'Embedding model',
     tableDocs: 'Documents',
     tableUpdated: 'Updated',
+    loadingAria: 'Loading knowledge bases',
   },
   kb: {
     back: 'Back',

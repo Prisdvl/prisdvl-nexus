@@ -737,6 +737,10 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
 .usage-row .track { height: 8px; border-radius: 999px; background: var(--surface-muted); overflow: hidden; }
 .usage-row .fill { height: 100%; border-radius: 999px; background: var(--primary); width: 0; transition: width 700ms cubic-bezier(0.23, 1, 0.32, 1); }
 
+/* 用量热力图的外框：给一个与内容等高的容器，骨架与真图占同一块面积 → 设置页不抖 */
+.usage-heat { min-height: 156px; margin: 18px 0 12px; }
+.usage-heat__skeleton { display: flex; flex-direction: column; gap: 12px; }
+
 /* GooeyNav 主题适配（原 CSS 面向深底，此处覆写并入主题色标） */
 :root {
   --color-1: var(--primary);
