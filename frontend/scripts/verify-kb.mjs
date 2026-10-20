@@ -1,7 +1,14 @@
 // 知识库列表 / 文档列表 / 分块管理 专项验证（mock 模式）
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import { chromium } from 'playwright-core'
 
 const BASE = 'http://localhost:5175'
+// 截图落点与其余 mock 脚本一致：CI 会设 QA_SHOTS_OUT（ci.yml:97），未设时落到系统临时目录。
+// 原来写死相对路径 → 落在 CWD，CI 失败时 diagnostics 里一张截图都没有。
+const OUT = process.env.QA_SHOTS_OUT ?? join(tmpdir(), 'prisma-recover-qa-shots')
+mkdirSync(OUT, { recursive: true })
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 await page.addInitScript(() => localStorage.setItem('nx-proto-tour-done', '1'))
@@ -38,7 +45,7 @@ await page.locator('#rename-kb').fill('重命名测试库')
 await page.locator('.dialog .btn-primary').click()
 await page.waitForTimeout(400)
 check('重命名生效', (await page.locator('.kb-table tbody').innerText()).includes('重命名测试库'))
-await page.screenshot({ path: 'qa-kb-list.png' })
+await page.screenshot({ path: join(OUT, 'qa-kb-list.png') })
 
 /* ---------- 文档列表 ---------- */
 await page.locator('.kb-table tbody tr').first().click()
@@ -68,7 +75,7 @@ await page.locator('.chunk-table tbody tr').first().getByRole('button', { name: 
 await page.locator('.chunk-batch button', { hasText: '批量禁用' }).click()
 await page.waitForTimeout(200)
 check('批量操作可用', (await page.locator('.chunk-table .doc-switch[aria-checked="false"]').count()) >= 1)
-await page.screenshot({ path: 'qa-kb-chunks.png' })
+await page.screenshot({ path: join(OUT, 'qa-kb-chunks.png') })
 
 await page.setViewportSize({ width: 390, height: 844 })
 await page.waitForTimeout(500)
