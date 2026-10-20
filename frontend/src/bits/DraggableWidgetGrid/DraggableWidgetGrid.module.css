@@ -1,0 +1,76 @@
+/*
+ * Draggable Widget Grid 的样式。
+ *
+ * 原稿用的是 Tailwind 原子类（bg-card / ring-border / text-foreground 等），
+ * 本项目没有 Tailwind，这里把它们逐一换成主题变量：
+ *   bg-card              → --surface
+ *   ring-border          → --border（用 inset box-shadow 画，避免占布局）
+ *   text-card-foreground → --text
+ *   ring-foreground/40   → --text-3 的合成色（落下高亮）
+ *   focus-visible ring   → --primary
+ */
+
+.root {
+  position: relative;
+  width: 100%;
+  --widget-radius: 18px;
+}
+
+.grid {
+  display: grid;
+  width: 100%;
+}
+
+/* 磁贴外壳：只管落位、拖动光标与焦点环，描边在 .card 上 */
+.slot {
+  position: relative;
+  min-width: 0;
+  border-radius: var(--widget-radius);
+  outline: none;
+}
+
+.slot:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.slot a,
+.slot img {
+  -webkit-user-drag: none;
+}
+
+/* 可拖动时才加的东西：抓取光标、禁止选中、触摸时让位给纵向滚动 */
+.grab {
+  cursor: grab;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: pan-y pinch-zoom;
+}
+
+.grab:active {
+  cursor: grabbing;
+}
+
+/* 卡片本体：满格、裁切、圆角，内容自己决定内部滚动 */
+.card {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--widget-radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+  clip-path: inset(0 round var(--widget-radius));
+  transition: box-shadow 300ms var(--ease-out);
+}
+
+/* 落下瞬间加一圈更亮的描边，给一个「收到了」的反馈 */
+.landed {
+  box-shadow:
+    inset 0 0 0 2px color-mix(in oklab, var(--text) 38%, transparent),
+    0 12px 30px -18px rgb(0 0 0 / 0.55);
+}

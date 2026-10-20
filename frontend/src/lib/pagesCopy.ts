@@ -83,6 +83,14 @@ export interface PagesCopy {
     recentEmpty: string
     manageKb: string
     browseDocs: string
+    /** 磁贴网格的整体标签（拖动重排的无障碍说明） */
+    boardAria: string
+    /** 计数磁贴的标题 */
+    widgetStats: string
+    /** 拖动/键盘重排的操作提示（读屏用） */
+    dragHint: string
+    resetLayout: string
+    resetLayoutTitle: string
   }
   agents: {
     /* —— 页头 —— */
@@ -782,6 +790,11 @@ const ZH: PagesCopy = {
     recentEmpty: '还没有会话，开始对话后会显示在这里。',
     manageKb: '管理知识库',
     browseDocs: '浏览文档',
+    boardAria: '工作台磁贴（可拖动重排）',
+    widgetStats: '总览',
+    dragHint: '拖动磁贴可重新排布；触摸屏先按住再拖；键盘按住 Alt 加方向键。',
+    resetLayout: '重置布局',
+    resetLayoutTitle: '把磁贴恢复成默认排布',
   },
   agents: {
     eyebrow: 'Agent',
@@ -1445,6 +1458,12 @@ const EN: PagesCopy = {
     recentEmpty: 'No chats yet. Start one and it will show up here.',
     manageKb: 'Manage knowledge',
     browseDocs: 'Browse docs',
+    boardAria: 'Workbench tiles (drag to rearrange)',
+    widgetStats: 'Overview',
+    dragHint:
+      'Drag a tile to rearrange. On touch screens, press and hold first. With a keyboard, hold Alt and use the arrow keys.',
+    resetLayout: 'Reset layout',
+    resetLayoutTitle: 'Restore the default tile arrangement',
   },
   agents: {
     eyebrow: 'Agents',

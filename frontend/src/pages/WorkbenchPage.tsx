@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowRight, BookOpen, Bot, Clock, Database, FileText, MessagesSquare, Plus, Search, Upload, Wand2, Zap,
+  ArrowRight, Bot, Clock, Database, FileText, MessagesSquare, Plus, RotateCcw, Search, Upload, Wand2, Zap,
 } from 'lucide-react'
 import Counter from '@/bits/Counter/Counter'
 import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
 import StatusMark from '@/bits/StatusMark/StatusMark'
+import { DraggableWidgetGrid, type WidgetItem } from '@/bits/DraggableWidgetGrid/DraggableWidgetGrid'
 import Loc from '@/components/Loc'
 import { SkeletonRows } from '@/components/Skeleton'
 import { SESSIONS, ACTIVITY as SEED_ACTIVITY, HEAT as SEED_HEAT, TREND as SEED_TREND, type ActivityKind } from '@/data'
@@ -14,6 +15,7 @@ import { pagesCopy } from '@/lib/pagesCopy'
 import { appCopy } from '@/lib/appCopy'
 import type { PaletteName, ThemeMode } from '@/lib/types'
 import { api, errMessage, USE_MOCK } from '@/lib/api'
+import '@/styles/workbench-widgets.css'
 
 interface Props {
   theme: ThemeMode
@@ -30,6 +32,60 @@ const KIND_ICON: Record<ActivityKind, typeof Upload> = {
   qa: Search,
   agent: Bot,
   chat: MessagesSquare,
+}
+
+/**
+ * 磁贴的默认排布。
+ *
+ * 尺寸不是随便定的：四个 lg（2×2）+ 四个 wide（2×1）在 4 列时正好铺满 16 格，
+ * 精确铺砖器可以一条缝都不留；窄屏成 2 列时仍然整除 = 8 行。
+ * 面积一旦不再是列数的整数倍，就会退回行打包器（磁贴会被撑大补洞），
+ * 视觉上会「有的块莫名变宽」——改尺寸时请自己先除一下。
+ */
+const DEFAULT_WIDGETS: WidgetItem[] = [
+  { id: 'stats', size: 'wide' },
+  { id: 'trend', size: 'lg' },
+  { id: 'imports', size: 'wide' },
+  { id: 'timeline', size: 'wide' },
+  { id: 'heat', size: 'wide' },
+  { id: 'recent', size: 'lg' },
+]
+
+const GRID_KEY = 'nx-workbench-widgets-v1'
+
+type WbCopy = ReturnType<typeof pagesCopy>['workbench']
+
+/** 磁贴的读屏名称：优先用同一个字典里已有的标题，避免另造一套文案。 */
+function widgetLabel(id: string, w: WbCopy): string {
+  switch (id) {
+    case 'stats': return w.widgetStats
+    case 'trend': return w.trendTitle
+    case 'imports': return w.importsTitle
+    case 'timeline': return w.timelineTitle
+    case 'heat': return w.heatTitle
+    default: return w.recentTitle
+  }
+}
+
+/** 磁贴外壳：头部固定，主体吃掉剩余高度并按需内部滚动。 */
+function Widget({
+  icon, title, sub, children, bodyClass,
+}: {
+  icon: React.ReactNode
+  title: React.ReactNode
+  sub?: React.ReactNode
+  children: React.ReactNode
+  bodyClass?: string
+}) {
+  return (
+    <div className="wbw-widget">
+      <div className="wbw-head">
+        <h2 className="wbw-title">{icon} {title}</h2>
+        {sub && <span className="wbw-sub">{sub}</span>}
+      </div>
+      <div className={`wbw-body${bodyClass ? ` ${bodyClass}` : ''}`}>{children}</div>
+    </div>
+  )
 }
 
 export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, goAutomations, onOpenConversation }: Props) {
@@ -154,6 +210,244 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
     : []
   const hover = trendHover !== null ? pts[trendHover] : null
 
+  /* 重置布局：清掉存档，再换一个 key 让网格按默认排布重新挂载 */
+  const [gridEpoch, setGridEpoch] = useState(0)
+  const resetLayout = () => {
+    try { localStorage.removeItem(GRID_KEY) } catch { /* 存不进就算了 */ }
+    setGridEpoch((n) => n + 1)
+  }
+
+  const widgets = useMemo(
+    () => DEFAULT_WIDGETS.map((item) => ({ ...item, label: widgetLabel(item.id, w) })),
+    [w],
+  )
+
+  /* ---------- 各个磁贴的内容 ---------- */
+
+  const statsBody = (
+    <div className="wbw-stats" aria-busy={countsLoading}>
+      {stats.map((s) => (
+        <div key={s.label} className={`wbw-stat${s.accent ? ' wbw-stat--accent' : ''}`}>
+          <span className="wbw-stat__label">{s.label}</span>
+          <span className="wbw-stat__num">
+            {/* 不传 places：按数值位数自动决定（0 → "0"，42 → "42"）。 */}
+            {countsLoading ? '—' : <Counter value={s.value} fontSize={26} padding={3} gap={5} fontWeight={600} textColor="currentColor" gradientFrom="var(--surface-muted)" gradientHeight={8} />}
+          </span>
+          <span className="wbw-stat__sub">{s.sub}</span>
+        </div>
+      ))}
+    </div>
+  )
+
+  const trendBody = statsLoading ? <SkeletonRows rows={2} /> : statsError ? <p className="form-error active" role="alert">{statsError}</p> : trendPoints.length === 0 ? <p className="wbw-hint">{w.trendEmpty}</p> : (
+    <>
+      <div className="wb-trend" key={trendKey} onMouseLeave={() => setTrendHover(null)}>
+        <div className="wb-trend-y" aria-hidden="true">
+          <span>{max}</span>
+          <span>{mid}</span>
+          <span>0</span>
+        </div>
+        <div className="wb-trend-plot">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={w.trendAria}>
+            <defs>
+              <linearGradient id="wbArea" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.2" />
+                <stop offset="100%" stopColor="var(--primary)" stopOpacity="0" />
+              </linearGradient>
+              <clipPath id="wbReveal">
+                <rect className="trend-reveal" x="0" y="0" width="100" height="100" />
+              </clipPath>
+            </defs>
+            <line className="trend-grid" x1="0" y1="12" x2="100" y2="12" />
+            <line className="trend-grid" x1="0" y1="51" x2="100" y2="51" />
+            <line className="trend-grid" x1="0" y1="90" x2="100" y2="90" />
+            <g clipPath="url(#wbReveal)">
+              <path className="trend-area" d={area} fill="url(#wbArea)" />
+              {pts.length > 1 && (
+                <path
+                  className="trend-line"
+                  d={line}
+                  fill="none"
+                  stroke="var(--primary)"
+                  strokeWidth="2.4"
+                  vectorEffect="non-scaling-stroke"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                />
+              )}
+            </g>
+            {hover && (
+              <line className="trend-cross" x1={hover.x} y1="8" x2={hover.x} y2="92" />
+            )}
+          </svg>
+          {/* 命中层与点标：独立百分比定位，避免 stretch 把圆点拉扁 */}
+          <div className="wb-trend-hits" role="presentation">
+            {pts.map((p, i) => (
+              <button
+                key={p.day}
+                type="button"
+                className={`wb-trend-hit${trendHover === i ? ' is-active' : ''}`}
+                style={{ left: `${p.x}%`, top: `${p.y}%` }}
+                aria-label={w.trendHitAria(p.label, p.count)}
+                onMouseEnter={() => setTrendHover(i)}
+                onFocus={() => setTrendHover(i)}
+              />
+            ))}
+          </div>
+          {hover && (
+            <div className="wb-trend-tip" style={{ left: `${hover.x}%`, top: `${hover.y}%` }} role="status">
+              <strong>{hover.count}</strong>
+              <span>{hover.label}</span>
+            </div>
+          )}
+        </div>
+        <div className="wb-trend-x" aria-hidden="true">
+          {xLabels.map((p) => (
+            <span key={p.day} style={{ left: `${p.x}%` }}>{p.label}</span>
+          ))}
+        </div>
+      </div>
+      <div className="wb-trend-legend">
+        <span className="wb-trend-metric">
+          <b>
+            <Counter value={totalCalls} fontSize={13} padding={1} gap={1} horizontalPadding={0} fontWeight={600} textColor="var(--text)" gradientHeight={0} gradientFrom="transparent" />
+          </b>
+          <Loc>{w.metricCalls}</Loc>
+        </span>
+        <span className="wb-trend-metric">
+          <Loc>{w.metricAvg}</Loc>
+          <b>
+            <Counter value={Math.round(totalCalls / Math.max(1, trendPoints.length))} fontSize={13} padding={1} gap={1} horizontalPadding={0} fontWeight={600} textColor="var(--text)" gradientHeight={0} gradientFrom="transparent" />
+          </b>
+        </span>
+        <span className="wb-trend-metric">
+          <Loc>{w.metricPeak}</Loc>
+          <b>
+            <Counter value={max} fontSize={13} padding={1} gap={1} horizontalPadding={0} fontWeight={600} textColor="var(--text)" gradientHeight={0} gradientFrom="transparent" />
+          </b>
+        </span>
+      </div>
+    </>
+  )
+
+  const importsBody = USE_MOCK ? (
+    <div className="wbw-list">
+      <div className="task-row"><StatusMark status="running" progress={0.62} size={18} /><span className="names"><span className="t">面经整理 v4.md</span><span className="d">{w.mockParsing(62, 42, 68)}</span></span><LatticeLoader status="working" label="" pattern="sweep" cellSize={4} fontSize={12} showTimer /></div>
+      <div className="task-row"><StatusMark status="done" size={18} label="并发编程要点.md" fontSize={13} strike={false} /><span className="names"><span className="d">{w.mockDone(61)}</span></span></div>
+      <p className="wbw-hint">{w.mockDemoHint}</p>
+    </div>
+  ) : importsLoading ? (
+    <SkeletonRows rows={3} />
+  ) : importsError ? (
+    <p className="form-error active" role="alert">{importsError}</p>
+  ) : !importRows?.length ? (
+    <p className="wbw-hint">{w.importsEmpty}</p>
+  ) : (
+    <div className="wbw-list">
+      {importRows.map((item) => (
+        <div className="task-row" key={item.id}>
+          <StatusMark status={item.status} size={18} label={item.status === 'done' ? w.statusReady : item.status === 'failed' ? w.statusFailed : w.statusProcessing} fontSize={12} strike={false} />
+          <span className="names"><span className="t">{item.name}</span><span className="d">{item.detail} · {item.updated}</span></span>
+        </div>
+      ))}
+      <button className="btn btn-ghost btn-sm" type="button" onClick={goKb}>{w.openKb}</button>
+    </div>
+  )
+
+  const timelineBody = (
+    <>
+      {activity.length === 0 && !statsLoading && !statsError && (
+        <p className="wbw-hint">{w.timelineEmpty}</p>
+      )}
+      <ul className="wb-timeline">
+        {activity.map((a, i) => {
+          const Icon = KIND_ICON[a.kind]
+          return (
+            <li key={`${a.kind}-${a.time}-${i}`}>
+              <span className="wb-tl-ic"><Icon size={13} /></span>
+              <div>
+                <div className="wb-tl-t">{a.title}</div>
+                <div className="wb-tl-d">{a.detail}</div>
+              </div>
+              <span className="wb-tl-time">{a.time}</span>
+            </li>
+          )
+        })}
+      </ul>
+    </>
+  )
+
+  const heatBody = (
+    <>
+      <div className="wb-heat" aria-label={w.heatAria}>
+        {heat.map((v, i) => (
+          <span key={i} data-lv={v} className="wb-heat-cell" />
+        ))}
+      </div>
+      <div className="wb-heat-foot">
+        <span>{w.heatTotal(heat.length)} · <Loc>{w.heatActive(activeDays)}</Loc></span>
+        <span className="wb-heat-scale">
+          <Loc>{w.heatLess}</Loc>
+          <i style={{ background: 'var(--surface-muted)' }} />
+          <i style={{ background: 'color-mix(in oklab, var(--primary) 26%, var(--surface-muted))' }} />
+          <i style={{ background: 'color-mix(in oklab, var(--primary) 50%, var(--surface-muted))' }} />
+          <i style={{ background: 'var(--primary-strong)' }} />
+          <Loc>{w.heatMore}</Loc>
+        </span>
+      </div>
+    </>
+  )
+
+  const recentBody = (
+    <>
+      {convLoading && <SkeletonRows rows={3} />}
+      {convError && <p className="form-error active" role="alert">{convError}</p>}
+      {!convLoading && !convError && recent.length === 0 && <p className="wbw-hint">{w.recentEmpty}</p>}
+      {!convLoading && !convError && recent.map((s) => (
+        <button
+          className="list-row"
+          key={s.id}
+          type="button"
+          style={{ width: '100%', cursor: 'pointer' }}
+          onClick={() => onOpenConversation(s.id)}
+        >
+          <span className="ic" style={{ display: 'inline-flex', width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', background: 'var(--primary-container)', color: 'var(--primary-text)', flex: 'none' }}>
+            <MessagesSquare size={14} />
+          </span>
+          <div style={{ minWidth: 0, textAlign: 'left' }}>
+            <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{s.updated}</div>
+          </div>
+        </button>
+      ))}
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <button className="btn btn-ghost btn-sm" type="button" style={{ flex: 1 }} onClick={goKb}>
+          <Plus size={13} /> <Loc>{w.manageKb}</Loc>
+        </button>
+        <button className="btn btn-ghost btn-sm" type="button" style={{ flex: 1 }} onClick={goKb}>
+          <FileText size={13} /> <Loc>{w.browseDocs}</Loc>
+        </button>
+      </div>
+    </>
+  )
+
+  const renderWidget = (item: WidgetItem) => {
+    switch (item.id) {
+      case 'stats':
+        return <Widget icon={<Wand2 size={15} />} title={<Loc>{w.widgetStats}</Loc>} sub={countsError ? w.countsUnavailable : undefined}>{statsBody}</Widget>
+      case 'trend':
+        return <Widget icon={<Zap size={15} />} title={<Loc>{w.trendTitle}</Loc>} sub={<Loc>{w.trendRange}</Loc>}>{trendBody}</Widget>
+      case 'imports':
+        return <Widget icon={<Upload size={15} />} title={<Loc>{w.importsTitle}</Loc>} sub={!USE_MOCK ? (importsLoading ? t.common.loading : w.importCount(importRows?.length ?? 0)) : undefined}>{importsBody}</Widget>
+      case 'timeline':
+        return <Widget icon={<Clock size={15} />} title={<Loc>{w.timelineTitle}</Loc>} sub={<Loc>{w.timelineRange}</Loc>}>{timelineBody}</Widget>
+      case 'heat':
+        return <Widget icon={<Database size={15} />} title={<Loc>{w.heatTitle}</Loc>} sub={<Loc>{w.heatRange}</Loc>}>{heatBody}</Widget>
+      default:
+        return <Widget icon={<MessagesSquare size={15} />} title={<Loc>{w.recentTitle}</Loc>} sub={<button className="btn btn-ghost btn-sm" type="button" onClick={goChat}><Loc>{w.recentAll}</Loc> <ArrowRight size={13} /></button>}>{recentBody}</Widget>
+    }
+  }
+
   return (
     <div className="page" data-palette={palette} data-theme={theme}>
       <div className="page-head">
@@ -162,9 +456,14 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
           <h1 className="page-title">{currentUser?.nickname || currentUser?.username ? w.greeting(currentUser.nickname || currentUser.username) : <Loc>{w.title}</Loc>}</h1>
           <p className="page-sub"><Loc>{w.sub}</Loc></p>
         </div>
-        <button className="btn btn-primary" type="button" onClick={goChat}>
-          <MessagesSquare size={16} /> <Loc>{w.startChat}</Loc>
-        </button>
+        <div className="wbw-tools">
+          <button className="btn btn-ghost btn-sm" type="button" onClick={resetLayout} title={w.resetLayoutTitle}>
+            <RotateCcw size={14} /> <Loc>{w.resetLayout}</Loc>
+          </button>
+          <button className="btn btn-primary" type="button" onClick={goChat}>
+            <MessagesSquare size={16} /> <Loc>{w.startChat}</Loc>
+          </button>
+        </div>
       </div>
 
       <section className="wb-quick-actions" aria-label={w.quickTitle}>
@@ -190,289 +489,21 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
         </button>
       </section>
 
-      <div className="stat-grid" aria-busy={countsLoading}>
-        {stats.map((s, i) => (
-          <div
-            key={s.label}
-            className={`stat-card wb-data-in${s.accent ? ' accent' : ''}`}
-            style={{ '--wb-i': i } as CSSProperties}
-          >
-            <div className="label">{s.label}</div>
-            <div className="num" style={s.accent ? { color: 'var(--primary-text)' } : undefined}>
-              {/* 不传 places：按数值位数自动决定（0 → "0"，42 → "42"）。
-                  之前固定两位会在全新账号上渲染成 "00"。 */}
-              {countsLoading ? '—' : <Counter value={s.value} fontSize={34} padding={4} gap={6} fontWeight={600} textColor="currentColor" gradientFrom="var(--surface)" gradientHeight={10} />}
-            </div>
-            <div className="sub">{s.sub}</div>
-          </div>
-        ))}
-      </div>
       {countsError && <p className="hint" role="status">{w.countsUnavailable} {countsError}</p>}
 
-      <div className="wb-layout">
-        {/* ---------- 主区 ---------- */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <section className="panel wb-card">
-            <div className="wb-card-head">
-              <h2 className="wb-card-title"><Zap size={16} /> <Loc>{w.trendTitle}</Loc></h2>
-              <span className="wb-sub"><Loc>{w.trendRange}</Loc></span>
-            </div>
-            {statsLoading ? <SkeletonRows rows={2} /> : statsError ? <p className="form-error active" role="alert">{statsError}</p> : trendPoints.length === 0 ? <p className="hint">{w.trendEmpty}</p> : (
-              <>
-                <div className="wb-trend" key={trendKey} onMouseLeave={() => setTrendHover(null)}>
-                  <div className="wb-trend-y" aria-hidden="true">
-                    <span>{max}</span>
-                    <span>{mid}</span>
-                    <span>0</span>
-                  </div>
-                  <div className="wb-trend-plot">
-                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={w.trendAria}>
-                      <defs>
-                        <linearGradient id="wbArea" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.2" />
-                          <stop offset="100%" stopColor="var(--primary)" stopOpacity="0" />
-                        </linearGradient>
-                        <clipPath id="wbReveal">
-                          <rect className="trend-reveal" x="0" y="0" width="100" height="100" />
-                        </clipPath>
-                      </defs>
-                      <line className="trend-grid" x1="0" y1="12" x2="100" y2="12" />
-                      <line className="trend-grid" x1="0" y1="51" x2="100" y2="51" />
-                      <line className="trend-grid" x1="0" y1="90" x2="100" y2="90" />
-                      <g clipPath="url(#wbReveal)">
-                        <path className="trend-area" d={area} fill="url(#wbArea)" />
-                        {pts.length > 1 && (
-                          <path
-                            className="trend-line"
-                            d={line}
-                            fill="none"
-                            stroke="var(--primary)"
-                            strokeWidth="2.4"
-                            vectorEffect="non-scaling-stroke"
-                            strokeLinejoin="round"
-                            strokeLinecap="round"
-                          />
-                        )}
-                      </g>
-                      {hover && (
-                        <line
-                          className="trend-cross"
-                          x1={hover.x}
-                          y1="8"
-                          x2={hover.x}
-                          y2="92"
-                        />
-                      )}
-                    </svg>
-                    {/* 命中层与点标：独立百分比定位，避免 stretch 把圆点拉扁 */}
-                    <div className="wb-trend-hits" role="presentation">
-                      {pts.map((p, i) => (
-                        <button
-                          key={p.day}
-                          type="button"
-                          className={`wb-trend-hit${trendHover === i ? ' is-active' : ''}`}
-                          style={{ left: `${p.x}%`, top: `${p.y}%` }}
-                          aria-label={w.trendHitAria(p.label, p.count)}
-                          onMouseEnter={() => setTrendHover(i)}
-                          onFocus={() => setTrendHover(i)}
-                        />
-                      ))}
-                    </div>
-                    {hover && (
-                      <div
-                        className="wb-trend-tip"
-                        style={{ left: `${hover.x}%`, top: `${hover.y}%` }}
-                        role="status"
-                      >
-                        <strong>{hover.count}</strong>
-                        <span>{hover.label}</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="wb-trend-x" aria-hidden="true">
-                    {xLabels.map((p) => (
-                      <span key={p.day} style={{ left: `${p.x}%` }}>{p.label}</span>
-                    ))}
-                  </div>
-                </div>
-                <div className="wb-trend-legend">
-                  <span className="wb-trend-metric">
-                    <b>
-                      <Counter
-                        value={totalCalls}
-                        fontSize={13}
-                        padding={1}
-                        gap={1}
-                        horizontalPadding={0}
-                        fontWeight={600}
-                        textColor="var(--text)"
-                        gradientHeight={0}
-                        gradientFrom="transparent"
-                      />
-                    </b>
-                    <Loc>{w.metricCalls}</Loc>
-                  </span>
-                  <span className="wb-trend-metric">
-                    <Loc>{w.metricAvg}</Loc>
-                    <b>
-                      <Counter
-                        value={Math.round(totalCalls / Math.max(1, trendPoints.length))}
-                        fontSize={13}
-                        padding={1}
-                        gap={1}
-                        horizontalPadding={0}
-                        fontWeight={600}
-                        textColor="var(--text)"
-                        gradientHeight={0}
-                        gradientFrom="transparent"
-                      />
-                    </b>
-                  </span>
-                  <span className="wb-trend-metric">
-                    <Loc>{w.metricPeak}</Loc>
-                    <b>
-                      <Counter
-                        value={max}
-                        fontSize={13}
-                        padding={1}
-                        gap={1}
-                        horizontalPadding={0}
-                        fontWeight={600}
-                        textColor="var(--text)"
-                        gradientHeight={0}
-                        gradientFrom="transparent"
-                      />
-                    </b>
-                  </span>
-                </div>
-              </>
-            )}
-          </section>
-
-          <div className="wb-duo">
-          <section className="panel wb-card">
-            <div className="wb-card-head">
-              <h2 className="wb-card-title"><Upload size={16} /> <Loc>{w.importsTitle}</Loc></h2>
-              {!USE_MOCK && <span className="wb-sub">{importsLoading ? t.common.loading : w.importCount(importRows?.length ?? 0)}</span>}
-            </div>
-            {USE_MOCK ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <div className="task-row wb-data-in" style={{ '--wb-i': 0 } as CSSProperties}><StatusMark status="running" progress={0.62} size={18} /><span className="names"><span className="t">面经整理 v4.md</span><span className="d">{w.mockParsing(62, 42, 68)}</span></span><LatticeLoader status="working" label="" pattern="sweep" cellSize={4} fontSize={12} showTimer /></div>
-                <div className="task-row wb-data-in" style={{ '--wb-i': 1 } as CSSProperties}><StatusMark status="done" size={18} label="并发编程要点.md" fontSize={13} strike={false} /><span className="names"><span className="d">{w.mockDone(61)}</span></span></div>
-                <p className="hint">{w.mockDemoHint}</p>
-              </div>
-            ) : importsLoading ? (
-              <SkeletonRows rows={3} />
-            ) : importsError ? (
-              <p className="form-error active" role="alert">{importsError}</p>
-            ) : !importRows?.length ? (
-              <p className="hint">{w.importsEmpty}</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {importRows.map((item, i) => (
-                  <div className="task-row wb-data-in" key={item.id} style={{ '--wb-i': i } as CSSProperties}>
-                    <StatusMark status={item.status} size={18} label={item.status === 'done' ? w.statusReady : item.status === 'failed' ? w.statusFailed : w.statusProcessing} fontSize={12} strike={false} />
-                    <span className="names"><span className="t">{item.name}</span><span className="d">{item.detail} · {item.updated}</span></span>
-                  </div>
-                ))}
-                <button className="btn btn-ghost btn-sm" type="button" onClick={goKb}>{w.openKb}</button>
-              </div>
-            )}
-          </section>
-
-          <section className="panel wb-card">
-            <div className="wb-card-head">
-              <h2 className="wb-card-title"><Clock size={16} /> <Loc>{w.timelineTitle}</Loc></h2>
-              <span className="wb-sub"><Loc>{w.timelineRange}</Loc></span>
-            </div>
-            <ul className="wb-timeline">
-              {activity.length === 0 && !statsLoading && !statsError && (
-                <p className="hint" style={{ padding: '4px 0' }}>{w.timelineEmpty}</p>
-              )}
-              {activity.map((a, i) => {
-                const Icon = KIND_ICON[a.kind]
-                return (
-                  <li key={`${a.kind}-${a.time}-${i}`} className="wb-data-in" style={{ '--wb-i': i } as CSSProperties}>
-                    <span className="wb-tl-ic"><Icon size={13} /></span>
-                    <div>
-                      <div className="wb-tl-t">{a.title}</div>
-                      <div className="wb-tl-d">{a.detail}</div>
-                    </div>
-                    <span className="wb-tl-time">{a.time}</span>
-                  </li>
-                )
-              })}
-            </ul>
-          </section>
-          </div>
-
-        </div>
-
-        {/* ---------- 右侧栏 ---------- */}
-        <aside className="wb-rail">
-          <section className="panel wb-card">
-            <div className="wb-card-head">
-              <h2 className="wb-card-title"><Database size={16} /> <Loc>{w.heatTitle}</Loc></h2>
-              <span className="wb-sub"><Loc>{w.heatRange}</Loc></span>
-            </div>
-            <div className="wb-heat" aria-label={w.heatAria}>
-              {heat.map((v, i) => (
-                <span key={i} data-lv={v} className="wb-heat-cell" style={{ '--wb-i': i } as CSSProperties} />
-              ))}
-            </div>
-            <div className="wb-heat-foot wb-data-in" style={{ '--wb-i': 2 } as CSSProperties}>
-              <span>{w.heatTotal(heat.length)} · <Loc>{w.heatActive(activeDays)}</Loc></span>
-              <span className="wb-heat-scale">
-                <Loc>{w.heatLess}</Loc>
-                <i style={{ background: 'var(--surface-muted)' }} />
-                <i style={{ background: 'color-mix(in oklab, var(--primary) 26%, var(--surface-muted))' }} />
-                <i style={{ background: 'color-mix(in oklab, var(--primary) 50%, var(--surface-muted))' }} />
-                <i style={{ background: 'var(--primary-strong)' }} />
-                <Loc>{w.heatMore}</Loc>
-              </span>
-            </div>
-          </section>
-
-          <section className="panel wb-card">
-            <div className="wb-card-head">
-              <h2 className="wb-card-title"><MessagesSquare size={16} /> <Loc>{w.recentTitle}</Loc></h2>
-              <button className="btn btn-ghost btn-sm" type="button" onClick={goChat}>
-                <Loc>{w.recentAll}</Loc> <ArrowRight size={13} />
-              </button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {convLoading && <SkeletonRows rows={3} />}
-              {convError && <p className="form-error active" role="alert">{convError}</p>}
-              {!convLoading && !convError && recent.length === 0 && <p className="hint">{w.recentEmpty}</p>}
-              {!convLoading && !convError && recent.map((s, i) => (
-                <button
-                  className="list-row wb-data-in"
-                  key={s.id}
-                  type="button"
-                  style={{ width: '100%', cursor: 'pointer', '--wb-i': i } as CSSProperties}
-                  onClick={() => onOpenConversation(s.id)}
-                >
-                  <span className="ic" style={{ display: 'inline-flex', width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', background: 'var(--primary-container)', color: 'var(--primary-text)', flex: 'none' }}>
-                    <MessagesSquare size={14} />
-                  </span>
-                  <div style={{ minWidth: 0, textAlign: 'left' }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{s.updated}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-              <button className="btn btn-ghost btn-sm" type="button" style={{ flex: 1 }} onClick={goKb}>
-                <Plus size={13} /> <Loc>{w.manageKb}</Loc>
-              </button>
-              <button className="btn btn-ghost btn-sm" type="button" style={{ flex: 1 }} onClick={goKb}>
-                <FileText size={13} /> <Loc>{w.browseDocs}</Loc>
-              </button>
-            </div>
-          </section>
-        </aside>
-      </div>
+      <DraggableWidgetGrid
+        key={gridEpoch}
+        items={widgets}
+        persistKey={GRID_KEY}
+        onChange={() => { /* 顺序已由网格自己持久化；这里不需要额外动作 */ }}
+        renderItem={renderWidget}
+        hint={w.dragHint}
+        className="wb-board"
+        cellSize={232}
+        gap={14}
+        radius={16}
+        maxColumns={4}
+      />
     </div>
   )
 }

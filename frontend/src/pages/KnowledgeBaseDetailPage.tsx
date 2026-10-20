@@ -874,28 +874,33 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
       </header>
 
       <div className="kb-body">
-        {showContext && (
-          <aside className="kb-context" aria-label={t.kb.contextAria}>
-            <div className="kb-context__head">{t.kb.contextHead}</div>
-            <div className="kb-context__list">
-              {docsLoading && <p className="hint" style={{ padding: 8 }}>{t.common.loading}</p>}
-              {!docsLoading && docs.length === 0 && <p className="hint" style={{ padding: 8 }}>{t.kb.metaEmpty}</p>}
-              {docs.map((d) => (
-                <button
-                  key={d.id}
-                  type="button"
-                  className="kb-context__item"
-                  data-on={activeDocId === d.id ? '' : undefined}
-                  title={d.name}
-                  onClick={() => setContextDocId(d.id)}
-                >
-                  <FileText size={14} />
-                  <span className="nm">{d.name}</span>
-                </button>
-              ))}
-            </div>
-          </aside>
-        )}
+        {/*
+          左侧文档轨**常驻 DOM**，只用 data-open 收起/展开。
+          之前是条件渲染：切到「高级检索 / 关联」时主舞台宽度会瞬减 220px（+14 间距），
+          正文整段重排、图表跟着跳一下。改成常驻 + 宽度过渡后，主舞台是被「推开」的，
+          视觉上是滑动而不是闪一下；收起时宽 0、间距 0，也不占地方。
+        */}
+        <aside className="kb-context" data-open={showContext ? '' : undefined} aria-label={t.kb.contextAria} aria-hidden={showContext ? undefined : true}>
+          <div className="kb-context__head">{t.kb.contextHead}</div>
+          <div className="kb-context__list">
+            {docsLoading && <p className="hint" style={{ padding: 8 }}>{t.common.loading}</p>}
+            {!docsLoading && docs.length === 0 && <p className="hint" style={{ padding: 8 }}>{t.kb.metaEmpty}</p>}
+            {docs.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                className="kb-context__item"
+                data-on={activeDocId === d.id ? '' : undefined}
+                title={d.name}
+                tabIndex={showContext ? undefined : -1}
+                onClick={() => setContextDocId(d.id)}
+              >
+                <FileText size={14} />
+                <span className="nm">{d.name}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
 
         <div className="kb-stage">
           {/* motion 14.0.0 的 AnimatePresence mode="wait" 存在回归：退出动画永不启动、

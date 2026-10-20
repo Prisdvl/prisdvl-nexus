@@ -1373,17 +1373,24 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
             <div className="chat-head__id">
               <div data-testid="chat-title" className="chat-head__title">{active.title}</div>
               <div data-testid="chat-meta" className="chat-head__meta">{c.metaLine(active.messages.length, active.updated)}</div>
-              <RubberSegment
-                className="chat-view-tabs"
-                size="sm"
-                items={[
-                  { value: 'chat', label: tr.viewChat },
-                  { value: 'trace', label: tr.viewTrace },
-                ]}
-                value={chatView}
-                onChange={(v) => setChatView(v as 'chat' | 'trace')}
-                aria-label={`${tr.viewChat} / ${tr.viewTrace}`}
-              />
+              {/*
+                「对话 / 轨迹」只在**已经有内容**之后才出现：
+                新对话（还没发第一条消息）时两栏都是空的，顶着一组切换器既没有
+                可切的东西，也让空态页面显得像后台面板。发第一条消息后再出现。
+              */}
+              {!emptyChat && (
+                <RubberSegment
+                  className="chat-view-tabs"
+                  size="sm"
+                  items={[
+                    { value: 'chat', label: tr.viewChat },
+                    { value: 'trace', label: tr.viewTrace },
+                  ]}
+                  value={chatView}
+                  onChange={(v) => setChatView(v as 'chat' | 'trace')}
+                  aria-label={`${tr.viewChat} / ${tr.viewTrace}`}
+                />
+              )}
             </div>
 
             <div className="chat-head__tools">
