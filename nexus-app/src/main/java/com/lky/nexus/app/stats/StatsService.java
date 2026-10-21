@@ -1,5 +1,7 @@
 package com.lky.nexus.app.stats;
 
+import com.lky.nexus.common.api.ErrorCode;
+import com.lky.nexus.common.exception.BusinessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,6 +30,9 @@ public class StatsService {
     private static final int HEAT_DAYS = 30;
     private static final int TREND_DAYS = 14;
 
+    /** 用量页热力图一年一格：这也是单次查询允许的最长窗口，再长就该换预聚合了。 */
+    private static final int MAX_DAILY_DAYS = 365;
+
     private final StatsMapper statsMapper;
 
     public StatsService(StatsMapper statsMapper) {
@@ -51,6 +56,40 @@ public class StatsService {
                 series(byDay, HEAT_DAYS, StatsMapper.DayCount::getMsgCount),
                 series(byDay, HEAT_DAYS, StatsMapper.DayCount::getTokenCount),
                 activity(userId, 8));
+    }
+
+    /**
+     * 近 {@code days} 天的逐日 Token 消耗（用量页热力图的数据源）。
+     *
+     * <p>与 {@link #summary} 共用同一条 {@link StatsMapper#dailyUsage}：条数与 Token 合计
+     * 在一次扫描里同时取回，这里只取 Token 那一列，空缺日期同样由本类补 0。
+     *
+     * @param userId 当前用户 ID（由服务端从令牌解析，绝不接受前端传入）
+     * @param days   窗口天数（含今天），只接受 1–365
+     * @return 连续日轴 + 窗口两端
+     */
+    @Transactional(readOnly = true)
+    public DailyTokenSeries dailyTokens(Long userId, int days) {
+        /* 越界不悄悄截断：调用方以为拿到的是 3 年数据、实际只有 1 年，是最难查的那类错 */
+        if (days < 1 || days > MAX_DAILY_DAYS) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "days 必须是 1–" + MAX_DAILY_DAYS + " 之间的整数");
+        }
+        LocalDate today = LocalDate.now();
+        LocalDate since = today.minusDays(days - 1L);
+
+        Map<String, StatsMapper.DayCount> byDay = new HashMap<>();
+        for (StatsMapper.DayCount row : statsMapper.dailyUsage(userId, since)) {
+            byDay.put(row.getStatDay().format(DAY), row);
+        }
+
+        List<DailyTokenSeries.DayTokens> out = new ArrayList<>(days);
+        for (int i = days - 1; i >= 0; i--) {
+            String key = today.minusDays(i).format(DAY);
+            StatsMapper.DayCount row = byDay.get(key);
+            out.add(new DailyTokenSeries.DayTokens(key, row == null ? 0L : row.getTokenCount()));
+        }
+        return new DailyTokenSeries(since.format(DAY), today.format(DAY), out);
     }
 
     /**

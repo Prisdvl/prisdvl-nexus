@@ -134,6 +134,7 @@
 | POST | `/api/users/me/sessions/revoke-all` | 退出全部设备（批量 revoke） |
 | GET | `/api/users/me/quota` | 当前用户当日额度（只读，用于界面上"今日 N/M 次 · x/y tokens"那一行） |
 | GET | `/api/users/me/storage` | 当前用户存储占用（只读）：`usedBytes` / `documentCount` / `knowledgeBaseCount` / `totalLimitBytes` / `perKnowledgeBaseLimitBytes`；上限 **≤ 0 表示不限**（前端据此不画进度条）。口径见 `security.md` §6.4 |
+| GET | `/api/users/me/stats/daily-tokens` | 当前用户逐日 Token 消耗（只读，用量页热力图数据源）：`{ from, to, days: [{ day, tokens }] }`，`days` 是**连续**日轴（无消息的日子 `tokens=0`），`tokens = chat_message.total_tokens` 按自然日求和（流式中断未写回用量的消息计 0）。查询参数 `days`（默认 **365**，只接受 **1–365**，越界 `1001`）；用户维度取自令牌，不接受前端传 userId |
 | GET | `/api/users/me/totp` | 两步验证状态：`{ enabled, recoveryCodesLeft, confirmedAt }`（只读，不返回密钥） |
 | POST | `/api/users/me/totp/setup` | 生成候选密钥（**此时还没开启**）：`{ secret, otpauthUri, issuer, account, digits, periodSeconds }`；密钥仅本响应可见一次 |
 | POST | `/api/users/me/totp/enable` | 用 `{ "code": "123456" }` 校验候选密钥，通过才置 `totp_enabled=1` 并返回 **`{ recoveryCodes: [...] }` 10 枚一次性恢复码**（只此一次） |
