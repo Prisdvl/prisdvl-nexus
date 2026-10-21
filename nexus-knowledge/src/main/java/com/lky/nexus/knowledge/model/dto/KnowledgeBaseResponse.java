@@ -27,6 +27,8 @@ public record KnowledgeBaseResponse(
         Integer docCount,
         Integer chunkCount,
         Long totalTokens,
+        /** 已入库文档的原始文件字节合计（单库配额口径，见 StorageQuotaService）。0 表示该库还没有文档 */
+        Long usedBytes,
         LocalDateTime createdAt,
         LocalDateTime updatedAt) {
 }

@@ -19,6 +19,7 @@ import ActivityHeatmap, { type HeatmapDay } from '@/components/ui/activity-heatm
 import { mockUsageDays, toHeatmapDays } from '@/components/ui/activity-heatmap-utils/usage-heatmap'
 import { Skeleton } from '@/components/Skeleton'
 import { writeLocale, normalizeLocale, useLocale } from '@/lib/locale'
+import { fmtBytes } from '@/lib/bytes'
 import { sectionsCopy } from '@/lib/sectionsCopy'
 import { appCopy } from '@/lib/appCopy'
 import { pagesCopy } from '@/lib/pagesCopy'
@@ -710,20 +711,6 @@ export function SessionsSection() {
   </section>
 }
 /* ---------------- 数据与用量 · 用量配额 ---------------- */
-
-/**
- * 存储字节的人类可读形式。
- *
- * 与知识库详情页那个 `formatBytes` 的差别：这里要显示 5 GB 级别的上限，
- * 只写 KB/MB 会变成「5120.0 MB」这种没人读得下去的数字。
- */
-function fmtBytes(bytes: number): string {
-  if (bytes <= 0) return '0 MB'
-  const gb = bytes / 1024 / 1024 / 1024
-  if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`
-  const mb = bytes / 1024 / 1024
-  return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`
-}
 
 export function UsageSection() {
   const { locale } = useLocale()

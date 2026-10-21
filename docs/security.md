@@ -219,6 +219,20 @@
 - 端口实现：`QuotaChatUsageRecorder.java:29-31` 调 `quotaService.recordTokens(...)`；Bean 装配见 `AppConfig.java:33-34`。
 - `recordTokens` **尽力而为、绝不抛异常**（模型已调用，钱已花）：失败只计数 `QUOTA_RECORD_FAILED`（`QuotaService.java:94-108`）。
 
+### 6.4 存储配额（StorageQuotaService）
+
+与 §6 的「按天请求/Token 配额」并列，但两套东西互不相干：那一套限制**调用成本**，这一套限制**落盘体积**。
+
+- **口径**：`kb_document.file_size`（原始文件字节）之和，条件 `deleted = 0`。不是解析后的正文、不是 chunk 行数、更不是向量体积——用户能理解「这个 PDF 有 12 MB」，理解不了「你占了 37 MB 的 chunk 行」。删除文档即刻释放额度（逻辑删除行不计）。
+- **两个维度**：账号总量 `nexus.storage.total-bytes`（默认 **5 GiB** = `5368709120`）、单库上限 `nexus.storage.per-knowledge-base-bytes`（默认 **1 GiB** = `1073741824`）。环境变量 `NEXUS_STORAGE_TOTAL_BYTES` / `NEXUS_STORAGE_PER_KB_BYTES`。**配成 0 或负数表示该维度不限**（临时放开不必改代码）。
+- **闸门位置**（`StorageQuotaServiceImpl.ensureRoom`）：
+  1. 入队前预检（`KnowledgeImportServiceImpl`）——快速失败，不占导入队列；
+  2. 落库事务内终检（`DocumentPersistServiceImpl`）——两个入口（单文件 / Vault 批量）都经过这里。
+- **增量口径**：终检只校验 `file.size() - 原文档 file_size` 的正差额。同一路径用更小的文件覆盖导入不该被判超限（`DocumentPersistServiceImpl` 注释）。
+- **超限返回**：`QUOTA_EXHAUSTED(7002)` → HTTP **403**，消息带可读差额（按 MB/GB 分档，避免「还差 0.0 MB」）。
+- **fail-closed**：配额查询本身失败时导入直接失败，不静默放行。
+- **已知边界（如实）**：① 没有「预留额度」，两个并发导入各自读到同一个 `used`，极限情况下合计可小幅超限——判定与写入在同一事务，但读的是已提交数据；② 上限是**全局配置**，没有 per-user / per-plan 的库表，用户不能自助调整；③ 限的是原始文件字节，`data/` 目录下的实际占用还要加上解析中间产物；④ 只拦导入，不拦检索/导出。
+
 ---
 
 ## 7. `CurrentUser.requireId()`

@@ -90,6 +90,23 @@ public interface DocumentMapper extends BaseMapper<DocumentPO> {
     @Select("SELECT COALESCE(SUM(file_size), 0) FROM kb_document WHERE kb_id = #{kbId} AND deleted = 0")
     long sumFileSizeByKb(@Param("kbId") Long kbId);
 
+    /**
+     * 某用户每个知识库的字节合计（知识库列表的占用展示用）。
+     *
+     * <p>一次分组查询代替「每行查一次 {@link #sumFileSizeByKb}」：列表一页 20 条就是
+     * 20 次往返，而这条只是渲染用的旁路数据，不值这个价。返回的 map 键为
+     * {@code kb_id} 与 {@code bytes}，由调用方转成 {@code Map<Long, Long>}。
+     *
+     * <p>空库不会出现在结果里（没有行就分不出组），调用方取值时按 0 兜底。
+     */
+    @Select("""
+            SELECT kb_id, COALESCE(SUM(file_size), 0) AS bytes
+            FROM kb_document
+            WHERE user_id = #{userId} AND deleted = 0
+            GROUP BY kb_id
+            """)
+    List<java.util.Map<String, Object>> sumFileSizeGroupedByUser(@Param("userId") Long userId);
+
     /** 某用户的文档条数（用量面板展示，不参与判定）。 */
     @Select("SELECT COUNT(*) FROM kb_document WHERE user_id = #{userId} AND deleted = 0")
     long countByUser(@Param("userId") Long userId);

@@ -11,6 +11,8 @@ export interface KbItem {
   tone: string
   /** 建库时冻结的嵌入模型（后端 `embeddingModel`）；演示数据没有该字段，界面按「—」处理 */
   embeddingModel?: string
+  /** 该库已入库文件的原始字节合计；演示数据没有，界面按 0 处理 */
+  usedBytes?: number
 }
 
 export const KBS: KbItem[] = [

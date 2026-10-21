@@ -50,6 +50,15 @@
 .kb-cell__text small { font-size: 11.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
 .kb-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--text-2); background: var(--surface-muted); padding: 3px 7px; border-radius: var(--radius-sm); }
 .kb-num { font-variant-numeric: tabular-nums; color: var(--text-2); }
+/* 单库占用：细轨道 + 已用/上限，颜色按 50% / 80% 分档（与设置页配额行同一套阈值） */
+.kb-usage { display: flex; flex-direction: column; gap: 5px; min-width: 96px; max-width: 140px; }
+.kb-usage__track { height: 5px; border-radius: 999px; background: var(--surface-muted); overflow: hidden; }
+.kb-usage__fill { height: 100%; border-radius: 999px; background: var(--primary); transition: width var(--dur-ui) var(--ease-out); }
+.kb-usage[data-level='warn'] .kb-usage__fill { background: var(--warning); }
+.kb-usage[data-level='danger'] .kb-usage__fill { background: var(--danger); }
+.kb-usage__text { font-size: 11.5px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kb-usage__limit { color: var(--text-3); }
+@media (prefers-reduced-motion: reduce) { .kb-usage__fill { transition: none; } }
 .kb-time { color: var(--text-3); font-size: 12px; white-space: nowrap; }
 .kb-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .kb-row-chev { color: var(--text-3); }

@@ -161,7 +161,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         log.info("创建知识库 id={}, userId={}, workspaceId={}, name={}, embedding={}:{} ({}维), chunk={}/{}",
                 entity.getId(), userId, workspaceId, name, embedding.provider(), embedding.model(),
                 embedding.dimensions(), chunkSize, chunkOverlap);
-        return toResponse(entity);
+        return toResponse(entity, 0L);   // 刚建库，必然没有文档占用
     }
 
     @Override
@@ -175,13 +175,18 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                         .eq(KnowledgeBasePO::getUserId, userId)
                         .orderByDesc(KnowledgeBasePO::getCreatedAt));
 
-        List<KnowledgeBaseResponse> list = result.getRecords().stream().map(this::toResponse).toList();
+        /* 占用字节一次分组查完：这是渲染用的旁路数据，逐行查会把列表变成 N+1 次往返 */
+        Map<Long, Long> usedBytesByKb = usedBytesByKb(userId);
+        List<KnowledgeBaseResponse> list = result.getRecords().stream()
+                .map(entity -> toResponse(entity, usedBytesByKb.getOrDefault(entity.getId(), 0L)))
+                .toList();
         return PageResult.of(list, result.getTotal(), safePageNum, safePageSize);
     }
 
     @Override
     public KnowledgeBaseResponse detail(Long userId, Long knowledgeBaseId) {
-        return toResponse(requireOwned(userId, knowledgeBaseId));
+        KnowledgeBasePO entity = requireOwned(userId, knowledgeBaseId);
+        return toResponse(entity, documentMapper.sumFileSizeByKb(entity.getId()));
     }
 
     @Override
@@ -213,7 +218,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         }
         entity.setUpdatedAt(LocalDateTime.now());
         knowledgeBaseMapper.updateById(entity);
-        return toResponse(entity);
+        return toResponse(entity, documentMapper.sumFileSizeByKb(entity.getId()));
     }
 
     @Override
@@ -346,7 +351,30 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         return embeddingResolver.effectiveFor(userId);
     }
 
+    /**
+     * 当前用户每个知识库的原始文件占用（字节）。
+     *
+     * <p>空库不在分组结果里，所以调用方按 0 兜底；值统一转成 {@code Long}——
+     * H2 与 MySQL 对 {@code SUM} 的返回类型不一致（BigDecimal / Long），
+     * 直接强转会在其中一个库上抛 ClassCastException。
+     */
+    private Map<Long, Long> usedBytesByKb(Long userId) {
+        Map<Long, Long> result = new HashMap<>();
+        for (Map<String, Object> row : documentMapper.sumFileSizeGroupedByUser(userId)) {
+            Object kbId = row.get("kb_id") != null ? row.get("kb_id") : row.get("KB_ID");
+            Object bytes = row.get("bytes") != null ? row.get("bytes") : row.get("BYTES");
+            if (kbId == null) continue;
+            result.put(Long.parseLong(String.valueOf(kbId)),
+                    bytes == null ? 0L : Long.parseLong(String.valueOf(bytes)));
+        }
+        return result;
+    }
+
     private KnowledgeBaseResponse toResponse(KnowledgeBasePO entity) {
+        return toResponse(entity, 0L);
+    }
+
+    private KnowledgeBaseResponse toResponse(KnowledgeBasePO entity, long usedBytes) {
         return new KnowledgeBaseResponse(
                 entity.getId(),
                 entity.getWorkspaceId(),
@@ -366,6 +394,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                 entity.getDocCount(),
                 entity.getChunkCount(),
                 entity.getTotalTokens(),
+                usedBytes,
                 entity.getCreatedAt(),
                 entity.getUpdatedAt());
     }

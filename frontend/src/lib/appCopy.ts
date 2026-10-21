@@ -143,6 +143,8 @@ export interface AppCopy {
     tableModel: string
     tableDocs: string
     tableUpdated: string
+    tableStorage: string
+    storageUnlimited: string
     loadingAria: string
   }
   kb: {
@@ -597,6 +599,8 @@ const ZH: AppCopy = {
     tableModel: 'Embedding 模型',
     tableDocs: '文档数',
     tableUpdated: '更新时间',
+    tableStorage: '占用',
+    storageUnlimited: '不限',
     loadingAria: '知识库列表加载中',
   },
   kb: {
@@ -1007,6 +1011,8 @@ const EN: AppCopy = {
     tableModel: 'Embedding model',
     tableDocs: 'Documents',
     tableUpdated: 'Updated',
+    tableStorage: 'Storage',
+    storageUnlimited: 'No limit',
     loadingAria: 'Loading knowledge bases',
   },
   kb: {

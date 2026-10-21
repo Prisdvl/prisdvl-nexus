@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { ChevronRight, Database, FileText, Files, Pencil, Plus, RefreshCw, Search, SearchX } from 'lucide-react'
 import Modal from '@/components/Modal'
@@ -7,6 +7,7 @@ import { Skeleton, StateEmpty } from '@/components/Skeleton'
 import { KBS, type KbItem } from '@/data'
 import { api, USE_MOCK, errMessage } from '@/lib/api'
 import { fetchKbs, useLoad } from '@/lib/backendData'
+import { fmtBytes, usagePercent } from '@/lib/bytes'
 import { toast } from '@/lib/toast'
 import Loc from '@/components/Loc'
 import { appCopy } from '@/lib/appCopy'
@@ -39,6 +40,18 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
   const [renaming, setRenaming] = useState<KbItem | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [renameBusy, setRenameBusy] = useState(false)
+
+  /* 单库上限来自服务端配额接口（不在每个知识库上重复下发）；拿不到就不画进度条，
+     只显示已用字节 —— 编一个上限出来比不显示更误导 */
+  const [kbLimitBytes, setKbLimitBytes] = useState(0)
+  useEffect(() => {
+    if (USE_MOCK) return
+    let alive = true
+    api.users.storage()
+      .then((s) => { if (alive) setKbLimitBytes(s.perKnowledgeBaseLimitBytes ?? 0) })
+      .catch(() => { /* 配额接口挂了不影响列表，只是不显示比例 */ })
+    return () => { alive = false }
+  }, [])
 
   const q = query.trim().toLowerCase()
   const list = useMemo(() => rows
@@ -146,6 +159,7 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
             <Skeleton w={120} h={12} />
             <Skeleton w={92} h={12} />
             <Skeleton w={56} h={12} />
+            <Skeleton w={72} h={12} />
             <Skeleton w={84} h={12} />
           </div>
           {Array.from({ length: 6 }, (_, i) => (
@@ -156,6 +170,7 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
                 <Skeleton w={`${28 + ((i * 5) % 16)}%`} h={11} />
               </div>
               <Skeleton w={64} h={12} />
+              <Skeleton w={56} h={12} />
               <Skeleton w={56} h={12} />
             </div>
           ))}
@@ -185,7 +200,7 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
         <div className="panel kb-table-wrap">
           <table className="kb-table">
             <thead>
-              <tr><th>{t.kbList.tableName}</th><th>{t.kbList.tableModel}</th><th>{t.kbList.tableDocs}</th><th>{t.kbList.tableUpdated}</th><th aria-label="actions" /></tr>
+              <tr><th>{t.kbList.tableName}</th><th>{t.kbList.tableModel}</th><th>{t.kbList.tableDocs}</th><th>{t.kbList.tableStorage}</th><th>{t.kbList.tableUpdated}</th><th aria-label="actions" /></tr>
             </thead>
             <tbody>
               {list.map((kb) => {
@@ -199,6 +214,22 @@ export default function KnowledgeBaseListPage({ onOpen }: Props) {
                     </td>
                     <td><code className="kb-code">{kb.embeddingModel ?? '—'}</code></td>
                     <td className="kb-num">{kb.docs}</td>
+                    <td>
+                      {(() => {
+                        const used = kb.usedBytes ?? 0
+                        const percent = usagePercent(used, kbLimitBytes)
+                        const level = percent === null ? 'off' : percent >= 80 ? 'danger' : percent >= 50 ? 'warn' : 'ok'
+                        return (
+                          <div className="kb-usage" data-level={level} title={`${fmtBytes(used)} / ${kbLimitBytes > 0 ? fmtBytes(kbLimitBytes) : t.kbList.storageUnlimited}`}>
+                            {percent !== null && <div className="kb-usage__track"><div className="kb-usage__fill" style={{ width: `${percent}%` }} /></div>}
+                            <span className="kb-usage__text">
+                              {fmtBytes(used)}
+                              {kbLimitBytes > 0 && <span className="kb-usage__limit"> / {fmtBytes(kbLimitBytes)}</span>}
+                            </span>
+                          </div>
+                        )
+                      })()}
+                    </td>
                     <td className="kb-time">{kb.updated}</td>
                     <td className="kb-row-actions">
                       <button className="plugin-icon-btn" type="button" title="重命名" aria-label={`重命名 ${kb.name}`} onClick={(e) => { e.stopPropagation(); setRenaming(kb); setRenameDraft(kb.name) }}><Pencil size={14} /></button>

@@ -677,6 +677,8 @@ export interface KnowledgeBase {
   chunkCount: number
   totalTokens: string | number
   embeddingModel?: string
+  /** 已入库文档的原始文件字节合计（单库配额口径）；老后端没有该字段 */
+  usedBytes?: number | string | null
   createdAt: string
   updatedAt: string
 }

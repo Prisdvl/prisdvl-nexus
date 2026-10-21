@@ -133,6 +133,7 @@
 | DELETE | `/api/users/me/sessions/{id}` | 退出指定设备（只能删自己的；否则 `404/2010`） |
 | POST | `/api/users/me/sessions/revoke-all` | 退出全部设备（批量 revoke） |
 | GET | `/api/users/me/quota` | 当前用户当日额度（只读，用于界面上"今日 N/M 次 · x/y tokens"那一行） |
+| GET | `/api/users/me/storage` | 当前用户存储占用（只读）：`usedBytes` / `documentCount` / `knowledgeBaseCount` / `totalLimitBytes` / `perKnowledgeBaseLimitBytes`；上限 **≤ 0 表示不限**（前端据此不画进度条）。口径见 `security.md` §6.4 |
 | GET | `/api/users/me/llm-config` | 当前用户自定义对话模型凭据（`baseUrl` / `modelName` / `enabled` / `hasApiKey` / **`apiKeyMasked`**；**永不返回明文**） |
 | PUT | `/api/users/me/llm-config` | 保存同一份凭据。`apiKey` **留空 = 保留旧值**，填了才覆盖（上限 **320**，超限 `1001`）；`enabled=true` 时三项必须齐全，否则 `1001`。落库形态是 AES-GCM 密文（`v1:` 前缀），见 `security.md` 未实现清单 §11 |
 | GET | `/api/users/me/embedding-config` | 当前用户自定义嵌入模型凭据（BYOK 路线 A）：`provider` / `modelName` / `baseUrl` / `dimensions` / `enabled` / `hasApiKey` / **`apiKeyMasked`**，另带平台约束 **`allowedModels`** 与 **`requiredDimensions`**（未配置时也返回，供前端渲染合法选项） |
@@ -226,6 +227,24 @@ GET /api/users/me/quota
 `requestUsed` 可能**大于** `requestLimit`：被拒的请求也占一次计数（否则连点没有成本），
 界面展示时用 `min(已用, 上限)` 收敛。
 
+#### 存储占用 `GET /api/users/me/storage`
+
+```http
+GET /api/users/me/storage
+
+200 OK
+{ "code": 0, "data": {
+    "usedBytes": 1610612736, "documentCount": 12,
+    "knowledgeBaseCount": 3,
+    "totalLimitBytes": 5368709120,
+    "perKnowledgeBaseLimitBytes": 1073741824 } }
+```
+
+- 口径是 `kb_document.file_size` 之和（`deleted = 0`）：**原始文件字节**，不是正文、不是向量体积。删文档即刻释放。
+- `totalLimitBytes` / `perKnowledgeBaseLimitBytes` **≤ 0 表示该维度不限**，前端此时不画进度条（而不是画一条满格）。
+- 只读快照，不占用每日请求配额；上限由 `nexus.storage.*` 配置，见 `security.md` §6.4。
+- 单库占用随 `GET /api/knowledge-bases`（列表）与 `GET /api/knowledge-bases/{id}`（详情）的 `usedBytes` 一起下发，前端列表的占用条用的就是它。
+
 ### 2.2 规划中（尚未实现）
 
 | 方法 | 路径 | 说明 |
@@ -246,8 +265,8 @@ GET /api/users/me/quota
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/knowledge-bases` | 创建（name、description、icon、chunkStrategy、retrievalTopK、similarityThreshold） |
-| GET | `/api/knowledge-bases` | 我的知识库列表（含 doc/chunk 统计、最近同步时间） |
-| GET | `/api/knowledge-bases/{id}` | 详情（含 embedding 模型、维度、切分参数） |
+| GET | `/api/knowledge-bases` | 我的知识库列表（含 doc/chunk 统计、最近同步时间、`usedBytes` 原始文件占用） |
+| GET | `/api/knowledge-bases/{id}` | 详情（含 embedding 模型、维度、切分参数、`usedBytes` 原始文件占用） |
 | PUT | `/api/knowledge-bases/{id}` | 改名/描述/图标/enabled 状态/检索参数（**不允许**改 embedding 模型，见 ADR-008） |
 | DELETE | `/api/knowledge-bases/{id}` | 删除知识库（级联删除文档、Chunk、向量、ES 文档） |
 | GET | `/api/knowledge-bases/{id}/tree` | 目录树（供左侧栏：Java / Spring / Redis…） |

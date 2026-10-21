@@ -94,6 +94,7 @@ export const toKbItem = (kb: KnowledgeBase): KbItem => ({
   updated: relTime(kb.updatedAt ?? kb.createdAt),
   tone: toneOf(kb.id),
   embeddingModel: kb.embeddingModel ?? undefined,
+  usedBytes: Number(kb.usedBytes ?? 0) || 0,
 })
 
 /** 后端文档状态 → 界面三态。 */
