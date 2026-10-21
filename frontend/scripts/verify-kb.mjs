@@ -20,6 +20,14 @@ const check = (name, ok, extra = '') => {
 page.on('pageerror', (e) => issues.push(`pageerror: ${String(e.message).slice(0, 160)}`))
 page.on('console', (m) => { if (m.type() === 'error') issues.push(`console.error: ${m.text().slice(0, 160)}`) })
 
+/*
+ * 数据到位前别用固定 sleep 再 count()：count() 自己不等待，慢 runner 上会读到"还没渲染"。
+ * 这里的每个等待都只是「等到条件成立」，超时照常往下断言 —— 真的没渲染依然判 FAIL。
+ */
+const settle = (fn, arg = null, timeout = 10000) => page.waitForFunction(fn, arg, { timeout }).catch(() => {})
+const rowCount = (min) => settle((n) => document.querySelectorAll('.kb-table tbody tr').length >= n, min)
+const rowEquals = (n) => settle((want) => document.querySelectorAll('.kb-table tbody tr').length === want, n)
+
 await page.goto(`${BASE}/#/login`, { waitUntil: 'networkidle' })
 await page.waitForSelector('.auth-card')
 await page.locator('#li-u').fill('qa-runner')
@@ -29,21 +37,21 @@ await page.waitForSelector('.shell', { timeout: 10000 })
 
 /* ---------- 知识库列表 ---------- */
 await page.goto(`${BASE}/#/app/kb`, { waitUntil: 'networkidle' })
-await page.waitForTimeout(900)
+await rowCount(5)
 check('知识库统计卡 3 个', (await page.locator('.kb-stats .stat-card').count()) === 3)
 check('知识库筛选 3 项', (await page.locator('.kb-filters button.rubber-segment__item').count()) === 3)
 check('知识库数据表渲染', (await page.locator('.kb-table tbody tr').count()) >= 5)
 check('表格含 Embedding 模型列且不编造 Collection', (await page.locator('.kb-table .kb-code').count()) >= 5 && (await page.locator('.kb-table th', { hasText: 'Collection' }).count()) === 0)
 await page.locator('.kb-actions__search input').fill('Redis')
-await page.waitForTimeout(300)
+await rowEquals(1)
 check('搜索可过滤', (await page.locator('.kb-table tbody tr').count()) === 1)
 await page.locator('.kb-actions__search input').fill('')
-await page.waitForTimeout(300)
+await rowCount(5)
 await page.locator('.kb-table tbody tr').first().getByRole('button', { name: /重命名/ }).click()
 await page.waitForSelector('#rename-kb')
 await page.locator('#rename-kb').fill('重命名测试库')
 await page.locator('.dialog .btn-primary').click()
-await page.waitForTimeout(400)
+await settle(() => (document.querySelector('.kb-table tbody')?.textContent ?? '').includes('重命名测试库'))
 check('重命名生效', (await page.locator('.kb-table tbody').innerText()).includes('重命名测试库'))
 await page.screenshot({ path: join(OUT, 'qa-kb-list.png') })
 
@@ -68,17 +76,17 @@ check('分块含字符与 Token 列', (await page.locator('.chunk-table th', { h
 check('分块批量操作齐全', (await page.locator('.chunk-batch button').count()) === 4)
 const onBefore = await page.locator('.chunk-table .doc-switch').first().getAttribute('aria-checked')
 await page.locator('.chunk-table .doc-switch').first().click()
-await page.waitForTimeout(200)
+await settle((before) => document.querySelector('.chunk-table .doc-switch')?.getAttribute('aria-checked') !== before, onBefore)
 const onAfter = await page.locator('.chunk-table .doc-switch').first().getAttribute('aria-checked')
 check('分块可单独启停', onBefore !== onAfter, `${onBefore} → ${onAfter}`)
 await page.locator('.chunk-table tbody tr').first().getByRole('button', { name: /选择分块/ }).click()
 await page.locator('.chunk-batch button', { hasText: '批量禁用' }).click()
-await page.waitForTimeout(200)
+await settle(() => document.querySelectorAll('.chunk-table .doc-switch[aria-checked="false"]').length >= 1)
 check('批量操作可用', (await page.locator('.chunk-table .doc-switch[aria-checked="false"]').count()) >= 1)
 await page.screenshot({ path: join(OUT, 'qa-kb-chunks.png') })
 
 await page.setViewportSize({ width: 390, height: 844 })
-await page.waitForTimeout(500)
+await settle(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
 check('手机端知识库页无横向溢出', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
 
 console.log(issues.length === 0 ? 'ALL OK' : `ISSUES: ${issues.join(' | ')}`)
