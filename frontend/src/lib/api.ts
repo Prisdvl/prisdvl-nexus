@@ -621,6 +621,11 @@ export const api = {
     /** 工作台汇总：趋势(14) + 热力(30) + 最近活动(8)。
      *  用户维度由服务端从令牌解析，前端不传 userId。 */
     summary: () => http.get<Result<StatsSummary>>('/stats/summary').then((r) => r.data.data),
+    /** 近 N 天（默认 365）逐日 Token 消耗，用量页热力图的数据源。
+     *  与 summary 分开取：整年序列只有用量页要，别让工作台首屏为它多读 11 个月的消息行。 */
+    dailyTokens: (days = 365) =>
+      http.get<Result<DailyTokenSeries>>('/users/me/stats/daily-tokens', { params: { days } })
+        .then((r) => r.data.data),
   },
   workflows: {
     list: (pageNum = 1, pageSize = 50) =>
@@ -875,6 +880,15 @@ export interface StatsSummary {
   /** 每天消息的 Token 合计（与 heat 同窗口）。老后端不返回这个字段，读取方要按空数组兜底。 */
   tokenHeat?: StatsTrendPoint[]
   activity: StatsActivityItem[]
+}
+
+export interface DailyTokenPoint { day: string; tokens: number }
+export interface DailyTokenSeries {
+  /** 窗口两端（YYYY-MM-DD，闭区间）：前端据此判断这串数据代表哪一段 */
+  from: string
+  to: string
+  /** 连续日轴：没有消息的日子也在，tokens 为 0（不是稀疏返回） */
+  days: DailyTokenPoint[]
 }
 
 export interface UserQuota {

@@ -16,7 +16,7 @@ import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResu
 import { useAuth } from '@/lib/auth'
 import { LANDING_KEYS, readAccountPreferences, writeAccountPreferences, type LandingKey } from '@/lib/preferences'
 import ActivityHeatmap, { parseDay, type HeatmapDay } from '@/components/ui/activity-heatmap'
-import { mockUsageDays, toHeatmapDays } from '@/components/ui/activity-heatmap-utils/usage-heatmap'
+import { fromDailyTokens, mockUsageDays } from '@/components/ui/activity-heatmap-utils/usage-heatmap'
 import { Skeleton } from '@/components/Skeleton'
 import { writeLocale, normalizeLocale, useLocale } from '@/lib/locale'
 import { fmtBytes } from '@/lib/bytes'
@@ -945,10 +945,12 @@ export function UsageSection() {
       .then(([q, k, st]) => { if (alive) { setQuota(q); setKbCount(k.total); setStorage(st) } })
       .catch((e) => { if (alive) setError(errMessage(e)) })
       .finally(() => { if (alive) setLoading(false) })
-    /* 热力图数据单独拉：统计接口挂了不该影响配额展示（反过来说配额挂了也不该拖没热力图） */
-    api.stats.summary()
-      .then((summary) => { if (alive) setHeatDays(toHeatmapDays(summary.heat, 365)) })
-      .catch(() => { if (alive) setHeatDays(toHeatmapDays([], 365)) })
+    /* 热力图数据单独拉：用量统计挂了不该影响配额展示（反过来配额挂了也不该拖没热力图）。
+       口径是 chat_message.total_tokens 按自然日求和，窗口 365 天；挂了就给全 0 的日轴，
+       让格子按"确实没用量"显示，而不是编一份看起来热闹的假数据。 */
+    api.stats.dailyTokens(365)
+      .then((series) => { if (alive) setHeatDays(fromDailyTokens(series.days, 365)) })
+      .catch(() => { if (alive) setHeatDays(fromDailyTokens([], 365)) })
     return () => { alive = false }
   }, [])
   const pct = (used: number, limit: number) => limit > 0 ? `${Math.min(100, Math.round(used / limit * 100))}%` : '0%'
@@ -962,7 +964,7 @@ export function UsageSection() {
     hint: s.usage.heatHint,
   }
   /* 点选某天的明细：全部从同一份 365 天序列现算，不额外请求
-     （后端只有逐日条数，日均/占比/排名在本地加起来比再开接口更便宜） */
+     （服务端给的是逐日 Token 合计，日均/占比/排名在本地加起来比再开接口更便宜） */
   const picked = useMemo(() => {
     if (!pickedDay) return null
     const day = heatDays.find((d) => d.date === pickedDay)
@@ -1042,7 +1044,8 @@ export function UsageSection() {
           <div className="usage-heat__stat">
             <dt>{s.usage.heatPickAvg}</dt>
             <dd title={s.usage.heatPickAvg}>
-              {picked.avgActive > 0 ? picked.avgActive.toFixed(1) : '—'}
+              {/* Token 量级到千位，小数没有意义：四舍五入后按语言加千分位 */}
+              {picked.avgActive > 0 ? Math.round(picked.avgActive).toLocaleString() : '—'}
             </dd>
           </div>
           <div className="usage-heat__stat">
