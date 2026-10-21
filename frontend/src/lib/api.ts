@@ -15,6 +15,8 @@
  *    决策：存 localStorage（XSS 风险见 Phase 4 报告；httpOnly Cookie 属后续项）。
  */
 import axios, { AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios'
+import { pagesCopy } from '@/lib/pagesCopy'
+import { readLocale } from '@/lib/locale'
 
 /* ------------------------------------------------------------------ *
  * 环境开关
@@ -330,10 +332,12 @@ http.interceptors.response.use(
 export function errMessage(e: unknown): string {
   const ax = e as AxiosError<Result<unknown>>
   const msg = ax?.response?.data?.message
+  /* 后端没给 message 时只能前端兜底，文案跟随当前界面语言（不要再写死中文） */
+  const common = pagesCopy(readLocale()).common
   if (msg) return msg
-  if (ax?.code === 'ECONNABORTED') return '请求超时，请检查后端是否在运行'
-  if (ax?.message === 'Network Error') return '连不上后端服务，请确认 8080 端口的进程已启动'
-  return '请求失败，请稍后重试'
+  if (ax?.code === 'ECONNABORTED') return common.errTimeout
+  if (ax?.message === 'Network Error') return common.errNetwork
+  return common.errGeneric
 }
 
 /** 业务包络 code：200x 之外都是业务错误，需要调用方处理 */

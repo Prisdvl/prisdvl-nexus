@@ -256,6 +256,14 @@ export interface AppCopy {
     contextAria: string
     contextHead: string
     docsManageAria: string
+    docStatusAria: string
+    docStatusAll: string
+    docRefresh: string
+    docMeta: (type: string, size: string, updated: string) => string
+    docEnableAria: (name: string) => string
+    chunkCountTitle: string
+    chunkManage: string
+    chunkManageAria: (name: string) => string
     docsLoadFailTitle: (reason: string) => string
     unknownDoc: string
     openInDocs: string
@@ -714,6 +722,14 @@ const ZH: AppCopy = {
     contextAria: '当前知识库文档',
     contextHead: '文档',
     docsManageAria: '文档管理',
+    docStatusAria: '状态筛选',
+    docStatusAll: '全部状态',
+    docRefresh: '刷新',
+    docMeta: (type, size, updated) => `本地文件 · ${type} · ${size} · ${updated}`,
+    docEnableAria: (name) => `${name}：启用本文档`,
+    chunkCountTitle: '分块数',
+    chunkManage: '分块管理',
+    chunkManageAria: (name) => `分块管理：${name}`,
     docsLoadFailTitle: (reason) => `文档列表加载失败：${reason}`,
     unknownDoc: '未知文档',
     openInDocs: '在文档列表中查看',
@@ -1128,6 +1144,14 @@ const EN: AppCopy = {
     contextAria: 'Documents in this knowledge base',
     contextHead: 'Docs',
     docsManageAria: 'Document management',
+    docStatusAria: 'Filter by status',
+    docStatusAll: 'All statuses',
+    docRefresh: 'Refresh',
+    docMeta: (type, size, updated) => `Local file · ${type} · ${size} · ${updated}`,
+    docEnableAria: (name) => `${name}: index this document`,
+    chunkCountTitle: 'Chunks',
+    chunkManage: 'Manage chunks',
+    chunkManageAria: (name) => `Manage chunks: ${name}`,
     docsLoadFailTitle: (reason) => `Failed to load documents: ${reason}`,
     unknownDoc: 'Unknown document',
     openInDocs: 'View in document list',

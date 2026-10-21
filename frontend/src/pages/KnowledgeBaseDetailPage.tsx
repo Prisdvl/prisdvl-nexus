@@ -164,11 +164,11 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
    * 库里还没有文档时 buildStarters 返回空数组，只留标题与说明，不编造问题。 */
   const pc = pagesCopy(locale).chat
   const tabItems = TAB_ORDER.map((k) => ({ value: k, label: t.kb.tabs[k] }))
-  /* 检索模式内部仍以中文名作 value（MODE_MAP 依赖），label 随语言切换 */
+  /* 检索模式用与语言无关的 code 作 value（vector/bm25/hybrid），label 随语言切换 */
   const modeItems = [
-    { value: '向量检索', label: t.kb.modes.vector },
-    { value: 'BM25', label: t.kb.modes.bm25 },
-    { value: '混合检索', label: t.kb.modes.hybrid },
+    { value: 'vector', label: t.kb.modes.vector },
+    { value: 'bm25', label: t.kb.modes.bm25 },
+    { value: 'hybrid', label: t.kb.modes.hybrid },
   ]
   const [hlActive, setHlActive] = useState(false)
   const { key: navKey } = useLocation()
@@ -216,7 +216,7 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   /* 检索参数：mode + topK —— 这两个是后端 GET /knowledge-bases/{id}/search 真实支持的。
      appliedUsage 记录"已生效"的那份，pending 用于区分未保存状态（后端不持久化检索参数，
      所以这里的"生效"= 最近一次检索实际使用的取值）。 */
-  const DEFAULT_USAGE = { mode: '混合检索', topK: 6 }
+  const DEFAULT_USAGE = { mode: 'hybrid', topK: 6 }
   const [usage, setUsage] = useState(DEFAULT_USAGE)
   const [appliedUsage, setAppliedUsage] = useState(DEFAULT_USAGE)
   const [preview, setPreview] = useState<DocItem | null>(null)
@@ -239,7 +239,6 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
     ? { duration: 0 }
     : { type: 'spring' as const, stiffness: 300, damping: 32, mass: 0.75 }
 
-  const MODE_MAP: Record<string, string> = { '向量检索': 'vector', 'BM25': 'bm25', '混合检索': 'hybrid' }
   const thinking = turns.some((t) => t.thinking)
   const importActive = importRows.some(
     (row) => row.phase === 'queued' || row.phase === 'uploading' || row.phase === 'processing',
@@ -435,7 +434,7 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
         await new Promise((r) => { window.setTimeout(r, 400) })
         setHits(MOCK_SEARCH_HITS)
       } else {
-        setHits(await api.knowledge.search(kbId, q, MODE_MAP[usage.mode] ?? 'hybrid', usage.topK))
+        setHits(await api.knowledge.search(kbId, q, usage.mode, usage.topK))
       }
       setSearched(true)
       /* 真正跑过一次，当前取值才算"已生效" */
@@ -928,13 +927,13 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
                     />
                   </div>
                   <span className="badge">{visibleDocs.length} / {docs.length}</span>
-                  <select className="input" value={docStatus} aria-label="状态筛选" onChange={(e) => setDocStatus(e.target.value as typeof docStatus)}>
-                    <option value="all">全部状态</option>
-                    <option value="done">已完成</option>
-                    <option value="indexing">解析中</option>
-                    <option value="failed">失败</option>
+                  <select className="input" value={docStatus} aria-label={t.kb.docStatusAria} onChange={(e) => setDocStatus(e.target.value as typeof docStatus)}>
+                    <option value="all">{t.kb.docStatusAll}</option>
+                    <option value="done">{t.kb.statusDone}</option>
+                    <option value="indexing">{t.kb.statusIndexing}</option>
+                    <option value="failed">{t.kb.statusFailed}</option>
                   </select>
-                  <button className="btn btn-ghost btn-sm" type="button" onClick={loadDocs}><RefreshCw size={13} /> 刷新</button>
+                  <button className="btn btn-ghost btn-sm" type="button" onClick={loadDocs}><RefreshCw size={13} /> {t.kb.docRefresh}</button>
                 </div>
               </div>
 
@@ -973,17 +972,17 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
                     <span className="ic"><FileText size={15} /></span>
                     <div style={{ minWidth: 0 }}>
                       <div className="nm">{d.name}</div>
-                    <div className="mt">Local File · chunk · {d.type} · {d.size} · {d.updated}</div>
+                    <div className="mt">{t.kb.docMeta(d.type, d.size, d.updated)}</div>
                     </div>
                   <button
                     className="doc-switch"
                     type="button"
                     role="switch"
                     aria-checked={docEnabled[d.id] ?? d.status === 'done'}
-                    aria-label={`${d.name} 启用`}
+                    aria-label={t.kb.docEnableAria(d.name)}
                     onClick={(e) => { e.stopPropagation(); setDocEnabled((prev) => ({ ...prev, [d.id]: !(prev[d.id] ?? d.status === 'done') })) }}
                   />
-                  <span className="kb-num" title="分块数">{d.name.length % 12 + 6}</span>
+                  <span className="kb-num" title={t.kb.chunkCountTitle}>{d.name.length % 12 + 6}</span>
                     <span className="doc-status" title={{ done: t.kb.statusDone, indexing: t.kb.statusIndexing, failed: t.kb.statusFailed }[d.status]}>
                       {d.status === 'done' && <StatusMark status="done" size={15} label={t.kb.statusDone} fontSize={12} strike={false} />}
                       {d.status === 'indexing' && <StatusMark status="running" progress={0.4} size={15} label={t.kb.statusIndexing} fontSize={12} />}
@@ -993,8 +992,8 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
                       <button
                         className="btn btn-ghost btn-sm"
                         type="button"
-                        aria-label={`分块管理 ${d.name}`}
-                        title="分块管理"
+                        aria-label={t.kb.chunkManageAria(d.name)}
+                        title={t.kb.chunkManage}
                         onClick={(e) => { e.stopPropagation(); setChunkDoc(d) }}
                       >
                         <Layers size={14} />
@@ -1547,7 +1546,7 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
 
       <Modal
         open={chunkDoc !== null}
-        title="分块管理"
+        title={t.kb.chunkManage}
         width={1000}
         onClose={() => setChunkDoc(null)}
       >

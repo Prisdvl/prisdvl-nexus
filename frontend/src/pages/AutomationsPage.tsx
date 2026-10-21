@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   CalendarClock, CheckCircle2, Clock, History, Pencil, Play, Plus, Search,
   Trash2, X, XCircle,
@@ -10,7 +10,7 @@ import { toast } from '@/lib/toast'
 import { appCopy } from '@/lib/appCopy'
 import { pagesCopy } from '@/lib/pagesCopy'
 import { useLocale } from '@/lib/locale'
-import { AUTOMATIONS, scheduleLabelKey, type Automation, type AutomationSchedule, type AutomationStatus } from '@/lib/automations'
+import { demoAutomationChoices, demoAutomations, scheduleLabelKey, type Automation, type AutomationSchedule, type AutomationStatus } from '@/lib/automations'
 import '@/styles/plugins.css'
 import '@/styles/ops.css'
 
@@ -36,12 +36,23 @@ export default function AutomationsPage() {
   const common = appCopy(locale).common
   const a = pagesCopy(locale).automations
   const reduce = useReducedMotion()
-  const [items, setItems] = useState<Automation[]>(AUTOMATIONS)
+  const [items, setItems] = useState<Automation[]>(() => demoAutomations(locale))
   const [tab, setTab] = useState<Tab>('all')
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState<Automation | null>(null)
   const [creating, setCreating] = useState(false)
   const [historyOf, setHistoryOf] = useState<Automation | null>(null)
+
+  /* 切语言时把内置演示任务换成对应语言的文案；用户新建 / 改过的内容保持原样 */
+  useEffect(() => {
+    setItems((prev) => {
+      const seed = demoAutomations(locale)
+      return prev.map((item) => {
+        const next = seed.find((s) => s.id === item.id)
+        return next ? { ...next, enabled: item.enabled, lastStatus: item.lastStatus } : item
+      })
+    })
+  }, [locale])
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -89,7 +100,7 @@ export default function AutomationsPage() {
         kb: form.kb,
         enabled: true,
         lastRun: a.never,
-        nextRun: form.schedule === 'hourly' ? '1 小时内' : '按计划',
+        nextRun: form.schedule === 'hourly' ? a.nextRunWithinHour : a.nextRunOnSchedule,
         lastStatus: 'queued',
         history: [],
       }
@@ -207,6 +218,7 @@ export default function AutomationsPage() {
         <AutomationForm
           initial={editing}
           labels={a}
+          choices={demoAutomationChoices(locale)}
           onCancel={() => { setCreating(false); setEditing(null) }}
           onSave={save}
         />
@@ -238,9 +250,10 @@ export default function AutomationsPage() {
   )
 }
 
-function AutomationForm({ initial, labels, onCancel, onSave }: {
+function AutomationForm({ initial, labels, choices, onCancel, onSave }: {
   initial: Automation | null
   labels: ReturnType<typeof pagesCopy>['automations']
+  choices: { agents: string[]; kbs: string[] }
   onCancel: () => void
   onSave: (form: FormState) => void
 }) {
@@ -248,8 +261,8 @@ function AutomationForm({ initial, labels, onCancel, onSave }: {
     name: initial?.name ?? '',
     prompt: initial?.prompt ?? '',
     schedule: initial?.schedule ?? 'daily',
-    agent: initial?.agent ?? '默认助手',
-    kb: initial?.kb ?? '我的 Java 笔记',
+    agent: initial?.agent ?? choices.agents[0],
+    kb: initial?.kb ?? choices.kbs[0],
     notify: true,
   })
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((f) => ({ ...f, [key]: value }))
@@ -287,13 +300,13 @@ function AutomationForm({ initial, labels, onCancel, onSave }: {
       <div className="field">
         <label htmlFor="auto-agent">{labels.agentLabel}</label>
         <select id="auto-agent" className="input" value={form.agent} onChange={(e) => set('agent', e.target.value)}>
-          {['默认助手', '面试助手', 'Java 代码审查员', '论文共读助手', '竞品情报员'].map((x) => <option key={x}>{x}</option>)}
+          {choices.agents.map((x) => <option key={x}>{x}</option>)}
         </select>
       </div>
       <div className="field">
         <label htmlFor="auto-kb">{labels.kbLabel}</label>
         <select id="auto-kb" className="input" value={form.kb} onChange={(e) => set('kb', e.target.value)}>
-          {['我的 Java 笔记', '面试八股合集', '软技能与项目', 'Redis 源码阅读'].map((x) => <option key={x}>{x}</option>)}
+          {choices.kbs.map((x) => <option key={x}>{x}</option>)}
         </select>
       </div>
       <div className="field">

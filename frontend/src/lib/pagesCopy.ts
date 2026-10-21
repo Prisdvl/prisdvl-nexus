@@ -214,6 +214,14 @@ export interface PagesCopy {
     examplePrompts: [string, string, string]
     benchExamples: string
     benchTrace: string
+    benchClear: string
+    streamMockHint: string
+    runStream: string
+    traceEmpty: string
+    completenessLabel: string
+    completenessHint: string
+    toolOption: (code: string, name: string) => string
+    mockTools: { code: string; name: string }[]
   }
   chat: {
     /* —— 模式与工具 —— */
@@ -647,6 +655,8 @@ export interface PagesCopy {
     queuedBody: (name: string) => string
     historyTitle: string
     historyEmpty: string
+    nextRunWithinHour: string
+    nextRunOnSchedule: string
     statusDone: string
     statusFailed: string
     statusQueued: string
@@ -914,6 +924,17 @@ const ZH: PagesCopy = {
     examplePrompts: ['帮我出一道 JVM 调优题并讲解', '总结这篇文档的三个要点', '审查这段并发代码的风险'],
     benchExamples: '示例指令',
     benchTrace: '工具轨迹',
+    benchClear: '清空',
+    streamMockHint: 'mock 模式没有后端流式端点',
+    runStream: '流式运行',
+    traceEmpty: '运行后在这里查看工具轨迹。',
+    completenessLabel: '完备度',
+    completenessHint: '名称、描述、指令、知识库与工具五项配置齐全时达到 100%。',
+    toolOption: (code, name) => `${code}（${name}）`,
+    mockTools: [
+      { code: 'knowledge_search', name: '知识库检索' },
+      { code: 'calculator', name: '数学计算' },
+    ],
   },
   chat: {
     modePlain: '普通对话',
@@ -1334,6 +1355,8 @@ const ZH: PagesCopy = {
     queuedBody: (name) => `${name} 将在后台运行`,
     historyTitle: '运行历史',
     historyEmpty: '还没有运行记录',
+    nextRunWithinHour: '1 小时内',
+    nextRunOnSchedule: '按计划',
     statusDone: '成功',
     statusFailed: '失败',
     statusQueued: '排队中',
@@ -1512,7 +1535,7 @@ const EN: PagesCopy = {
     running: 'Agent is running (calling tools)',
     runDone: 'Run finished',
     runFailed: 'Run failed',
-    mockTestOut: (name) => `Agent “${name}”: 演示回答（mock 模式）`,
+    mockTestOut: (name) => `Agent “${name}”: demo answer (mock mode)`,
     mockTestTitle: 'Local demo finished',
     mockTestBody: 'Mock mode — no backend call',
     testDoneTitle: 'Agent run finished',
@@ -1589,6 +1612,17 @@ const EN: PagesCopy = {
     examplePrompts: ['Give me a JVM tuning question with explanation', 'Summarise the three key points of this doc', 'Review the risks in this concurrent code'],
     benchExamples: 'Examples',
     benchTrace: 'Tool trace',
+    benchClear: 'Clear',
+    streamMockHint: 'Mock mode has no backend streaming endpoint',
+    runStream: 'Run (stream)',
+    traceEmpty: 'The tool trace appears here after a run.',
+    completenessLabel: 'Completeness',
+    completenessHint: 'Hits 100% once name, description, instructions, knowledge bases and tools are all set.',
+    toolOption: (code, name) => `${code} (${name})`,
+    mockTools: [
+      { code: 'knowledge_search', name: 'Knowledge search' },
+      { code: 'calculator', name: 'Calculator' },
+    ],
   },
   chat: {
     modePlain: 'Plain chat',
@@ -2012,6 +2046,8 @@ const EN: PagesCopy = {
     queuedBody: (name) => `${name} will run in the background`,
     historyTitle: 'Run history',
     historyEmpty: 'No runs yet',
+    nextRunWithinHour: 'Within the hour',
+    nextRunOnSchedule: 'On schedule',
     statusDone: 'Done',
     statusFailed: 'Failed',
     statusQueued: 'Queued',

@@ -393,7 +393,7 @@ export default function AgentsPage() {
           <span style={{ flex: 1 }} />
           {(testOut || testCalls.length > 0) && (
             <button className="btn btn-ghost btn-sm" type="button" onClick={() => { setTestOut(''); setTestCalls([]); setTestFailed(false) }}>
-              {locale === 'en' ? 'Clear' : '清空'}
+              {g.benchClear}
             </button>
           )}
         </div>
@@ -423,9 +423,9 @@ export default function AgentsPage() {
                   type="button"
                   onClick={runStreamed}
                   disabled={!testIn.trim() || testing || USE_MOCK}
-                  title={USE_MOCK ? 'mock 模式没有后端流式端点' : g.benchHint}
+                  title={USE_MOCK ? g.streamMockHint : g.benchHint}
                 >
-                  <Play size={14} /> {streaming ? g.running : locale === 'en' ? 'Run (stream)' : '流式运行'}
+                  <Play size={14} /> {streaming ? g.running : g.runStream}
                 </button>
                 <button className="btn btn-primary" type="submit" disabled={!testIn.trim() || testing}>
                   <Play size={14} /> {testing ? g.running : g.run}
@@ -442,7 +442,7 @@ export default function AgentsPage() {
               </div>
               <div className="bench-result-body">
                 <div className="bench-trace">
-                  {testCalls.length > 0 ? <ToolTrace calls={testCalls} /> : <p className="hint">{locale === 'en' ? 'Tool trace appears here after a run.' : '运行后在这里查看工具轨迹。'}</p>}
+                  {testCalls.length > 0 ? <ToolTrace calls={testCalls} /> : <p className="hint">{g.traceEmpty}</p>}
                 </div>
                 <div className="bench-answer">
                   {testOut ? <div className="bench-output">{testOut}</div> : <p className="hint">{g.testResultEmpty}</p>}
@@ -570,11 +570,7 @@ export default function AgentsPage() {
                 <label>{g.bindToolsLabel}{!USE_MOCK && ` (${g.bindToolsHint})`}</label>
                 {!USE_MOCK && toolChoices.length === 0 && <p className="hint">{g.bindToolsEmpty}</p>}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {(USE_MOCK
-                    ? ['knowledge_search（知识库检索）', 'calculator（数学计算）']
-                    : toolChoices.map((t) => `${t.code}（${t.name}）`)
-                  ).map((label, i) => {
-                    const code = USE_MOCK ? label.split('（')[0] : toolChoices[i].code
+                  {(USE_MOCK ? g.mockTools : toolChoices.map((t) => ({ code: t.code, name: t.name }))).map(({ code, name }) => {
                     const on = wizTools.includes(code)
                     return (
                       <button
@@ -585,7 +581,7 @@ export default function AgentsPage() {
                         onClick={() => toggleIn(wizTools, code, setWizTools)}
                         style={on ? { borderColor: 'var(--primary)', color: 'var(--primary)', background: 'var(--primary-container)' } : undefined}
                       >
-                        {on && <Check size={12} />} {label}
+                        {on && <Check size={12} />} {g.toolOption(code, name)}
                       </button>
                     )
                   })}
@@ -620,9 +616,9 @@ export default function AgentsPage() {
             <div style={{ padding: '10px 0 6px' }}>
               <h4 className="wizard-subtitle">{g.testStepTitle}</h4>
               <div className="agent-dial-row">
-                <CometDial value={wizardCompleteness} min={0} max={100} step={5} unit="%" label="完备度" size={130} sweep={300} thickness={5} />
+                <CometDial value={wizardCompleteness} min={0} max={100} step={5} unit="%" label={g.completenessLabel} size={130} sweep={300} thickness={5} />
                 <p className="hint" style={{ maxWidth: 240 }}>
-                  名称、描述、指令、知识库与工具五项配置齐全时达到 100%。
+                  {g.completenessHint}
                 </p>
               </div>
               <p className="hint" style={{ marginTop: 4 }}>{g.testStepHint}</p>
