@@ -1,0 +1,19 @@
+# ============================================================
+# 前端镜像的构建上下文 = frontend/（见 deploy/docker-compose.yml 的 context）
+#
+# 这里必须排除宿主机依赖与产物，否则 `docker compose build frontend` 会踩两个坑：
+#   1) 平台错配：宿主机 node_modules 里是 Windows 版 esbuild / rolldown 二进制，
+#      Dockerfile 里 `npm ci` 刚装好 Linux 版本，`COPY . .` 又会被宿主机那份覆盖，
+#      `vite build` 随即报二进制不可执行 / 直接崩。
+#   2) 上下文膨胀：node_modules 约 400MB、4 万多个文件，每次构建都要打包发给 daemon，
+#      慢且容易把构建守护进程拖崩（表现为 rpc error: ... EOF）。
+# 只保留源码与构建配置，依赖一律在镜像内装。
+# ============================================================
+node_modules
+dist
+dist-ssr
+.vite
+coverage
+*.log
+.DS_Store
+Thumbs.db
