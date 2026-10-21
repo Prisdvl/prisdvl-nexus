@@ -1,0 +1,17 @@
+-- chat_message 补 (user_id, created_at) 复合索引：工作台统计与用量页热力图的主查询形状
+--
+-- 为什么现在才加：两条统计入口是同一条 SQL 形状——
+--   WHERE user_id = ? AND created_at >= ?
+--   GROUP BY CAST(created_at AS DATE)
+-- （/api/stats/summary 取近 30 天，/api/users/me/stats/daily-tokens 最长 365 天）
+-- 而表上现有三条索引都不覆盖它：
+--   * idx_msg_conv (conversation_id, user_id, id)：前缀是会话，不是 user_id；
+--   * idx_msg_request (request_id)：与用户维度无关；
+--   * idx_msg_user_agent (user_id, agent_id, id)：user_id 前缀能用上，但第二列是
+--     agent_id，created_at 只能回表逐行筛，365 天窗口等于把该用户全部消息读一遍。
+-- 加本索引后优化器可按 user_id 定位、再在 created_at 上做范围扫描，无需回表筛历史行。
+--
+-- 列顺序不是随便排的：user_id 在前，因为多租户表的所有查询都带它，前缀必须能匹配；
+-- created_at 在后，因为它只出现在范围条件里。反过来 (created_at, user_id) 也能走索引，
+-- 但按时间范围扫全表会把别人家的行一起读进来，再靠过滤丢掉。
+CREATE INDEX idx_msg_user_created ON chat_message (user_id, created_at);

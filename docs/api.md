@@ -135,6 +135,7 @@
 | GET | `/api/users/me/quota` | 当前用户当日额度（只读，用于界面上"今日 N/M 次 · x/y tokens"那一行） |
 | GET | `/api/users/me/storage` | 当前用户存储占用（只读）：`usedBytes` / `documentCount` / `knowledgeBaseCount` / `totalLimitBytes` / `perKnowledgeBaseLimitBytes`；上限 **≤ 0 表示不限**（前端据此不画进度条）。口径见 `security.md` §6.4 |
 | GET | `/api/users/me/stats/daily-tokens` | 当前用户逐日 Token 消耗（只读，用量页热力图数据源）：`{ from, to, days: [{ day, tokens }] }`，`days` 是**连续**日轴（无消息的日子 `tokens=0`），`tokens = chat_message.total_tokens` 按自然日求和（流式中断未写回用量的消息计 0）。查询参数 `days`（默认 **365**，只接受 **1–365**，越界 `1001`）；用户维度取自令牌，不接受前端传 userId |
+| GET | `/api/stats/summary` | 工作台汇总（只读，首页一次拿四块）：`trend` 近 14 天 / `heat` 近 30 天的每日**消息条数**、`tokenHeat` 同 30 天窗口的每日 **Token 合计**、`activity` 最近 8 条（新建会话 / 导入任务）。缺失日期已补 0；用户维度取自令牌，不接受前端传 userId。详见下文 |
 | GET | `/api/users/me/totp` | 两步验证状态：`{ enabled, recoveryCodesLeft, confirmedAt }`（只读，不返回密钥） |
 | POST | `/api/users/me/totp/setup` | 生成候选密钥（**此时还没开启**）：`{ secret, otpauthUri, issuer, account, digits, periodSeconds }`；密钥仅本响应可见一次 |
 | POST | `/api/users/me/totp/enable` | 用 `{ "code": "123456" }` 校验候选密钥，通过才置 `totp_enabled=1` 并返回 **`{ recoveryCodes: [...] }` 10 枚一次性恢复码**（只此一次） |
@@ -316,6 +317,27 @@ GET /api/users/me/storage
 - `totalLimitBytes` / `perKnowledgeBaseLimitBytes` **≤ 0 表示该维度不限**，前端此时不画进度条（而不是画一条满格）。
 - 只读快照，不占用每日请求配额；上限由 `nexus.storage.*` 配置，见 `security.md` §6.4。
 - 单库占用随 `GET /api/knowledge-bases`（列表）与 `GET /api/knowledge-bases/{id}`（详情）的 `usedBytes` 一起下发，前端列表的占用条用的就是它。
+
+#### 工作台汇总 `GET /api/stats/summary`
+
+```http
+GET /api/stats/summary
+
+200 OK
+{ "code": 0, "data": {
+    "trend":     [ { "day": "2026-10-08", "count": 0 }, … 14 项 ],
+    "heat":      [ { "day": "2026-09-22", "count": 3 }, … 30 项 ],
+    "tokenHeat": [ { "day": "2026-09-22", "count": 1420 }, … 30 项 ],
+    "activity":  [ { "type": "CHAT", "refId": "1842", "label": "面试复盘",
+                     "at": "2026-10-21T09:14:02" }, … 8 条 ] } }
+```
+
+- `trend` / `heat` / `tokenHeat` **都是连续日轴**：日期升序、末项是今天，没有数据的那天 `count = 0`。SQL 只返回有行的日期，补零在服务端做——不补的话前端折线会把"那天没消息"画成"那天不存在"，视觉上等于把稀疏数据拉平。
+- `trend` 与 `heat` **口径相同**（当天 `chat_message` 条数），差别只在窗口（14 / 30 天）；`tokenHeat` 是同一 30 天窗口里每天的 `total_tokens` 合计（流式中断未写回用量的消息按 0 计）。
+- `activity` 是两路合并后按 `at` 倒序取 **8 条**：`type=CHAT` 来自 `chat_conversation`（`deleted = 0`，`label` = 会话标题），`type=IMPORT` 来自 `kb_import_task`（`label` = 源文件名）；`refId` 按 §1.6 以**字符串**返回；`at` 直接取 `LocalDateTime.toString()`（无时区，秒为 0 时会省略秒段，别按定长解析）。
+- 只读快照，不占每日请求配额；用户维度由服务端从令牌解析（`CurrentUser.requireId()`），**不接受前端传 `userId`**。
+- 需要整年序列时用 `GET /api/users/me/stats/daily-tokens?days=365`（独立接口）：把 365 天塞进 summary，等于让每个打开工作台的人都多读 11 个月的消息行。
+- 索引：本接口与 `daily-tokens` 共用同一查询形状（`user_id` + `created_at` 范围），由 `V28__idx_chat_message_user_created.sql` 的 `idx_msg_user_created (user_id, created_at)` 支撑。
 
 ### 2.2 规划中（尚未实现）
 
