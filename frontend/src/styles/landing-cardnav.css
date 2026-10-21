@@ -61,18 +61,4 @@
 @media (max-width: 767px) {
   /* 固定导航压在首屏之上，给内容让出空间 */
   .lp { padding-top: 76px; }
-
-  .lp-cardnav__lang {
-    position: fixed;
-    top: 18px;
-    right: 72px;
-    z-index: 61;
-  }
-  .lp-cardnav__lang .lp-lang {
-    height: 32px;
-    min-width: 34px;
-    background: oklch(from var(--bg) l c h / 0.72);
-    backdrop-filter: blur(14px);
-    box-shadow: var(--shadow-sm, none);
-  }
 }

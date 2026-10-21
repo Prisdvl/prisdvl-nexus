@@ -9,8 +9,6 @@ export type LandingCopy = {
   heroBadge: string
   heroSub: string
   heroWheel: readonly string[]
-  langToggle: string
-  langAria: string
   schematic: {
     ingest: { t: string; s: string }
     search: { t: string; s: string }
@@ -78,8 +76,6 @@ const ZH: LandingCopy = {
   heroBadge: '个人知识库工作台',
   heroSub: '上传文档建成知识库，提问可引用原文；需要时智能体可调用工具。登录后即可使用。',
   heroWheel: ['知识库', '智能体', '混合检索', '原文引用', '工具轨迹', 'Nexus'],
-  langToggle: 'EN',
-  langAria: '切换到英文',
   schematic: {
     ingest: { t: '资料入库', s: '切片 · 索引' },
     search: { t: '混合检索', s: '向量 · 全文' },
@@ -172,8 +168,6 @@ const EN: LandingCopy = {
   heroBadge: 'Personal knowledge workbench',
   heroSub: 'Upload docs into a knowledge base, ask with citations; agents can call tools when needed. Sign in to begin.',
   heroWheel: ['Knowledge', 'Agents', 'Hybrid search', 'Citations', 'Tool trail', 'Nexus'],
-  langToggle: '中',
-  langAria: 'Switch to Chinese',
   schematic: {
     ingest: { t: 'Ingest', s: 'Chunk · index' },
     search: { t: 'Hybrid search', s: 'Vector · text' },

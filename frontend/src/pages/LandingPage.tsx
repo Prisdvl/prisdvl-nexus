@@ -18,7 +18,6 @@ import { FloatingNav, type FloatingNavItem } from '@/bits/FloatingNav/FloatingNa
 import '@/bits/FloatingNav/FloatingNav.css'
 import '@/styles/landing-cardnav.css'
 import BrandMark from '@/components/BrandMark'
-import LangToggle from '@/components/LangToggle'
 import { InteractiveHoverButton } from '@/registry/magicui/interactive-hover-button'
 import LogoLoop, { type LogoItem } from '@/bits/LogoLoop/LogoLoop'
 import { AGENTS, type AgentItem } from '@/data'
@@ -1299,9 +1298,6 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
     },
   }))
 
-  /* 全站唯一的语言入口：落地页导航栏里的小地球，未登录页面不再重复放 */
-  const langBtn = <LangToggle className="lp-lang" size={16} />
-
   const floatingNav = (
     <FloatingNav
       navItems={navItems}
@@ -1311,7 +1307,6 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
       segmentAria={t.sectionNavAria}
       action={
         <div className="lp-nav-actions">
-          {langBtn}
           <button className="btn btn-primary" type="button" onClick={onEnterAuth}>
             {t.login} <ArrowRight size={14} />
           </button>
@@ -1360,7 +1355,6 @@ export default function LandingPage({ theme, palette, onEnterAuth }: Props) {
 
   const cardNav = (
     <div className="lp-cardnav">
-      <div className="lp-cardnav__lang">{langBtn}</div>
       <CardNav
         logo={<BrandMark wordmark />}
         items={cardNavItems}

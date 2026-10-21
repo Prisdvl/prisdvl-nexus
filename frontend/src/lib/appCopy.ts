@@ -44,7 +44,6 @@ export interface AppCopy {
     openNav: string
     collapse: string
     expand: string
-    switchLang: string
     renameTitle: string
     renameHint: string
     renameAria: string
@@ -519,7 +518,6 @@ const ZH: AppCopy = {
     archived: (n) => `已归档（${n}）`, restore: '恢复',
     noMatch: (q) => `没有匹配「${q}」的会话`,
     openNav: '打开导航', collapse: '折叠侧栏', expand: '展开侧栏',
-    switchLang: '切换到 English',
     renameTitle: '重命名聊天', renameHint: '保持简短且易于识别', renameAria: '会话名称',
     savingShort: '保存中…',
     pin: '置顶', unpin: '取消置顶', archive: '归档', archiveAction: '改为归档',
@@ -934,7 +932,6 @@ const EN: AppCopy = {
     archived: (n) => `Archived (${n})`, restore: 'Restore',
     noMatch: (q) => `No chats match “${q}”`,
     openNav: 'Open navigation', collapse: 'Collapse sidebar', expand: 'Expand sidebar',
-    switchLang: 'Switch to 简体中文',
     renameTitle: 'Rename chat', renameHint: 'Keep it short and recognizable', renameAria: 'Chat name',
     savingShort: 'Saving…',
     pin: 'Pin', unpin: 'Unpin', archive: 'Archive', archiveAction: 'Archive instead',

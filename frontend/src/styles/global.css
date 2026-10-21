@@ -2300,56 +2300,6 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
 .lp-pill .rubber-segment { --rs-inset: 3px; --rs-idle: 0.86; --rs-hover: 1; }
 .lp-pill .rubber-segment__item { min-width: 0; font-size: 13.5px; }
 
-/* ============================================================
- * 语言切换（LangToggle）—— 只在落地页导航栏出现
- * ------------------------------------------------------------
- * 图标统一来自 react-useanimations 的 globe（Lottie）；
- * 不放目标语言文字，按钮固定 34px 见方，切换时不会有宽度跳动。
- * ============================================================ */
-.lang-toggle {
-  appearance: none;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-2);
-  font: inherit;
-  cursor: pointer;
-  /* 尺寸/描边/背景统一在这层定义 */
-  transition:
-    color var(--dur-fast, 0.15s) var(--ease-out, ease),
-    background var(--dur-fast, 0.15s) var(--ease-out, ease),
-    border-color var(--dur-fast, 0.15s) var(--ease-out, ease);
-}
-/* Globe 图标容器：固定尺寸，避免 Lottie 撑动布局 */
-.lang-globe {
-  display: inline-grid;
-  place-items: center;
-  flex-shrink: 0;
-  line-height: 0;
-}
-.lang-globe [data-useanimations] { display: block; }
-
-.lang-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border-radius: var(--radius-pill, 999px);
-  font-size: 12.5px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-.lang-toggle:hover {
-  color: var(--text);
-  background: var(--surface-muted);
-  border-color: color-mix(in oklab, var(--text) 18%, transparent);
-}
-.lang-toggle:focus-visible {
-  outline: 2px solid var(--accent, #3b82f6);
-  outline-offset: 2px;
-}
-
 /* 登录页页脚：只剩条款声明 */
 .auth-foot {
   display: flex;
@@ -2360,39 +2310,11 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
 }
 .auth-terms { font-size: 12px; }
 
-/* 移动顶栏：语言键与菜单键视觉对齐 */
-.mb-lang { display: inline-flex; }
-.mobile-bar .lang-toggle {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-}
-
-/* 落地页语言切换：桌面跟登录并排，窄屏叠在 CardNav 旁 */
-
+/* 落地页导航右侧动作区（登录按钮） */
 .lp-nav-actions {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-}
-/* 落地页沿用 LangToggle 基础样式，只补一层半透明底以浮在导航胶囊上 */
-.lp-lang {
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border-radius: 999px;
-  border-color: color-mix(in oklab, var(--text) 14%, transparent);
-  background: color-mix(in oklab, var(--surface-muted) 70%, transparent);
-}
-.lp-lang:hover {
-  border-color: color-mix(in oklab, var(--text) 22%, transparent);
-}
-.lp-lang .lang-globe {
-  transition: transform 240ms var(--ease-out);
-}
-.lp-lang:hover .lang-globe,
-.lp-lang:focus-visible .lang-globe {
-  transform: rotate(-14deg) scale(1.08);
 }
 
 /* 对话页 Agent 选择（横向，可滚） */
