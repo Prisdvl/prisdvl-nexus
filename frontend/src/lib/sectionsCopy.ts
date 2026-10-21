@@ -61,6 +61,10 @@ export interface SectionsCopy {
     providerHint: string
     modelLabel: string
     modelHint: string
+    /** 「自定义端点」模式下模型名是自由输入，标签与提示换成这两个 */
+    modelLabelCustom: string
+    customOption: string
+    customHint: string
     baseLabel: string
     baseHint: string
     keyLabel: string
@@ -342,6 +346,9 @@ const ZH: SectionsCopy = {
     providerHint: '供应商与模型名一起受平台白名单约束（白名单由服务端下发，这里不硬编码）。',
     modelLabel: '模型名',
     modelHint: '从平台白名单中选择；不在白名单里的模型不会被接受。',
+    modelLabelCustom: '模型名（端点上的实际模型名）',
+    customOption: '自定义端点（OpenAI 兼容）',
+    customHint: '填你自己的 OpenAI 兼容端点。保存时会真调一次 /embeddings 探针，只有它返回 1024 维才会保存——维度不一致会让既有知识库的向量全部失效，所以这里不接受"先存下去待会儿再说"。',
     baseLabel: 'Base URL',
     baseHint: '你自己的 OpenAI 兼容嵌入端点，如百炼 compatible-mode。',
     keyLabel: 'API Key',
@@ -622,6 +629,9 @@ const EN: SectionsCopy = {
     providerHint: 'The provider is whitelisted together with the model name (the whitelist comes from the server; nothing is hard-coded here).',
     modelLabel: 'Model name',
     modelHint: 'Pick from the platform whitelist — models outside it are rejected.',
+    modelLabelCustom: 'Model name (the actual id on your endpoint)',
+    customOption: 'Custom endpoint (OpenAI-compatible)',
+    customHint: 'Point at your own OpenAI-compatible endpoint. On save we call /embeddings once as a probe: it is only accepted if it returns 1024 dimensions. A different width would silently invalidate every existing knowledge base, so we refuse to store it.',
     baseLabel: 'Base URL',
     baseHint: 'Your own OpenAI-compatible embedding endpoint, e.g. Bailian compatibility mode.',
     keyLabel: 'API Key',

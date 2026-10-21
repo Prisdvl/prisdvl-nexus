@@ -24,6 +24,8 @@
 # 1. 后端：Java 21 + Maven
 export JAVA_HOME=/path/to/jdk-21
 export AI_CHAT_API_KEY=<OpenCode Zen 的 oc_ 开头 key>   # 只有问答/Agent/评测需要模型
+# 加密主密钥：不配的话"保存 Key""开启两步验证"会直接报 9999，已绑定 2FA 的账号登录报 9999
+export NEXUS_SECURITY_CRYPTO_KEK=$(openssl rand -base64 32)
 mvn clean package -DskipTests
 java -Xmx512m -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=standalone
 
@@ -34,6 +36,7 @@ npm run dev            # http://localhost:5175
 ```
 
 - 注册账号需提供**用户名 / 密码 / 邮箱**（邮箱必填；standalone 默认 console 邮件通道，验证码进后端日志）；演示数据见第 4 节。
+- **`NEXUS_SECURITY_CRYPTO_KEK` 必填**（原因与轮换风险见 §2.3 的加粗提示）。H2 内存库每次重启都清空，所以本地随便生成一把即可；但**同一个进程生命周期内别换**，换了历史密文就解不开。
 - **H2 是内存库：后端每次重启，数据都会清空**，需要重新导入笔记。
 - standalone 下检索会**如实降级**（SQL 关键词匹配）而不是报错——这是刻意设计（见 decisions.md B.29）。
 
@@ -44,6 +47,8 @@ cd deploy
 cp .env.example .env          # 填上 JWT_SECRET / AI_CHAT_API_KEY / AI_EMBEDDING_API_KEY
 docker compose up -d mysql postgres elasticsearch redis rabbitmq
 cd .. && mvn clean package -DskipTests
+# 宿主机进程同样要带加密主密钥，否则保存 Key / 开启两步验证报 9999，已绑定 2FA 的账号登录报 9999
+export NEXUS_SECURITY_CRYPTO_KEK=$(openssl rand -base64 32)
 java -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=local
 ```
 
@@ -200,11 +205,33 @@ cp deploy/.env.example deploy/.env
 | 类别 | 变量 | 缺失时的行为 |
 | --- | --- | --- |
 | **必须自己填** | `JWT_SECRET`、`AI_CHAT_API_KEY`、`AI_EMBEDDING_API_KEY` | **`docker compose config` 直接报错退出**，连容器都不会创建 |
-| **强烈建议填** | `NEXUS_SECURITY_CRYPTO_KEK`（base64 的 16/24/32 字节） | 应用**能启动**（compose 层是可选的），但「保存模型 Key / 嵌入 Key」会失败（`9999`），已保存的密文也解不开 |
+| **必须自己填（生产）** | `NEXUS_SECURITY_CRYPTO_KEK`（base64 的 16/24/32 字节） | 应用**能启动**，但凡是经 `CredentialCipher` 读写的东西全部不可用：保存模型 Key / 嵌入 Key 报 `9999`（未配置 KEK，拒绝以明文保存）；**两步验证（TOTP）开不了也验不过——已绑定的账号会因为解不开密钥而登录失败（`9999`）**；并且**一旦换过 KEK，之前写下的密文永久解不开**（AEAD 校验失败，不是能靠重启恢复的错误） |
 | 邮件 | `NEXUS_EMAIL_SENDER`（默认 `console`） | `console` 时验证码只进 backend 容器日志；改成 `resend` 就**必须**同时提供 `RESEND_API_KEY`（放系统/用户环境变量，别写进 `.env`），否则 backend 启动时 `EmailSender` Bean 创建失败，容器起不来 |
 | 端口 | `NEXUS_FRONTEND_PORT` 等 | 有开发默认值 |
 | 开发口令 | `NEXUS_MYSQL_PASSWORD`、`NEXUS_PG_PASSWORD`、`NEXUS_RABBITMQ_PASSWORD`、`NEXUS_MYSQL_ROOT_PASSWORD` | 有默认值（与 `application-local.yml` 一致，**仅限本机**） |
 | 模型网关 | `AI_CHAT_BASE_URL`、`AI_CHAT_MODEL`、`AI_JUDGE_MODEL`、`AI_EMBEDDING_BASE_URL`、`AI_EMBEDDING_MODEL`、`AI_EMBEDDING_DIM` | 有默认值（嵌入默认指向百炼 `text-embedding-v4` / 1024 维） |
+
+> **`NEXUS_SECURITY_CRYPTO_KEK` 不是"强烈建议"，是上线的硬闸门。**
+> 它是 `CredentialCipher`（AES-GCM）的唯一主密钥，保护三类数据：用户自带的模型 Key、
+> 嵌入 Key、以及两步验证的 TOTP 密钥。没配它的表现不是"启动失败"，而是**上线之后**才炸：
+> 用户保存 Key 报错、开启两步验证报错（`9999` 未配置 KEK）、已绑定两步验证的账号登录也报 `9999`。
+>
+> ```bash
+> # 生成一把（32 字节 → base64），写进部署机的系统环境变量或 compose 的 env_file，别提交进仓库
+> openssl rand -base64 32
+> ```
+>
+> 三条硬约束：
+> 1. **生产必须显式配置**；`application.yml` 里默认值是空的（fail-closed），没有开发兜底值。
+> 2. **换 KEK = 作废历史密文**。要轮换，得先批量解密再用新钥重新加密（当前版本没有在线轮换）；
+>    直接改环境变量的后果是用户模型 Key 全部失效、两步验证账号全部登不进。
+> 3. **standalone / 单进程本地验证也要带**：
+>    ```bash
+>    NEXUS_SECURITY_CRYPTO_KEK=$(openssl rand -base64 32) \
+>      java -jar nexus-app/target/nexus-app-0.0.1-SNAPSHOT.jar --spring.profiles.active=standalone
+>    ```
+>    否则 `POST /api/users/me/embedding-key`、`POST /api/users/me/totp/setup` 均返回 `9999`（未配置 KEK）。
+>    测试夹具用的是固定测试密钥，见 `nexus-app/src/test/resources/application-test.yml`。
 
 `JWT_SECRET` 用的是 compose 的 `${JWT_SECRET:?...}` 语法。这一条是把后端
 `nexus.jwt.secret` 的 **fail-closed** 语义**前移到了编排层**：如果只依赖应用侧校验，

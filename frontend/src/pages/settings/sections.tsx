@@ -209,7 +209,14 @@ export function EmbeddingKeySection() {
   // 白名单来自后端（ai.byok.embedding.allowed-models），前端不硬编码一份副本——
   // 硬编码必然与后端漂移，而这里的白名单是"能不能写向量"的硬约束。
   const allowed = cfg?.allowedModels ?? []
-  const providers = Array.from(new Set(allowed.map((m) => m.split(':')[0])))
+  // CUSTOM_PROVIDER 是前端约定值：后端不要求 provider 属于白名单名单，
+  // 它只要求「白名单外」时必须带 Base URL + Key 并探针通过（见 CustomEmbeddingProbe）。
+  const CUSTOM_PROVIDER = 'custom'
+  const providers = [
+    ...Array.from(new Set(allowed.map((m) => m.split(':')[0]))),
+    ...(cfg?.customEndpointAllowed ? [CUSTOM_PROVIDER] : []),
+  ]
+  const isCustom = provider === CUSTOM_PROVIDER
   const modelsOf = (p: string) => allowed.filter((m) => m.startsWith(`${p}:`)).map((m) => m.slice(p.length + 1))
 
   useEffect(() => {
@@ -219,6 +226,7 @@ export function EmbeddingKeySection() {
         provider: null, modelName: null, baseUrl: null, dimensions: 1024, enabled: false,
         hasApiKey: false, apiKeyMasked: null,
         allowedModels: ['bailian:text-embedding-v4'], requiredDimensions: 1024,
+        customEndpointAllowed: true,
       })
       setProvider('bailian'); setModelName('text-embedding-v4')
       setLoading(false)
@@ -239,9 +247,11 @@ export function EmbeddingKeySection() {
     return () => { alive = false }
   }, [])
 
-  // 换供应商时把模型名对齐到该供应商白名单里的第一项，避免提交出白名单外的组合
+  // 换供应商时把模型名对齐到该供应商白名单里的第一项，避免提交出白名单外的组合；
+  // 切到「自定义端点」时清空模型名，让用户自己填
   const onProviderChange = (next: string) => {
     setProvider(next)
+    if (next === 'custom') { setModelName(''); return }
     if (!modelsOf(next).includes(modelName)) setModelName(modelsOf(next)[0] ?? '')
   }
 
@@ -275,15 +285,22 @@ export function EmbeddingKeySection() {
       <div className="field">
         <label htmlFor="ek-provider"><Loc>{s.embeddingKey.providerLabel}</Loc></label>
         <select id="ek-provider" className="input" value={provider} onChange={(e) => onProviderChange(e.target.value)}>
-          {providers.map((p) => <option key={p} value={p}>{p}</option>)}
+          {providers.map((p) => (
+            <option key={p} value={p}>{p === 'custom' ? s.embeddingKey.customOption : p}</option>
+          ))}
         </select>
-        <p className="hint"><Loc>{s.embeddingKey.providerHint}</Loc></p>
+        <p className="hint"><Loc>{isCustom ? s.embeddingKey.customHint : s.embeddingKey.providerHint}</Loc></p>
       </div>
       <div className="field">
-        <label htmlFor="ek-model"><Loc>{s.embeddingKey.modelLabel}</Loc></label>
-        <select id="ek-model" className="input" value={modelName} onChange={(e) => setModelName(e.target.value)}>
-          {modelsOf(provider).map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
+        <label htmlFor={isCustom ? 'ek-model-text' : 'ek-model'}>
+          <Loc>{isCustom ? s.embeddingKey.modelLabelCustom : s.embeddingKey.modelLabel}</Loc>
+        </label>
+        {isCustom
+          ? <input id="ek-model-text" className="input" placeholder="text-embedding-3-small"
+              value={modelName} onChange={(e) => setModelName(e.target.value)} maxLength={200} />
+          : <select id="ek-model" className="input" value={modelName} onChange={(e) => setModelName(e.target.value)}>
+              {modelsOf(provider).map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>}
         <p className="hint"><Loc>{s.embeddingKey.modelHint}</Loc></p>
       </div>
       <div className="field">

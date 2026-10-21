@@ -71,7 +71,8 @@ await page.waitForTimeout(700)
 
 const providerOpts = await page.locator('#ek-provider option').allInnerTexts()
 const modelOpts = await page.locator('#ek-model option').allInnerTexts()
-check('供应商下拉来自后端白名单', providerOpts.join('/') === 'bailian', providerOpts.join('/'))
+// 白名单供应商 + 可选的「自定义端点」入口（后端 ai.byok.embedding.allow-custom-endpoint）
+check('供应商下拉来自后端白名单', providerOpts.includes('bailian'), providerOpts.join('/'))
 check('模型下拉来自后端白名单（两项）', modelOpts.join('/') === 'text-embedding-v3/text-embedding-v4' || modelOpts.join('/') === 'text-embedding-v4/text-embedding-v3', modelOpts.join('/'))
 /* 维度是平台决定的，界面上不再有可编辑宿主——只断言"没有假输入框 + 文案里写明 1024"。
    原来这里断言 #ek-dim 是 disabled input，那段假输入框已在纯交互批里删掉。 */

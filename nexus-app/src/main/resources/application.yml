@@ -347,6 +347,15 @@ ai:
       # ⚠️ 单独改这个值而不迁移向量列，会让启用 BYOK 的用户新建的库全部写不进向量
       #    （会明确报维度不一致，不会静默写错数据）——两者必须一起迁移。
       required-dimensions: 1024
+      # 白名单之外，还允不允许用户填自己的 OpenAI 兼容端点（Base URL + 模型名 + Key）？
+      # 允许的话，保存时会用一次真实 /embeddings 探针校验「它确实返回 1024 维」——
+      # 白名单是「平台验过、拿来即用」，自定义端点是「用户自证」（见 CustomEmbeddingProbe）。
+      # 企业内网部署若只想开放平台这几种模型，把它设成 false 即可。
+      allow-custom-endpoint: ${NEXUS_BYOK_EMBEDDING_ALLOW_CUSTOM:true}
+      # 探针能不能访问内网/本机地址。默认 false：Base URL 是用户输入，
+      # 允许它指向内网等于给了一个 SSRF 探测器。只有 local / standalone / test
+      # （端点是本机桩服务）才打开。
+      allow-private-endpoints: ${NEXUS_BYOK_EMBEDDING_ALLOW_PRIVATE:false}
   providers:
     # 当前接入 DeepSeek 官方 OpenAI 兼容 API。换供应商只需改 base-url / model / api-key。
     #

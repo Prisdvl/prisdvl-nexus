@@ -108,6 +108,37 @@ class EmbeddingByokPolicyTest {
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
+    @Test
+    @DisplayName("requireUsable：白名单外要放行必须同时满足「开了自定义端点」且「有 Base URL」")
+    void requireUsableAllowsCustomEndpointOnlyWhenEnabledAndAddressed() {
+        EmbeddingByokPolicy off = customPolicy(false);
+        assertThatThrownBy(() -> off.requireUsable("custom", "my-model", 1024,
+                "https://gw.example/v1", ErrorCode.PARAM_INVALID))
+                .as("未开启自定义端点时，白名单外一律拒绝")
+                .isInstanceOf(BusinessException.class);
+
+        EmbeddingByokPolicy on = customPolicy(true);
+        on.requireUsable("custom", "my-model", 1024, "https://gw.example/v1", ErrorCode.PARAM_INVALID);
+        assertThatThrownBy(() -> on.requireUsable("custom", "my-model", 1024, "  ",
+                ErrorCode.PARAM_INVALID))
+                .as("没有 Base URL 的自定义端点不可用")
+                .isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> on.requireUsable("custom", "my-model", 768,
+                "https://gw.example/v1", ErrorCode.PARAM_INVALID))
+                .as("自定义端点也必须 1024 维")
+                .isInstanceOf(BusinessException.class);
+        // 白名单路径在开启自定义端点后行为不变
+        on.requireUsable("bailian", "text-embedding-v4", 1024, null, ErrorCode.PARAM_INVALID);
+    }
+
+    private static EmbeddingByokPolicy customPolicy(boolean allowCustom) {
+        AiModelProperties properties = new AiModelProperties();
+        properties.getByok().getEmbedding().setAllowedModels(new ArrayList<>(List.of("bailian:text-embedding-v4")));
+        properties.getByok().getEmbedding().setRequiredDimensions(1024);
+        properties.getByok().getEmbedding().setAllowCustomEndpoint(allowCustom);
+        return new EmbeddingByokPolicy(properties);
+    }
+
     private static EmbeddingByokPolicy policy(String... allowedModels) {
         AiModelProperties properties = new AiModelProperties();
         properties.getByok().getEmbedding().setAllowedModels(new ArrayList<>(List.of(allowedModels)));

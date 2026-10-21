@@ -86,3 +86,10 @@ logging:
     com.lky.nexus: DEBUG
     # 想看清每次发给模型的完整 prompt 时可打开下面两行（默认关闭，避免日志过大/泄漏）
     # org.springframework.ai.chat.client: DEBUG
+
+# 本机/单进程形态：允许「自定义嵌入端点」指向 localhost（联调桩服务）。
+# application.yml 默认是关掉的——Base URL 由用户输入，指内网等于 SSRF。
+ai:
+  byok:
+    embedding:
+      allow-private-endpoints: true

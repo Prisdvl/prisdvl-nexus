@@ -188,6 +188,26 @@ public class AiModelProperties {
              * 多维度分表属路线 B，本轮不实施；这里固定成 1024，遇到别的维度直接拒绝。
              */
             private int requiredDimensions = 1024;
+
+            /**
+             * 是否允许用户填<b>白名单之外</b>的 OpenAI 兼容端点（自行填 Base URL + 模型名）。
+             *
+             * <p>与白名单不冲突：白名单里的模型是「平台验证过、拿来即用」的快路径；
+             * 自定义端点是「用户自己的网关/自建模型」，保存时必须当场探针成功
+             * 且返回维度等于 {@link #requiredDimensions}（见 {@code CustomEmbeddingProbe}）。
+             *
+             * <p>默认开启。关掉它就等于「只许用平台这几种模型」——企业内网部署常用这个姿势。
+             */
+            private boolean allowCustomEndpoint = true;
+
+            /**
+             * 探针是否允许访问内网 / 本机地址。
+             *
+             * <p>默认 {@code false}：Base URL 是用户输入，允许它指向内网就等于把服务端变成
+             * SSRF 探测器。只有本机开发与测试 profile 打开——那里的「自定义端点」是
+             * localhost 上的桩服务。
+             */
+            private boolean allowPrivateEndpoints = false;
         }
     }
 

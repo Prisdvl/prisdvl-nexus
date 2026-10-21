@@ -408,3 +408,11 @@
     **不存在** `micrometer-registry-prometheus`（全仓 pom 无该依赖），因此没有
     `/actuator/prometheus` 抓取端点、没有 Grafana 看板；代码中也没有任何 `@Timed` 注解。
 16. **登录失败冻结是按用户名、可被定向 DoS**：攻击者能用错密码把他人账号刷到冻结（`LoginAttemptLimiter.java:22-26`）；跨用户名的分布式撞库与代理后 IP 失真本期不覆盖。
+17. **自定义嵌入端点是用户可填的对外地址（SSRF 面）**：`ai.byok.embedding.allow-custom-endpoint` 开启后，
+    用户可以把 `baseUrl` 指向任意 OpenAI 兼容端点，保存时由 `CustomEmbeddingProbe` 真调一次 `/embeddings` 验维度。
+    现有防护：只允许 `http/https`；保存时用 `InetAddress.getAllByName` 解析主机名，逐个地址拒绝环回 / 私有 /
+    链路本地 / 组播（`allow-private-endpoints` 仅在开发与测试 profile 打开），`HttpClient` 关闭重定向跟随
+    （防 302 跳到内网），连接 4 s、请求 10 s 超时。
+    仍然欠缺：**只在保存时解析一次，运行期不复检**——探针通过后若域名改解析到内网（DNS rebinding / TOCTOU），
+    运行期的 `EmbeddingClientFactory` 会照发请求；也没有按用户限制"能打多少个不同主机"，探针本身仍是
+    一次可被用来探测内网的小型出网通道（只能收到 HTTP 状态码与向量长度，不含响应体）。

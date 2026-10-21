@@ -139,8 +139,9 @@ public class KnowledgeEmbeddingResolver {
     }
 
     private EffectiveEmbedding effectiveFromUser(UserEmbeddingCredentials credentials) {
-        byokPolicy.requireAllowed(credentials.provider(), credentials.model(),
-                credentials.dimensions(), ErrorCode.MODEL_ROLE_NOT_CONFIGURED);
+        // 与保存侧、客户端工厂共用同一份判定：白名单内，或开启了自定义端点且带 Base URL
+        byokPolicy.requireUsable(credentials.provider(), credentials.model(),
+                credentials.dimensions(), credentials.baseUrl(), ErrorCode.MODEL_ROLE_NOT_CONFIGURED);
         return new EffectiveEmbedding(credentials.provider(), credentials.model(), credentials.dimensions());
     }
 

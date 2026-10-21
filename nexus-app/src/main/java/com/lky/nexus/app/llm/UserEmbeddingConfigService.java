@@ -42,13 +42,16 @@ public class UserEmbeddingConfigService {
     private final UserEmbeddingConfigMapper userEmbeddingConfigMapper;
     private final CredentialCipher credentialCipher;
     private final EmbeddingByokPolicy byokPolicy;
+    private final CustomEmbeddingProbe customEmbeddingProbe;
 
     public UserEmbeddingConfigService(UserEmbeddingConfigMapper userEmbeddingConfigMapper,
                                       CredentialCipher credentialCipher,
-                                      EmbeddingByokPolicy byokPolicy) {
+                                      EmbeddingByokPolicy byokPolicy,
+                                      CustomEmbeddingProbe customEmbeddingProbe) {
         this.userEmbeddingConfigMapper = userEmbeddingConfigMapper;
         this.credentialCipher = credentialCipher;
         this.byokPolicy = byokPolicy;
+        this.customEmbeddingProbe = customEmbeddingProbe;
     }
 
     /** 读当前用户的配置（apiKey 掩码回显；未配置时也返回白名单，便于前端直接渲染表单）。 */
@@ -57,7 +60,7 @@ public class UserEmbeddingConfigService {
         UserEmbeddingConfigPO po = findByUser(userId);
         if (po == null) {
             return new UserEmbeddingConfigResponse(null, null, null, required, false, false, null,
-                    byokPolicy.allowedModels(), required);
+                    byokPolicy.allowedModels(), required, byokPolicy.allowsCustomEndpoint());
         }
         // 掩码必须打在**明文**上（与对话侧同一处理）：打在密文上会把密文片段当成 Key 回显出去。
         // 解不开也不让整个 GET 失败（与对话侧同一取舍，见 UserLlmConfigService#readablePlainKey）
@@ -70,7 +73,7 @@ public class UserEmbeddingConfigService {
                 // "有没有 Key"看库里有没有值，不看能不能解开（解不开时 apiKeyMasked 为 null）
                 StringUtils.hasText(po.getApiKey()),
                 UserLlmConfigService.mask(plainKey),
-                byokPolicy.allowedModels(), required);
+                byokPolicy.allowedModels(), required, byokPolicy.allowsCustomEndpoint());
     }
 
     /**
@@ -87,12 +90,6 @@ public class UserEmbeddingConfigService {
         int required = byokPolicy.requiredDimensions();
         int dimensions = request.dimensions() == null ? required : request.dimensions();
 
-        // 白名单 + 维度：用户只要碰了 provider / 模型名 / 维度里的任意一项就校验。
-        // 三项全空表示"清空配置"，这时候不该拿白名单去拦一个空值。
-        if (provider != null || modelName != null || request.dimensions() != null) {
-            byokPolicy.requireAllowed(provider, modelName, dimensions, ErrorCode.PARAM_INVALID);
-        }
-
         UserEmbeddingConfigPO po = findByUser(userId);
         boolean isNew = po == null;
         if (isNew) {
@@ -101,15 +98,11 @@ public class UserEmbeddingConfigService {
             po.setEnabled(0);
         }
 
-        po.setProvider(provider);
-        po.setModelName(modelName);
-        po.setBaseUrl(baseUrl);
-        po.setDimensions(dimensions);
-
         // apiKey 留空 = 保留已有（历史明文行顺手升级为密文）；填了才覆盖。
         // 刻意不无脑重加密：GCM 用随机 IV，无脑重加密会让"只改了模型名"也换掉密文。
         // 顺序同样是契约：填了新 Key 的路径不得先去解旧密文——否则换过 KEK 之后
         // 连"重新保存一次"都做不到（与对话侧同一 bug，见 UserLlmConfigService#upsert）。
+        // 探针要用到明文 Key，所以 Key 的解析必须在模型校验之前。
         String plainKey;
         if (StringUtils.hasText(request.apiKey())) {
             plainKey = request.apiKey().trim();
@@ -120,6 +113,22 @@ public class UserEmbeddingConfigService {
                 po.setApiKey(credentialCipher.encrypt(plainKey));
             }
         }
+
+        // 模型校验：只要碰了 provider / 模型名 / 维度里的任意一项就要过。
+        // 三项全空表示"清空配置"，这时候不该拿白名单去拦一个空值。
+        if (provider != null || modelName != null || request.dimensions() != null) {
+            if (byokPolicy.isAllowed(provider, modelName)) {
+                // 白名单快路径：平台已验证过端点与维度，不再探针
+                byokPolicy.requireAllowed(provider, modelName, dimensions, ErrorCode.PARAM_INVALID);
+            } else {
+                requireCustomEndpoint(provider, modelName, baseUrl, plainKey, dimensions);
+            }
+        }
+
+        po.setProvider(provider);
+        po.setModelName(modelName);
+        po.setBaseUrl(baseUrl);
+        po.setDimensions(dimensions);
 
         if (enabled) {
             validateReady(provider, modelName, baseUrl, plainKey);
@@ -134,6 +143,50 @@ public class UserEmbeddingConfigService {
         log.info("用户 {} 的自定义嵌入模型配置已保存：enabled={}, provider={}, model={}, dimensions={}",
                 userId, enabled, po.getProvider(), po.getModelName(), po.getDimensions());
         return get(userId);
+    }
+
+    /**
+     * 白名单之外的自定义端点：当场探针，证明「它确实返回平台要求的维度」。
+     *
+     * <p>关键取舍：不信任用户声明的维度。向量列写死 {@code vector(1024)}，存错维度不会报错，
+     * 只会在检索时表现为「结果莫名其妙」。而自定义端点没有任何平台侧的验证，
+     * 因此以「一次真实调用」代替「用户承诺」。
+     */
+    private void requireCustomEndpoint(String provider, String modelName, String baseUrl,
+                                       String plainKey, int dimensions) {
+        if (!byokPolicy.allowsCustomEndpoint()) {
+            // 走白名单路径报错：消息里带着当前白名单，用户知道该填什么
+            byokPolicy.requireAllowed(provider, modelName, dimensions, ErrorCode.PARAM_INVALID);
+            return;
+        }
+        if (!StringUtils.hasText(provider) || !StringUtils.hasText(modelName)) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "嵌入模型需要同时给出 provider 与模型名");
+        }
+        int required = byokPolicy.requiredDimensions();
+        if (dimensions != required) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    ("自定义端点的维度必须是 %d 维（当前填的是 %d）。向量列与知识库冻结维度都按 %d 维建立，"
+                            + "平台不会静默截断或补零。")
+                            .formatted(required, dimensions, required));
+        }
+        if (!StringUtils.hasText(baseUrl)) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "使用自定义嵌入端点时 Base URL 必填（形如 https://your-gateway/v1）");
+        }
+        if (!StringUtils.hasText(plainKey)) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    "使用自定义嵌入端点时必须填写 API Key（探针要用它真调一次端点）");
+        }
+        int actual = customEmbeddingProbe.probe(baseUrl, plainKey, modelName);
+        if (actual != required) {
+            throw new BusinessException(ErrorCode.PARAM_INVALID,
+                    ("自定义端点实际返回 %d 维向量，平台要求 %d 维 —— 换维度会让既有知识库的向量全部失效，"
+                            + "因此这里拒绝保存。请换一个 %d 维的模型（如支持 dimensions 参数的 text-embedding-v4 / "
+                            + "text-embedding-3-small）。")
+                            .formatted(actual, required, required));
+        }
+        log.info("自定义嵌入端点探针通过：provider={}, model={}, dimensions={}", provider, modelName, actual);
     }
 
     /**

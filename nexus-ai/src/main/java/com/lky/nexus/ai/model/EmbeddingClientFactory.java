@@ -97,11 +97,14 @@ public class EmbeddingClientFactory {
      * 已经查过，但这里是"向量可能被真正生产出来"的最后一道边界，多一道断言代价极低，
      * 却能杜绝将来某个新调用点绕过策略直接建客户端。
      *
-     * @throws BusinessException 4006：白名单外的模型，或维度不是平台允许的维度
+     * <p>与保存侧共用 {@link EmbeddingByokPolicy#requireUsable}：白名单内的 provider:model，
+     * 或已开启自定义端点且带 Base URL 的组合，都算可用；维度仍必须是平台唯一维度。
+     *
+     * @throws BusinessException 4006：白名单外的模型（且未开启自定义端点），或维度不是平台允许的维度
      */
     public EmbeddingClient getForUser(UserEmbeddingCredentials credentials) {
-        byokPolicy.requireAllowed(credentials.provider(), credentials.model(),
-                credentials.dimensions(), ErrorCode.MODEL_ROLE_NOT_CONFIGURED);
+        byokPolicy.requireUsable(credentials.provider(), credentials.model(),
+                credentials.dimensions(), credentials.baseUrl(), ErrorCode.MODEL_ROLE_NOT_CONFIGURED);
         String cacheKey = "user|" + credentials.fingerprint();
         return clientsByUser.computeIfAbsent(cacheKey, key -> createForUser(credentials));
     }

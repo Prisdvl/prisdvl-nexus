@@ -107,6 +107,12 @@ ai:
         - bailian:text-embedding-v4
         - bailian:text-embedding-v3
       required-dimensions: 1024
+      # 测试默认**关掉**自定义端点：既有用例断言「白名单外的模型被拒」，
+      # 打开后那条路径会去真发探针请求，测试就依赖外网了。
+      # 需要验证自定义端点的那支用例用 @SpringBootTest(properties=...) 单独打开。
+      allow-custom-endpoint: false
+      # 本机桩服务在 127.0.0.1 上，SSRF 闸门在测试里必须放开（生产默认是关的）
+      allow-private-endpoints: true
   roles:
     chat.default: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"
     chat.agent: "deepseek:${AI_CHAT_MODEL:deepseek-chat}"

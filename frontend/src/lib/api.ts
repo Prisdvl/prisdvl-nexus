@@ -933,6 +933,8 @@ export interface UserEmbeddingConfig {
   apiKeyMasked: string | null
   allowedModels: string[]
   requiredDimensions: number
+  /** 后端是否允许白名单之外的自定义端点（保存时用一次真实探针校验维度） */
+  customEndpointAllowed?: boolean
 }
 
 export interface AgentToolTrace { tool: string; input?: unknown; output?: unknown; error?: string | null; status?: string }

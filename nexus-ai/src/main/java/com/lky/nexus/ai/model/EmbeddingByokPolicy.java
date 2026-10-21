@@ -53,6 +53,16 @@ public class EmbeddingByokPolicy {
         return allowedModels().contains(provider.trim() + ":" + model.trim());
     }
 
+    /** 是否允许使用白名单之外的自定义 OpenAI 兼容端点（保存时以探针校验维度）。 */
+    public boolean allowsCustomEndpoint() {
+        return properties.getByok().getEmbedding().isAllowCustomEndpoint();
+    }
+
+    /** 探针是否允许访问内网 / 本机地址（仅开发与测试 profile 打开）。 */
+    public boolean allowsPrivateEndpoints() {
+        return properties.getByok().getEmbedding().isAllowPrivateEndpoints();
+    }
+
     /**
      * 违反约束的原因；合规时返回空。
      *
@@ -66,6 +76,10 @@ public class EmbeddingByokPolicy {
             return Optional.of("嵌入模型 %s:%s 不在平台允许的白名单内。当前白名单：%s"
                     .formatted(provider.trim(), model.trim(), allowedModels()));
         }
+        return dimensionViolation(dimensions);
+    }
+
+    private Optional<String> dimensionViolation(Integer dimensions) {
         int required = requiredDimensions();
         if (dimensions == null || dimensions != required) {
             return Optional.of(("嵌入维度必须是 %d 维（当前为 %s）。向量列与知识库冻结维度都按 %d 维建立，"
@@ -73,6 +87,24 @@ public class EmbeddingByokPolicy {
                     .formatted(required, dimensions == null ? "未填" : dimensions.toString(), required));
         }
         return Optional.empty();
+    }
+
+    /**
+     * 这一点能不能真的拿来跑嵌入：白名单内的 {@code provider:model}，或者开启了自定义端点且带了 Base URL。
+     * 保存路径与使用路径共用这一份判定，避免「存得进去、跑起来报白名单」的两套规则。
+     *
+     * @param baseUrl 自定义端点必填；白名单路径可空
+     */
+    public void requireUsable(String provider, String model, Integer dimensions, String baseUrl,
+                              ErrorCode code) {
+        boolean whitelisted = isAllowed(provider, model);
+        if (!whitelisted && !(allowsCustomEndpoint() && StringUtils.hasText(baseUrl))) {
+            throw new BusinessException(code, violationOf(provider, model, dimensions)
+                    .orElse("嵌入模型 %s:%s 不可用".formatted(provider, model)));
+        }
+        dimensionViolation(dimensions).ifPresent(message -> {
+            throw new BusinessException(code, message);
+        });
     }
 
     /**

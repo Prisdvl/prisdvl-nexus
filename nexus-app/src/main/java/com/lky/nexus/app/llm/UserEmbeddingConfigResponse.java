@@ -24,5 +24,12 @@ public record UserEmbeddingConfigResponse(
         /** 平台允许的嵌入模型（{@code provider:model}）。 */
         List<String> allowedModels,
         /** 平台允许的嵌入维度。 */
-        int requiredDimensions) {
+        int requiredDimensions,
+        /**
+         * 是否允许白名单之外的自定义 OpenAI 兼容端点。
+         *
+         * <p>{@code true} 时前端多给一个「自定义端点」入口（自行填 Base URL + 模型名 + Key），
+         * 保存时后端用一次真实探针校验它返回的维度；{@code false} 表示只能从白名单里选。
+         */
+        boolean customEndpointAllowed) {
 }
