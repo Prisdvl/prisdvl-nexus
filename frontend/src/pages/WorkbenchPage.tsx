@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight, Bot, Clock, Database, FileText, MessagesSquare, Plus, RotateCcw, Search, Upload, Wand2, Zap,
 } from 'lucide-react'
@@ -147,10 +147,22 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
       return { day: raw, label, count: p.count }
     })
   }, [summary])
-  const heat = USE_MOCK
-    ? SEED_HEAT
-    : (summary?.heat.map((point) => Math.min(4, point.count)) ?? [])
-  const activeDays = heat.filter((value) => value > 0).length
+  /*
+   * 活跃度的统计口径：消息条数 / Token 消耗。
+   * 两套数据来自同一条 /api/stats/summary（heat / tokenHeat），切换只换数据源，不再请求。
+   */
+  const [heatMetric, setHeatMetric] = useState<'messages' | 'tokens'>('messages')
+  const heatRaw = USE_MOCK
+    ? (heatMetric === 'tokens' ? SEED_HEAT.map((value) => value * 260) : SEED_HEAT)
+    : (heatMetric === 'tokens' ? (summary?.tokenHeat ?? []) : (summary?.heat ?? [])).map((point) => point.count)
+  /* 色阶按窗口内的最大值归一化：Token 一天几千、消息一天几条，同一套绝对阈值套不上两套量纲 */
+  const heatMax = Math.max(1, ...heatRaw)
+  const heat = heatRaw.map((value) =>
+    value <= 0 ? 0 : Math.min(4, Math.max(1, Math.ceil((value / heatMax) * 4))),
+  )
+  const activeDays = heatRaw.filter((value) => value > 0).length
+  const heatSum = heatRaw.reduce((total, value) => total + value, 0)
+  const heatSumText = heatSum >= 1000 ? `${(heatSum / 1000).toFixed(1)}k` : String(heatSum)
   const activity = USE_MOCK
     ? SEED_ACTIVITY
     : (summary?.activity ?? []).map((a) => ({
@@ -231,7 +243,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
           <span className="wbw-stat__label">{s.label}</span>
           <span className="wbw-stat__num">
             {/* 不传 places：按数值位数自动决定（0 → "0"，42 → "42"）。 */}
-            {countsLoading ? '—' : <Counter value={s.value} fontSize={26} padding={3} gap={5} fontWeight={600} textColor="currentColor" gradientFrom="var(--surface-muted)" gradientHeight={8} />}
+            {countsLoading ? '—' : <Counter value={s.value} fontSize={20} padding={3} gap={5} fontWeight={620} textColor="currentColor" gradientFrom="var(--surface-muted)" gradientHeight={7} />}
           </span>
           <span className="wbw-stat__sub">{s.sub}</span>
         </div>
@@ -379,13 +391,19 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
 
   const heatBody = (
     <>
-      <div className="wb-heat" aria-label={w.heatAria}>
+      <div className="wb-heat" aria-label={heatMetric === 'tokens' ? w.heatMetricAria : w.heatAria}>
         {heat.map((v, i) => (
           <span key={i} data-lv={v} className="wb-heat-cell" />
         ))}
       </div>
+      {heatMetric === 'tokens' && activeDays === 0 && (
+        <p className="wbw-hint">{w.heatNoTokens}</p>
+      )}
       <div className="wb-heat-foot">
-        <span>{w.heatTotal(heat.length)} · <Loc>{w.heatActive(activeDays)}</Loc></span>
+        <span>
+          {w.heatTotal(heat.length)} · <Loc>{w.heatActive(activeDays)}</Loc>
+          {heatMetric === 'tokens' && <> · <Loc>{w.heatTokenSum(heatSumText)}</Loc></>}
+        </span>
         <span className="wb-heat-scale">
           <Loc>{w.heatLess}</Loc>
           <i style={{ background: 'var(--surface-muted)' }} />
@@ -396,6 +414,26 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
         </span>
       </div>
     </>
+  )
+
+  /* 活跃度磁贴右上角的统计口径切换：按钮而不是 select —— 只有两项，一按即换 */
+  const heatMetricSwitch = (
+    <span className="wbw-seg" role="group" aria-label={w.heatMetricAria}>
+      <button
+        type="button"
+        aria-pressed={heatMetric === 'messages'}
+        onClick={() => setHeatMetric('messages')}
+      >
+        <Loc>{w.heatByMessages}</Loc>
+      </button>
+      <button
+        type="button"
+        aria-pressed={heatMetric === 'tokens'}
+        onClick={() => setHeatMetric('tokens')}
+      >
+        <Loc>{w.heatByTokens}</Loc>
+      </button>
+    </span>
   )
 
   const recentBody = (
@@ -442,7 +480,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
       case 'timeline':
         return <Widget icon={<Clock size={15} />} title={<Loc>{w.timelineTitle}</Loc>} sub={<Loc>{w.timelineRange}</Loc>}>{timelineBody}</Widget>
       case 'heat':
-        return <Widget icon={<Database size={15} />} title={<Loc>{w.heatTitle}</Loc>} sub={<Loc>{w.heatRange}</Loc>}>{heatBody}</Widget>
+        return <Widget icon={<Database size={15} />} title={<Loc>{w.heatTitle}</Loc>} sub={heatMetricSwitch}>{heatBody}</Widget>
       default:
         return <Widget icon={<MessagesSquare size={15} />} title={<Loc>{w.recentTitle}</Loc>} sub={<button className="btn btn-ghost btn-sm" type="button" onClick={goChat}><Loc>{w.recentAll}</Loc> <ArrowRight size={13} /></button>}>{recentBody}</Widget>
     }
@@ -499,10 +537,12 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
         renderItem={renderWidget}
         hint={w.dragHint}
         className="wb-board"
-        cellSize={232}
+        cellSize={300}
         gap={14}
         radius={16}
         maxColumns={4}
+        /* 只给 4 列和 2 列：3 列时 2 宽的磁贴每行留一格空洞，页面反而更高 */
+        columnChoices={[2, 4]}
       />
     </div>
   )

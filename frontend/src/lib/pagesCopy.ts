@@ -77,6 +77,13 @@ export interface PagesCopy {
     heatActive: (n: number) => string
     heatLess: string
     heatMore: string
+    /** 统计口径切换：消息条数 / Token 消耗。 */
+    heatByMessages: string
+    heatByTokens: string
+    heatMetricAria: string
+    /** 当前口径下的合计（Token 模式用，参数已格式化，如 "12.3k"）。 */
+    heatTokenSum: (value: string) => string
+    heatNoTokens: string
     /* —— 最近会话 —— */
     recentTitle: string
     recentAll: string
@@ -785,6 +792,11 @@ const ZH: PagesCopy = {
     heatActive: (n) => `活跃 ${n} 天`,
     heatLess: '少',
     heatMore: '多',
+    heatByMessages: '消息数',
+    heatByTokens: 'Token',
+    heatMetricAria: '活跃度统计口径',
+    heatTokenSum: (value) => `合计 ${value} Token`,
+    heatNoTokens: '近 30 天还没有 Token 用量记录。',
     recentTitle: '最近会话',
     recentAll: '全部',
     recentEmpty: '还没有会话，开始对话后会显示在这里。',
@@ -1453,6 +1465,11 @@ const EN: PagesCopy = {
     heatActive: (n) => `${n} active days`,
     heatLess: 'Less',
     heatMore: 'More',
+    heatByMessages: 'Messages',
+    heatByTokens: 'Tokens',
+    heatMetricAria: 'Activity metric',
+    heatTokenSum: (value) => `${value} tokens in total`,
+    heatNoTokens: 'No token usage in the last 30 days.',
     recentTitle: 'Recent chats',
     recentAll: 'All',
     recentEmpty: 'No chats yet. Start one and it will show up here.',

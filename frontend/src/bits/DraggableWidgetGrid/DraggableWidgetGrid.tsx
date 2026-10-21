@@ -62,8 +62,27 @@ export interface DraggableWidgetGridProps {
   maxColumns?: number
   /** 目标格宽（px），列数由它推导。 */
   cellSize?: number
+  /**
+   * 可选的列数（只在列出的值里挑最接近 {@link cellSize} 的那个）。
+   *
+   * 用来挡掉 3 列这种"宽磁贴填不满"的中间态：磁贴都是 1 宽或 2 宽时，
+   * 奇数列表会把每行留一格空洞，整体高度反而比 2 列时更高。
+   */
+  columnChoices?: number[]
   /** 磁贴间距（px）。 */
   gap?: number
+  /**
+   * 行高相对列宽的比例（默认 0.72）。
+   *
+   * 写成比例而不是定值，是为了让磁贴在宽屏上仍然「随列宽缩放」；再用
+   * {@link minRowHeight} / {@link maxRowHeight} 夹住两端，避免两列布局下
+   * 行高被列宽带飞（600px 高的磁贴一屏放不下两块）。
+   */
+  rowRatio?: number
+  /** 行高下限（px），默认 152。 */
+  minRowHeight?: number
+  /** 行高上限（px），默认 200；再高的话两列布局下每块磁贴都要滚半屏才能看全。 */
+  maxRowHeight?: number
   /** 磁贴圆角（px）。 */
   radius?: number
   /** localStorage 键；传了就自动持久化顺序与尺寸。 */
@@ -72,6 +91,9 @@ export interface DraggableWidgetGridProps {
   hint?: string
   className?: string
 }
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value))
 
 const SPANS: { [K in WidgetSize]: { col: number; row: number } } = {
   sm: { col: 1, row: 1 },
@@ -618,7 +640,11 @@ export function DraggableWidgetGrid({
   editable = true,
   maxColumns = 4,
   cellSize = 215,
+  columnChoices = [],
   gap = 12,
+  rowRatio = 0.72,
+  minRowHeight = 152,
+  maxRowHeight = 200,
   radius = 18,
   persistKey,
   hint,
@@ -652,10 +678,15 @@ export function DraggableWidgetGrid({
     const measure = () => {
       const width = el.getBoundingClientRect().width
       if (width < 1) return
-      const columns = Math.max(
-        minColumns,
-        Math.min(maxColumns, Math.round(width / cellSize)),
-      )
+      const allowed = columnChoices.filter((n) => n >= minColumns && n <= maxColumns)
+      const columns = allowed.length
+        ? // 只在允许的列数里挑：3 列时 2 宽的磁贴每行都填不满，会多出半行空洞
+          allowed.reduce(
+            (best, n) =>
+              Math.abs(width / n - cellSize) < Math.abs(width / best - cellSize) ? n : best,
+            allowed[0],
+          )
+        : Math.max(minColumns, Math.min(maxColumns, Math.round(width / cellSize)))
       const unit = (width - gap * (columns - 1)) / columns
       setMetrics((was) =>
         was.columns === columns && Math.abs(was.unit - unit) < 0.5
@@ -667,7 +698,7 @@ export function DraggableWidgetGrid({
     const observer = new ResizeObserver(measure)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [maxColumns, minColumns, cellSize, gap])
+  }, [maxColumns, minColumns, cellSize, gap, columnChoices.join(',')])
 
   const columns = metrics.columns || Math.max(minColumns, maxColumns)
   const placements = useMemo(() => layout(items, columns), [items, columns])
@@ -883,10 +914,12 @@ export function DraggableWidgetGrid({
           style={{
             gap,
             gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-            // 方形格子：行高等于列宽。
+            // 行高跟列宽走一个比例，再夹在上下限之间：
+            // 方形格子（行高 = 列宽）在两列布局下会变成 600px 高的巨块，
+            // 而固定像素又会让宽屏上的磁贴偏扁，所以取「比例 + 夹逼」。
             gridAutoRows: metrics.unit
-              ? `${Math.round(metrics.unit)}px`
-              : `minmax(${cellSize * 0.75}px, auto)`,
+              ? `${Math.round(clamp(metrics.unit * rowRatio, minRowHeight, maxRowHeight))}px`
+              : `minmax(${minRowHeight}px, auto)`,
           }}
         >
           {domOrder.current.map((id) => {

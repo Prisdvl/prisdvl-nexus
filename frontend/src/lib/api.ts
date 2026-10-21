@@ -820,7 +820,13 @@ export interface RelatedDoc { documentId?: string; title?: string; sharedTags?: 
 
 export interface StatsTrendPoint { day: string; count: number }
 export interface StatsActivityItem { type: string; refId: string; label: string | null; at: string | null }
-export interface StatsSummary { trend: StatsTrendPoint[]; heat: StatsTrendPoint[]; activity: StatsActivityItem[] }
+export interface StatsSummary {
+  trend: StatsTrendPoint[]
+  heat: StatsTrendPoint[]
+  /** 每天消息的 Token 合计（与 heat 同窗口）。老后端不返回这个字段，读取方要按空数组兜底。 */
+  tokenHeat?: StatsTrendPoint[]
+  activity: StatsActivityItem[]
+}
 
 export interface UserQuota {
   requestUsed: number
