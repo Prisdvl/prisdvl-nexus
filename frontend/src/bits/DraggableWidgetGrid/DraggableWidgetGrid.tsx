@@ -89,6 +89,13 @@ export interface DraggableWidgetGridProps {
   persistKey?: string
   /** 读屏用的操作提示（文案由调用方给，组件自己不读字典）。 */
   hint?: string
+  /**
+   * 换位后的朗读文案（`aria-live` 播报）。
+   *
+   * 拖放结束时鼠标用户已经看见落点，但读屏用户只听到一声「已落下」；这里把
+   * 「哪块磁贴、第几位、共几块」交回调用方组句，组件不碰字典。
+   */
+  announceMove?: (item: WidgetItem, index: number, total: number) => string
   className?: string
 }
 
@@ -648,6 +655,7 @@ export function DraggableWidgetGrid({
   radius = 18,
   persistKey,
   hint,
+  announceMove,
   className = '',
 }: DraggableWidgetGridProps) {
   const [items, setItems] = useState<WidgetItem[]>(() => {
@@ -705,15 +713,24 @@ export function DraggableWidgetGrid({
   const rows = placements.reduce((n, p) => Math.max(n, p.row + p.h), 0)
 
   // 给活过多次渲染的事件处理器用的最新值。
-  const latest = useRef({ items, metrics, onChange })
+  const latest = useRef({ items, metrics, onChange, announceMove })
   latest.current.metrics = metrics
   latest.current.onChange = onChange
+  latest.current.announceMove = announceMove
   useIsoLayoutEffect(() => {
     latest.current.items = items
   }, [items])
 
-  const commit = useCallback(
-    (next: WidgetItem[]) => {
+  /** 把「哪块、第几位、共几块」交给调用方组句，写进 live region。 */
+  const announce = (list: WidgetItem[], id: string) => {
+    const build = latest.current.announceMove
+    if (!build) return
+    const index = list.findIndex((item) => item.id === id)
+    if (index < 0) return
+    setAnnouncement(build(list[index], index + 1, list.length))
+  }
+
+  const commit = useCallback((next: WidgetItem[]) => {
       latest.current.items = next
       setItems(next)
       if (persistKey) {
@@ -750,6 +767,8 @@ export function DraggableWidgetGrid({
   const [held, setHeld] = useState(null as string | null)
   const [raised, setRaised] = useState(null as string | null)
   const [landed, setLanded] = useState(null as string | null)
+  // 落位后的朗读文案：拖拽是纯视觉变化，读屏必须靠这段 live region 才知道换位成功。
+  const [announcement, setAnnouncement] = useState('')
   const dragging = useRef(null as string | null)
   const startOrder = useRef(null as WidgetItem[] | null)
   const frame = useRef(0)
@@ -845,7 +864,10 @@ export function DraggableWidgetGrid({
         const before = startOrder.current
         startOrder.current = null
         const after = latest.current.items
-        if (before && !sameOrder(before, after)) latest.current.onChange?.(after)
+        if (before && !sameOrder(before, after)) {
+          latest.current.onChange?.(after)
+          announce(after, id)
+        }
       },
       key: (e, id) => {
         if (!editable || !e.altKey) return
@@ -868,6 +890,7 @@ export function DraggableWidgetGrid({
           refocus.current = id
           commit(next)
           latest.current.onChange?.(next)
+          announce(next, id)
           return
         }
       },
@@ -904,6 +927,11 @@ export function DraggableWidgetGrid({
         {editable && hint && (
           <p id={hintId} className="sr-only">
             {hint}
+          </p>
+        )}
+        {announceMove && (
+          <p className="sr-only" aria-live="polite" aria-atomic="true">
+            {announcement}
           </p>
         )}
         <div

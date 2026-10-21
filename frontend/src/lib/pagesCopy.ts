@@ -96,6 +96,8 @@ export interface PagesCopy {
     widgetStats: string
     /** 拖动/键盘重排的操作提示（读屏用） */
     dragHint: string
+    /** 换位后的朗读文案（读屏靠它知道磁贴挪到了第几位） */
+    moveAnnounce: (label: string, index: number, total: number) => string
     resetLayout: string
     resetLayoutTitle: string
   }
@@ -805,6 +807,7 @@ const ZH: PagesCopy = {
     boardAria: '工作台磁贴（可拖动重排）',
     widgetStats: '总览',
     dragHint: '拖动磁贴可重新排布；触摸屏先按住再拖；键盘按住 Alt 加方向键。',
+    moveAnnounce: (label, index, total) => `${label}已移到第 ${index} 位，共 ${total} 块。`,
     resetLayout: '重置布局',
     resetLayoutTitle: '把磁贴恢复成默认排布',
   },
@@ -1479,6 +1482,7 @@ const EN: PagesCopy = {
     widgetStats: 'Overview',
     dragHint:
       'Drag a tile to rearrange. On touch screens, press and hold first. With a keyboard, hold Alt and use the arrow keys.',
+    moveAnnounce: (label, index, total) => `${label} moved to position ${index} of ${total}.`,
     resetLayout: 'Reset layout',
     resetLayoutTitle: 'Restore the default tile arrangement',
   },

@@ -536,6 +536,7 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
         onChange={() => { /* 顺序已由网格自己持久化；这里不需要额外动作 */ }}
         renderItem={renderWidget}
         hint={w.dragHint}
+        announceMove={(item, index, total) => w.moveAnnounce(item.label ?? item.id, index, total)}
         className="wb-board"
         cellSize={300}
         gap={14}
