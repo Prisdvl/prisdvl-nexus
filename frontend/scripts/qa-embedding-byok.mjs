@@ -24,7 +24,7 @@ const PASSWORD = 'Passw0rd!23'
 const FAKE_KEY = 'sk-e2e-byok-abcdefghijklmnop123456'   // 刻意用假 Key：保存路径不调模型
 const MASKED = 'sk-…56'                                 // 服务端掩码：前 3 + … + 后 2
 const BYOK_BASE_URL = 'https://byok-e2e.example.com/compatible-mode/v1'
-const BYOK_MODEL = 'text-embedding-v3'
+const BYOK_MODEL = 'text-embedding-v4'
 const GLOBAL_MODEL = 'text-embedding-v4'
 
 const browser = await chromium.launch({ channel: 'msedge', headless: true })
@@ -73,7 +73,7 @@ const providerOpts = await page.locator('#ek-provider option').allInnerTexts()
 const modelOpts = await page.locator('#ek-model option').allInnerTexts()
 // 白名单供应商 + 可选的「自定义端点」入口（后端 ai.byok.embedding.allow-custom-endpoint）
 check('供应商下拉来自后端白名单', providerOpts.includes('bailian'), providerOpts.join('/'))
-check('模型下拉来自后端白名单（两项）', modelOpts.join('/') === 'text-embedding-v3/text-embedding-v4' || modelOpts.join('/') === 'text-embedding-v4/text-embedding-v3', modelOpts.join('/'))
+check('模型下拉来自后端白名单', modelOpts.includes('text-embedding-v4'), modelOpts.join('/'))
 /* 维度是平台决定的，界面上不再有可编辑宿主——只断言"没有假输入框 + 文案里写明 1024"。
    原来这里断言 #ek-dim 是 disabled input，那段假输入框已在纯交互批里删掉。 */
 check(
@@ -102,7 +102,7 @@ await page.locator('.settings-item', { hasText: '嵌入模型' }).first().click(
 await page.waitForTimeout(700)
 const placeholderAfterReload = (await page.locator('#ek-key').getAttribute('placeholder')) ?? ''
 check('刷新后配置与掩码仍在', placeholderAfterReload.includes(MASKED) && (await page.locator('#ek-base').inputValue()) === BYOK_BASE_URL, placeholderAfterReload)
-check('刷新后模型选择仍是 v3', (await page.locator('#ek-model').inputValue()) === BYOK_MODEL)
+check('刷新后模型选择仍是白名单那项', (await page.locator('#ek-model').inputValue()) === BYOK_MODEL)
 
 /* ---------- 启用时建库：冻结用户自己的模型 ---------- */
 const login = await page.request.post(`${BASE}/api/auth/login`, { data: { username: USER, password: PASSWORD } })

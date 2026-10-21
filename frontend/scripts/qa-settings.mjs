@@ -72,7 +72,9 @@ check('每次切换都播放进入过渡', (await page.evaluate(() => window.__s
 /* ---------- 2.5 嵌入模型（BYOK 路线 A）：白名单下拉 + 固定维度 ---------- */
 await page.locator('.settings-item', { hasText: '嵌入模型' }).first().click()
 await page.waitForTimeout(420)
-check('嵌入模型：供应商下拉来自白名单', (await page.locator('#ek-provider option').allInnerTexts()).join() === 'bailian', (await page.locator('#ek-provider option').allInnerTexts()).join('/'))
+const providerOpts = await page.locator('#ek-provider option').allInnerTexts()
+/* 白名单仍是第一项；第二个是「自定义端点」，只在 customEndpointAllowed=true 时出现 */
+check('嵌入模型：供应商下拉来自白名单', providerOpts[0] === 'bailian' && providerOpts.length <= 2, providerOpts.join('/'))
 check('嵌入模型：模型下拉来自白名单', (await page.locator('#ek-model option').allInnerTexts()).join() === 'text-embedding-v4', (await page.locator('#ek-model option').allInnerTexts()).join('/'))
 /* 维度由平台决定，界面改成只读文本（原先是个 disabled 的假输入框，容易被误认为可编辑） */
 check('嵌入模型：维度以纯文本说明固定 1024',
