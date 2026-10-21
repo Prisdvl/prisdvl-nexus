@@ -263,6 +263,16 @@ nexus:
     # async：投递到 RabbitMQ（需要 broker，local/prod 默认）
     # sync ：当前线程直接执行（standalone / 测试：环境里没有 broker）
     mode: ${NEXUS_IMPORT_MODE:async}
+  notify:
+    # 每个用户最多几个通知通道。上限的作用不是省钱，而是让"通道"保持可枚举：
+    # 一个用户挂 200 个 Webhook 时，一次导入完成会打 200 个外部请求。
+    max-channels: ${NEXUS_NOTIFY_MAX_CHANNELS:10}
+    webhook:
+      # 投递超时。给得短：导入线程是同步投递，等太久会拖慢任务收尾。
+      timeout: ${NEXUS_NOTIFY_WEBHOOK_TIMEOUT:5s}
+      # 是否允许回调地址指向本机/内网。默认 false（Webhook 地址由用户输入，指内网等于 SSRF）；
+      # standalone / test 打开，否则本地没法验证投递。
+      allow-private-endpoints: ${NEXUS_NOTIFY_ALLOW_PRIVATE:false}
   vector:
     # 向量库（PostgreSQL + pgvector）。standalone / 测试环境没有它，会被关掉；
     # 关闭时写入与检索会明确报 4003，而不是静默失败。

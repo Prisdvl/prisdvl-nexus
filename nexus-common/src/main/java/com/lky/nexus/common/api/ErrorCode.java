@@ -105,6 +105,9 @@ public enum ErrorCode {
     IMPORT_TASK_NOT_FOUND(3008, "导入任务不存在"),
     IMPORT_TASK_PUBLISH_FAILED(3009, "导入任务投递失败"),
 
+    /** 通知通道不存在（已删或不属于当前用户）。 */
+    NOTIFY_CHANNEL_NOT_FOUND(3010, "通知通道不存在"),
+
     // ---------- 4xxx AI 模型 / 嵌入 / 向量 ----------
     MODEL_UNAVAILABLE(4001, "AI 模型不可用"),
     MODEL_TIMEOUT(4002, "AI 模型响应超时"),

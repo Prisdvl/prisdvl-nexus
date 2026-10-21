@@ -138,6 +138,11 @@
 | POST | `/api/users/me/totp/setup` | 生成候选密钥（**此时还没开启**）：`{ secret, otpauthUri, issuer, account, digits, periodSeconds }`；密钥仅本响应可见一次 |
 | POST | `/api/users/me/totp/enable` | 用 `{ "code": "123456" }` 校验候选密钥，通过才置 `totp_enabled=1` 并返回 **`{ recoveryCodes: [...] }` 10 枚一次性恢复码**（只此一次） |
 | POST | `/api/users/me/totp/disable` | 用 `{ "password": "******" }` 关闭两步验证并清空密钥/恢复码（换绑设备 = 先关再开） |
+| GET | `/api/users/me/notify-channels` | 通知通道列表（服务端保存，跨设备同步）。每项含 `name` / `type`（`WEBHOOK`\|`EMAIL`）/ `target` / **`hasSecret`（永不返回密钥本身）** / `events` / `enabled` / 最近一次投递的 `lastStatus`·`lastError`·`lastAt` |
+| POST | `/api/users/me/notify-channels` | 新建通道：`{ name, type, target, secret?, events, enabled? }`；`events` **至少一项**（`import.done` / `import.failed`，未知码静默丢弃），否则 `1001`；上限 `nexus.notify.max-channels`（默认 10），超限 `1001`；Webhook 目标保存时就过一遍协议与内网校验 |
+| PUT | `/api/users/me/notify-channels/{id}` | 修改通道。`secret` 三态：**`null`/省略 = 不动已存密钥，`""` = 清除，非空 = 覆盖**；别人的 id 与不存在同样 `404/3010` |
+| DELETE | `/api/users/me/notify-channels/{id}` | 删除通道（别人的 id 同样 `404/3010`） |
+| POST | `/api/users/me/notify-channels/{id}/test` | 发一条测试消息，返回**更新后的通道对象**（`lastStatus` = `OK`\|`FAILED`，失败时 `lastError` 是可读原因）；投递失败本身不报错，仍回 `200` |
 | GET | `/api/users/me/llm-config` | 当前用户自定义对话模型凭据（`baseUrl` / `modelName` / `enabled` / `hasApiKey` / **`apiKeyMasked`**；**永不返回明文**） |
 | PUT | `/api/users/me/llm-config` | 保存同一份凭据。`apiKey` **留空 = 保留旧值**，填了才覆盖（上限 **320**，超限 `1001`）；`enabled=true` 时三项必须齐全，否则 `1001`。落库形态是 AES-GCM 密文（`v1:` 前缀），见 `security.md` 未实现清单 §11 |
 | GET | `/api/users/me/embedding-config` | 当前用户自定义嵌入模型凭据（BYOK 路线 A）：`provider` / `modelName` / `baseUrl` / `dimensions` / `enabled` / `hasApiKey` / **`apiKeyMasked`**，另带平台约束 **`allowedModels`**、**`requiredDimensions`** 与 **`customEndpointAllowed`**（未配置时也返回，供前端渲染合法选项） |
@@ -254,6 +259,29 @@ POST /api/users/me/totp/disable
 - 校验窗口 `±1` 个时间步（30 s/步，见 `nexus.auth.totp.window`），容忍客户端时钟偏差；重放保护靠"候选密钥一次性 + 恢复码一次性"，
   不额外记已用码（同窗口内复用同一码不构成提权：攻击者仍需先已知密码）。
 - 登录侧见上文 `POST /api/auth/login` 的 `totpCode` 与 `2011`。
+
+#### 通知通道 `notify-channels`
+
+```http
+GET /api/users/me/notify-channels
+200 OK
+{ "code": 0, "data": [{
+    "id": "2112808352084967426", "name": "团队群机器人", "type": "WEBHOOK",
+    "target": "https://example.com/hook", "hasSecret": true,
+    "events": ["import.done", "import.failed"], "enabled": true,
+    "lastStatus": "OK", "lastError": null, "lastAt": "2026-10-21T15:35:14" }] }
+
+POST /api/users/me/notify-channels/{id}/test
+200 OK
+{ "code": 0, "data": { "id": "211…", "lastStatus": "FAILED",
+                       "lastError": "Webhook 请求失败：ConnectException", "…": "…" } }
+```
+
+- **投递是有真实触发源的**：导入任务结束（`import.done`，含 `PARTIAL` 之外的成功）与导入未完全成功（`import.failed`，含 `PARTIAL`）会各投一次；`enabled=false` 或事件不在 `events` 里的通道不投。
+- **投递失败不改业务结果**：`dispatch` 里 catch 一切异常并写 `last_*`，导入任务不会因为用户填了个挂掉的 Webhook 而变成失败。
+- **密钥只进不出**：`secret` 用 `CredentialCipher`（与 TOTP/BYOK 同一把 `NEXUS_SECURITY_CRYPTO_KEK`，AES-GCM `v1:` 前缀）落库；设置了密钥的 Webhook 请求带 `X-Nexus-Signature: sha256=<HMAC-SHA256(secret, body)>`，接收方可校验来源。口径见 `security.md` §6.6。
+- Webhook 目标在**保存时**就校验协议（只 http/https）与目标地址；生产默认拒绝环回/私网/链路本地（SSRF），开发/测试 profile 由 `nexus.notify.webhook.allow-private-endpoints=true` 放行（本机调试 Webhook 需要它）。
+- 邮件通道复用既有 `EmailSender` 的 `sendNotice`：SMTP 未配置时实现是 Console/未配置桩，`lastStatus` 会如实写成 `FAILED`，不会假装成功。
 
 #### 当日额度 `GET /api/users/me/quota`
 

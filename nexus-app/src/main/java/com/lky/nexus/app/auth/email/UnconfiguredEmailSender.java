@@ -18,4 +18,11 @@ public class UnconfiguredEmailSender implements EmailSender {
         throw new BusinessException(ErrorCode.INTERNAL_ERROR,
                 "邮件发送未配置：请设置 nexus.email.sender（开发可用 console）");
     }
+
+    @Override
+    public void sendNotice(String email, String title, String body) {
+        // 与验证码同一策略：没配通道就明确失败，不假装"通知发出去了"
+        throw new BusinessException(ErrorCode.INTERNAL_ERROR,
+                "邮件发送未配置：请设置 nexus.email.sender（开发可用 console）");
+    }
 }

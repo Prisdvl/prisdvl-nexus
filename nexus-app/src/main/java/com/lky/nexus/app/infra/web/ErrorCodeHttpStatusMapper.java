@@ -45,7 +45,7 @@ public final class ErrorCodeHttpStatusMapper {
             case TOTP_NOT_ENABLED, TOTP_ALREADY_ENABLED -> HttpStatus.CONFLICT;
 
             // 3xxx 知识库 / 文档
-            case KNOWLEDGE_BASE_NOT_FOUND, DOCUMENT_NOT_FOUND, IMPORT_TASK_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case KNOWLEDGE_BASE_NOT_FOUND, DOCUMENT_NOT_FOUND, IMPORT_TASK_NOT_FOUND, NOTIFY_CHANNEL_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case KNOWLEDGE_BASE_NAME_DUPLICATED -> HttpStatus.CONFLICT;
             case FILE_TYPE_UNSUPPORTED -> HttpStatus.UNSUPPORTED_MEDIA_TYPE;
             case FILE_SIZE_EXCEEDED -> HttpStatus.CONTENT_TOO_LARGE;

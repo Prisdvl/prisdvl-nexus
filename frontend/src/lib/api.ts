@@ -399,6 +399,18 @@ export const api = {
     /** 关闭两步验证（需当前密码：丢手机的人只能靠它进来） */
     disableTotp: (password: string) =>
       http.post<Result<null>>('/users/me/totp/disable', { password }).then((r) => r.data.data),
+    /** 通知通道列表（服务端保存，跨设备同步） */
+    notifyChannels: () =>
+      http.get<Result<UserNotifyChannel[]>>('/users/me/notify-channels').then((r) => r.data.data),
+    createNotifyChannel: (body: NotifyChannelInput) =>
+      http.post<Result<UserNotifyChannel>>('/users/me/notify-channels', body).then((r) => r.data.data),
+    updateNotifyChannel: (id: string, body: NotifyChannelInput) =>
+      http.put<Result<UserNotifyChannel>>(`/users/me/notify-channels/${id}`, body).then((r) => r.data.data),
+    deleteNotifyChannel: (id: string) =>
+      http.delete<Result<null>>(`/users/me/notify-channels/${id}`).then((r) => r.data.data),
+    /** 发一条测试消息：返回的 lastStatus/lastError 就是投递结果 */
+    testNotifyChannel: (id: string) =>
+      http.post<Result<UserNotifyChannel>>(`/users/me/notify-channels/${id}/test`, {}).then((r) => r.data.data),
     /** 读取当前用户的自定义对话模型配置（apiKey 只回掩码） */
     llmConfig: () =>
       http.get<Result<UserLlmConfig>>('/users/me/llm-config').then((r) => r.data.data),
@@ -885,8 +897,40 @@ export interface UserStorage {
 }
 
 /** 两步验证状态（GET /users/me/totp） */
-export interface TotpStatus {
+/** 通知通道类型：Webhook 回调，或邮件 */
+export type NotifyChannelType = 'WEBHOOK' | 'EMAIL'
+
+/**
+ * 用户自己配的通知通道。
+ *
+ * <p>`hasSecret` 而不是 `secret`：签名密钥只在写入时上行，服务端存密文，永不回传。
+ */
+export interface UserNotifyChannel {
+  /** 雪花 id 在 JSON 里是字符串（超出 JS 安全整数） */
+  id: string
+  name: string
+  type: NotifyChannelType
+  target: string
+  hasSecret: boolean
+  /** 事件码（'import.done' / 'import.failed'） */
+  events: string[]
   enabled: boolean
+  lastStatus: 'OK' | 'FAILED' | null
+  lastError: string | null
+  lastAt: string | null
+}
+
+export interface NotifyChannelInput {
+  name: string
+  type: NotifyChannelType
+  target: string
+  /** null = 保留已存密钥；'' = 清除；其它 = 覆盖 */
+  secret?: string | null
+  events: string[]
+  enabled: boolean
+}
+
+export interface TotpStatus {  enabled: boolean
   /** 还没用掉的恢复码数量，只在 enabled 时有意义 */
   recoveryCodesLeft: number
   /** 绑定通过的时间（ISO 字符串），未绑定为 null */

@@ -13,10 +13,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 public final class RecordingEmailSender implements EmailSender {
 
     public final List<Event> events = new CopyOnWriteArrayList<>();
+    /** 通知（非验证码）也记下来，供通知通道的用例断言"到底发了什么"。 */
+    public final List<Notice> notices = new CopyOnWriteArrayList<>();
 
     @Override
     public void sendCode(String email, String code, EmailPurpose purpose, Duration expire) {
         events.add(new Event(email, code, purpose, expire));
+    }
+
+    @Override
+    public void sendNotice(String email, String title, String body) {
+        notices.add(new Notice(email, title, body));
+    }
+
+    public Notice lastNotice() {
+        assertThat(notices).isNotEmpty();
+        return notices.get(notices.size() - 1);
     }
 
     public String lastCode() {
@@ -29,5 +41,8 @@ public final class RecordingEmailSender implements EmailSender {
     }
 
     public record Event(String email, String code, EmailPurpose purpose, Duration expire) {
+    }
+
+    public record Notice(String email, String title, String body) {
     }
 }

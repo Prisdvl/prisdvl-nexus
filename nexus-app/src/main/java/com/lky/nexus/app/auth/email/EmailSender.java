@@ -20,4 +20,17 @@ public interface EmailSender {
      * @param expire  有效期（写入邮件提示）
      */
     void sendCode(String email, String code, EmailPurpose purpose, Duration expire);
+
+    /**
+     * 发送一条业务通知（不是验证码）：任务完成、导入失败这类"做完叫我一声"的消息。
+     *
+     * <p>与 {@link #sendCode} 分开而不是塞进同一个方法：验证码是<b>安全凭证</b>（不能进日志、
+     * 有时效、要防爆破计数），通知是<b>普通文本</b>（可以进日志、没有时效、失败只记一条状态）。
+     * 混在一起会逼每个实现去区分，迟早在通知路径上打出验证码。
+     *
+     * @param email 收件地址（已 normalize）
+     * @param title 标题（纯文本，调用方负责本地化）
+     * @param body  正文（纯文本）
+     */
+    void sendNotice(String email, String title, String body);
 }

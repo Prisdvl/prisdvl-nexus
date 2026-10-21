@@ -55,6 +55,22 @@ public class SmtpEmailSender implements EmailSender {
         }
     }
 
+    @Override
+    public void sendNotice(String email, String title, String body) {
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, false, StandardCharsets.UTF_8.name());
+            helper.setFrom(from);
+            helper.setTo(email);
+            helper.setSubject(title);
+            helper.setText(body, false);
+            mailSender.send(message);
+            log.info("通知邮件已提交 SMTP to={}", email);
+        } catch (MailException | jakarta.mail.MessagingException ex) {
+            log.warn("通知邮件发送失败 to={}", email);
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "通知邮件发送失败", ex);
+        }
+    }
     private static JavaMailSender createMailSender(NexusEmailProperties.Smtp smtp) {
         if (smtp == null || !StringUtils.hasText(smtp.getHost())) {
             throw new IllegalStateException(

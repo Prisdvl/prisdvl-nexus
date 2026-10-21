@@ -209,8 +209,17 @@ class EmailCodeServiceTest {
     @Test
     @DisplayName("发信失败：删除验证码并释放冷却，允许立即重发；异常不吞掉")
     void sendFailureRollsBackCodeAndCooldown() {
-        EmailSender failing = (email, code, purpose, expire) -> {
-            throw new IllegalStateException("smtp down");
+        // EmailSender 现在有两个方法，lambda 不再够用；这里只关心 sendCode 抛错
+        EmailSender failing = new EmailSender() {
+            @Override
+            public void sendCode(String email, String code, EmailPurpose purpose, Duration expire) {
+                throw new IllegalStateException("smtp down");
+            }
+
+            @Override
+            public void sendNotice(String email, String title, String body) {
+                throw new IllegalStateException("not used");
+            }
         };
         EmailCodeService failingService = new EmailCodeService(store, failing, rateLimiter(), properties);
 

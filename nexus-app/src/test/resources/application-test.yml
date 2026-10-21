@@ -39,6 +39,10 @@ nexus:
   storage:
     # 原始文件落到 target 下（已被 .gitignore 忽略），避免污染仓库根目录
     root: ./target/test-storage
+  notify:
+    # 本机桩服务在 127.0.0.1 上；与上面 byok.embedding 同一个理由，测试里必须放开 SSRF 闸门
+    webhook:
+      allow-private-endpoints: true
   import:
     # 测试环境没有 broker：默认走同步执行，保证测试的确定性
     # （异步契约由 ImportTaskAsyncTest 通过替换 ImportTaskPublisher 单独验证）

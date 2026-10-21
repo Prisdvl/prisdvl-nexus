@@ -25,4 +25,11 @@ public class ConsoleEmailSender implements EmailSender {
                 expire: {}
                 """, email, purpose.keyToken(), code, expire);
     }
+
+    @Override
+    public void sendNotice(String email, String title, String body) {
+        // 通知正文可能含用户内容（知识库名、文件名），默认只打标题；排查时把级别调到 debug
+        log.info("[NOTICE] to={} title={}", email, title);
+        log.debug("[NOTICE-BODY] to={} body={}", email, body);
+    }
 }

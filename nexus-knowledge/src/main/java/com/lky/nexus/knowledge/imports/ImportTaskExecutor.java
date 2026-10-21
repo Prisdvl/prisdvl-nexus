@@ -25,10 +25,12 @@ import com.lky.nexus.knowledge.parser.ParserRegistry;
 import com.lky.nexus.knowledge.service.DocumentPersistResult;
 import com.lky.nexus.knowledge.service.DocumentPersistService;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
+import com.lky.nexus.knowledge.imports.event.ImportFinishedEvent;
 import com.lky.nexus.knowledge.storage.DocumentStorage;
 import com.lky.nexus.knowledge.storage.ImportStagingStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -90,6 +92,7 @@ public class ImportTaskExecutor {
     private final DocumentMapper documentMapper;
     private final ImportTaskMapper importTaskMapper;
     private final ImportTaskItemMapper importTaskItemMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     public ImportTaskExecutor(KnowledgeBaseService knowledgeBaseService,
                               VaultPackageExtractor vaultPackageExtractor,
@@ -101,7 +104,8 @@ public class ImportTaskExecutor {
                               ImportStagingStore importStagingStore,
                               DocumentMapper documentMapper,
                               ImportTaskMapper importTaskMapper,
-                              ImportTaskItemMapper importTaskItemMapper) {
+                              ImportTaskItemMapper importTaskItemMapper,
+                              ApplicationEventPublisher eventPublisher) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.vaultPackageExtractor = vaultPackageExtractor;
         this.vaultSyncPlanner = vaultSyncPlanner;
@@ -113,6 +117,7 @@ public class ImportTaskExecutor {
         this.documentMapper = documentMapper;
         this.importTaskMapper = importTaskMapper;
         this.importTaskItemMapper = importTaskItemMapper;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -145,6 +150,7 @@ public class ImportTaskExecutor {
         if (stagedBytes == null) {
             log.error("导入暂存文件丢失 taskId={}", taskId);
             markFailed(taskId, "导入暂存文件丢失，请重新上传");
+            publishFailedById(taskId, safeKbName(task));
             return toResponse(importTaskMapper.selectById(taskId));
         }
 
@@ -154,11 +160,13 @@ public class ImportTaskExecutor {
             // 业务性失败（压缩包损坏、参数非法）：重试不会有不同结果，因此不再抛出
             log.warn("导入任务因业务原因失败 taskId={}, reason={}", taskId, ex.getMessage());
             markFailed(taskId, ex.getMessage());
+            publishFailedById(taskId, safeKbName(task));
             return toResponse(importTaskMapper.selectById(taskId));
         } catch (Exception ex) {
             // 非预期失败（数据库抖动、网络）：落失败状态后抛出，交给重试策略与死信队列
             log.error("导入任务执行异常 taskId={}", taskId, ex);
             markFailed(taskId, ex.getClass().getSimpleName() + ": " + ex.getMessage());
+            publishFailedById(taskId, safeKbName(task));
             throw ex;
         }
     }
@@ -309,6 +317,10 @@ public class ImportTaskExecutor {
                         ? ImportTaskStatus.PARTIAL.name() : ImportTaskStatus.FAILED.name()));
         importTaskMapper.updateById(task);
 
+        // 通知订阅方（app 模块的监听器负责翻译成人话并投递）。事件只带客观计数，
+        // 文案与通道选择都不在 knowledge 模块里决定。
+        publishFinished(task, knowledgeBase.getName());
+
         documentPersistService.refreshKnowledgeBaseStats(knowledgeBase.getId());
 
         // 完全成功才清理暂存：部分失败时保留压缩包，重试接口可直接复用，用户不必再传一次
@@ -439,6 +451,51 @@ public class ImportTaskExecutor {
                 .set(ImportTaskPO::getErrorMsg, truncate(message, 1900))
                 .set(ImportTaskPO::getFinishedAt, LocalDateTime.now())
                 .eq(ImportTaskPO::getId, taskId));
+    }
+
+    /**
+     * 发布"导入结束"事件。
+     *
+     * <p>失败一律吞掉：通知是附加能力，事件发不出去不该让一个已经成功的导入返回 500。
+     * 监听方（app 模块）自己也会再兜一层。
+     */
+    private void publishFinished(ImportTaskPO task, String knowledgeBaseName) {
+        try {
+            eventPublisher.publishEvent(new ImportFinishedEvent(
+                    task.getUserId(),
+                    task.getId(),
+                    task.getKbId(),
+                    knowledgeBaseName,
+                    task.getTaskType(),
+                    task.getStatus(),
+                    nullSafe(task.getCreatedCount()),
+                    nullSafe(task.getUpdatedCount()),
+                    nullSafe(task.getSkippedCount()),
+                    nullSafe(task.getFailedCount()),
+                    nullSafe(task.getTotalChunks())));
+        } catch (RuntimeException ex) {
+            log.warn("导入结束事件发布失败 taskId={}", task.getId(), ex);
+        }
+    }
+
+    /** 重新读一次任务再发：markFailed 用的是 update，不刷新内存里的对象。 */
+    private void publishFailedById(Long taskId, String knowledgeBaseName) {
+        ImportTaskPO fresh = importTaskMapper.selectById(taskId);
+        if (fresh != null) {
+            publishFinished(fresh, knowledgeBaseName);
+        }
+    }
+
+    /** 知识库可能已被删除，此时通知里就写 id，不要让"取名字"失败再引发一次异常。 */
+    private String safeKbName(ImportTaskPO task) {
+        try {
+            return knowledgeBaseService.requireOwned(task.getUserId(), task.getKbId()).getName();
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+    private static int nullSafe(Integer value) {
+        return value == null ? 0 : value;
     }
 
     private void updateProgress(ImportTaskPO task, Counters counters) {

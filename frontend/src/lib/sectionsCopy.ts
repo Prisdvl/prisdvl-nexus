@@ -226,6 +226,40 @@ export interface SectionsCopy {
     save: string
     savedTitle: string
     savedBody: string
+    channelsTitle: string
+    channelsDesc: string
+    channelsEmpty: string
+    channelsMax: (limit: number) => string
+    add: string
+    addTitle: string
+    nameLabel: string
+    namePh: string
+    typeLabel: string
+    typeWebhook: string
+    typeEmail: string
+    targetLabel: string
+    targetPhWebhook: string
+    targetPhEmail: string
+    secretLabel: string
+    secretHint: string
+    secretKeepHint: string
+    eventsLabel: string
+    eventImportDone: string
+    eventImportFailed: string
+    enabledLabel: string
+    testCta: string
+    testing: string
+    testOkTitle: string
+    testFailTitle: string
+    deleteCta: string
+    deletedTitle: string
+    deletedBody: string
+    saveCta: string
+    saveFailed: string
+    cancel: string
+    lastNever: string
+    lastOk: (when: string) => string
+    lastFail: (when: string, reason: string) => string
   }
   usage: {
     title: string
@@ -500,19 +534,53 @@ const ZH: SectionsCopy = {
   },
   notify: {
     title: '通知偏好',
-    desc: '提醒选择保存在当前浏览器；邮件/推送发送服务尚未接入。',
+    desc: '上面三个开关只是本机的提醒偏好；真正把消息送出去的，是下面的通知通道。',
     doneLabel: '任务完成',
-    doneHint: '后台任务完成提醒偏好（通知通道未启用）',
+    doneHint: '后台任务完成时在我自己的应用里提示（只存在本机）',
     doneAria: '任务完成通知',
     citeLabel: '回答与引用更新',
-    citeHint: '引用更新提醒偏好（通知通道未启用）',
+    citeHint: '回答引用的来源被更新时提示（只存在本机）',
     citeAria: '回答与引用更新通知',
     weeklyLabel: '每周摘要',
-    weeklyHint: '每周摘要提醒偏好（通知通道未启用）',
+    weeklyHint: '每周给我一份摘要提示（只存在本机）',
     weeklyAria: '每周摘要通知',
     save: '保存偏好',
     savedTitle: '偏好已保存到此浏览器',
-    savedBody: '通知发送服务尚未接入',
+    savedBody: '偏好保存在本机；投递请在下方配置通知通道',
+    channelsTitle: '通知通道',
+    channelsDesc: '导入结束这类事件可以投递到你自己的 Webhook 或邮箱；通道保存在服务端，换设备也在。',
+    channelsEmpty: '还没有配置通道。加一个 Webhook 或邮箱，导入结束时会自动通知你。',
+    channelsMax: (limit: number) => `最多 ${limit} 个通道。`,
+    add: '添加通道',
+    addTitle: '添加通知通道',
+    nameLabel: '名称',
+    namePh: '例如：我的飞书群',
+    typeLabel: '类型',
+    typeWebhook: 'Webhook',
+    typeEmail: '邮件',
+    targetLabel: '目标地址',
+    targetPhWebhook: 'https://example.com/hook',
+    targetPhEmail: 'you@example.com',
+    secretLabel: '签名密钥（可选）',
+    secretHint: '填了就随请求发 X-Nexus-Signature: sha256=…，对方可校验来源。',
+    secretKeepHint: '留空表示不改动已保存的密钥。',
+    eventsLabel: '触发事件',
+    eventImportDone: '导入完成',
+    eventImportFailed: '导入未完全成功',
+    enabledLabel: '启用',
+    testCta: '发送测试',
+    testing: '发送中…',
+    testOkTitle: '测试消息已送出',
+    testFailTitle: '测试投递失败',
+    deleteCta: '删除',
+    deletedTitle: '通道已删除',
+    deletedBody: '之后的导入不会再发到这里。',
+    saveCta: '保存通道',
+    saveFailed: '保存失败',
+    cancel: '取消',
+    lastNever: '还没有投递记录',
+    lastOk: (when: string) => `上次投递成功 · ${when}`,
+    lastFail: (when: string, reason: string) => `上次投递失败 · ${when} · ${reason}`,
   },
   usage: {
     title: '用量配额',
@@ -781,19 +849,53 @@ const EN: SectionsCopy = {
   },
   notify: {
     title: 'Notifications',
-    desc: 'Reminder choices are stored in this browser; the email/push delivery service is not connected yet.',
+    desc: 'The three switches above are local reminders only; actual delivery goes through the channels below.',
     doneLabel: 'Task completed',
-    doneHint: 'Preference for background-task completion reminders (delivery channel not enabled)',
+    doneHint: 'Remind me when a background task finishes (this browser only)',
     doneAria: 'Task completion notifications',
     citeLabel: 'Answers & citation updates',
-    citeHint: 'Preference for citation update reminders (delivery channel not enabled)',
+    citeHint: 'Remind me when a cited source changes (this browser only)',
     citeAria: 'Answer and citation update notifications',
     weeklyLabel: 'Weekly digest',
-    weeklyHint: 'Preference for weekly digest reminders (delivery channel not enabled)',
+    weeklyHint: 'Remind me to read the weekly digest (this browser only)',
     weeklyAria: 'Weekly digest notifications',
     save: 'Save preferences',
     savedTitle: 'Preferences saved in this browser',
-    savedBody: 'The notification delivery service is not connected yet',
+    savedBody: 'Saved in this browser; configure a channel below to actually deliver',
+    channelsTitle: 'Delivery channels',
+    channelsDesc: 'Events like an import finishing can be delivered to your own webhook or mailbox. Channels live on the server, so they follow you across devices.',
+    channelsEmpty: 'No channel yet. Add a webhook or a mailbox and we will tell you when an import finishes.',
+    channelsMax: (limit: number) => `Up to ${limit} channels.`,
+    add: 'Add channel',
+    addTitle: 'Add delivery channel',
+    nameLabel: 'Name',
+    namePh: 'e.g. my team chat',
+    typeLabel: 'Type',
+    typeWebhook: 'Webhook',
+    typeEmail: 'Email',
+    targetLabel: 'Target',
+    targetPhWebhook: 'https://example.com/hook',
+    targetPhEmail: 'you@example.com',
+    secretLabel: 'Signing secret (optional)',
+    secretHint: 'When set, requests carry X-Nexus-Signature: sha256=… so the receiver can verify the origin.',
+    secretKeepHint: 'Leave blank to keep the saved secret.',
+    eventsLabel: 'Events',
+    eventImportDone: 'Import finished',
+    eventImportFailed: 'Import finished with problems',
+    enabledLabel: 'Enabled',
+    testCta: 'Send test',
+    testing: 'Sending…',
+    testOkTitle: 'Test message delivered',
+    testFailTitle: 'Test delivery failed',
+    deleteCta: 'Delete',
+    deletedTitle: 'Channel deleted',
+    deletedBody: 'Future imports will not notify it.',
+    saveCta: 'Save channel',
+    saveFailed: 'Could not save',
+    cancel: 'Cancel',
+    lastNever: 'No delivery yet',
+    lastOk: (when: string) => `Last delivery OK · ${when}`,
+    lastFail: (when: string, reason: string) => `Last delivery failed · ${when} · ${reason}`,
   },
   usage: {
     title: 'Usage quota',

@@ -112,6 +112,42 @@ public class ResendEmailSender implements EmailSender {
         }
     }
 
+    @Override
+    public void sendNotice(String email, String title, String body) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("from", from);
+        payload.put("to", List.of(email));
+        payload.put("subject", title);
+        payload.put("text", body);
+        byte[] bytes;
+        try {
+            bytes = objectMapper.writeValueAsBytes(payload);
+        } catch (IOException ex) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "通知邮件发送失败", ex);
+        }
+        HttpRequest request = HttpRequest.newBuilder(sendUri)
+                .timeout(requestTimeout)
+                .header("Authorization", "Bearer " + apiKey)
+                .header("Content-Type", "application/json")
+                .header("User-Agent", USER_AGENT)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(bytes))
+                .build();
+        try {
+            HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                log.warn("通知邮件发送失败 to={} httpStatus={}", email, response.statusCode());
+                throw new BusinessException(ErrorCode.INTERNAL_ERROR, "通知邮件发送失败");
+            }
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (IOException ex) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "通知邮件发送失败", ex);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "通知邮件发送被中断", ex);
+        }
+    }
+
     private Map<String, Object> buildPayload(String email, String code, EmailPurpose purpose, Duration expire) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("from", from);

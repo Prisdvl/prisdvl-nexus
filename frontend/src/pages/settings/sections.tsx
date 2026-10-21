@@ -12,7 +12,7 @@ import StatusMark from '@/bits/StatusMark/StatusMark'
 import Modal from '@/components/Modal'
 import { AppearanceControls } from '@/components/Appearance'
 import { toast } from '@/lib/toast'
-import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserEmbeddingConfig, type UserSession, type UserStorage, type TotpSetup, type TotpStatus } from '@/lib/api'
+import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserEmbeddingConfig, type UserSession, type UserStorage, type TotpSetup, type TotpStatus, type UserNotifyChannel, type NotifyChannelType, type NotifyChannelInput } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { LANDING_KEYS, readAccountPreferences, writeAccountPreferences, type LandingKey } from '@/lib/preferences'
 import ActivityHeatmap, { type HeatmapDay } from '@/components/ui/activity-heatmap'
@@ -1119,7 +1119,164 @@ export function NotifySection() {
       <div className="settings-inline"><div><strong style={{ fontSize: 13.5 }}><Loc>{s.notify.weeklyLabel}</Loc></strong><p className="hint" style={{ margin: '4px 0 0' }}><Loc>{s.notify.weeklyHint}</Loc></p></div><SquishSwitch checked={weekly} onChange={setWeekly} ariaLabel={s.notify.weeklyAria} /></div>
     </div>
     <button className="btn btn-ghost" type="button" style={{ marginTop: 16 }} onClick={save}><Save size={15} /> <Loc>{s.notify.save}</Loc></button>
+    <hr className="divider" />
+    <NotifyChannels s={s} />
   </section>
+}
+
+/* ---------------- 通知偏好 · 通知通道（服务端，Webhook / 邮件） ---------------- */
+function NotifyChannels({ s }: { s: ReturnType<typeof sectionsCopy> }) {
+  const [channels, setChannels] = useState<UserNotifyChannel[] | null>(null)
+  const [editing, setEditing] = useState<UserNotifyChannel | 'new' | null>(null)
+  const [name, setName] = useState('')
+  const [type, setType] = useState<NotifyChannelType>('WEBHOOK')
+  const [target, setTarget] = useState('')
+  const [secret, setSecret] = useState('')
+  const [events, setEvents] = useState<string[]>(['import.done'])
+  const [enabled, setEnabled] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  const load = () => {
+    api.users.notifyChannels()
+      .then((list) => setChannels(list))
+      .catch(() => { setChannels([]) })
+  }
+  useEffect(() => { if (!USE_MOCK) load() }, [])
+
+  const resetForm = () => {
+    setName(''); setType('WEBHOOK'); setTarget(''); setSecret('')
+    setEvents(['import.done']); setEnabled(true); setMsg('')
+  }
+  const startEdit = (ch: UserNotifyChannel | 'new') => {
+    setEditing(ch)
+    setMsg('')
+    if (ch === 'new') { resetForm(); return }
+    setName(ch.name); setType(ch.type); setTarget(ch.target); setSecret('')
+    setEvents(ch.events); setEnabled(ch.enabled)
+  }
+  const toggleEvent = (code: string) => {
+    setEvents((prev) => prev.includes(code) ? prev.filter((v) => v !== code) : [...prev, code])
+  }
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setMsg('')
+    const body: NotifyChannelInput = { name, type, target, events, enabled, secret: secret || null }
+    try {
+      if (editing === 'new') await api.users.createNotifyChannel(body)
+      else if (editing) await api.users.updateNotifyChannel(editing.id, body)
+      setEditing(null)
+      resetForm()
+      load()
+    } catch (err) {
+      setMsg(`${s.notify.saveFailed}：${errMessage(err)}`)
+    } finally { setBusy(false) }
+  }
+  const sendTest = async (ch: UserNotifyChannel) => {
+    setMsg('')
+    try {
+      const updated = await api.users.testNotifyChannel(ch.id)
+      // 投递结果写在返回的通道上（lastStatus/lastError/lastAt）；不合并的话列表还会停在"还没有投递记录"
+      setChannels((prev) => prev?.map((item) => (item.id === updated.id ? updated : item)) ?? prev)
+      /* 接口在投递失败时仍然回 200（失败写进 lastStatus），所以不能只看是否抛错——
+         否则对方的 Webhook 404 了，界面还在报"测试消息已发送"。 */
+      if (updated.lastStatus === 'FAILED') toast.error(s.notify.testFailTitle, updated.lastError ?? '')
+      else toast.success(s.notify.testOkTitle, ch.target)
+    } catch (err) {
+      toast.error(s.notify.testFailTitle, errMessage(err))
+      load()
+    }
+  }
+  const remove = async (ch: UserNotifyChannel) => {
+    try {
+      await api.users.deleteNotifyChannel(ch.id)
+      toast.success(s.notify.deletedTitle, s.notify.deletedBody)
+      if (editing && editing !== 'new' && editing.id === ch.id) setEditing(null)
+      load()
+    } catch (err) { toast.error(s.notify.saveFailed, errMessage(err)) }
+  }
+  const relTime = (when: string | null) => {
+    if (!when) return s.notify.lastNever
+    const d = new Date(when)
+    return Number.isNaN(d.getTime()) ? s.notify.lastNever : d.toLocaleString()
+  }
+
+  return <div>
+    <div className="settings-inline" style={{ marginTop: 8 }}>
+      <div>
+        <strong style={{ fontSize: 13.5 }}><Loc>{s.notify.channelsTitle}</Loc></strong>
+        <p className="hint" style={{ margin: '4px 0 0' }}><Loc>{s.notify.channelsDesc}</Loc></p>
+      </div>
+      <button className="btn btn-sm" type="button" id="notify-add" onClick={() => startEdit('new')}><Loc>{s.notify.add}</Loc></button>
+    </div>
+
+    {channels === null && <p className="hint"><Loc>{s.notify.channelsEmpty}</Loc></p>}
+    {channels !== null && channels.length === 0 && editing === null && <p className="hint"><Loc>{s.notify.channelsEmpty}</Loc></p>}
+
+    {channels !== null && channels.length > 0 && <div style={{ marginTop: 10, display: "flex", flexDirection: "column" }}>
+      {channels.map((ch) => <div className="settings-inline" key={ch.id} style={{ padding: '8px 0' }}>
+        <div>
+          <strong style={{ fontSize: 13 }}>{ch.name}</strong>
+          <span className="badge" data-tone={ch.enabled ? 'success' : undefined} style={{ marginLeft: 8 }}>{ch.type === 'WEBHOOK' ? s.notify.typeWebhook : s.notify.typeEmail}</span>
+          <p className="hint" style={{ margin: '4px 0 0', wordBreak: 'break-all' }}>{ch.target}</p>
+          <p className="hint" style={{ margin: '2px 0 0' }}>
+            {ch.lastStatus === 'OK' && <Loc>{s.notify.lastOk(relTime(ch.lastAt))}</Loc>}
+            {ch.lastStatus === 'FAILED' && <Loc>{s.notify.lastFail(relTime(ch.lastAt), ch.lastError ?? '')}</Loc>}
+            {!ch.lastStatus && <Loc>{s.notify.lastNever}</Loc>}
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => sendTest(ch)}><Loc>{s.notify.testCta}</Loc></button>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => startEdit(ch)}><Loc>{s.notify.saveCta}</Loc></button>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => remove(ch)}><Loc>{s.notify.deleteCta}</Loc></button>
+        </div>
+      </div>)}
+    </div>}
+
+    {editing !== null && <form onSubmit={submit} style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <strong style={{ fontSize: 13 }}><Loc>{s.notify.addTitle}</Loc></strong>
+      <div className="settings-inline">
+        <label htmlFor="notify-name"><Loc>{s.notify.nameLabel}</Loc></label>
+        <input id="notify-name" className="input" value={name} placeholder={s.notify.namePh} onChange={(e) => setName(e.target.value)} required maxLength={64} />
+      </div>
+      <div className="settings-inline">
+        <label htmlFor="notify-type"><Loc>{s.notify.typeLabel}</Loc></label>
+        <select id="notify-type" className="input" value={type} onChange={(e) => setType(e.target.value as NotifyChannelType)}>
+          <option value="WEBHOOK">{s.notify.typeWebhook}</option>
+          <option value="EMAIL">{s.notify.typeEmail}</option>
+        </select>
+      </div>
+      <div className="settings-inline">
+        <label htmlFor="notify-target"><Loc>{s.notify.targetLabel}</Loc></label>
+        <input id="notify-target" className="input" value={target} placeholder={type === 'WEBHOOK' ? s.notify.targetPhWebhook : s.notify.targetPhEmail} onChange={(e) => setTarget(e.target.value)} required />
+      </div>
+      {type === 'WEBHOOK' && <div className="settings-inline">
+        <label htmlFor="notify-secret"><Loc>{s.notify.secretLabel}</Loc></label>
+        <div>
+          <input id="notify-secret" className="input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" />
+          <p className="hint" style={{ margin: '4px 0 0' }}><Loc>{s.notify.secretHint}</Loc></p>
+          {editing !== 'new' && <p className="hint" style={{ margin: '2px 0 0' }}><Loc>{s.notify.secretKeepHint}</Loc></p>}
+        </div>
+      </div>}
+      <div className="settings-inline">
+        <label><Loc>{s.notify.eventsLabel}</Loc></label>
+        <div style={{ display: 'flex', gap: 14 }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}><input type="checkbox" id="notify-ev-done" checked={events.includes('import.done')} onChange={() => toggleEvent('import.done')} /> <Loc>{s.notify.eventImportDone}</Loc></label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}><input type="checkbox" id="notify-ev-failed" checked={events.includes('import.failed')} onChange={() => toggleEvent('import.failed')} /> <Loc>{s.notify.eventImportFailed}</Loc></label>
+        </div>
+      </div>
+      <div className="settings-inline">
+        <label htmlFor="notify-enabled"><Loc>{s.notify.enabledLabel}</Loc></label>
+        <SquishSwitch checked={enabled} onChange={setEnabled} ariaLabel={s.notify.enabledLabel} />
+      </div>
+      {msg && <p className="form-error active">{msg}</p>}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn btn-primary btn-sm" type="submit" disabled={busy}><Loc>{s.notify.saveCta}</Loc></button>
+        <button className="btn btn-ghost btn-sm" type="button" onClick={() => { setEditing(null); resetForm() }}><Loc>{s.notify.cancel}</Loc></button>
+      </div>
+    </form>}
+  </div>
 }
 /* ---------------- 危险区 ---------------- */
 export function DangerSection() {

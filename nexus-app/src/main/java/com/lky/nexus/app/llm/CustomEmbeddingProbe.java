@@ -3,13 +3,12 @@ package com.lky.nexus.app.llm;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lky.nexus.ai.model.EmbeddingByokPolicy;
+import com.lky.nexus.app.infra.net.OutboundUrlGuard;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -155,20 +154,8 @@ public class CustomEmbeddingProbe {
      * {@code http://[::1]}、{@code http://internal-host} 都得拦住。
      */
     private void requirePublicHost(String host) {
-        InetAddress[] addresses;
-        try {
-            addresses = InetAddress.getAllByName(host);
-        } catch (UnknownHostException e) {
-            throw new BusinessException(ErrorCode.PARAM_INVALID, "无法解析 Base URL 的主机名：" + host);
-        }
-        for (InetAddress address : addresses) {
-            if (address.isAnyLocalAddress() || address.isLoopbackAddress()
-                    || address.isLinkLocalAddress() || address.isSiteLocalAddress()
-                    || address.isMulticastAddress()) {
-                throw new BusinessException(ErrorCode.PARAM_INVALID,
-                        "Base URL 不能指向内网或本机地址（" + host + "）");
-            }
-        }
+        // 规则只有一份，见 OutboundUrlGuard（Webhook 投递共用同一套地址校验）
+        OutboundUrlGuard.requirePublicHost(host);
     }
 
     private String toJson(Object value) {

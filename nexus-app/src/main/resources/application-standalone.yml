@@ -49,6 +49,10 @@ nexus:
     # 因此导入走同步执行；同时关掉 RabbitMQ 健康检查，
     # 否则 /actuator/health 会因为连不上 broker 而变成 DOWN（误报）。
     mode: sync
+  notify:
+    # 同上：允许通知通道的 Webhook 指向 localhost（联调桩服务）
+    webhook:
+      allow-private-endpoints: true
   vector:
     # 同理：没有 PostgreSQL，向量功能关闭（使用时明确报 4003）
     enabled: false
