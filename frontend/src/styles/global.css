@@ -751,6 +751,25 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
 .usage-heat { min-height: 156px; margin: 18px 0 12px; }
 .usage-heat__skeleton { display: flex; flex-direction: column; gap: 12px; }
 
+/* 点选某天后的明细条：四格统计 + 清除。整行可换行，窄屏不横向溢出 */
+.usage-heat__picked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--ui-selected);
+}
+.usage-heat__picked-day { font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.usage-heat__picked-weekday { font-size: 12px; color: var(--text-3); }
+.usage-heat__stats { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 0; }
+.usage-heat__stat { display: flex; flex-direction: column; gap: 2px; }
+.usage-heat__stat dt { font-size: 11px; color: var(--text-3); }
+.usage-heat__stat dd { margin: 0; font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.usage-heat__picked-clear { margin-left: auto; }
+
 /* GooeyNav 主题适配（原 CSS 面向深底，此处覆写并入主题色标） */
 :root {
   --color-1: var(--primary);

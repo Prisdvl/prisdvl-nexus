@@ -47,6 +47,11 @@ export interface ActivityHeatmapProps {
   onSelect?: (day: HeatmapDay | null) => void
   /** 受控选中态（ISO 日期） */
   selected?: string | null
+  /**
+   * 星期标签（周一起 7 个，如 ['一','二',…]）。传了就画左侧轴，只标周一/三/五；
+   * 不传则纯格子。文案由调用点给，组件不认语言。
+   */
+  weekdays?: string[]
 }
 
 /** 把日期串当本地日历日解析，避免 new Date('YYYY-MM-DD') 按 UTC 解析而错位一天 */
@@ -90,6 +95,7 @@ export default function ActivityHeatmap({
   className,
   onSelect,
   selected = null,
+  weekdays,
 }: ActivityHeatmapProps) {
   const reduce = useReducedMotion()
   const [hover, setHover] = useState<HeatmapDay | null>(null)
@@ -111,7 +117,9 @@ export default function ActivityHeatmap({
     return { cells: list, total, activeDays, max }
   }, [days, levels])
 
-  const shown = hover ?? (selected ? days.find((d) => d.date === selected) ?? null : null)
+  /* 详情条只反映悬停/聚焦的那天：选中态由调用点自己的明细面板展示，
+     否则同一天会在条里和面板里各出现一次 */
+  const shown = hover
 
   const pick = (day: HeatmapDay) => {
     setHover(null)
@@ -132,36 +140,45 @@ export default function ActivityHeatmap({
         <span className={styles.summary}>{labels.summary(total, activeDays)}</span>
       </div>
 
-      {/* role=group 而不是 grid：格子是 <button>，没有 row/gridcell 层级，
-          声明成 grid 反而是无效的 ARIA 结构 */}
-      <div
-        className={styles.grid}
-        role="group"
-        aria-label={labels.title}
-        style={{ ['--cell' as string]: `${cellSize}px` }}
-      >
-        {cells.map((cell) =>
-          cell.day ? (
-            <motion.button
-              key={cell.key}
-              type="button"
-              className={styles.cell}
-              data-level={cell.level}
-              aria-pressed={selected === cell.day.date}
-              aria-label={labels.dayLabel(cell.day.date, cell.day.value)}
-              title={labels.dayLabel(cell.day.date, cell.day.value)}
-              onClick={() => pick(cell.day as HeatmapDay)}
-              onMouseEnter={() => setHover(cell.day)}
-              onMouseLeave={() => setHover(null)}
-              onFocus={() => setHover(cell.day)}
-              onBlur={() => setHover(null)}
-              whileTap={reduce ? undefined : { scale: 0.86 }}
-              transition={cellTransition}
-            />
-          ) : (
-            <span key={cell.key} className={styles.blank} aria-hidden="true" />
-          ),
+      {/* 星期轴与网格并排：轴固定在左侧，横向滚动只发生在网格里 */}
+      <div className={styles.plot} style={{ ['--cell' as string]: `${cellSize}px` }}>
+        {weekdays && weekdays.length === 7 && (
+          <div className={styles.weekdays} aria-hidden="true">
+            {weekdays.map((label, i) => (
+              /* 只标周一/三/五，其余行留空；七行高度必须与网格一致，否则会错位 */
+              <span key={label} className={styles.weekday}>
+                {i % 2 === 0 && i < 5 ? label : ''}
+              </span>
+            ))}
+          </div>
         )}
+
+        {/* role=group 而不是 grid：格子是 <button>，没有 row/gridcell 层级，
+            声明成 grid 反而是无效的 ARIA 结构 */}
+        <div className={styles.grid} role="group" aria-label={labels.title}>
+          {cells.map((cell) =>
+            cell.day ? (
+              <motion.button
+                key={cell.key}
+                type="button"
+                className={styles.cell}
+                data-level={cell.level}
+                aria-pressed={selected === cell.day.date}
+                aria-label={labels.dayLabel(cell.day.date, cell.day.value)}
+                title={labels.dayLabel(cell.day.date, cell.day.value)}
+                onClick={() => pick(cell.day as HeatmapDay)}
+                onMouseEnter={() => setHover(cell.day)}
+                onMouseLeave={() => setHover(null)}
+                onFocus={() => setHover(cell.day)}
+                onBlur={() => setHover(null)}
+                whileTap={reduce ? undefined : { scale: 0.86 }}
+                transition={cellTransition}
+              />
+            ) : (
+              <span key={cell.key} className={styles.blank} aria-hidden="true" />
+            ),
+          )}
+        </div>
       </div>
 
       <div className={styles.legend}>

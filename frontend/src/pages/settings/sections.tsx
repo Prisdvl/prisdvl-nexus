@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Download, KeyRound, Laptop, LogOut, MailCheck, Save, ShieldAlert } from 'lucide-react'
 import Counter from '@/bits/Counter/Counter'
 import CodeSlots from '@/bits/CodeSlots/CodeSlots'
@@ -15,7 +15,7 @@ import { toast } from '@/lib/toast'
 import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserEmbeddingConfig, type UserSession, type UserStorage, type TotpSetup, type TotpStatus, type UserNotifyChannel, type NotifyChannelType, type NotifyChannelInput } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { LANDING_KEYS, readAccountPreferences, writeAccountPreferences, type LandingKey } from '@/lib/preferences'
-import ActivityHeatmap, { type HeatmapDay } from '@/components/ui/activity-heatmap'
+import ActivityHeatmap, { parseDay, type HeatmapDay } from '@/components/ui/activity-heatmap'
 import { mockUsageDays, toHeatmapDays } from '@/components/ui/activity-heatmap-utils/usage-heatmap'
 import { Skeleton } from '@/components/Skeleton'
 import { writeLocale, normalizeLocale, useLocale } from '@/lib/locale'
@@ -961,6 +961,29 @@ export function UsageSection() {
     dayValue: s.usage.heatDayValue,
     hint: s.usage.heatHint,
   }
+  /* 点选某天的明细：全部从同一份 365 天序列现算，不额外请求
+     （后端只有逐日条数，日均/占比/排名在本地加起来比再开接口更便宜） */
+  const picked = useMemo(() => {
+    if (!pickedDay) return null
+    const day = heatDays.find((d) => d.date === pickedDay)
+    if (!day) return null
+    const total = heatDays.reduce((sum, d) => sum + d.value, 0)
+    const activeDays = heatDays.filter((d) => d.value > 0).length
+    const avgActive = activeDays > 0 ? total / activeDays : 0
+    /* 名次：比这天更忙的天数 + 1，并列同名次（不占用排名，和「第 N 忙」说法一致） */
+    const rank = heatDays.filter((d) => d.value > day.value).length + 1
+    /* 组件内的星期序列是周一起，Date.getDay() 是周日起，这里换算 */
+    const weekday = s.usage.heatWeekdays[(parseDay(day.date).getDay() + 6) % 7]
+    return {
+      day,
+      weekday,
+      total,
+      avgActive,
+      rank,
+      days: heatDays.length,
+      share: total > 0 ? (day.value / total) * 100 : 0,
+    }
+  }, [heatDays, pickedDay, s.usage.heatWeekdays])
   return <section className="panel panel-pad">
     <SectionHead title={s.usage.title} desc={USE_MOCK ? s.usage.descMock : s.usage.descReal} />
     {loading && <p className="hint" role="status"><Loc>{s.usage.loading}</Loc></p>}
@@ -993,13 +1016,53 @@ export function UsageSection() {
     {/* 热力图：固定高度容器，数据没到时也有骨架高度，避免设置页 CLS */}
     <div className="usage-heat">
       {heatDays.length > 0
-        ? <ActivityHeatmap days={heatDays} labels={heatLabels} selected={pickedDay} onSelect={(d) => setPickedDay(d?.date ?? null)} />
+        ? <ActivityHeatmap
+            days={heatDays}
+            labels={heatLabels}
+            weekdays={s.usage.heatWeekdaysShort}
+            cellSize={10}
+            selected={pickedDay}
+            onSelect={(d) => setPickedDay(d?.date ?? null)}
+          />
         : <div className="usage-heat__skeleton" role="status" aria-label={s.usage.heatTitle}>
             <Skeleton w="38%" h={13} />
-            <Skeleton w="100%" h={97} radius={4} />
+            <Skeleton w="100%" h={82} radius={4} />
             <Skeleton w="26%" h={11} />
           </div>}
     </div>
+    {picked && (
+      <div className="usage-heat__picked" aria-live="polite">
+        <span className="usage-heat__picked-day">{picked.day.date}</span>
+        <span className="usage-heat__picked-weekday">{picked.weekday}</span>
+        <dl className="usage-heat__stats">
+          <div className="usage-heat__stat">
+            <dt>{s.usage.heatPickValue}</dt>
+            <dd>{picked.day.value.toLocaleString()}</dd>
+          </div>
+          <div className="usage-heat__stat">
+            <dt>{s.usage.heatPickAvg}</dt>
+            <dd title={s.usage.heatPickAvg}>
+              {picked.avgActive > 0 ? picked.avgActive.toFixed(1) : '—'}
+            </dd>
+          </div>
+          <div className="usage-heat__stat">
+            <dt>{s.usage.heatPickShare}</dt>
+            <dd>{picked.share >= 10 ? Math.round(picked.share) : picked.share.toFixed(1)}%</dd>
+          </div>
+          <div className="usage-heat__stat">
+            <dt>{s.usage.heatPickRank}</dt>
+            <dd>{s.usage.heatPickRankValue(picked.rank, picked.days)}</dd>
+          </div>
+        </dl>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm usage-heat__picked-clear"
+          onClick={() => setPickedDay(null)}
+        >
+          {s.usage.heatPickClear}
+        </button>
+      </div>
+    )}
     <p className="hint" style={{ marginBottom: 0 }}><Loc>{s.usage.heatFootHint}</Loc></p>
     <p className="hint" style={{ margin: '10px 0 0' }}><Loc>{s.usage.footHint}</Loc></p>
   </section>

@@ -285,6 +285,15 @@ export interface SectionsCopy {
     heatDayValue: (value: number) => string
     heatHint: string
     heatFootHint: string
+    /* 星期轴（周一起）与「点选某天」后的明细面板 */
+    heatWeekdaysShort: [string, string, string, string, string, string, string]
+    heatWeekdays: [string, string, string, string, string, string, string]
+    heatPickValue: string
+    heatPickAvg: string
+    heatPickShare: string
+    heatPickRank: string
+    heatPickClear: string
+    heatPickRankValue: (rank: number, days: number) => string
   }
   export: {
     title: string
@@ -602,8 +611,16 @@ const ZH: SectionsCopy = {
     heatSummary: (total, activeDays) => `共 ${total.toLocaleString()} 条 · ${activeDays} 天有记录`,
     heatDayLabel: (date, value) => (value > 0 ? `${date}，${value} 条` : `${date}，无记录`),
     heatDayValue: (value) => (value > 0 ? `${value} 条用量` : '无记录'),
-    heatHint: '悬停或点选任意一天查看当天用量',
-    heatFootHint: '以每日会话消息条数统计（后端暂未按天聚合 token 消耗）；点某天后可在上方查看当天数值。',
+    heatHint: '悬停任意一天查看当天用量；点选后下方显示明细',
+    heatFootHint: '以每日会话消息条数统计（后端暂未按天聚合 token 消耗）；点某天后可在下方查看当天明细。',
+    heatWeekdaysShort: ['一', '二', '三', '四', '五', '六', '日'],
+    heatWeekdays: ['周一', '周二', '周三', '周四', '周五', '周六', '周日'],
+    heatPickValue: '当日用量',
+    heatPickAvg: '活跃日均',
+    heatPickShare: '占全年',
+    heatPickRank: '全年排名',
+    heatPickClear: '清除选择',
+    heatPickRankValue: (rank, days) => `第 ${rank} 忙 / ${days} 天`,
   },
   export: {
     title: '数据导出',
@@ -917,8 +934,16 @@ const EN: SectionsCopy = {
     heatSummary: (total, activeDays) => `${total.toLocaleString()} total · ${activeDays} active days`,
     heatDayLabel: (date, value) => (value > 0 ? `${date}, ${value}` : `${date}, no activity`),
     heatDayValue: (value) => (value > 0 ? `${value} requests` : 'No activity'),
-    heatHint: 'Hover or select a day to see its usage',
-    heatFootHint: 'Counted per daily chat messages (token usage is not yet aggregated by day on the server); selecting a day shows its value above.',
+    heatHint: 'Hover a day for its value; select one to see details below',
+    heatFootHint: 'Counted per daily chat messages (token usage is not yet aggregated by day on the server); selecting a day shows its details below.',
+    heatWeekdaysShort: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    heatWeekdays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+    heatPickValue: 'Requests that day',
+    heatPickAvg: 'Active-day average',
+    heatPickShare: 'Share of year',
+    heatPickRank: 'Rank by volume',
+    heatPickClear: 'Clear selection',
+    heatPickRankValue: (rank, days) => `#${rank} of ${days} days`,
   },
   export: {
     title: 'Data export',
