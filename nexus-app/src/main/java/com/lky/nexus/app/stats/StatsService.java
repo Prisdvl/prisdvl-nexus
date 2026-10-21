@@ -9,11 +9,13 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.ToLongFunction;
 
 /**
  * 工作台统计。
  *
- * <p>趋势与热力都是"近 N 天消息数"，差别只在窗口长度（14 / 30）。
+ * <p>趋势与热力都是"近 N 天消息数"，差别只在窗口长度（14 / 30）；Token 热力是同一个窗口里
+ * 每天的消息 Token 合计 —— 三块都从同一次查询里切出来。
  * <b>SQL 只返回有数据的日期</b>，这里负责把空缺日期补 0 —— 否则前端折线会把
  * "没有那天"画成"那天不存在"，视觉上等于把稀疏数据拉平。
  */
@@ -21,6 +23,10 @@ import java.util.Map;
 public class StatsService {
 
     private static final DateTimeFormatter DAY = DateTimeFormatter.ISO_LOCAL_DATE;
+
+    /** 热力窗口（天）。趋势只有 14 天，从这份更长的结果里切尾部即可，不必再查一次。 */
+    private static final int HEAT_DAYS = 30;
+    private static final int TREND_DAYS = 14;
 
     private final StatsMapper statsMapper;
 
@@ -32,27 +38,34 @@ public class StatsService {
      * 汇总当前用户的工作台数据。
      *
      * @param userId 当前用户 ID（由服务端从令牌解析，绝不接受前端传入）
-     * @return 趋势 / 热力 / 最近活动三块数据；空缺日期已补 0
+     * @return 趋势 / 热力 / Token 热力 / 最近活动；空缺日期已补 0
      */
     @Transactional(readOnly = true)
     public StatsSummary summary(Long userId) {
+        Map<String, StatsMapper.DayCount> byDay = new HashMap<>();
+        for (StatsMapper.DayCount row : statsMapper.dailyUsage(userId, LocalDate.now().minusDays(HEAT_DAYS - 1))) {
+            byDay.put(row.getStatDay().format(DAY), row);
+        }
         return new StatsSummary(
-                fill(userId, 14),
-                fill(userId, 30),
+                series(byDay, TREND_DAYS, StatsMapper.DayCount::getMsgCount),
+                series(byDay, HEAT_DAYS, StatsMapper.DayCount::getMsgCount),
+                series(byDay, HEAT_DAYS, StatsMapper.DayCount::getTokenCount),
                 activity(userId, 8));
     }
 
-    /** 近 days 天的逐日计数，缺失日期补 0，按日期升序。 */
-    private List<StatsSummary.TrendPoint> fill(Long userId, int days) {
-        Map<String, Long> byDay = new HashMap<>();
-        for (StatsMapper.DayCount row : statsMapper.messageCountByDay(userId, LocalDate.now().minusDays(days - 1))) {
-            byDay.put(row.getStatDay().format(DAY), row.getMsgCount());
-        }
+    /**
+     * 近 days 天的逐日数值，缺失日期补 0，按日期升序。
+     *
+     * @param pick 从当天的行里取哪一列（消息条数 / Token 合计）
+     */
+    private List<StatsSummary.TrendPoint> series(
+            Map<String, StatsMapper.DayCount> byDay, int days, ToLongFunction<StatsMapper.DayCount> pick) {
         List<StatsSummary.TrendPoint> out = new ArrayList<>(days);
         LocalDate today = LocalDate.now();
         for (int i = days - 1; i >= 0; i--) {
             String key = today.minusDays(i).format(DAY);
-            out.add(new StatsSummary.TrendPoint(key, byDay.getOrDefault(key, 0L)));
+            StatsMapper.DayCount row = byDay.get(key);
+            out.add(new StatsSummary.TrendPoint(key, row == null ? 0L : pick.applyAsLong(row)));
         }
         return out;
     }

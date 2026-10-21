@@ -27,15 +27,24 @@ import java.util.List;
 public interface StatsMapper {
 
     /** 近 N 天每天的消息数（无消息的日期不会返回，由 Service 补零）。 */
+    /**
+     * 近 N 天每天的用量：消息条数 + 消息 Token 合计（无数据的日子不会返回，由 Service 补零）。
+     *
+     * <p>条数与 Token 合并成一次查询：两者同源同窗口，拆成两条 SQL 只会多一次表扫描，
+     * 还会有「两条查询跨过零点、窗口对不齐」的隐患。{@code total_tokens} 允许为 NULL
+     * （流式中断的消息可能没写回用量），所以用 {@code COALESCE} 归零。
+     */
     @Select("""
-            SELECT CAST(created_at AS DATE) AS stat_day, COUNT(*) AS msg_count
+            SELECT CAST(created_at AS DATE) AS stat_day,
+                   COUNT(*) AS msg_count,
+                   COALESCE(SUM(total_tokens), 0) AS token_count
             FROM chat_message
             WHERE user_id = #{userId}
               AND created_at >= #{since}
             GROUP BY CAST(created_at AS DATE)
             ORDER BY stat_day
             """)
-    List<DayCount> messageCountByDay(@Param("userId") Long userId, @Param("since") LocalDate since);
+    List<DayCount> dailyUsage(@Param("userId") Long userId, @Param("since") LocalDate since);
 
     /** 近 N 天的最近活动：新建会话 + 导入任务，按时间倒序合并。 */
     @Select("""
@@ -56,6 +65,8 @@ public interface StatsMapper {
     class DayCount {
         private LocalDate statDay;
         private long msgCount;
+        /** 当天消息的 Token 合计（{@code chat_message.total_tokens} 求和）。 */
+        private long tokenCount;
     }
 
     @Data

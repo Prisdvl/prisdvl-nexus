@@ -8,6 +8,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -37,6 +38,9 @@ class StatsSummaryTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private JdbcTemplate jdbc;
+
     @Test
     @DisplayName("未登录访问 → 2001（统计不接受匿名读）")
     void requiresAuthentication() throws Exception {
@@ -54,9 +58,39 @@ class StatsSummaryTest {
                 .andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.trend.length()").value(14))
                 .andExpect(jsonPath("$.data.heat.length()").value(30))
+                .andExpect(jsonPath("$.data.tokenHeat.length()").value(30))
                 .andExpect(jsonPath("$.data.trend[0].day").value(LocalDate.now().minusDays(13).toString()))
                 .andExpect(jsonPath("$.data.trend[13].day").value(LocalDate.now().toString()))
-                .andExpect(jsonPath("$.data.heat[29].day").value(LocalDate.now().toString()));
+                .andExpect(jsonPath("$.data.heat[29].day").value(LocalDate.now().toString()))
+                .andExpect(jsonPath("$.data.tokenHeat[29].day").value(LocalDate.now().toString()));
+    }
+
+    /**
+     * Token 热力必须真的是「当天 Token 合计」，而不是又一份消息条数。
+     *
+     * <p>造两条今天写的消息（100 + 150 tokens）：条数应为 2，Token 应为 250。只断言长度
+     * 或形状抓不住「两个序列接错字段」这类错，所以这条必须落到具体数值上。
+     */
+    @Test
+    @DisplayName("Token 热力：当天 total_tokens 求和，与消息条数分开统计")
+    void sumsTokensPerDay() throws Exception {
+        String token = registerAndLogin("stats-tokens");
+        Long userId = ownerId(token);
+        long conversationId = System.nanoTime();
+
+        jdbc.update("INSERT INTO chat_conversation (id, user_id) VALUES (?, ?)", conversationId, userId);
+        jdbc.update("""
+                INSERT INTO chat_message (id, conversation_id, user_id, role, content, total_tokens)
+                VALUES (?,?,?,?,?,?)
+                """, conversationId * 10 + 1, conversationId, userId, "USER", "你好", 100);
+        jdbc.update("""
+                INSERT INTO chat_message (id, conversation_id, user_id, role, content, total_tokens)
+                VALUES (?,?,?,?,?,?)
+                """, conversationId * 10 + 2, conversationId, userId, "ASSISTANT", "你好", 150);
+
+        mockMvc.perform(get("/api/stats/summary").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(jsonPath("$.data.heat[29].count").value(2))
+                .andExpect(jsonPath("$.data.tokenHeat[29].count").value(250));
     }
 
     @Test
@@ -69,7 +103,17 @@ class StatsSummaryTest {
                 .andExpect(jsonPath("$.data.trend[0].count").value(0))
                 .andExpect(jsonPath("$.data.trend[13].count").value(0))
                 .andExpect(jsonPath("$.data.heat[29].count").value(0))
+                .andExpect(jsonPath("$.data.tokenHeat[29].count").value(0))
                 .andExpect(jsonPath("$.data.activity.length()").value(0));
+    }
+
+    /** 从令牌换用户 ID：不去猜用户表的表名/字段，直接走公开接口。 */
+    private Long ownerId(String token) throws Exception {
+        String body = mockMvc.perform(get("/api/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        // 响应里的 id 是字符串（雪花 id 超过 JS 安全整数，接口统一按字符串下发）
+        return Long.parseLong(String.valueOf((Object) JsonPath.read(body, "$.data.id")));
     }
 
     private String registerAndLogin(String username) throws Exception {
