@@ -2403,6 +2403,28 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
   animation-duration: 200ms;
 }
 
+/* 语言切换：整页交叉淡入。
+   用 root 快照而不是逐块动画，是因为换语言会让中英文长度差引起的折行全部重排，
+   直接换是「跳一下」，快照交叉淡入能把重排藏起来。
+   [data-locale-switching] 只在切换期间存在（localeTransition.ts 负责挂/摘），
+   特异性高于下面主题扩散那组 root 规则，所以不会把 0.62s 的扩散时长带过来。 */
+html[data-locale-switching]::view-transition-group(root) {
+  animation-duration: var(--dur-ui);
+}
+html[data-locale-switching]::view-transition-old(root) {
+  animation: nx-locale-out calc(var(--dur-ui) * 0.45) var(--ease-out) both;
+}
+html[data-locale-switching]::view-transition-new(root) {
+  animation: nx-locale-in var(--dur-ui) var(--ease-out) both;
+}
+@keyframes nx-locale-out { to { opacity: 0; } }
+@keyframes nx-locale-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  html[data-locale-switching]::view-transition-group(root) { animation-duration: 0.01ms; }
+  html[data-locale-switching]::view-transition-old(root),
+  html[data-locale-switching]::view-transition-new(root) { animation: none; }
+}
+
 /* ============================================================
  * 文档预览抽屉（右侧滑出）
  * ============================================================ */
