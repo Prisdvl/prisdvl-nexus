@@ -466,6 +466,13 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
   background-color: var(--surface-active, #eaeaea);
 }
 
+/* 上面这条把 outline/box-shadow 都清成 none 了（特异性与 .btn:focus-visible 相同、位置更靠后），
+   键盘用户在上面会完全看不到焦点环。这里补回来，别再被后续规则盖掉。 */
+.btn-ghost.btn-sm:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-bottom: 30px; }
 @media (max-width: 900px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
 .stat-card {

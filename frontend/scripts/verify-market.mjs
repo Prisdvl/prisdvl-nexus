@@ -32,9 +32,11 @@ check('侧栏底部不再有语言按钮', (await page.locator('.sb-row--lang').
 await page.locator('.sb-row--settings').click()
 await page.waitForSelector('.settings-dialog')
 await page.locator('.settings-dialog__item', { hasText: /账号偏好|Preferences/ }).click()
-await page.waitForSelector('.prefs-lang-opt')
-check('设置弹窗包含语言分段', (await page.locator('.prefs-lang-opt').count()) === 2)
-await page.getByRole('button', { name: 'English' }).click()
+await page.waitForSelector('#ac-lang')
+check('设置弹窗的语言是下拉框（不是一排按钮）', (await page.locator('#ac-lang').count()) === 1
+  && (await page.locator('.prefs-lang-opt').count()) === 0
+  && (await page.locator('#ac-lang option').count()) === 2)
+await page.selectOption('#ac-lang', 'en')
 await page.waitForTimeout(300)
 check('设置切换语言生效', await page.evaluate(() => document.documentElement.lang === 'en'))
 await page.keyboard.press('Escape')

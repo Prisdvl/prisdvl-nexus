@@ -50,9 +50,10 @@ await page.waitForTimeout(1600)
 const heatCells = await page.locator('.wb-heat span').count()
 check('活跃度图渲染 12 周热力格', heatCells === 84, `实际 ${heatCells}`)
 check('用量趋势图已渲染', (await page.locator('.wb-trend svg path').count()) >= 2)
-const statCards = await page.locator('.stat-grid .stat-card').count()
-const glowCards = await page.locator('.stat-grid .border-glow-card').count()
-check('统计卡使用低噪声表面（不含光条组件）', statCards === 4 && glowCards === 0, `卡片 ${statCards} / 光条 ${glowCards}`)
+/* 工作台的「总览」现在是磁贴网格里的一块（原来的 .stat-grid/.stat-card 已不存在） */
+const statCards = await page.locator('.wbw-stats .wbw-stat').count()
+const glowCards = await page.locator('.wbw-stats .border-glow-card').count()
+check('总览磁贴的四项统计使用低噪声表面（不含光条组件）', statCards === 4 && glowCards === 0, `卡片 ${statCards} / 光条 ${glowCards}`)
 check('活动时间线 5 条', (await page.locator('.wb-timeline li').count()) === 5)
 
 /* ---------- 3. 对话页：会话切换 / 管理 / 消息操作 / 绑定 ---------- */

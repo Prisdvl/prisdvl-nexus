@@ -193,8 +193,9 @@ await page.waitForTimeout(600)
   }
   await page.goto(BASE + '/#/app/workbench', { waitUntil: 'networkidle' })
   await page.waitForTimeout(1800)
-  const cols = await page.locator('.stat-grid').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length)
-  check('手机：统计卡单列', cols === 1, `${cols} 列`)
+  /* 工作台的统计卡已并入磁贴网格（.stat-grid 不再存在），改成验证窄屏下磁贴网格最多两列 */
+  const cols = await page.locator('[data-slot="widget-grid"]').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').filter(Boolean).length)
+  check('手机：工作台磁贴最多两列', cols <= 2, `${cols} 列`)
   await page.screenshot({ path: `${OUT}/r-mobile-workbench.png`, fullPage: true })
 
   // 弹窗宽度不超出视口

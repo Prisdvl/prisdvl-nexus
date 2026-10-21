@@ -74,7 +74,10 @@ await page.locator('.settings-item', { hasText: '嵌入模型' }).first().click(
 await page.waitForTimeout(420)
 check('嵌入模型：供应商下拉来自白名单', (await page.locator('#ek-provider option').allInnerTexts()).join() === 'bailian', (await page.locator('#ek-provider option').allInnerTexts()).join('/'))
 check('嵌入模型：模型下拉来自白名单', (await page.locator('#ek-model option').allInnerTexts()).join() === 'text-embedding-v4', (await page.locator('#ek-model option').allInnerTexts()).join('/'))
-check('嵌入模型：维度只读且固定 1024', (await page.locator('#ek-dim').isDisabled()) && (await page.locator('#ek-dim').inputValue()) === '1024')
+/* 维度由平台决定，界面改成只读文本（原先是个 disabled 的假输入框，容易被误认为可编辑） */
+check('嵌入模型：维度以纯文本说明固定 1024',
+  (await page.locator('#ek-dim').count()) === 0
+  && (await page.locator('.field-static').first().innerText()).includes('1024'))
 check('嵌入模型：Base URL / Key / 启用开关 / 保存按钮齐备',
   (await page.locator('#ek-base').count()) === 1 && (await page.locator('#ek-key').count()) === 1
   && (await page.locator('.settings-body [role=switch]').count()) === 1
