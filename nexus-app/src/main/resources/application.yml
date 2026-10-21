@@ -237,6 +237,13 @@ nexus:
   storage:
     # 原始文件存储根目录（增量同步要重新解析已导入的文件，因此必须留一份原文）
     root: ${NEXUS_STORAGE_ROOT:./data}
+    # 知识库存储配额。口径是 kb_document.file_size（原始文件字节）之和，
+    # 不是解析后的正文、更不是向量体积：用户能理解"这个 PDF 有 12 MB"，
+    # 理解不了"你占了 37 MB 的 chunk 行"。
+    # 配成 0 或负数表示该维度**不限**（临时放开时不必改代码）。
+    quota:
+      total-bytes: ${NEXUS_STORAGE_TOTAL_BYTES:5368709120}
+      per-knowledge-base-bytes: ${NEXUS_STORAGE_PER_KB_BYTES:1073741824}
   import:
     # async：投递到 RabbitMQ（需要 broker，local/prod 默认）
     # sync ：当前线程直接执行（standalone / 测试：环境里没有 broker）

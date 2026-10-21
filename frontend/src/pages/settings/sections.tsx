@@ -12,7 +12,7 @@ import StatusMark from '@/bits/StatusMark/StatusMark'
 import Modal from '@/components/Modal'
 import { AppearanceControls } from '@/components/Appearance'
 import { toast } from '@/lib/toast'
-import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserEmbeddingConfig, type UserSession } from '@/lib/api'
+import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserEmbeddingConfig, type UserSession, type UserStorage } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { LANDING_KEYS, readAccountPreferences, writeAccountPreferences, type LandingKey } from '@/lib/preferences'
 import ActivityHeatmap, { type HeatmapDay } from '@/components/ui/activity-heatmap'
@@ -350,8 +350,8 @@ export function PrefsSection() {
         value={lang}
         onChange={(e) => { setLang(e.target.value); writeLocale(normalizeLocale(e.target.value)) }}
       >
-        <option value="简体中文" lang="zh-CN">简体中文</option>
-        <option value="English" lang="en">English</option>
+        <option value="zh" lang="zh-CN">简体中文</option>
+        <option value="en" lang="en">English</option>
       </select>
       <p className="hint"><Loc>{s.prefs.langHint}</Loc></p>
     </div>
@@ -710,11 +710,27 @@ export function SessionsSection() {
   </section>
 }
 /* ---------------- 数据与用量 · 用量配额 ---------------- */
+
+/**
+ * 存储字节的人类可读形式。
+ *
+ * 与知识库详情页那个 `formatBytes` 的差别：这里要显示 5 GB 级别的上限，
+ * 只写 KB/MB 会变成「5120.0 MB」这种没人读得下去的数字。
+ */
+function fmtBytes(bytes: number): string {
+  if (bytes <= 0) return '0 MB'
+  const gb = bytes / 1024 / 1024 / 1024
+  if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`
+  const mb = bytes / 1024 / 1024
+  return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`
+}
+
 export function UsageSection() {
   const { locale } = useLocale()
   const s = sectionsCopy(locale)
   const [quota, setQuota] = useState<UserQuota | null>(null)
   const [kbCount, setKbCount] = useState<number | null>(null)
+  const [storage, setStorage] = useState<UserStorage | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [heatDays, setHeatDays] = useState<HeatmapDay[]>([])
@@ -724,11 +740,12 @@ export function UsageSection() {
     if (USE_MOCK) {
       setQuota({ requestUsed: 182, requestLimit: 500, tokenUsed: 48200, tokenLimit: 200000, resetAt: new Date(Date.now() + 86400000).toISOString() })
       setKbCount(6); setLoading(false)
+      setStorage({ usedBytes: 268435456, documentCount: 34, knowledgeBaseCount: 6, totalLimitBytes: 5368709120, perKnowledgeBaseLimitBytes: 1073741824 })
       setHeatDays(mockUsageDays(365))
       return () => { alive = false }
     }
-    Promise.all([api.users.quota(), api.knowledge.list(1, 1)])
-      .then(([q, k]) => { if (alive) { setQuota(q); setKbCount(k.total) } })
+    Promise.all([api.users.quota(), api.knowledge.list(1, 1), api.users.storage()])
+      .then(([q, k, st]) => { if (alive) { setQuota(q); setKbCount(k.total); setStorage(st) } })
       .catch((e) => { if (alive) setError(errMessage(e)) })
       .finally(() => { if (alive) setLoading(false) })
     /* 热力图数据单独拉：统计接口挂了不该影响配额展示（反过来说配额挂了也不该拖没热力图） */
@@ -757,6 +774,25 @@ export function UsageSection() {
       <p className="hint"><Loc>{s.usage.resetAt(new Date(quota.resetAt).toLocaleString())}</Loc></p>
     </>}
     {kbCount !== null && <div className="usage-row"><div className="top"><span><Loc>{s.usage.kbLabel}</Loc></span><span><strong>{kbCount}</strong></span></div></div>}
+    {storage && <div className="usage-row">
+      <div className="top">
+        <span><Loc>{s.usage.storageLabel}</Loc></span>
+        <span>
+          <strong>{fmtBytes(storage.usedBytes)}</strong>
+          {' / '}
+          {storage.totalLimitBytes > 0 ? fmtBytes(storage.totalLimitBytes) : <Loc>{s.usage.storageUnlimited}</Loc>}
+        </span>
+      </div>
+      {storage.totalLimitBytes > 0 && <div className="track"><div className="fill" style={{ width: pct(storage.usedBytes, storage.totalLimitBytes) }} /></div>}
+      {storage.totalLimitBytes > 0 && storage.usedBytes >= storage.totalLimitBytes && (
+        <p className="form-error active" role="alert" style={{ margin: '8px 0 0' }}><Loc>{s.usage.storageFull}</Loc></p>
+      )}
+      <p className="hint">
+        {storage.perKnowledgeBaseLimitBytes > 0
+          ? <Loc>{s.usage.storagePerKbHint(fmtBytes(storage.perKnowledgeBaseLimitBytes))}</Loc>
+          : <Loc>{s.usage.storageUnlimited}</Loc>}
+      </p>
+    </div>}
     {/* 热力图：固定高度容器，数据没到时也有骨架高度，避免设置页 CLS */}
     <div className="usage-heat">
       {heatDays.length > 0

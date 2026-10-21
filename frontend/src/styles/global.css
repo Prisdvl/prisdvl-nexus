@@ -733,6 +733,9 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
 
 /* 用量 */
 .usage-row { margin-bottom: 16px; }
+/* 用量行的补充说明（存储的单库上限那句）跟 .field .hint 同一档字号：
+   它是脚注，不该和上面的数值抢视线 */
+.usage-row .hint { margin: 6px 0 0; font-size: 12px; color: var(--text-3); }
 .usage-row .top { display: flex; justify-content: space-between; font-size: 13px; color: var(--text-2); margin-bottom: 6px; }
 .usage-row .track { height: 8px; border-radius: 999px; background: var(--surface-muted); overflow: hidden; }
 .usage-row .fill { height: 100%; border-radius: 999px; background: var(--primary); width: 0; transition: width 700ms cubic-bezier(0.23, 1, 0.32, 1); }

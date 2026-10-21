@@ -17,8 +17,9 @@ export function readLocale(): Locale {
 }
 
 export function writeLocale(locale: Locale) {
-  /* 走统一的写入口，避免这里手写 JSON 时把 landing 之类的偏好字段改坏 */
-  writeAccountPreferences({ language: locale === 'en' ? 'English' : '简体中文' })
+  /* 走统一的写入口，避免这里手写 JSON 时把 landing 之类的偏好字段改坏。
+     存的是与语言无关的 code（zh / en），不再是 '简体中文' 这种展示文案 */
+  writeAccountPreferences({ language: locale })
   applyDocumentLang(locale)
   window.dispatchEvent(new CustomEvent(LOCALE_EVENT, { detail: locale }))
 }

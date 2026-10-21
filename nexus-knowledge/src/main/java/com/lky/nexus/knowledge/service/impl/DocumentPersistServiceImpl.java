@@ -21,6 +21,7 @@ import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.DocumentTagPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.parser.ParsedDocument;
+import com.lky.nexus.knowledge.quota.StorageQuotaService;
 import com.lky.nexus.knowledge.service.ChunkEmbeddingService;
 import com.lky.nexus.knowledge.service.ChunkIndexService;
 import com.lky.nexus.knowledge.service.DocumentPersistResult;
@@ -75,6 +76,7 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
     private final KnowledgeBaseService knowledgeBaseService;
     private final ChunkEmbeddingService chunkEmbeddingService;
     private final ChunkIndexService chunkIndexService;
+    private final StorageQuotaService storageQuotaService;
 
     public DocumentPersistServiceImpl(DocumentMapper documentMapper,
                                       DocumentTagMapper documentTagMapper,
@@ -85,7 +87,8 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
                                       JsonMapper jsonMapper,
                                       KnowledgeBaseService knowledgeBaseService,
                                       ChunkEmbeddingService chunkEmbeddingService,
-                                      ChunkIndexService chunkIndexService) {
+                                      ChunkIndexService chunkIndexService,
+                                      StorageQuotaService storageQuotaService) {
         this.documentMapper = documentMapper;
         this.documentTagMapper = documentTagMapper;
         this.documentLinkMapper = documentLinkMapper;
@@ -96,6 +99,7 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
         this.knowledgeBaseService = knowledgeBaseService;
         this.chunkEmbeddingService = chunkEmbeddingService;
         this.chunkIndexService = chunkIndexService;
+        this.storageQuotaService = storageQuotaService;
     }
 
     @Override
@@ -114,6 +118,15 @@ public class DocumentPersistServiceImpl implements DocumentPersistService {
         DocumentPO document = created ? new DocumentPO() : existing;
 
         applyMetadata(document, knowledgeBase.getId(), userId, file, parsed, storedPath, true, sourceType);
+
+        // 存储配额：拦在落库这一处，两个导入入口（单文件、Vault 批量）都经过这里。
+        // 增量只算"这次比原来多出来的字节"——同一路径覆盖成更小的文件不该被判超限。
+        long previousBytes = existing == null || existing.getFileSize() == null ? 0L : existing.getFileSize();
+        long delta = file.size() - previousBytes;
+        if (delta > 0) {
+            storageQuotaService.ensureRoom(userId, knowledgeBase.getId(), delta, file.fileName());
+        }
+
         document.setChunkCount(chunks.size());
         document.setTokenCount(chunks.stream().mapToInt(TextChunk::tokenCount).sum());
         document.setIndexedAt(now);

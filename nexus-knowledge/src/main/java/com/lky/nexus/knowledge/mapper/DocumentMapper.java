@@ -72,4 +72,25 @@ public interface DocumentMapper extends BaseMapper<DocumentPO> {
     List<Long> selectIdsByFolder(@Param("kbId") Long kbId,
                                  @Param("folder") String folder,
                                  @Param("prefix") String prefix);
+
+    /**
+     * 某用户已入库文档的字节合计（存储配额用）。
+     *
+     * <p>{@code COALESCE} 是必须的：一条文档都没有时 {@code SUM} 返回 {@code NULL}，
+     * 直接映射到 {@code long} 会在开箱状态就抛 NPE/类型转换错——配额检查不能要求
+     * "先有数据才能查"。
+     *
+     * <p>{@code deleted = 0} 同样必须显式写：手写 SQL 不经过 {@code @TableLogic}，
+     * 否则删掉的文档会继续占着配额，用户删完还是"空间不足"。
+     */
+    @Select("SELECT COALESCE(SUM(file_size), 0) FROM kb_document WHERE user_id = #{userId} AND deleted = 0")
+    long sumFileSizeByUser(@Param("userId") Long userId);
+
+    /** 单个知识库已入库文档的字节合计（单库配额用）。 */
+    @Select("SELECT COALESCE(SUM(file_size), 0) FROM kb_document WHERE kb_id = #{kbId} AND deleted = 0")
+    long sumFileSizeByKb(@Param("kbId") Long kbId);
+
+    /** 某用户的文档条数（用量面板展示，不参与判定）。 */
+    @Select("SELECT COUNT(*) FROM kb_document WHERE user_id = #{userId} AND deleted = 0")
+    long countByUser(@Param("userId") Long userId);
 }

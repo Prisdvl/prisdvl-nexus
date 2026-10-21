@@ -13,6 +13,7 @@ import com.lky.nexus.knowledge.model.entity.ImportTaskItemPO;
 import com.lky.nexus.knowledge.model.entity.ImportTaskPO;
 import com.lky.nexus.knowledge.imports.VaultScanOptions;
 import com.lky.nexus.knowledge.parser.ParserRegistry;
+import com.lky.nexus.knowledge.quota.StorageQuotaService;
 import com.lky.nexus.knowledge.service.ImportTaskPublisher;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
 import com.lky.nexus.knowledge.service.KnowledgeImportService;
@@ -60,19 +61,22 @@ public class KnowledgeImportServiceImpl implements KnowledgeImportService {
     private final ImportTaskMapper importTaskMapper;
     private final ImportTaskItemMapper importTaskItemMapper;
     private final ParserRegistry parserRegistry;
+    private final StorageQuotaService storageQuotaService;
 
     public KnowledgeImportServiceImpl(KnowledgeBaseService knowledgeBaseService,
                                       ImportStagingStore importStagingStore,
                                       ImportTaskPublisher importTaskPublisher,
                                       ImportTaskMapper importTaskMapper,
                                       ImportTaskItemMapper importTaskItemMapper,
-                                      ParserRegistry parserRegistry) {
+                                      ParserRegistry parserRegistry,
+                                      StorageQuotaService storageQuotaService) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.importStagingStore = importStagingStore;
         this.importTaskPublisher = importTaskPublisher;
         this.importTaskMapper = importTaskMapper;
         this.importTaskItemMapper = importTaskItemMapper;
         this.parserRegistry = parserRegistry;
+        this.storageQuotaService = storageQuotaService;
     }
 
     @Override
@@ -92,6 +96,10 @@ public class KnowledgeImportServiceImpl implements KnowledgeImportService {
         // "3005 + 当前支持哪些格式"，而不是几分钟后一句含糊的"导入失败"
         parserRegistry.requireParser(sourceName);
         requireUploadable(sourceName, content);
+
+        // 配额前置检查：等到落库才发现超限，用户已经等了几分钟的解析，还白占一份暂存。
+        // 这里是"按上限预判"，落库时 DocumentPersistServiceImpl 还会按真实增量再判一次。
+        storageQuotaService.ensureRoom(userId, knowledgeBaseId, content.length, sourceName);
 
         log.info("单文件上传入队 kbId={}, name={}, size={} KB",
                 knowledgeBaseId, sourceName, content.length / 1024);

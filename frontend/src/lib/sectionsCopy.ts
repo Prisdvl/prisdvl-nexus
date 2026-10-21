@@ -200,6 +200,11 @@ export interface SectionsCopy {
     tokenLabel: string
     resetAt: (time: string) => string
     kbLabel: string
+    /* 存储配额（原始文件字节口径） */
+    storageLabel: string
+    storageUnlimited: string
+    storageFull: string
+    storagePerKbHint: (limit: string) => string
     footHint: string
     /* 近 365 天热力图 */
     heatTitle: string
@@ -448,7 +453,11 @@ const ZH: SectionsCopy = {
     tokenLabel: 'Token（今日）',
     resetAt: (time) => `额度重置：${time}`,
     kbLabel: '知识库',
-    footHint: '文件存储容量没有服务端统计接口，因此不显示估算值。',
+    storageLabel: '存储（原始文件）',
+    storageUnlimited: '不限',
+    storageFull: '存储已满，新的导入会被拒绝。删掉一些文档后立即恢复。',
+    storagePerKbHint: (limit) => `单个知识库上限 ${limit}；按已入库文件的原始大小计算，覆盖导入只算增量。`,
+    footHint: '存储数字来自服务端统计（kb_document.file_size 之和），已删文档不计入。',
     heatTitle: '近 365 天用量',
     heatLess: '少',
     heatMore: '多',
@@ -691,7 +700,11 @@ const EN: SectionsCopy = {
     tokenLabel: 'Tokens (today)',
     resetAt: (time) => `Quota resets: ${time}`,
     kbLabel: 'Knowledge bases',
-    footHint: 'There is no server-side API for file storage size, so no estimate is shown.',
+    storageLabel: 'Storage (raw files)',
+    storageUnlimited: 'Unlimited',
+    storageFull: 'Storage is full; new imports will be rejected. Delete some documents to free space.',
+    storagePerKbHint: (limit) => `Each knowledge base is capped at ${limit}; measured on raw file sizes, re-imports only count the delta.`,
+    footHint: 'Storage numbers come from the server (sum of kb_document.file_size); deleted documents no longer count.',
     heatTitle: 'Last 365 days',
     heatLess: 'Less',
     heatMore: 'More',

@@ -20,13 +20,34 @@ export interface AccountPreferences {
   landing: LandingKey
 }
 
-const DEFAULTS: AccountPreferences = { language: '简体中文', timezone: 'Asia/Shanghai', landing: 'workbench' }
+const DEFAULTS: AccountPreferences = { language: 'zh', timezone: 'Asia/Shanghai', landing: 'workbench' }
 
 /** 旧版把中文当枚举写进了存储 —— 保留一张只读映射，读到就迁到 code */
 const LEGACY_LANDING: Record<string, LandingKey> = {
   工作台: 'workbench',
   对话: 'chat',
   知识库: 'kb',
+}
+
+/**
+ * 语言也存 code（zh / en），老数据里的 '简体中文' / 'English' 读到就迁。
+ *
+ * <p>和 `lib/locale.ts` 的 `normalizeLocale` 是同一套判定，这里只负责把**存储**里的
+ * 老值收敛掉，免得 localStorage 里长期留着中文——那正是本次清扫要消灭的东西。
+ */
+const LEGACY_LANGUAGE: Record<string, string> = {
+  简体中文: 'zh',
+  中文: 'zh',
+  'zh-CN': 'zh',
+  English: 'en',
+  en_US: 'en',
+  'en-US': 'en',
+}
+
+function normalizeLanguage(raw: unknown): string {
+  if (typeof raw !== 'string' || !raw) return DEFAULTS.language
+  if (raw === 'zh' || raw === 'en') return raw
+  return LEGACY_LANGUAGE[raw] ?? DEFAULTS.language
 }
 
 function normalizeLanding(raw: unknown): LandingKey {
@@ -39,7 +60,7 @@ export function readAccountPreferences(): AccountPreferences {
   try {
     const value = JSON.parse(localStorage.getItem(ACCOUNT_PREFS_KEY) ?? '{}') as Partial<AccountPreferences> & { landing?: unknown }
     return {
-      language: value.language ?? DEFAULTS.language,
+      language: normalizeLanguage(value.language),
       timezone: value.timezone ?? DEFAULTS.timezone,
       landing: normalizeLanding(value.landing),
     }

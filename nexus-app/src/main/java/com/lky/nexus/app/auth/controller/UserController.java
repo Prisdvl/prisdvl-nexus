@@ -8,6 +8,8 @@ import com.lky.nexus.app.auth.security.CurrentUser;
 import com.lky.nexus.app.auth.service.AuthService;
 import com.lky.nexus.app.security.QuotaService;
 import com.lky.nexus.common.api.Result;
+import com.lky.nexus.knowledge.quota.StorageQuotaService;
+import com.lky.nexus.knowledge.quota.StorageUsage;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -28,10 +30,13 @@ public class UserController {
 
     private final AuthService authService;
     private final QuotaService quotaService;
+    private final StorageQuotaService storageQuotaService;
 
-    public UserController(AuthService authService, QuotaService quotaService) {
+    public UserController(AuthService authService, QuotaService quotaService,
+                          StorageQuotaService storageQuotaService) {
         this.authService = authService;
         this.quotaService = quotaService;
+        this.storageQuotaService = storageQuotaService;
     }
 
     /**
@@ -88,5 +93,18 @@ public class UserController {
                 snapshot.requestUsed(), snapshot.requestLimit(),
                 snapshot.tokenUsed(), snapshot.tokenLimit(),
                 snapshot.resetAt()));
+    }
+
+    /**
+     * 当前用户的存储用量（只读）。
+     *
+     * <p>直接把知识库模块的 {@link StorageUsage} 当响应体，不再包一层同构 DTO：
+     * 它就是"用量 + 上限"的只读快照，多写一个字段名相同的类只会让两处定义慢慢漂移。
+     *
+     * <p>上限为 {@code <= 0} 表示不限，前端据此不画进度条（而不是画一条满格）。
+     */
+    @GetMapping("/me/storage")
+    public Result<StorageUsage> storage() {
+        return Result.ok(storageQuotaService.usage(CurrentUser.requireId()));
     }
 }

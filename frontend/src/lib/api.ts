@@ -368,6 +368,8 @@ export const api = {
     changePassword: (oldPassword: string, newPassword: string) =>
       http.put<Result<null>>('/users/me/password', { oldPassword, newPassword }).then((r) => r.data.data),
     quota: () => http.get<Result<UserQuota>>('/users/me/quota').then((r) => r.data.data),
+    /** 存储用量快照；上限字段 <= 0 表示不限，前端据此不画进度条 */
+    storage: () => http.get<Result<UserStorage>>('/users/me/storage').then((r) => r.data.data),
     /** 读取当前用户的自定义对话模型配置（apiKey 只回掩码） */
     llmConfig: () =>
       http.get<Result<UserLlmConfig>>('/users/me/llm-config').then((r) => r.data.data),
@@ -834,6 +836,21 @@ export interface UserQuota {
   tokenUsed: number
   tokenLimit: number
   resetAt: string
+}
+
+/**
+ * 存储用量快照。
+ *
+ * 口径是「原始文件字节」，不含解析后的正文与向量：用户能理解 PDF 有 12 MB，
+ * 理解不了自己占了 37 MB 的 chunk 行。
+ * `totalLimitBytes` / `perKnowledgeBaseLimitBytes` <= 0 表示该维度不限。
+ */
+export interface UserStorage {
+  usedBytes: number
+  documentCount: number
+  knowledgeBaseCount: number
+  totalLimitBytes: number
+  perKnowledgeBaseLimitBytes: number
 }
 
 /** 当前用户的自定义对话模型配置（GET 回显；apiKey 不回明文） */
