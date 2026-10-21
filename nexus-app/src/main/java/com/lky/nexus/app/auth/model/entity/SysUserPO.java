@@ -64,6 +64,26 @@ public class SysUserPO {
      */
     private Long tokenVersion;
 
+    /**
+     * TOTP 密钥（迁移 V26）。
+     *
+     * <p>存的是 {@code CredentialCipher} 的密文（{@code v1:...}），不是 Base32 明文：
+     * 这串东西能生成任意有效验证码，泄露就等于绕过第二因子。
+     * 未绑定、或 setup 了但还没校验通过时为空。
+     */
+    private String totpSecret;
+
+    /**
+     * 登录是否需要第二因子（迁移 V26）：1 = 需要；0 = 不需要。
+     *
+     * <p>必须与 {@link #totpSecret} 分开：setup 先落候选密钥、校验通过才置 1，
+     * 否则用户放弃绑定时会被一个自己没扫过的密钥锁在门外。
+     */
+    private Integer totpEnabled;
+
+    /** 绑定校验通过的时间（迁移 V26），仅用于展示。 */
+    private LocalDateTime totpConfirmedAt;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

@@ -2,16 +2,23 @@ package com.lky.nexus.app.auth.controller;
 
 import com.lky.nexus.app.auth.model.dto.ChangePasswordRequest;
 import com.lky.nexus.app.auth.model.dto.QuotaResponse;
+import com.lky.nexus.app.auth.model.dto.TotpDisableRequest;
+import com.lky.nexus.app.auth.model.dto.TotpEnableRequest;
+import com.lky.nexus.app.auth.model.dto.TotpEnableResponse;
+import com.lky.nexus.app.auth.model.dto.TotpSetupResponse;
+import com.lky.nexus.app.auth.model.dto.TotpStatusResponse;
 import com.lky.nexus.app.auth.model.dto.UpdateProfileRequest;
 import com.lky.nexus.app.auth.model.dto.UserInfoResponse;
 import com.lky.nexus.app.auth.security.CurrentUser;
 import com.lky.nexus.app.auth.service.AuthService;
+import com.lky.nexus.app.auth.service.TwoFactorService;
 import com.lky.nexus.app.security.QuotaService;
 import com.lky.nexus.common.api.Result;
 import com.lky.nexus.knowledge.quota.StorageQuotaService;
 import com.lky.nexus.knowledge.quota.StorageUsage;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -31,12 +38,15 @@ public class UserController {
     private final AuthService authService;
     private final QuotaService quotaService;
     private final StorageQuotaService storageQuotaService;
+    private final TwoFactorService twoFactorService;
 
     public UserController(AuthService authService, QuotaService quotaService,
-                          StorageQuotaService storageQuotaService) {
+                          StorageQuotaService storageQuotaService,
+                          TwoFactorService twoFactorService) {
         this.authService = authService;
         this.quotaService = quotaService;
         this.storageQuotaService = storageQuotaService;
+        this.twoFactorService = twoFactorService;
     }
 
     /**
@@ -106,5 +116,50 @@ public class UserController {
     @GetMapping("/me/storage")
     public Result<StorageUsage> storage() {
         return Result.ok(storageQuotaService.usage(CurrentUser.requireId()));
+    }
+
+    /**
+     * 两步验证状态（5.6 补）。
+     *
+     * <p>只回"开没开、恢复码还剩几枚"，不回密钥：密钥明文只在 {@code setup} 那一次出现，
+     * 设置页刷新后拿不到——这是刻意的，能反复读出来的密钥等于没有第二因子。
+     */
+    @GetMapping("/me/totp")
+    public Result<TotpStatusResponse> totpStatus() {
+        return Result.ok(twoFactorService.status(CurrentUser.requireId()));
+    }
+
+    /**
+     * 生成 TOTP 候选密钥（未启用才可调用）。
+     *
+     * <p>这一步<b>不会</b>让账号进入"登录需要验证码"的状态：必须再调 {@code enable}
+     * 并回填一枚当前验证码，证明密钥真的装进了用户自己的验证器。
+     */
+    @PostMapping("/me/totp/setup")
+    public Result<TotpSetupResponse> totpSetup() {
+        return Result.ok(twoFactorService.beginSetup(CurrentUser.requireId()));
+    }
+
+    /**
+     * 启用两步验证，返回一次性恢复码。
+     *
+     * <p>响应里的恢复码是本接口唯一的明文出口：丢了只能关闭后重新绑定
+     * （见 {@link #totpDisable}）。前端必须把这句提示写在码旁边。
+     */
+    @PostMapping("/me/totp/enable")
+    public Result<TotpEnableResponse> totpEnable(@Valid @RequestBody TotpEnableRequest request) {
+        return Result.ok(twoFactorService.enable(CurrentUser.requireId(), request.code()));
+    }
+
+    /**
+     * 关闭两步验证（需验密码）。
+     *
+     * <p>为什么验密码而不是验证码：丢手机的人正是要靠密码关掉它。
+     * 只有验证码一条路，等于把用户永久锁在自己开启的功能外面。
+     */
+    @PostMapping("/me/totp/disable")
+    public Result<Void> totpDisable(@Valid @RequestBody TotpDisableRequest request) {
+        twoFactorService.disable(CurrentUser.requireId(), request.password());
+        return Result.ok();
     }
 }

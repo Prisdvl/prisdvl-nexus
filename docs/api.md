@@ -134,6 +134,10 @@
 | POST | `/api/users/me/sessions/revoke-all` | 退出全部设备（批量 revoke） |
 | GET | `/api/users/me/quota` | 当前用户当日额度（只读，用于界面上"今日 N/M 次 · x/y tokens"那一行） |
 | GET | `/api/users/me/storage` | 当前用户存储占用（只读）：`usedBytes` / `documentCount` / `knowledgeBaseCount` / `totalLimitBytes` / `perKnowledgeBaseLimitBytes`；上限 **≤ 0 表示不限**（前端据此不画进度条）。口径见 `security.md` §6.4 |
+| GET | `/api/users/me/totp` | 两步验证状态：`{ enabled, recoveryCodesLeft, confirmedAt }`（只读，不返回密钥） |
+| POST | `/api/users/me/totp/setup` | 生成候选密钥（**此时还没开启**）：`{ secret, otpauthUri, issuer, account, digits, periodSeconds }`；密钥仅本响应可见一次 |
+| POST | `/api/users/me/totp/enable` | 用 `{ "code": "123456" }` 校验候选密钥，通过才置 `totp_enabled=1` 并返回 **`{ recoveryCodes: [...] }` 10 枚一次性恢复码**（只此一次） |
+| POST | `/api/users/me/totp/disable` | 用 `{ "password": "******" }` 关闭两步验证并清空密钥/恢复码（换绑设备 = 先关再开） |
 | GET | `/api/users/me/llm-config` | 当前用户自定义对话模型凭据（`baseUrl` / `modelName` / `enabled` / `hasApiKey` / **`apiKeyMasked`**；**永不返回明文**） |
 | PUT | `/api/users/me/llm-config` | 保存同一份凭据。`apiKey` **留空 = 保留旧值**，填了才覆盖（上限 **320**，超限 `1001`）；`enabled=true` 时三项必须齐全，否则 `1001`。落库形态是 AES-GCM 密文（`v1:` 前缀），见 `security.md` 未实现清单 §11 |
 | GET | `/api/users/me/embedding-config` | 当前用户自定义嵌入模型凭据（BYOK 路线 A）：`provider` / `modelName` / `baseUrl` / `dimensions` / `enabled` / `hasApiKey` / **`apiKeyMasked`**，另带平台约束 **`allowedModels`** 与 **`requiredDimensions`**（未配置时也返回，供前端渲染合法选项） |
@@ -141,7 +145,7 @@
 
 ```http
 POST /api/auth/login
-{ "username": "lky", "password": "******" }
+{ "username": "lky", "password": "******", "totpCode": "123456" }
 
 200 OK
 { "code": 0, "message": "success", "data": {
@@ -152,6 +156,10 @@ POST /api/auth/login
     "user": { "id": "...", "username": "lky", "nickname": "...", "email": null,
               "emailVerified": false, "roles": ["USER"] } } }
 ```
+
+`totpCode` 只在**该账号已开启两步验证**时必填；未开启的账号传了也不校验（忽略）。
+开启后缺码或码错一律 `401 / 2011`，前端据此把登录表单切到"输验证码"第二屏（见下），
+**不要把 2011 当普通登录失败处理**：密码此时对了，只是第二因子没给对。
 
 ```http
 POST /api/auth/refresh
@@ -211,6 +219,41 @@ PUT /api/users/me/password
 
 列表项形状：`{ id, device, ip, lastUsedAt, createdAt, current }`。  
 前端设置页「会话与设备」调用上述三个 sessions 接口；`api.ts` 在 access 401/2001 时用单飞 Promise 调 `/auth/refresh` 并重放原请求。
+
+#### 两步验证（TOTP）
+
+```http
+GET  /api/users/me/totp
+200 OK
+{ "code": 0, "data": { "enabled": true, "recoveryCodesLeft": 7,
+                       "confirmedAt": "2026-10-21T09:12:00" } }
+
+POST /api/users/me/totp/setup
+200 OK
+{ "code": 0, "data": {
+    "secret": "JBSWY3DPEHPK3PXP",
+    "otpauthUri": "otpauth://totp/Prisdvl%20Nexus:lky?secret=JBSWY3DPEHPK3PXP&issuer=Prisdvl%20Nexus&digits=6&period=30",
+    "issuer": "Prisdvl Nexus", "account": "lky", "digits": 6, "periodSeconds": 30 } }
+
+POST /api/users/me/totp/enable
+{ "code": "123456" }
+200 OK
+{ "code": 0, "data": { "recoveryCodes": ["3f9a-k2","...十枚..."] } }
+
+POST /api/users/me/totp/disable
+{ "password": "******" }
+200 OK
+```
+
+- 码错、已过期、恢复码已用过或不属于该账号 → 一律 `401 / 2012`（**不区分**是哪种：分开报等于告诉攻击者"这段看起来像恢复码"）。
+- 未启用就想关闭（或读状态时本就没开）→ `409 / 2013`；已启用还去 `setup`/`enable` → `409 / 2014`（换密钥必须先关）。
+- `.env`/环境变量必须提供 `NEXUS_SECURITY_CRYPTO_KEK`：TOTP 密钥用同一把 KEK 做 AES-GCM，缺失时凭证加解密 fail-closed（与 BYOK 同口径）。
+- 登录时**缺码**（`totpCode` 为空）不记登录失败次数（用户只是还没输第二步）；**码错**计入 §4 的失败冻结。前端据此把 2011 当"切第二屏"信号，2012 当"这一格填错了"。
+- `secret` 落库前用与 BYOK 同一把 KEK 做 AES-GCM（`CredentialCipher`，`v1:` 前缀），**任何接口都不回读密钥**；
+  恢复码只存 `SHA-256`，用一次即写 `used_at`（`UPDATE … WHERE used_at IS NULL`，并发下也只会成功一次）。
+- 校验窗口 `±1` 个时间步（30 s/步，见 `nexus.auth.totp.window`），容忍客户端时钟偏差；重放保护靠"候选密钥一次性 + 恢复码一次性"，
+  不额外记已用码（同窗口内复用同一码不构成提权：攻击者仍需先已知密码）。
+- 登录侧见上文 `POST /api/auth/login` 的 `totpCode` 与 `2011`。
 
 #### 当日额度 `GET /api/users/me/quota`
 

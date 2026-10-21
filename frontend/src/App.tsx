@@ -92,11 +92,13 @@ function LoginRoute({ theme, palette }: { theme: ThemeMode; palette: PaletteName
            * 只有成功才导航。原来 login() 是同步置标记、不可能失败，
            * 所以这个 try 是接后端后新加的。
            */
-          try {
-            await login(cred.username, cred.password)
-          } catch {
-            return // 错误由 AuthPage 捕获并展示，这里不导航
-          }
+          /*
+           * 登录失败必须把错误往上抛：AuthPage 的 catch 里靠 `err.response.data.code`
+           * 区分 2006（密码错，弹红条）与 2011（已开两步验证，展开验证码输入框）。
+           * 这里若 catch 后 return，错误被吞掉，用户看到的就是"点了登录没反应"。
+           * 成功才继续往下走（`await` 失败会直接中断本函数，不会导航）。
+           */
+          await login(cred.username, cred.password, cred.totpCode)
           /*
            * 登录成功后立刻拉一次后端会话列表 —— 这是 P1-1 的验收标准
            * （"登录后侧栏会话列表来自后端"）。

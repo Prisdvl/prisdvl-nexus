@@ -73,7 +73,13 @@ const providerOpts = await page.locator('#ek-provider option').allInnerTexts()
 const modelOpts = await page.locator('#ek-model option').allInnerTexts()
 check('供应商下拉来自后端白名单', providerOpts.join('/') === 'bailian', providerOpts.join('/'))
 check('模型下拉来自后端白名单（两项）', modelOpts.join('/') === 'text-embedding-v3/text-embedding-v4' || modelOpts.join('/') === 'text-embedding-v4/text-embedding-v3', modelOpts.join('/'))
-check('维度只读且为 1024', (await page.locator('#ek-dim').isDisabled()) && (await page.locator('#ek-dim').inputValue()) === '1024')
+/* 维度是平台决定的，界面上不再有可编辑宿主——只断言"没有假输入框 + 文案里写明 1024"。
+   原来这里断言 #ek-dim 是 disabled input，那段假输入框已在纯交互批里删掉。 */
+check(
+  '维度是只读文案且写明 1024（没有假输入框）',
+  (await page.locator('#ek-dim').count()) === 0
+    && /1024/.test((await page.locator('#ek-dim-text').innerText()) ?? ''),
+)
 check('未配置时显示未设置状态', ((await page.locator('#ek-key').getAttribute('placeholder')) ?? '').includes('sk-…'))
 
 /* ---------- 保存 → 掩码回显 ---------- */

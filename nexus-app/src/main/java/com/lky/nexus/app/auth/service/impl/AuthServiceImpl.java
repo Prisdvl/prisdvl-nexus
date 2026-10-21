@@ -62,6 +62,9 @@ public class AuthServiceImpl implements AuthService {
     /** 用户状态：1 正常。 */
     private static final int STATUS_ENABLED = 1;
 
+    /** 需要第二因子：1 已启用两步验证。 */
+    private static final int TOTP_ENABLED = 1;
+
     private final SysUserMapper sysUserMapper;
     private final SysRoleMapper sysRoleMapper;
     private final SysUserRoleMapper sysUserRoleMapper;
@@ -71,6 +74,7 @@ public class AuthServiceImpl implements AuthService {
     private final com.lky.nexus.app.workspace.WorkspaceService workspaceService;
     private final UserAuthCache userAuthCache;
     private final LoginAttemptLimiter loginAttemptLimiter;
+    private final com.lky.nexus.app.auth.service.TwoFactorService twoFactorService;
 
     public AuthServiceImpl(SysUserMapper sysUserMapper,
                            SysRoleMapper sysRoleMapper,
@@ -80,7 +84,8 @@ public class AuthServiceImpl implements AuthService {
                            RefreshTokenService refreshTokenService,
                            com.lky.nexus.app.workspace.WorkspaceService workspaceService,
                            UserAuthCache userAuthCache,
-                           LoginAttemptLimiter loginAttemptLimiter) {
+                           LoginAttemptLimiter loginAttemptLimiter,
+                           com.lky.nexus.app.auth.service.TwoFactorService twoFactorService) {
         this.sysUserMapper = sysUserMapper;
         this.sysRoleMapper = sysRoleMapper;
         this.sysUserRoleMapper = sysUserRoleMapper;
@@ -90,6 +95,7 @@ public class AuthServiceImpl implements AuthService {
         this.workspaceService = workspaceService;
         this.userAuthCache = userAuthCache;
         this.loginAttemptLimiter = loginAttemptLimiter;
+        this.twoFactorService = twoFactorService;
     }
 
     @Override
@@ -156,6 +162,26 @@ public class AuthServiceImpl implements AuthService {
         // 记进去只会让一个持有正确密码的用户把自己刷到冻结
         if (!Integer.valueOf(STATUS_ENABLED).equals(user.getStatus())) {
             throw new BusinessException(ErrorCode.ACCOUNT_DISABLED);
+        }
+
+        // 两步验证：密码对了还差第二因子。
+        //
+        // 位置很关键——必须挡在 reset 之前：否则攻击者只要知道密码，
+        // 就能用"密码正确 + 验证码乱填"的请求把受害人的失败计数清零，
+        // 等于亲手帮他解冻（并且让 6 位码的爆破次数不再受限）。
+        if (Integer.valueOf(TOTP_ENABLED).equals(user.getTotpEnabled())) {
+            if (!StringUtils.hasText(request.totpCode())) {
+                // 缺码不记失败：这不是"在猜"，用户只是还没输第二步。
+                // 单独一个 2011 让前端知道该弹验证码输入框，而不是提示"用户名或密码错误"。
+                throw new BusinessException(ErrorCode.TOTP_REQUIRED);
+            }
+            try {
+                twoFactorService.verifyLogin(user.getId(), request.totpCode().trim());
+            } catch (BusinessException e) {
+                loginAttemptLimiter.recordFailure(username);
+                log.warn("登录失败（第二因子无效） username={}", username);
+                throw e;
+            }
         }
 
         // 成功即清零：否则"错几次、成功一次"的正常用户会慢慢累加到冻结

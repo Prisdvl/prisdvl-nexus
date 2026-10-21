@@ -4,7 +4,7 @@ import { ArrowLeft, LogIn } from 'lucide-react'
 import RubberSegment from '@/bits/RubberSegment/RubberSegment'
 import SkipLink from '@/components/SkipLink'
 import { toast } from '@/lib/toast'
-import { errMessage } from '@/lib/api'
+import { bizCodeOf, errMessage } from '@/lib/api'
 import { useLocation, useNavigate } from 'react-router'
 import BrandMark from '@/components/BrandMark'
 import WavesBg from '@/components/WavesBg'
@@ -27,6 +27,8 @@ interface AuthPageProps {
 export interface Credentials {
   username: string
   password: string
+  /** 两步验证码（TOTP 6 位或一枚恢复码）。仅当账号开启 2FA 且服务端回 2011 后才会有值。 */
+  totpCode?: string
 }
 
 export interface RegisterCredentials extends Credentials {
@@ -50,7 +52,15 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
   const [tab, setTab] = useState<'login' | 'register'>('login')
   /** 1 = 切到注册（内容从右弹入），-1 = 切到登录（从左弹入） */
   const tabDir = useRef(1)
-  const [login, setLogin] = useState({ username: '', password: '' })
+  const [login, setLogin] = useState({ username: '', password: '', totpCode: '' })
+  /**
+   * 账号是否开启了两步验证（服务端回 2011 后才为 true）。
+   *
+   * <p>不做"先查账号有没有开 2FA"的预请求：那等于给登录接口加一个
+   * 「这个用户名是否存在」的探测器。改为按需展开——第一次提交只发账号密码，
+   * 服务端说要看验证码，界面才多出这一格。
+   */
+  const [needTotp, setNeedTotp] = useState(false)
   const [reg, setReg] = useState({ username: '', password: '', password2: '', nickname: '', email: '' })
   const [formMsg, setFormMsg] = useState('')
   const [busy, setBusy] = useState(false)
@@ -87,12 +97,23 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
     if (busy) return
     setBusy(true)
     try {
-      await onEnter(from, { username: login.username.trim(), password: login.password })
+      await onEnter(from, {
+        username: login.username.trim(),
+        password: login.password,
+        totpCode: needTotp ? login.totpCode.trim() : undefined,
+      })
     } catch (err) {
       /* 后端错误直接展示：实测凭证错是 401 + code 2006「用户名或密码错误」，
          校验错是 400 + code 1001（message 带字段名前缀），连不上是网络错误。
-         它走 formMsg（表单级红条），不会伪装成字段的必填错误。 */
-      setFormMsg(errMessage(err))
+         它走 formMsg（表单级红条），不会伪装成字段的必填错误。
+
+         2011（TOTP_REQUIRED）是唯一需要"改界面形状"的错误：密码没问题是第二因子缺席，
+         所以不弹红条（弹了像密码错），改成展开验证码输入框。 */
+      if (bizCodeOf(err) === 2011) {
+        setNeedTotp(true)
+      } else {
+        setFormMsg(errMessage(err))
+      }
     } finally {
       setBusy(false)
     }
@@ -284,6 +305,22 @@ export default function AuthPage({ theme, palette, onEnter, onRegister, onGoHome
                     />
                     <p className="err" id="li-p-err">{a.errPassword}</p>
                   </div>
+                  {needTotp && (
+                    <div className="field">
+                      <label htmlFor="li-totp">{a.totpCode}</label>
+                      <input
+                        id="li-totp"
+                        className="input"
+                        value={login.totpCode}
+                        placeholder={a.totpCodePh}
+                        autoComplete="one-time-code"
+                        inputMode="numeric"
+                        autoFocus
+                        onChange={(e) => setLogin({ ...login, totpCode: e.target.value })}
+                      />
+                      <p className="hint" style={{ marginTop: 6 }}>{a.totpHint}</p>
+                    </div>
+                  )}
                   <p className="switch-line" style={{ margin: '0 0 14px', textAlign: 'right' }}>
                     <button type="button" onClick={() => navigate('/forgot')}>{a.forgot}</button>
                   </p>

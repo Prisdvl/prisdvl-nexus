@@ -137,6 +137,21 @@ nexus:
     # invalidate 抛异常的话，缓存里那条旧版本会继续被读到、直到过期
     # （DB 已是新值，所以下一次缓存 miss 就会纠正）。TTL 越短越安全、查库越多。
     token-version-cache-ttl: ${JWT_TOKEN_VERSION_CACHE_TTL:5m}
+  # 两步验证（TOTP，RFC 6238）。无第三方依赖：HMAC-SHA1 走 JDK 自带算法。
+  #
+  # 只有 issuer 会离开服务端（写进 otpauth:// 里、显示在用户手机的验证器上），
+  # 其余参数都是校验口径，改了会让已经绑定的账号登不进来 —— 变更必须配迁移说明。
+  auth:
+    totp:
+      issuer: ${NEXUS_TOTP_ISSUER:Prisdvl Nexus}
+      digits: ${NEXUS_TOTP_DIGITS:6}
+      # 30 秒是 RFC 6238 推荐值，主流验证器（Google/1Password/Authy）都默认它。
+      period-seconds: ${NEXUS_TOTP_PERIOD_SECONDS:30}
+      # 前后各容忍 1 个时间步（约 ±30s 时钟漂移）。不能放大：
+      # 每多一步，6 位码被猜中的概率就多 1/10^6。
+      window: ${NEXUS_TOTP_WINDOW:1}
+      # 一次下发多少枚一次性恢复码（只存 SHA-256，明文只在 enable 的响应里出现一次）。
+      recovery-codes: ${NEXUS_TOTP_RECOVERY_CODES:10}
   # 邮箱验证码（Phase 1 基础设施 + Phase 2 已登录验邮）。
   # 默认 unconfigured：生产不会把明文验证码打进日志，也不会自动降级为 console。
   # local / standalone / test profile 覆盖为 console（仅开发）。

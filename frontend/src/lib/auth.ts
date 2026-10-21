@@ -89,7 +89,7 @@ export const authStore = {
    * ⚠️ 后端 register 的校验规则（实测）：用户名 3–32 且 `^[A-Za-z0-9_-]+$`、
    * 密码 8–64。返回 1001 是参数校验失败，message 形如 `username: 用户名长度需在 3–32 之间`。
    */
-  login: async (username: string, password: string) => {
+  login: async (username: string, password: string, totpCode?: string) => {
     if (USE_MOCK) {
       /* 离线演示：保留旧的原型行为——只置标记，不发请求 */
       localStorage.setItem(LEGACY_KEY, '1')
@@ -98,7 +98,7 @@ export const authStore = {
       emit()
       return
     }
-    const token = await api.auth.login(username, password)
+    const token = await api.auth.login(username, password, totpCode)
     tokenStore.save(token.accessToken, token.expiresIn, token.refreshToken)
     authed = true
     lastLogoutReason = null

@@ -120,6 +120,38 @@ export interface SectionsCopy {
     twoFactorLabel: string
     twoFactorHint: string
     unavailable: string
+    /** 两步验证（TOTP）：状态、绑定、恢复码、关闭 */
+    totpOn: string
+    totpOff: string
+    totpRecoveryLeft: (n: number) => string
+    totpConfirmedAt: (when: string) => string
+    totpStart: string
+    totpSetupTitle: string
+    totpSecretLabel: string
+    totpSecretHint: string
+    totpUriLabel: string
+    totpCodeLabel: string
+    totpCodePh: string
+    totpConfirm: string
+    totpCancel: string
+    totpEnableOkTitle: string
+    totpEnableOkBody: string
+    totpRecoveryTitle: string
+    totpRecoveryHint: string
+    totpRecoveryDone: string
+    totpRecoveryOnce: string
+    totpDisableLabel: string
+    totpDisableHint: string
+    totpDisablePassword: string
+    totpDisableCta: string
+    totpDisableOkTitle: string
+    totpDisableOkBody: string
+    totpErrSecret: string
+    totpErrCode: string
+    totpErrPassword: string
+    totpLoading: string
+    totpCopy: string
+    totpCopied: string
     toolsLabel: string
     toolsNone: string
     toolsList: (names: string[]) => string
@@ -371,8 +403,39 @@ const ZH: SectionsCopy = {
     okBody: '所有登录令牌已吊销，请使用新密码重新登录',
     failTitle: '密码修改失败',
     twoFactorLabel: '两步验证',
-    twoFactorHint: '服务端尚未提供 TOTP 绑定接口，因此当前不可用。',
+    twoFactorHint: '开启后用验证器 App 的 6 位码作为登录的第二步；关闭需要当前密码。',
     unavailable: '暂不可用',
+    totpOn: '已开启',
+    totpOff: '未开启',
+    totpRecoveryLeft: (n: number) => `恢复码还剩 ${n} 枚`,
+    totpConfirmedAt: (when: string) => `开启于 ${when}`,
+    totpStart: '开启两步验证',
+    totpSetupTitle: '用验证器扫描或手动输入',
+    totpSecretLabel: '密钥（Base32）',
+    totpSecretHint: '密钥只显示这一次。刷新页面后不再提供——请现在就把它加进验证器。',
+    totpUriLabel: 'otpauth 链接',
+    totpCodeLabel: '验证器里显示的 6 位码',
+    totpCodePh: '000000',
+    totpConfirm: '确认并启用',
+    totpCancel: '取消',
+    totpEnableOkTitle: '两步验证已开启',
+    totpEnableOkBody: '下次登录需要验证器中的 6 位码',
+    totpRecoveryTitle: '恢复码（只显示这一次）',
+    totpRecoveryHint: '每枚只能用一次。丢了手机会需要它们才能登录——请立刻存到离线位置。',
+    totpRecoveryDone: '我已保存，完成',
+    totpRecoveryOnce: '关闭这一面板后就再也看不到这些码了。',
+    totpDisableLabel: '关闭两步验证',
+    totpDisableHint: '关闭后登录只需密码。换手机前建议先关闭再用新设备重新绑定。',
+    totpDisablePassword: '当前密码',
+    totpDisableCta: '关闭',
+    totpDisableOkTitle: '两步验证已关闭',
+    totpDisableOkBody: '登录恢复为只需密码',
+    totpErrSecret: '密钥没有拿到，请重试',
+    totpErrCode: '请输入验证器中的 6 位数字',
+    totpErrPassword: '请输入当前密码',
+    totpLoading: '读取中…',
+    totpCopy: '复制',
+    totpCopied: '已复制',
     toolsLabel: '工具授权（始终允许）',
     toolsNone: '暂无：高风险工具每次都会先询问你。',
     toolsList: (names) => `以下工具不再询问：${names.join('、')}`,
@@ -618,8 +681,39 @@ const EN: SectionsCopy = {
     okBody: 'All sign-in tokens were revoked — sign in again with the new password',
     failTitle: 'Could not change password',
     twoFactorLabel: 'Two-factor authentication',
-    twoFactorHint: 'The server does not expose a TOTP binding API yet, so this is unavailable.',
+    twoFactorHint: 'Once enabled, a 6-digit code from your authenticator app is required at sign-in; turning it off requires your password.',
     unavailable: 'Unavailable',
+    totpOn: 'Enabled',
+    totpOff: 'Not enabled',
+    totpRecoveryLeft: (n: number) => `${n} recovery codes left`,
+    totpConfirmedAt: (when: string) => `Enabled on ${when}`,
+    totpStart: 'Set up two-factor',
+    totpSetupTitle: 'Scan with your authenticator, or enter the key manually',
+    totpSecretLabel: 'Secret (Base32)',
+    totpSecretHint: 'Shown only once. It is not available after a refresh — add it to your authenticator now.',
+    totpUriLabel: 'otpauth link',
+    totpCodeLabel: '6-digit code from the authenticator',
+    totpCodePh: '000000',
+    totpConfirm: 'Confirm and enable',
+    totpCancel: 'Cancel',
+    totpEnableOkTitle: 'Two-factor enabled',
+    totpEnableOkBody: 'Sign-in now needs the 6-digit code from your authenticator',
+    totpRecoveryTitle: 'Recovery codes (shown only once)',
+    totpRecoveryHint: 'Each code works once. If you lose your phone these are the only way back in — store them offline right now.',
+    totpRecoveryDone: 'I saved them, done',
+    totpRecoveryOnce: 'Once this panel closes these codes cannot be shown again.',
+    totpDisableLabel: 'Turn off two-factor',
+    totpDisableHint: 'After turning it off, signing in needs only the password. Before switching phones, turn it off and bind the new device.',
+    totpDisablePassword: 'Current password',
+    totpDisableCta: 'Turn off',
+    totpDisableOkTitle: 'Two-factor turned off',
+    totpDisableOkBody: 'Sign-in is back to password only',
+    totpErrSecret: 'Could not get the secret, please retry',
+    totpErrCode: 'Enter the 6-digit code from your authenticator',
+    totpErrPassword: 'Enter your current password',
+    totpLoading: 'Loading…',
+    totpCopy: 'Copy',
+    totpCopied: 'Copied',
     toolsLabel: 'Tool permissions (always allowed)',
     toolsNone: 'None yet: high-risk tools always ask you first.',
     toolsList: (names) => `These tools no longer ask: ${names.join(', ')}`,

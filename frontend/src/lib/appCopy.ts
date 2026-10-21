@@ -344,6 +344,10 @@ export interface AppCopy {
     forgot: string
     loggingIn: string
     creating: string
+    /** 登录页第二屏：两步验证码（服务端 2011 后才出现） */
+    totpCode: string
+    totpCodePh: string
+    totpHint: string
     noAccount: string
     createAccount: string
     hasAccount: string
@@ -801,6 +805,9 @@ One disk IO = one page (16KB), better locality
     regEmailPh: '用于验证与找回密码',
     forgot: '忘记密码？',
     loggingIn: '登录中…', creating: '创建中…',
+    totpCode: '两步验证码',
+    totpCodePh: '6 位数字，或一枚恢复码',
+    totpHint: '该账号已开启两步验证。验证码来自你的验证器 App；丢了手机就用当时保存的恢复码。',
     noAccount: '还没有账号？', createAccount: '创建账号',
     hasAccount: '已有账号？', goLogin: '去登录',
     terms: '登录即表示同意平台使用条款与隐私政策',
@@ -1211,6 +1218,9 @@ One disk IO = one page (16KB), better locality
     regEmailPh: 'Used for verification and password recovery',
     forgot: 'Forgot password?',
     loggingIn: 'Signing in…', creating: 'Creating…',
+    totpCode: 'Two-step code',
+    totpCodePh: '6 digits, or a recovery code',
+    totpHint: 'This account uses two-step verification. Use the code from your authenticator app, or a saved recovery code if the phone is lost.',
     noAccount: 'No account yet?', createAccount: 'Create an account',
     hasAccount: 'Already have an account?', goLogin: 'Go to sign in',
     terms: 'Signing in means you accept the platform terms and privacy policy',

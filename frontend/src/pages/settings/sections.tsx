@@ -12,7 +12,7 @@ import StatusMark from '@/bits/StatusMark/StatusMark'
 import Modal from '@/components/Modal'
 import { AppearanceControls } from '@/components/Appearance'
 import { toast } from '@/lib/toast'
-import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserEmbeddingConfig, type UserSession, type UserStorage } from '@/lib/api'
+import { api, errMessage, USE_MOCK, type AuthUser, type UserQuota, type PageResult, type KnowledgeBase, type DocumentDetail, type Conversation, type BackendMessage, type BackendAgent, type UserLlmConfig, type UserEmbeddingConfig, type UserSession, type UserStorage, type TotpSetup, type TotpStatus } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { LANDING_KEYS, readAccountPreferences, writeAccountPreferences, type LandingKey } from '@/lib/preferences'
 import ActivityHeatmap, { type HeatmapDay } from '@/components/ui/activity-heatmap'
@@ -302,7 +302,7 @@ export function EmbeddingKeySection() {
       {/* 维度由平台与向量列决定，不是用户可选项：只给结论，不给假输入框 */}
       <div className="field">
         <span className="field-label">{s.embeddingKey.dimLabel}</span>
-        <p className="field-static"><Loc>{s.embeddingKey.dimHint(cfg?.requiredDimensions ?? 1024)}</Loc></p>
+        <p className="field-static" id="ek-dim-text"><Loc>{s.embeddingKey.dimHint(cfg?.requiredDimensions ?? 1024)}</Loc></p>
       </div>
       <div className="settings-inline" style={{ margin: '4px 0 16px' }}>
         <div>
@@ -429,7 +429,7 @@ export function SecuritySection() {
       <button className="btn btn-primary" type="submit" disabled={USE_MOCK || saving || !oldPassword || !newPassword || !confirmPassword}><KeyRound size={15} /> {USE_MOCK ? <Loc>{s.security.submitDisabledMock}</Loc> : saving ? <Loc>{s.security.submitting}</Loc> : <Loc>{s.security.submit}</Loc>}</button>
     </form>}
     <hr className="divider" />
-    <div className="settings-inline"><div><strong style={{ fontSize: 13.5 }}><Loc>{s.security.twoFactorLabel}</Loc></strong><p className="hint" style={{ margin: '4px 0 0' }}><Loc>{s.security.twoFactorHint}</Loc></p></div><button className="btn btn-ghost btn-sm" type="button" disabled aria-disabled="true"><Loc>{s.security.unavailable}</Loc></button></div>
+    <TwoFactorPanel s={s} />
     <hr className="divider" />
     <div className="export-card" style={{ marginTop: 0 }}><div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
       <span style={{ flex: 1, minWidth: 200 }}><strong style={{ fontSize: 13.5 }}><Loc>{s.security.toolsLabel}</Loc></strong><p className="hint" style={{ marginTop: 4 }}><Loc>{allowedTools.length === 0 ? s.security.toolsNone : s.security.toolsList(allowedTools)}</Loc></p></span>
@@ -438,6 +438,199 @@ export function SecuritySection() {
     </div></div>
   </section>
 }
+/* ---------------- 访问与安全 · 两步验证（TOTP） ---------------- */
+
+/**
+ * 两步验证面板。
+ *
+ * <p>四段状态机，每一段都对应服务端的一个真实分支，不是纯视觉切换：
+ * <ol>
+ *   <li>未开启 → 点「开启」调 setup，拿到候选密钥（服务端此时<b>没有</b>把账号标成需要验证码）；</li>
+ *   <li>待校验 → 用户把密钥加进验证器，回填 6 位码调 enable，服务端才置 enabled=1；</li>
+ *   <li>刚开启 → 一次性展示 10 枚恢复码（服务端只存哈希，关掉面板就再也看不到）；</li>
+ *   <li>已开启 → 只能关闭（换绑 = 先关再开），关闭要当前密码。</li>
+ * </ol>
+ *
+ * <p>密钥/恢复码都<b>不</b>写进 localStorage 或 React 持久状态以外的任何地方：
+ * 它们是等价于第二把钥匙的东西。
+ */
+function TwoFactorPanel({ s }: { s: ReturnType<typeof sectionsCopy> }) {
+  const [status, setStatus] = useState<TotpStatus | null>(null)
+  const [setup, setSetup] = useState<TotpSetup | null>(null)
+  const [code, setCode] = useState('')
+  const [recovery, setRecovery] = useState<string[] | null>(null)
+  const [disableOpen, setDisableOpen] = useState(false)
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (USE_MOCK) return
+    let alive = true
+    api.users.totpStatus()
+      .then((v) => { if (alive) setStatus(v) })
+      /* 读不到状态不弹红条：设置页整页别因为这一个接口挂掉。
+         退化成"未开启"，用户点按钮时才看到真正的错误。 */
+      .catch(() => { if (alive) setStatus({ enabled: false, recoveryCodesLeft: 0, confirmedAt: null }) })
+    return () => { alive = false }
+  }, [])
+
+  const run = async (fn: () => Promise<void>) => {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try { await fn() } catch (e) { setError(errMessage(e)) } finally { setBusy(false) }
+  }
+
+  const startSetup = () => run(async () => {
+    const v = await api.users.setupTotp()
+    setSetup(v)
+    setRecovery(null)
+    setCode('')
+  })
+
+  const confirmEnable = () => run(async () => {
+    if (!/^\d{6}$/.test(code.trim())) { setError(s.security.totpErrCode); return }
+    const v = await api.users.saveTotp(code.trim())
+    setRecovery(v.recoveryCodes)
+    setSetup(null)
+    setCode('')
+    setStatus({ enabled: true, recoveryCodesLeft: v.recoveryCodes.length, confirmedAt: new Date().toISOString() })
+    toast.success(s.security.totpEnableOkTitle, s.security.totpEnableOkBody)
+  })
+
+  const closeDisable = (open: boolean) => {
+    setDisableOpen(open)
+    if (!open) { setPassword(''); setError('') }
+  }
+
+  const confirmDisable = () => run(async () => {
+    if (!password) { setError(s.security.totpErrPassword); return }
+    await api.users.disableTotp(password)
+    setStatus({ enabled: false, recoveryCodesLeft: 0, confirmedAt: null })
+    closeDisable(false)
+    toast.success(s.security.totpDisableOkTitle, s.security.totpDisableOkBody)
+  })
+
+  const copy = (text: string) => {
+    void navigator.clipboard?.writeText(text).then(() => toast.info(s.security.totpCopied, text.slice(0, 24)))
+  }
+
+  return <>
+    <div className="settings-inline" style={{ marginTop: 0 }}>
+      <div>
+        <strong style={{ fontSize: 13.5 }}><Loc>{s.security.twoFactorLabel}</Loc></strong>{' '}
+        <span className="badge" data-tone={status?.enabled ? 'success' : undefined}>
+          {status?.enabled ? s.security.totpOn : s.security.totpOff}
+        </span>
+        <p className="hint" style={{ margin: '4px 0 0' }}><Loc>{s.security.twoFactorHint}</Loc></p>
+        {status?.enabled && (
+          <p className="hint" style={{ margin: '2px 0 0' }}>
+            {s.security.totpRecoveryLeft(status.recoveryCodesLeft)}
+            {status.confirmedAt ? ` · ${s.security.totpConfirmedAt(status.confirmedAt.slice(0, 10))}` : ''}
+          </p>
+        )}
+      </div>
+      <button
+        className="btn btn-ghost btn-sm"
+        type="button"
+        disabled={busy || USE_MOCK || status === null}
+        aria-expanded={setup !== null || disableOpen}
+        onClick={() => (status?.enabled ? closeDisable(!disableOpen) : startSetup())}
+      >
+        <ShieldAlert size={14} />{' '}
+        {status === null
+          ? s.security.totpLoading
+          : status.enabled
+            ? s.security.totpDisableLabel
+            : s.security.totpStart}
+      </button>
+    </div>
+
+    {error && <p className="form-error active" role="alert">{error}</p>}
+
+    {setup && (
+      <div className="export-card" style={{ marginTop: 14 }}>
+        <strong style={{ fontSize: 13.5 }}>{s.security.totpSetupTitle}</strong>
+        <p className="hint" style={{ marginTop: 4 }}>{s.security.totpSecretHint}</p>
+        <div className="field" style={{ marginTop: 10 }}>
+          <label htmlFor="ac-totp-secret">{s.security.totpSecretLabel}</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input id="ac-totp-secret" className="input" readOnly value={setup.secret} onFocus={(e) => e.currentTarget.select()} />
+            <button className="btn btn-ghost btn-sm" type="button" onClick={() => copy(setup.secret)}>{s.security.totpCopy}</button>
+          </div>
+        </div>
+        <details style={{ marginTop: 8 }}>
+          <summary className="hint" style={{ cursor: 'pointer' }}>{s.security.totpUriLabel}</summary>
+          <p className="hint" style={{ wordBreak: 'break-all', marginTop: 6 }}>{setup.otpauthUri}</p>
+        </details>
+        <div className="field" style={{ marginTop: 10 }}>
+          <label htmlFor="ac-totp-code">{s.security.totpCodeLabel}</label>
+          <input
+            id="ac-totp-code"
+            className="input"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            placeholder={s.security.totpCodePh}
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-primary btn-sm" type="button" disabled={busy || code.length !== 6} onClick={confirmEnable}>
+            <ShieldAlert size={14} /> {s.security.totpConfirm}
+          </button>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => { setSetup(null); setCode(''); setError('') }}>
+            {s.security.totpCancel}
+          </button>
+        </div>
+      </div>
+    )}
+
+    {recovery && (
+      <div className="export-card" style={{ marginTop: 14, borderColor: 'var(--warning)' }}>
+        <strong style={{ fontSize: 13.5 }}>{s.security.totpRecoveryTitle}</strong>
+        <p className="hint" style={{ marginTop: 4 }}>{s.security.totpRecoveryHint}</p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 6, margin: '10px 0' }}>
+          {recovery.map((c) => (
+            <code key={c} style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, padding: '4px 6px', background: 'var(--surface-muted)', borderRadius: 6 }}>{c}</code>
+          ))}
+        </div>
+        <p className="hint" style={{ marginBottom: 8 }}>{s.security.totpRecoveryOnce}</p>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => copy(recovery.join('\n'))}>{s.security.totpCopy}</button>
+          <button className="btn btn-primary btn-sm" type="button" onClick={() => setRecovery(null)}>{s.security.totpRecoveryDone}</button>
+        </div>
+      </div>
+    )}
+
+    {disableOpen && (
+      <div className="export-card" style={{ marginTop: 14 }}>
+        <strong style={{ fontSize: 13.5 }}>{s.security.totpDisableLabel}</strong>
+        <p className="hint" style={{ marginTop: 4 }}>{s.security.totpDisableHint}</p>
+        <div className="field" style={{ marginTop: 10 }}>
+          <label htmlFor="ac-totp-pw">{s.security.totpDisablePassword}</label>
+          <input
+            id="ac-totp-pw"
+            className="input"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-primary btn-sm" type="button" disabled={busy || !password} onClick={confirmDisable}>
+            {s.security.totpDisableCta}
+          </button>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => closeDisable(false)}>{s.security.totpCancel}</button>
+        </div>
+      </div>
+    )}
+  </>
+}
+
 /* ---------------- 访问与安全 · 邮箱验证 ---------------- */
 const EMAIL_CODE_COOLDOWN_SEC = 60
 

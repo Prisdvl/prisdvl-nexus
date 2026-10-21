@@ -37,6 +37,12 @@ public final class ErrorCodeHttpStatusMapper {
             // 2008 / 2009：验证码问题 → 400（客户端可修正：重填或重发）
             case EMAIL_CODE_INVALID, EMAIL_CODE_TOO_MANY_ATTEMPTS -> HttpStatus.BAD_REQUEST;
             case SESSION_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            // 2011~2012 / 2015：第二因子相关。缺码与错码都用 401 ——
+            // "密码对了但还没完成认证"在传输语义上就是未认证；
+            // 前端按业务码 2011 翻到验证码步骤，按 2012/2015 提示重填。
+            // 2013/2014 是资源状态不允许（没开就想关、开了还想再开）→ 409
+            case TOTP_REQUIRED, TOTP_CODE_INVALID -> HttpStatus.UNAUTHORIZED;
+            case TOTP_NOT_ENABLED, TOTP_ALREADY_ENABLED -> HttpStatus.CONFLICT;
 
             // 3xxx 知识库 / 文档
             case KNOWLEDGE_BASE_NOT_FOUND, DOCUMENT_NOT_FOUND, IMPORT_TASK_NOT_FOUND -> HttpStatus.NOT_FOUND;

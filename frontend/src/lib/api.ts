@@ -283,6 +283,13 @@ http.interceptors.response.use(
     const config = error.config as RetriableConfig | undefined
     const url = config?.url ?? ''
 
+    // 2011 = 密码已对、只差第二因子：与"会话失效"毫无关系。
+    // 若落进下面的 401 分支会被清 token + 通知 auth 层跳转，登录页顺势重挂载，
+    // 刚展开的验证码输入框又收回去——表现就是"输了密码没反应"。
+    if (bizCode === 2011) {
+      return Promise.reject(error)
+    }
+
     // 2001 = 未认证或凭证缺失；401 也可能由网关返回
     if (status !== 401 && bizCode !== 2001) {
       return Promise.reject(error)
@@ -340,9 +347,16 @@ export function bizCodeOf(e: unknown): number | undefined {
 
 export const api = {
   auth: {
-    /** 登录：accessToken + refreshToken + expiresIn + user */
-    login: (username: string, password: string) =>
-      http.post<Result<AuthToken>>('/auth/login', { username, password }).then((r) => r.data.data),
+    /** 登录：accessToken + refreshToken + expiresIn + user
+     *
+     * <p>{@code totpCode} 只在账号开启两步验证时需要。服务端缺码时返回 2011
+     * （{@code TOTP_REQUIRED}），调用方据此把登录表单切成"再输一枚验证码"的第二屏，
+     * 而不是提示"用户名或密码错误"——后者会让用户以为密码被改了。
+     */
+    login: (username: string, password: string, totpCode?: string) =>
+      http
+        .post<Result<AuthToken>>('/auth/login', totpCode ? { username, password, totpCode } : { username, password })
+        .then((r) => r.data.data),
     /** 实测响应：UserInfoResponse */
     register: (body: { username: string; password: string; email: string; nickname?: string }) =>
       http.post<Result<AuthUser>>('/auth/register', body).then((r) => r.data.data),
@@ -370,6 +384,21 @@ export const api = {
     quota: () => http.get<Result<UserQuota>>('/users/me/quota').then((r) => r.data.data),
     /** 存储用量快照；上限字段 <= 0 表示不限，前端据此不画进度条 */
     storage: () => http.get<Result<UserStorage>>('/users/me/storage').then((r) => r.data.data),
+    /** 两步验证状态；未开启时 recoveryCodesLeft 为 0、confirmedAt 为 null */
+    totpStatus: () => http.get<Result<TotpStatus>>('/users/me/totp').then((r) => r.data.data),
+    /**
+     * 生成 TOTP 候选密钥。
+     *
+     * <p>返回的 secret 明文**只出现这一次**；这一步不会让账号进入"登录要验证码"，
+     * 必须再调 {@link saveTotp} 回填一枚当前验证码才算绑定成功。
+     */
+    setupTotp: () => http.post<Result<TotpSetup>>('/users/me/totp/setup', {}).then((r) => r.data.data),
+    /** 校验一枚验证码并启用，返回一次性明文恢复码（之后服务端只留 SHA-256） */
+    saveTotp: (code: string) =>
+      http.post<Result<{ recoveryCodes: string[] }>>('/users/me/totp/enable', { code }).then((r) => r.data.data),
+    /** 关闭两步验证（需当前密码：丢手机的人只能靠它进来） */
+    disableTotp: (password: string) =>
+      http.post<Result<null>>('/users/me/totp/disable', { password }).then((r) => r.data.data),
     /** 读取当前用户的自定义对话模型配置（apiKey 只回掩码） */
     llmConfig: () =>
       http.get<Result<UserLlmConfig>>('/users/me/llm-config').then((r) => r.data.data),
@@ -853,6 +882,30 @@ export interface UserStorage {
   knowledgeBaseCount: number
   totalLimitBytes: number
   perKnowledgeBaseLimitBytes: number
+}
+
+/** 两步验证状态（GET /users/me/totp） */
+export interface TotpStatus {
+  enabled: boolean
+  /** 还没用掉的恢复码数量，只在 enabled 时有意义 */
+  recoveryCodesLeft: number
+  /** 绑定通过的时间（ISO 字符串），未绑定为 null */
+  confirmedAt: string | null
+}
+
+/**
+ * 绑定用的候选密钥（POST /users/me/totp/setup）。
+ *
+ * <p>`secret` 是 Base32 明文，只在这次响应里出现：设置页刷新后拿不到，
+ * 所以界面必须提供"现在就抄/扫码"的路径，不能设计成"回头再来看"。
+ */
+export interface TotpSetup {
+  secret: string
+  otpauthUri: string
+  issuer: string
+  account: string
+  digits: number
+  periodSeconds: number
 }
 
 /** 当前用户的自定义对话模型配置（GET 回显；apiKey 不回明文） */
