@@ -19,6 +19,15 @@ const check = (name, ok, extra = '') => {
   if (!ok) issues.push(name)
 }
 const url = () => page.evaluate(() => location.hash)
+/* 等 hash 命中片段再断言：CI 的 windows runner 比本机慢，固定 sleep 是这类脚本唯一的抖动源。
+ * 超时不抛错，交给紧随其后的断言去报实际值。 */
+const waitHash = (part, timeout = 20000) =>
+  page.waitForFunction((p) => location.hash.includes(p), part, { timeout }).catch(() => {})
+/* 未捕获异常也要留一行可读输出：否则 CI 注解里只有一个 exit 1，看不出卡在哪一步 */
+process.on('unhandledRejection', (err) => {
+  console.log(`FAIL 脚本异常: ${String(err && err.message ? err.message : err).slice(0, 300)}`)
+  process.exit(1)
+})
 const login = async (from = '/#/login') => {
   await page.goto(BASE + from, { waitUntil: 'networkidle' })
   await page.waitForTimeout(1500)
@@ -32,7 +41,7 @@ const login = async (from = '/#/login') => {
 
 /* ---------- 1. 未登录访问受保护页 → 重定向 /login 且记住来源 ---------- */
 await page.goto(BASE + '/#/app/chat', { waitUntil: 'networkidle' })
-await page.waitForTimeout(1500)
+await waitHash('/login')
 check('未登录访问 /app/chat 被重定向到 /login', (await url()).includes('/login'), await url())
 check('登录页已渲染', (await page.locator('.auth-card').count()) === 1)
 
@@ -41,27 +50,27 @@ await page.locator('#li-u').fill('qa-runner')
 await page.locator('#li-p').fill('qa-runner-password')
 await page.locator('.auth-card .btn-primary', { hasText: '登录' }).click()
 await page.waitForSelector('.shell', { timeout: 8000 })
-await page.waitForTimeout(1200)
+await waitHash('/app/chat')
 check('登录后回到来源页 /app/chat', (await url()).includes('/app/chat'), await url())
 
 /* ---------- 3. 侧栏切换会改 URL ---------- */
 const nav = (l) => page.locator('.sb-nav button.rubber-segment__item', { hasText: l }).first()
 await nav('知识库').click()
-await page.waitForTimeout(800)
+await waitHash('/app/kb')
 check('切到知识库时 URL 变化', (await url()).includes('/app/kb'), await url())
 await nav('Agent').click()
-await page.waitForTimeout(800)
+await waitHash('/app/agents')
 check('切到 Agent 时 URL 变化', (await url()).includes('/app/agents'), await url())
 
 /* ---------- 4. 刷新保持当前页 ---------- */
-await page.goto('http://localhost:5175/#/app/account', { waitUntil: 'networkidle' })   // 「账号」导航项已移除，直接走路由
-  await page.waitForTimeout(900)
-await page.waitForTimeout(800)
+await page.goto(BASE + '/#/app/account', { waitUntil: 'networkidle' })   // 「账号」导航项已移除，直接走路由
+await waitHash('/app/account')
 await page.reload({ waitUntil: 'networkidle' })
-await page.waitForTimeout(1800)
+/* 刷新后等页面标题真的渲染出来，再断内容 */
+await page.locator('.page-title').first().waitFor({ state: 'visible', timeout: 20000 }).catch(() => {})
 check('刷新后仍在 /app/account', (await url()).includes('/app/account'), await url())
 check('刷新后仍是已登录（未被踢回登录页）', (await page.locator('.shell').count()) === 1)
-check('刷新后账号页内容在', (await page.locator('.page-title').first().innerText()).includes('设置'))
+check('刷新后账号页内容在', (await page.locator('.page-title').first().innerText().catch(() => '')).includes('设置'))
 
 /* ---------- 5. 深链：知识库详情 + 引用定位 ---------- */
 /* 以前这里硬编码 http://localhost:8080 取库 ID：mock 模式下没有真后端，必然
@@ -69,7 +78,8 @@ check('刷新后账号页内容在', (await page.locator('.page-title').first().
  * 改成「从列表页点第一行进详情、再从 URL 取 ID」——真栈与 mock 两种模式都成立，
  * 而且库名与文档名都从页面上读，不绑死种子数据。 */
 await page.goto(BASE + '/#/app/kb', { waitUntil: 'networkidle' })
-await page.waitForTimeout(1400)
+/* 等表格真的出第一行（或确认就是空库），别用固定 sleep 猜渲染时间 */
+await page.locator('.kb-table tbody tr').first().waitFor({ state: 'visible', timeout: 20000 }).catch(() => {})
 const firstRow = page.locator('.kb-table tbody tr').first()
 let kbId = null
 let kbName = ''
@@ -77,7 +87,7 @@ if ((await firstRow.count()) > 0) {
   const cellText = await firstRow.locator('.kb-cell').first().innerText().catch(() => '')
   kbName = (cellText || '').split('\n')[0].trim()
   await firstRow.click()
-  await page.waitForTimeout(1400)
+  await waitHash('/app/kb/')
   const m = (await url()).match(/\/app\/kb\/([^/?#]+)/)
   if (m) kbId = m[1]
 }
@@ -87,8 +97,8 @@ if (!kbId) {
   await page.waitForSelector('.doc-row', { timeout: 10000 }).catch(() => {})
   const docName = ((await page.locator('.doc-row').first().innerText().catch(() => '')) || '').split('\n')[0].trim()
   await page.goto(BASE + '/#/app/kb/' + kbId + (docName ? '?doc=' + encodeURIComponent(docName) : ''), { waitUntil: 'networkidle' })
-  await page.waitForSelector('.kb-top__title-row', { timeout: 10000 })
-  await page.waitForTimeout(1200)
+  await page.waitForSelector('.kb-top__title-row', { timeout: 15000 })
+  await page.waitForSelector('.doc-row[data-hl]', { timeout: 15000 }).catch(() => {})
   const detailTitle = await page.locator('.kb-top__title-row').first().innerText()
   check(
     '深链直达知识库详情',
@@ -100,6 +110,8 @@ if (!kbId) {
   }
 
 /* ---------- 6. 知识库详情 tab 为横向橡皮分段且无黑框残留 ---------- */
+/* 先等 tab 条挂上再计数：数少了会被读成"tab 没了"，其实是还没渲染 */
+await page.locator('.kb-top__tabs button.rubber-segment__item').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
 const kbTabs = await page.locator('.kb-top__tabs button.rubber-segment__item').count()
 check('KB 详情 tab 是橡皮分段（4 项）', kbTabs === 4, `实际 ${kbTabs}`)
 check('页面中已无 GooeyNav 黑框层', (await page.locator('.gooey-nav-container').count()) === 0)
@@ -124,35 +136,36 @@ check('切到问答 tab 生效', qaVisible && qaPressed === 'true', `visible=${q
 
 /* ---------- 7. 浏览器前进/后退可用 ---------- */
 await nav('工作台').click()
-await page.waitForTimeout(700)
+await waitHash('/app/workbench')
 await page.goBack()
-await page.waitForTimeout(900)
+await waitHash('/app/kb')
 check('后退回到上一路由', (await url()).includes('/app/kb'), await url())
 await page.goForward()
-await page.waitForTimeout(900)
+await waitHash('/app/workbench')
 check('前进回到工作台', (await url()).includes('/app/workbench'), await url())
 
 /* ---------- 8. 已登录访问 /login 会被送回工作台 ---------- */
 await page.goto(BASE + '/#/login', { waitUntil: 'networkidle' })
-await page.waitForTimeout(1500)
+await waitHash('/app/workbench')
 check('已登录访问 /login 自动跳工作台', (await url()).includes('/app/workbench'), await url())
 
 /* ---------- 9. 未知路由兜底 ---------- */
 await page.goto(BASE + '/#/app/nope', { waitUntil: 'networkidle' })
-await page.waitForTimeout(1400)
-check('未知 /app/* 显示 404 页', (await page.locator('.page-title').first().innerText()).includes('没有页面'))
+await page.locator('.page-title').first().waitFor({ state: 'visible', timeout: 20000 }).catch(() => {})
+check('未知 /app/* 显示 404 页', (await page.locator('.page-title').first().innerText().catch(() => '')).includes('没有页面'))
 
 /* ---------- 10. 退出登录回 /login 且受保护页不可再进 ---------- */
 await page.goto(BASE + '/#/app/workbench', { waitUntil: 'networkidle' })
-await page.waitForTimeout(1400)
+await waitHash('/app/workbench')
 await page.locator('.sb-row--settings').click()   // 账号入口改为底部「个人设置」弹层
-  await page.waitForTimeout(600)
-await page.waitForTimeout(300)
+/* 等弹层里的退出按钮可见再点：runner 上弹层动画没走完就点，会一直等到超时抛异常，
+ * 而抛异常不走 check()，日志里只剩「脚本 exit 1」，看不出卡在哪一步 */
+await page.locator('.settings-dialog__logout').waitFor({ state: 'visible', timeout: 20000 }).catch(() => {})
 await page.locator('.settings-dialog__logout').click()
-await page.waitForTimeout(1200)
+await waitHash('/login')
 check('退出登录后 URL 为 /login', (await url()).includes('/login'), await url())
 await page.goto(BASE + '/#/app/workbench', { waitUntil: 'networkidle' })
-await page.waitForTimeout(1400)
+await waitHash('/login')
 check('退出后无法再进受保护页', (await url()).includes('/login'), await url())
 
 await browser.close()
