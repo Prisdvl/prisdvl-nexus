@@ -612,6 +612,11 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
 
   useEffect(() => {
     if (!highlightDoc) { setHlActive(false); return }
+    /*
+     * 文档列表还没到就启动 2.5 秒计时器，慢一点（真后端首屏、CI 上的冷启动）就会出现
+     * 「高亮已经淡出、行才刚渲染」——用户和脚本都看不到落点。等有行了再点亮。
+     */
+    if (docs.length === 0) return
     setTab('docs')
     setHlActive(true)
     const scroll = setTimeout(() => {
@@ -623,7 +628,7 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
     }, 2500)
     return () => { clearTimeout(scroll); clearTimeout(clear) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlightDoc, navKey])
+  }, [highlightDoc, navKey, docs.length])
 
   useEffect(() => {
     const el = streamRef.current

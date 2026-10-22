@@ -96,8 +96,13 @@ if (!kbId) {
 } else {
   await page.waitForSelector('.doc-row', { timeout: 10000 }).catch(() => {})
   const docName = ((await page.locator('.doc-row').first().innerText().catch(() => '')) || '').split('\n')[0].trim()
-  await page.goto(BASE + '/#/app/kb/' + kbId + (docName ? '?doc=' + encodeURIComponent(docName) : ''), { waitUntil: 'networkidle' })
+  /*
+   * 高亮是「2.5 秒自动淡出」的一次性状态：等 networkidle 再去找它，慢 runner 上经常
+   * 已经在等待期间淡完了。改成 commit 就返回，先等行渲染，再等高亮落点。
+   */
+  await page.goto(BASE + '/#/app/kb/' + kbId + (docName ? '?doc=' + encodeURIComponent(docName) : ''), { waitUntil: 'commit' })
   await page.waitForSelector('.kb-top__title-row', { timeout: 15000 })
+  await page.waitForSelector('.doc-row', { timeout: 15000 }).catch(() => {})
   await page.waitForSelector('.doc-row[data-hl]', { timeout: 15000 }).catch(() => {})
   const detailTitle = await page.locator('.kb-top__title-row').first().innerText()
   check(
