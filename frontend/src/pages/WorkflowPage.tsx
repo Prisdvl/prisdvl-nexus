@@ -19,7 +19,7 @@ import {
 import Inspector from '@/pages/workflow/Inspector'
 import PresetGallery from '@/pages/workflow/PresetGallery'
 import RunPanels from '@/pages/workflow/RunPanels'
-import { WORKFLOW_COPY } from '@/pages/workflow/copy'
+import { WORKFLOW_COPY, defaultInputs } from '@/pages/workflow/copy'
 import '@/styles/plugins.css'
 import '@/styles/workflow.css'
 
@@ -66,7 +66,8 @@ export default function WorkflowPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [nodeRunsLoading, setNodeRunsLoading] = useState(false)
   const [traceError, setTraceError] = useState('')
-  const [inputsText, setInputsText] = useState('{\n  "question": ""\n}')
+  /* 预填示例问题：模板里的 {{ input.question }} 空着跑会渲染成空串（见 defaultInputs） */
+  const [inputsText, setInputsText] = useState(() => defaultInputs(c))
   const [linkFrom, setLinkFrom] = useState<LinkFrom | null>(null)
   const [zoom, setZoom] = useState(1)
   const [kbs, setKbs] = useState<KnowledgeBase[]>([])

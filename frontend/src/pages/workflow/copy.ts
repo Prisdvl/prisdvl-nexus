@@ -53,6 +53,8 @@ const zh = {
   debugRun: '试跑草稿', run: '正式运行', running: '执行中…',
   runTitle: '运行', inputs: '输入（JSON）', inputsHint: '变量用 {{ input.question }} 引用这里的字段。',
   inputsInvalid: '输入不是合法的 JSON 对象',
+  /* 「试跑草稿」输入框预填的示例问题：模板里常见 {{ input.question }}，空着会渲染成空串 */
+  sampleQuestion: '示例问题',
   runDone: '运行完成', debugDone: '试跑完成', runFailed: '运行失败',
   traceTitle: '节点轨迹', noRun: '选择一条运行记录查看节点轨迹。',
   historyTitle: '运行历史', historyEmpty: '还没有运行记录，运行一次就会出现在这里。',
@@ -142,6 +144,7 @@ const en: typeof zh = {
   debugRun: 'Debug draft', run: 'Run', running: 'Running…',
   runTitle: 'Run', inputs: 'Inputs (JSON)', inputsHint: 'Reference these fields as {{ input.question }}.',
   inputsInvalid: 'Inputs must be a JSON object',
+  sampleQuestion: 'Example question',
   runDone: 'Run finished', debugDone: 'Debug finished', runFailed: 'Run failed',
   traceTitle: 'Node trace', noRun: 'Select a run to see its node trace.',
   historyTitle: 'Run history', historyEmpty: 'No runs yet — run the workflow and it will show up here.',
@@ -199,3 +202,14 @@ export const presetDescOf = (copy: WorkflowCopy, code: string, fallback: string)
 
 /** 分类展示顺序：固定在产品层面，不随后端返回顺序变 */
 export const PRESET_CATEGORY_ORDER = ['qa', 'content', 'ops', 'review'] as const
+
+/**
+ * 「试跑草稿」输入框的默认值。
+ *
+ * 预填一个示例问题，而不是把 question 留空：模板里最常见的就是 {{ input.question }}，
+ * 空着跑出来是「问： 」半截文本，看着像模板坏了。只在首次进入页面时生成，
+ * 用户自己改过就一直是用户的内容。
+ */
+export function defaultInputs(copy: WorkflowCopy): string {
+  return `{\n  "question": "${copy.sampleQuestion}"\n}`
+}
