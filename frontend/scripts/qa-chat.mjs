@@ -723,14 +723,57 @@ const qState = () => page.evaluate(() => ({
 const workingNow = () => page.evaluate(() => !!document.querySelector('.thought-chain[data-working]'))
 await page.locator('.sb-session').first().click()
 await page.waitForTimeout(700)
-await page.locator('.prompt-bar__input').fill('排队：第一条')
-await page.locator('.prompt-bar__input').press('Enter')
+const sendPrompt = async (text) => {
+  await page.locator('.prompt-bar__input').fill(text)
+  await page.locator('.prompt-bar__input').press('Enter')
+}
+/**
+ * 让「当前这一轮正在跑」成立。mock 一轮只有约 4.8s（ChatPage step()：800+800+1400+1400+400），
+ * CI 慢 runner 上点击/输入几个往返就把它耗光了，于是后面的"连发两条"变成两条都直接发出、队列恒为空。
+ * 这里不猜时间：不忙就补发一条把窗口重新撑起来，再继续。
+ */
+const ensureWorking = async () => {
+  for (let i = 0; i < 4; i += 1) {
+    if (await workingNow()) return true
+    await sendPrompt(`排队铺垫：${i}`)
+    const started = await page
+      .waitForFunction(() => !!document.querySelector('.thought-chain[data-working]'), null, { timeout: 6000 })
+      .then(() => true)
+      .catch(() => false)
+    if (started) return true
+  }
+  return workingNow()
+}
+/**
+ * 往队列里塞到 want 条。窗口耗尽时补一次"撑窗口 + 重发"，文本带重试序号，
+ * 免得中途成功了却超时，下轮把同一条又塞一遍（重复文本会让后面删除断言分不清删了哪条）。
+ */
+const enqueue = async (text, want) => {
+  for (let i = 0; i < 4; i += 1) {
+    const now = await qState()
+    if (now.queue.length >= want) return true
+    if (!now.busy) await ensureWorking()
+    await sendPrompt(`${text}${i === 0 ? '' : `·重试${i}`}`)
+    const reached = await page
+      .waitForFunction((n) => document.querySelectorAll('.queue__item .queue__text').length >= n, want, { timeout: 5000 })
+      .then(() => true)
+      .catch(() => false)
+    if (reached) return true
+  }
+  return false
+}
+/** 等这一轮跑完（空闲）。第一条必须在空闲时发，否则它会进队列，q0 的断言就不成立。 */
+const waitIdle = () => page
+  .waitForFunction(() => !document.querySelector('.thought-chain[data-working]'), null, { timeout: 25000 })
+  .then(() => true)
+  .catch(() => false)
+await waitIdle()
+await sendPrompt('排队：第一条')
 /*
  * 不等固定延时，等"确实在跑"这个信号出现再断言。
- * mock 流一轮约 4.8s（ChatPage step()：800+800+1400+1400+400），固定 1000ms 再加几次往返，
- * 在 CI 的慢 runner 上会把窗口耗掉——上一版就是这么红的（第二条直接发出去了）。
+ * 固定 1000ms 再加几次往返，在 CI 的慢 runner 上会把窗口耗掉——上一版就是这么红的（第二条直接发出去了）。
  */
-await page.waitForFunction(() => !!document.querySelector('.thought-chain[data-working]'), null, { timeout: 5000 }).catch(() => {})
+await page.waitForFunction(() => !!document.querySelector('.thought-chain[data-working]'), null, { timeout: 8000 }).catch(() => {})
 const q0 = await qState()
 check('忙时第一条正常发出', q0.busy === true && q0.queue.length === 0)
 
@@ -745,14 +788,11 @@ check('发送第二条前第一条仍在运行', await workingNow())
 const waitQueueLen = (want) => page
   .waitForFunction((n) => document.querySelectorAll('.queue__item .queue__text').length === n, want, { timeout: 5000 })
   .catch(() => {})
-await page.locator('.prompt-bar__input').fill('排队：第二条')
-await page.locator('.prompt-bar__input').press('Enter')
-await waitQueueLen(1)
-await page.locator('.prompt-bar__input').fill('排队：第三条')
-await page.locator('.prompt-bar__input').press('Enter')
+const firstQueuedOk = await enqueue('排队：第二条', 1)
+const secondQueuedOk = await enqueue('排队：第三条', 2)
 await waitQueueLen(2)
 const q1 = await qState()
-check('busy 时消息进入待发送队列', q1.queue.length === 2, JSON.stringify(q1.queue))
+check('busy 时消息进入待发送队列', q1.queue.length === 2, JSON.stringify({ queue: q1.queue, firstQueuedOk, secondQueuedOk }))
 check('排队期间不新增消息（不会插队打断当前回答）', q1.users === q0.users, `${q0.users} → ${q1.users}`)
 
 /*
