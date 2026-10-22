@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, USE_MOCK, errMessage, type BackendAgent, type KbDocument, type KnowledgeBase } from '@/lib/api'
 import { readLocale } from '@/lib/locale'
+import { agentStatus } from '@/lib/agent-status'
 import { pagesCopy } from '@/lib/pagesCopy'
 import type { AgentItem, DocItem, KbItem } from '@/data'
 
@@ -123,6 +124,9 @@ export const toAgentItem = (a: BackendAgent): AgentItem => ({
   model: a.modelRole ?? 'auto',
   tools: a.toolCodes ?? [],
   kb: a.kbIds?.length ? pagesCopy(readLocale()).common.kbCount(a.kbIds.length) : pagesCopy(readLocale()).common.none,
+  /* 后端 status 必须带出来：丢了它，卡片上的「草稿」徽标和「发布」按钮就永远不渲染，
+     用户只会在建会话时撞 5008，而不是在列表里看见「先发布」的出路 */
+  status: agentStatus(a.status),
 })
 
 /* ---------------- 拉取（含排序） ---------------- */

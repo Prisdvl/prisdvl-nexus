@@ -356,7 +356,7 @@ export default function AgentsPage() {
               <div className="acts">
                 {a.status === 'DRAFT' && (
                   <button className="btn btn-ghost btn-sm" type="button" title={g.publishBtn} aria-label={`${g.publishBtn}: ${a.name}`} onClick={() => void publishAgent(a)}>
-                    <Sparkles size={13} />
+                    <Sparkles size={13} /> {g.publishBtn}
                   </button>
                 )}
                 <button className="btn btn-primary btn-sm" type="button" onClick={() => { setTestAgent(a); setTestOut(''); setTestFailed(false) }}><Play size={13} /> {g.test}</button>
