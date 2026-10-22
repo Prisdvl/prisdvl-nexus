@@ -949,10 +949,19 @@ check('👎 可补原因且不重复计数', downRec.length === 1 && downRec[0].
 /* ---------- 11.5 P0 回归：停止的收尾语义 + 会话持久化 ---------- */
 await page.locator('.prompt-bar__input').fill('停止语义检查')
 await page.locator('.prompt-bar__input').press('Enter')
-await page.waitForTimeout(1200)
+/* 等工具卡真的出现再点停止：固定 1.2s 在慢机器上会点空（换成条件等待） */
+await page.locator('.thought-call[data-status="running"]').first().waitFor({ timeout: 10000 }).catch(() => {})
 check('运行时确有工具在跑', (await page.locator('.thought-call[data-status="running"]').count()) >= 1)
 await page.locator('.prompt-bar button[aria-label*="Stop"], .prompt-bar button[aria-label*="停止"]').first().click()
-await page.waitForTimeout(1000)
+/* 停止后的收尾是异步的（取消工具、落库、再渲染「继续生成」）；原来固定睡 1s，CI 的 runner
+   磁盘慢一点就会在按钮出现前断言，属于假红。改成等条件，超时也不抛，交给下面的 check 报。 */
+const contBtn = page.locator('.msg-ops button[aria-label="继续生成"]').first()
+await page.waitForFunction(
+  () => document.querySelectorAll('.thought-call[data-status="running"]').length === 0,
+  null,
+  { timeout: 8000 },
+).catch(() => {})
+await contBtn.waitFor({ timeout: 8000 }).catch(() => {})
 const stopInfo = await page.evaluate(() => ({
   running: document.querySelectorAll('.thought-call[data-status="running"]').length,
   cancelled: document.querySelectorAll('.thought-call[data-status="cancelled"]').length,
@@ -963,7 +972,7 @@ check('停止后没有工具卡在 running', stopInfo.running === 0, `cancelled=
 check('停止后给出「继续生成」入口', stopInfo.canContinue === true)
 await page.waitForTimeout(3000)
 check('停止后没有后台继续推进', (await page.locator('.thought-call[data-status="running"]').count()) === 0)
-await page.locator('.msg-ops button[aria-label="继续生成"]').first().click()
+await contBtn.click()
 await page.waitForTimeout(2200)
 const contInfo = await page.evaluate(() => {
   /* 只看最后一条：确认卡专项测试会留下 cancelled 的条目 */
