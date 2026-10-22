@@ -800,9 +800,13 @@ Content-Type: application/json
   两者不是同一件事；前者已留档，后者仍然只活在这一次连接里。
 - `mode` 在**建会话时**指定（`POST /api/chat/conversations` 的 `mode` 字段），
   不是每次发送时指定；`/api/chat/stream` 的请求体只有 `conversationId` 与 `content`。
-- **RAG 会话必须绑定知识库**：没绑就提问，在开流之前返回统一 JSON（HTTP 400 / code 1001，
-  文案"该会话（RAG 模式）尚未绑定知识库，请先绑定后再提问"），而不是"悄悄退化成不检索"。
-  绑定用 `PUT /api/chat/conversations/{id}` 的 `kbIds`：传 `[]` = 解绑，不传该字段 = 不改。
+- **RAG 会话没绑知识库不等于"资料里没有"**：没绑就提问时**照常开流**（HTTP 200，SSE），
+  `retrieval` 事件里 `count = 0`、`emptyReason = "NO_KB"`、`knowledgeBaseIds = []`，
+  并落一条固定回答「这个会话还没有绑定知识库，所以没有可检索的资料。请在右上角「会话配置」里…」；
+  该原因同时写进助手消息 `metadata.retrieval.emptyReason`，刷新后提示仍在。
+  早先是"开流之前返回 HTTP 400 / code 1001"，改成现在这样是因为 400 只留一条报错、没有落库消息，
+  界面既没有落点也给不出"去绑定"的入口。绑定用 `PUT /api/chat/conversations/{id}` 的 `kbIds`：
+  传 `[]` = 解绑，不传该字段 = 不改。
 - **多库检索的口径（Phase 5.5）**：绑了多个库时**逐库检索后跨库归并**——
   每个库按**自己的** `retrievalTopK` / `similarityThreshold` 召回（不是共用调用方的 `topK`），
   然后按分数降序归并、再按全局 `topK` 截断（请求值，没传用 `nexus.retrieval.top-k` = 5）。
@@ -875,7 +879,8 @@ Content-Type: application/json
   `KB_ONLY` 只依据笔记，没有就直说。两者都**禁止**把自身知识标注成"来源：笔记"，
   区别只在"没有资料时答不答"。非法值 → `1001`。响应里该字段**保证是合法值**
   （服务端把库里的 NULL 收敛成默认），前端不必再兜底；
-  注意它与 RAG 会话的契约**有意相反**：RAG 没有可引用资料时一律拒绝（见 B.41 第 9 条）；
+  注意它与 RAG 会话的旧契约**曾有意相反**：RAG 没有可引用资料时拒绝提问（见 B.41 第 9 条）；
+  现在 RAG 改成"照常回答 + `retrieval.emptyReason` 说明原因"，本条策略的含义不变；
 - 错误码：`5006` 不存在/非本人（HTTP 404，不泄露存在性）、`5007` 标识重复、`5008` 未发布、
   `5009` 已停用、`5010` 内置项只读（后四个 HTTP 409，语义是"请求格式没问题、资源状态不允许"）。
 

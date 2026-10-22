@@ -237,6 +237,8 @@ export interface PagesCopy {
     /** 0 命中且原因是「未建索引」时的内联提示（与「没找到相关内容」是两条相反的建议） */
     retrievalNoIndex: string
     retrievalNoIndexCta: string
+    retrievalNoKb: string
+    retrievalNoKbCta: string
     unknownSource: string
     docFallback: string
     /* —— 空态 —— */
@@ -951,6 +953,8 @@ const ZH: PagesCopy = {
     stepRetrievePartial: '部分知识库检索失败，已跳过',
     retrievalNoIndex: '当前知识库尚未建索引，所以这次什么都没搜到。导入文档不等于建索引，需要先建索引。',
     retrievalNoIndexCta: '去建索引',
+    retrievalNoKb: '这个会话还没绑定知识库，所以这次没有可检索的资料。',
+    retrievalNoKbCta: '去绑定',
     unknownSource: '未知来源',
     docFallback: '文档',
     emptyTitle: '还没有任何会话',
@@ -1641,6 +1645,8 @@ const EN: PagesCopy = {
     stepRetrievePartial: 'Some knowledge bases failed to search and were skipped',
     retrievalNoIndex: 'This knowledge base is not indexed yet, so nothing could be found. Importing documents does not index them — build the index first.',
     retrievalNoIndexCta: 'Build index',
+    retrievalNoKb: 'This conversation has no knowledge base bound yet, so there was nothing to search.',
+    retrievalNoKbCta: 'Bind one',
     unknownSource: 'Unknown source',
     docFallback: 'Document',
     emptyTitle: 'No chats yet',

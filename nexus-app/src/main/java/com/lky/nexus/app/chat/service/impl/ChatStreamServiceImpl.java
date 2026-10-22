@@ -25,8 +25,6 @@ import com.lky.nexus.app.chat.stream.RetrievalEvent;
 import com.lky.nexus.app.chat.stream.SseEventNames;
 import com.lky.nexus.app.chat.stream.StreamCancellationRegistry;
 import com.lky.nexus.app.infra.web.RequestIdHolder;
-import com.lky.nexus.common.api.ErrorCode;
-import com.lky.nexus.common.exception.BusinessException;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.UserContextKeys;
 import com.lky.nexus.knowledge.rag.Citations;
@@ -212,12 +210,14 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         ChatClient chatClient = chatClientFactory.get(modelRole, userId);
 
         // RAG 模式的检索同样放在落库之前（与 /ask/stream 一致，见 RagStreamServiceImpl）：
-        // ① 知识库未绑定/不属于自己、索引不可用，都会以统一 JSON 报错，而不是"先开一条 SSE 再在半路报错"；
+        // ① 知识库不属于自己、索引不可用，都会以统一 JSON 报错，而不是"先开一条 SSE 再在半路报错"；
         // ② 检索发生在生成之前，用户等待的就是"检索 + 生成"两段，事件顺序也才好保证。
         boolean ragMode = mode == ChatMode.RAG;
         // 会话可以绑定多个知识库（Phase 5.5）：这里的列表就是"本次检索覆盖哪些库"，
         // 非 RAG 模式下没有库维度，取空表（下游只在 ragMode 分支里用它）。
-        List<Long> knowledgeBaseIds = ragMode ? requireKnowledgeBaseIds(conversation) : List.of();
+        // 一个都没绑也允许走完流式：用 retrieval.emptyReason=NO_KB 说清原因，比开流前 400 更好——
+        // 后者只留一条报错、没有落库消息，界面既没有落点也给不出"去绑定"的入口。
+        List<Long> knowledgeBaseIds = ragMode ? ConversationKbIds.parse(jsonMapper, conversation.getKbIds()) : List.of();
         // 历史从 ChatMemory 取（不是 chat_message 全量）：它同时服务两个地方——
         // 消解指代的检索查询串、以及给模型的"之前的问答"。详见 ChatMemoryTurns 的类注释。
         List<RagAnswerService.RagTurn> history = ragMode
@@ -252,11 +252,12 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         StreamSession session = new StreamSession(userId, conversationId, assistantMessage.getId(),
                 requestId, modelRole, mode, ragMode, content, emitter);
         session.sendMeta(userMessage.getId(), assistantMessage.getId());
+        // 0 命中时要说清原因（NO_KB / NO_INDEX / NO_RESULTS）：三种事实对用户的下一步是相反的指令
+        EmptyReason emptyReason = ragMode ? emptyReasonOf(userId, knowledgeBaseIds, prepared) : null;
         if (ragMode) {
             // 检索事件必须在第一个 delta 之前：前端据此显示"检索到 N 个片段"。
             // 这里是同步发送（flux 还没订阅），顺序由代码结构保证，不靠时序运气。
-            session.sendRetrieval(knowledgeBaseIds, prepared,
-                    emptyReasonOf(userId, knowledgeBaseIds, prepared));
+            session.sendRetrieval(knowledgeBaseIds, prepared, emptyReason);
             // 交给模型的那几段同时留一份：回答结束后它们要变成随消息落库的引用。
             // 顺序就是提示词里的 [1..n]，与回答正文里的编号同一套
             session.rememberRetrieval(prepared.usedHits());
@@ -270,7 +271,10 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             // 把基础设施故障当成自己笔记的结论（Phase 5.5.1）
             session.finishWithoutModel(prepared.hasFailures()
                     ? RagAnswerService.RETRIEVAL_FAILED_ANSWER
-                    : RagAnswerService.EMPTY_ANSWER);
+                    /* 没绑库与"库里确实没有"是两件事：前者要去配置，后者要换问法 */
+                    : emptyReason == EmptyReason.NO_KB
+                            ? RagAnswerService.NO_KB_ANSWER
+                            : RagAnswerService.EMPTY_ANSWER);
             return emitter;
         }
 
@@ -330,28 +334,6 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             }
             return request.stream().chatResponse();
         });
-    }
-
-    /**
-     * 取会话绑定的知识库（RAG 模式，Phase 5.5 起可以是一个或多个）。
-     *
-     * <p>这条路径上<b>没有</b>"悄悄退化成不检索"这个选项：RAG 会话拿不到知识库时，
-     * 用户真正想要的是"告诉我哪里没配好"，而不是一个看起来正常、其实没查过笔记的回答。
-     *
-     * <p><b>为什么这里不再取 {@code get(0)}</b>：绑定是用户在界面上配的，
-     * 静默只查第一个库的后果是"答案确实来自知识库、但只是一部分资料"，看不出少查了。
-     * 库里到底有几个就查几个——"只绑了一个"是 {@code List.of(one)} 这个特例，不是另一条分支。
-     *
-     * <p>这里<b>不做</b>归属校验：{@code prepareMany} 会先 {@code requireAllOwned}，
-     * 两处都查一遍只是多一次 SQL，还会让"谁负责这件事"变模糊。
-     */
-    private List<Long> requireKnowledgeBaseIds(ChatConversationPO conversation) {
-        List<Long> kbIds = ConversationKbIds.parse(jsonMapper, conversation.getKbIds());
-        if (kbIds.isEmpty()) {
-            throw new BusinessException(ErrorCode.PARAM_INVALID,
-                    "该会话（RAG 模式）尚未绑定知识库，请先绑定后再提问");
-        }
-        return kbIds;
     }
 
     @Override

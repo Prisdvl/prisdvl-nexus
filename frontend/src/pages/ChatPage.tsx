@@ -1662,12 +1662,17 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                       })}
                     </div>
                   )}
-                  {m.role === 'bot' && m.context?.emptyReason === 'NO_INDEX' && (
-                    /* 0 命中且原因是「未建索引」：给一条能直接执行的出路，而不是只报「没找到」 */
+                  {m.role === 'bot' && (m.context?.emptyReason === 'NO_INDEX' || m.context?.emptyReason === 'NO_KB') && (
+                    /* 0 命中要分清两种相反的出路：库里没建索引（去详情页建索引）与
+                       会话没绑库（去打开会话配置）。只报「没找到」会把配置问题说成查证结果。 */
                     <p className="cite-hint">
                       <AlertTriangle size={13} aria-hidden="true" />
-                      <span>{c.retrievalNoIndex}</span>
-                      {m.context.kbIds?.[0] ? (
+                      <span>{m.context.emptyReason === 'NO_KB' ? c.retrievalNoKb : c.retrievalNoIndex}</span>
+                      {m.context.emptyReason === 'NO_KB' ? (
+                        <button type="button" className="cite-hint__cta" onClick={() => setConfigOpen(true)}>
+                          {c.retrievalNoKbCta}
+                        </button>
+                      ) : m.context.kbIds?.[0] ? (
                         <a className="cite-hint__cta" href={`#/app/kb/${m.context.kbIds[0]}`} data-clickable>
                           {c.retrievalNoIndexCta}
                         </a>

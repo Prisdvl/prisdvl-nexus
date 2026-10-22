@@ -10,12 +10,18 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -26,8 +32,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *   <li><b>能存能读</b>：{@code chat_conversation.kb_ids} 是 JSON 列，MySQL 与 H2 对它的
  *       序列化形态不同（见 {@code ConversationKbIds}）。只写不读的测试会漏掉"存进去了但读不出来"，
  *       而那时的表现是"提问说没绑知识库"，用户会以为是自己没设置；</li>
- *   <li><b>没绑定时要明确报错</b>：RAG 会话没绑库就提问，绝不能"悄悄退化成不检索"——
- *       用户会得到一个看起来正常、其实没查过笔记的回答，这比报错糟糕得多；</li>
+ *   <li><b>没绑定要说得清楚</b>：RAG 会话没绑库就提问，绝不能"悄悄退化成不检索"——
+ *       用户会得到一个看起来正常、其实没查过笔记的回答，这比报错糟糕得多。
+ *       但这不等于要开流前 400：那样只留一条报错、没有落库消息，界面既没有落点，
+ *       也给不出"去绑定"的入口。现在改成照常开流，用 {@code retrieval.emptyReason=NO_KB}
+ *       + 一句"没绑库"的固定回答说清原因（见 {@code ragConversationWithoutKnowledgeBaseSaysWhy}）；</li>
  *   <li><b>绑别人的库要被拒</b>：否则会话会带着一个查不到数据的 id 存下来；</li>
  *   <li><b>绑多个要被拒</b>：检索侧目前是单库签名，绑多个只能取第一个，
  *       这属于静默丢条件。</li>
@@ -73,8 +82,8 @@ class ChatRagModeTest {
     }
 
     @Test
-    @DisplayName("未绑定知识库的 RAG 会话提问 → 1001，且明确说清是\"没绑定\"（不静默退化成不检索）")
-    void ragConversationWithoutKnowledgeBaseIsRejectedLoudly() throws Exception {
+    @DisplayName("未绑定知识库的 RAG 会话提问 → 照常开流，retrieval.emptyReason=NO_KB 并说明\"没绑定\"（不静默退化）")
+    void ragConversationWithoutKnowledgeBaseSaysWhy() throws Exception {
         String token = registerAndLogin("rag-unbound");
 
         String created = mockMvc.perform(post("/api/chat/conversations")
@@ -90,17 +99,64 @@ class ChatRagModeTest {
                 .andReturn().getResponse().getContentAsString();
         String conversationId = JsonPath.read(created, "$.data.id");
 
-        String body = mockMvc.perform(post("/api/chat/stream")
+        String body = streamBody(token, conversationId);
+
+        // 照常是一条完整的流：retrieval → delta → done，前端的渲染路径不必为这个分支分叉
+        assertThat(eventNames(body))
+                .as("没绑库时也要走完流式，否则界面没有落点")
+                .containsSubsequence("meta", "retrieval", "delta", "done");
+        String retrieval = dataOf(body, "retrieval");
+        assertThat(JsonPath.<String>read(retrieval, "$.emptyReason"))
+                .as("没绑库与\"库里确实没有\"是相反的下一步，原因必须写进事件")
+                .isEqualTo("NO_KB");
+        assertThat(JsonPath.<Integer>read(retrieval, "$.count")).isZero();
+        assertThat(JsonPath.<List<Long>>read(retrieval, "$.knowledgeBaseIds")).isEmpty();
+        assertThat(JsonPath.<Boolean>read(retrieval, "$.empty")).isTrue();
+        assertThat(body).as("固定回答要指向\"去绑定\"，而不是\"换关键词\"").contains("还没有绑定知识库");
+
+        // 落库的 metadata 也要带原因：刷新页面/换设备回来时提示不能丢（只有 SSE 里那次提示是不够的）
+        mockMvc.perform(get("/api/chat/messages/" + conversationId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.list.length()").value(2))
+                .andExpect(jsonPath("$.data.list[1].retrieval.emptyReason").value("NO_KB"))
+                .andExpect(jsonPath("$.data.list[1].retrieval.count").value(0));
+    }
+
+    /** 读一次 SSE 流的完整响应体（asyncDispatch 之后再取，否则拿到的是空的开流响应）。 */
+    private String streamBody(String token, String conversationId) throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/chat/stream")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
                         .content("""
                                 {"conversationId":%s,"content":"缓存击穿怎么解决？"}
                                 """.formatted(conversationId)))
-                // 错误发生在开流之前，因此是统一 JSON 而不是 SSE 里的 error 事件
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value(1001))
-                .andReturn().getResponse().getContentAsString();
-        assertThat(body).contains("尚未绑定知识库");
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        mockMvc.perform(asyncDispatch(result)).andExpect(status().isOk());
+        return result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+    }
+
+    private List<String> eventNames(String body) {
+        return body.lines()
+                .filter(line -> line.startsWith("event:"))
+                .map(line -> line.substring("event:".length()).trim())
+                .toList();
+    }
+
+    /** 取指定事件之后的第一行 data（SSE 一帧一条 data，够用且不引入额外解析器）。 */
+    private String dataOf(String body, String event) {
+        String[] lines = body.split("\\R");
+        for (int i = 0; i < lines.length; i++) {
+            if (lines[i].equals("event:" + event)) {
+                for (int j = i + 1; j < lines.length; j++) {
+                    if (lines[j].startsWith("data:")) return lines[j].substring("data:".length()).trim();
+                    if (lines[j].startsWith("event:")) break;
+                }
+            }
+        }
+        return "";
     }
 
     @Test
