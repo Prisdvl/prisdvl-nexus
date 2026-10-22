@@ -62,7 +62,8 @@ public class WorkflowDefinitionService {
     public List<WorkflowPresetResponse> presetList() {
         return presets.all().stream()
                 .map(preset -> new WorkflowPresetResponse(preset.code(), preset.name(),
-                        preset.description(), preset.graph().nodes().size()))
+                        preset.category(), preset.description(), preset.tags(),
+                        preset.graph().nodes().size()))
                 .toList();
     }
 

@@ -104,6 +104,20 @@
   overflow: hidden;
 }
 
+/* 空态：磁贴有 2 行高时一行提示会孤零零卡在顶上，垂直居中并给出入口 */
+.wbw-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+}
+
+.wbw-empty .wbw-hint {
+  margin: 0;
+}
+
 /* 趋势图：撑满主体，宽度由容器决定（viewBox 是 0..100 的相对坐标） */
 .wbw-body .wb-trend {
   /* global.css 里 .wb-trend 是固定 200px 的块高；放进磁贴后要跟着格子高度走 */

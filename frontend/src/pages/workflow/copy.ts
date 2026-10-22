@@ -10,12 +10,38 @@ const zh = {
   eyebrow: 'Workflows', title: '工作流', sub: '把知识检索、模型、Agent 与条件分支编排成可发布、可运行的流程。',
   pickerLabel: '工作流', createPh: '新工作流名称', create: '新建', creating: '创建中…',
   presetPick: '从模板新建…', presetCreated: '已从模板创建', presetFailed: '模板创建失败',
+  pickerMenu: '切换工作流', pickerEmpty: '还没有工作流，先新建一个',
+  statusDraft: '草稿', statusPublished: '已发布',
+  delete: '删除', deleting: '删除中…', deleted: '已删除', deleteFailed: '删除失败',
+  deleteConfirm: (name: string) => `删除工作流「${name}」？它会从列表里消失，历史运行记录仍然保留。`,
+  presetOpen: '模板库', presetGalleryTitle: '从模板开始', presetGallerySub: '按用途分四类。选一个直接落成草稿，再改成自己的流程——从空白画布猜连线的成本太高。',
+  presetUse: '使用此模板', presetUsing: '创建中…', presetNodes: (n: number) => `${n} 个节点`, presetClose: '关闭',
+  presetCategory: {
+    qa: '知识问答', content: '内容生产', ops: '分流与运营', review: '审核与合规',
+  } as Record<string, string>,
+  /* 模板名与描述由后端按 code 下发（只有中文），这里按 code 覆盖成双语；
+     未登记的 code 回落后端原文，避免新增模板时前端显示空白 */
+  presetDescs: {
+    'knowledge-gap-analysis': '检索知识库后给出覆盖度与缺口清单，每条结论要求附证据。',
+    'kb-qa-bot': '检索命中就带依据作答，没命中走兜底文案，避免模型凭空编造。',
+    'study-plan-7d': '检索笔记后生成 7 天学习计划，渲染前插一道人工审批闸门。',
+    'knowledge-report': '检索知识库后生成带来源标题的报告，可直接分享。',
+    'weekly-report': '把本周素材丢给模型，按「完成 / 进行中 / 下周计划」三段式成稿。',
+    'meeting-notes': '把零散会议记录整理成议题 / 结论 / 待办 / 遗留问题四块，缺信息处标注。',
+    'support-triage': '模型先归类，再用条件分支走「退款流程 / 转人工」两套话术。',
+    'release-review': '先生成对外文案，再卡一道人工审批；拒绝则本次运行失败。',
+  } as Record<string, string>,
   /* 模板名由后端按 code 下发（当前只有中文），这里按 code 覆盖成双语；
      未登记的 code 回落后端原名，避免新增模板时前端显示空白 */
   presetNames: {
     'knowledge-gap-analysis': '知识缺口分析',
+    'kb-qa-bot': '知识库问答机器人',
     'study-plan-7d': '7 天学习计划',
     'knowledge-report': '知识报告生成',
+    'weekly-report': '周报生成',
+    'meeting-notes': '会议纪要结构化',
+    'support-triage': '工单分流',
+    'release-review': '对外文案审核',
   } as Record<string, string>,
   emptyList: '还没有工作流', emptyListDesc: '新建一个后，画布会自动落一张 START → END 的最小可运行图。',
   pickHint: '从上方选择一个工作流开始编辑。',
@@ -75,10 +101,35 @@ const en: typeof zh = {
   eyebrow: 'Workflows', title: 'Workflows', sub: 'Compose retrieval, models, agents and branches into a publishable, runnable flow.',
   pickerLabel: 'Workflow', createPh: 'New workflow name', create: 'New', creating: 'Creating…',
   presetPick: 'New from template…', presetCreated: 'Created from template', presetFailed: 'Could not create from template',
+  pickerMenu: 'Switch workflow', pickerEmpty: 'No workflows yet — create one first',
+  statusDraft: 'Draft', statusPublished: 'Published',
+  delete: 'Delete', deleting: 'Deleting…', deleted: 'Deleted', deleteFailed: 'Delete failed',
+  deleteConfirm: (name: string) => `Delete “${name}”? It disappears from the list; its run history is kept.`,
+  presetOpen: 'Templates', presetGalleryTitle: 'Start from a template',
+  presetGallerySub: 'Four categories by intent. Pick one, get a draft, then make it yours — guessing how to wire nodes from a blank canvas is expensive.',
+  presetUse: 'Use this template', presetUsing: 'Creating…', presetNodes: (n: number) => `${n} nodes`, presetClose: 'Close',
+  presetCategory: {
+    qa: 'Knowledge Q&A', content: 'Content', ops: 'Triage & ops', review: 'Review & compliance',
+  } as Record<string, string>,
+  presetDescs: {
+    'knowledge-gap-analysis': 'Ranks what your notes cover and what is missing, with evidence for every claim.',
+    'kb-qa-bot': 'Answers with citations when retrieval hits, falls back to a scripted reply when it misses.',
+    'study-plan-7d': 'Turns your notes into a 7-day plan and pauses for human approval before rendering.',
+    'knowledge-report': 'Builds a report with source titles from your knowledge base.',
+    'weekly-report': 'Turns this week’s notes into done / in-progress / next-week sections.',
+    'meeting-notes': 'Restructures loose notes into topics, decisions, action items and open questions.',
+    'support-triage': 'Classifies a ticket, then branches into refund flow or human handoff.',
+    'release-review': 'Drafts public copy and gates it behind a human approval; rejection fails the run.',
+  } as Record<string, string>,
   presetNames: {
     'knowledge-gap-analysis': 'Knowledge gap analysis',
+    'kb-qa-bot': 'Knowledge base Q&A bot',
     'study-plan-7d': '7-day study plan',
     'knowledge-report': 'Knowledge report',
+    'weekly-report': 'Weekly report',
+    'meeting-notes': 'Meeting notes digest',
+    'support-triage': 'Support triage',
+    'release-review': 'Public copy review',
   } as Record<string, string>,
   emptyList: 'No workflows yet', emptyListDesc: 'Create one and the canvas seeds a minimal START → END graph you can run immediately.',
   pickHint: 'Pick a workflow above to start editing.',
@@ -140,3 +191,9 @@ export type WorkflowCopy = typeof zh
 
 /** 后端下发的模板名（中文）按 code 覆盖成当前语言；未登记就回落后端原名 */
 export const presetNameOf = (copy: WorkflowCopy, code: string, fallback: string) => copy.presetNames[code] ?? fallback
+
+/** 同上，模板描述 */
+export const presetDescOf = (copy: WorkflowCopy, code: string, fallback: string) => copy.presetDescs[code] ?? fallback
+
+/** 分类展示顺序：固定在产品层面，不随后端返回顺序变 */
+export const PRESET_CATEGORY_ORDER = ['qa', 'content', 'ops', 'review'] as const

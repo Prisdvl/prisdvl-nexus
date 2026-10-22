@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  AlertTriangle, BookOpen, Bot, CheckCircle2, Cpu, Flag, GitBranch, Maximize2, Play, Plus,
-  RefreshCw, Rocket, Save, ShieldCheck, Sparkles, Terminal, UserCheck, ZoomIn, ZoomOut,
+  AlertTriangle, BookOpen, Bot, CheckCircle2, ChevronDown, Cpu, Flag, GitBranch, LayoutTemplate, Maximize2, Play, Plus,
+  RefreshCw, Rocket, Save, ShieldCheck, Sparkles, Terminal, Trash2, UserCheck, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
 import { StateEmpty } from '@/components/Skeleton'
@@ -17,8 +17,9 @@ import {
   nextPosition, positionOf, runState, seedGraph, withoutNode, type WfNodeType,
 } from '@/lib/workflowGraph'
 import Inspector from '@/pages/workflow/Inspector'
+import PresetGallery from '@/pages/workflow/PresetGallery'
 import RunPanels from '@/pages/workflow/RunPanels'
-import { WORKFLOW_COPY, presetNameOf } from '@/pages/workflow/copy'
+import { WORKFLOW_COPY } from '@/pages/workflow/copy'
 import '@/styles/plugins.css'
 import '@/styles/workflow.css'
 
@@ -33,7 +34,7 @@ const ICONS: Record<WfNodeType, typeof Bot> = {
   END: Flag,
 }
 
-type Busy = '' | 'list' | 'load' | 'create' | 'save' | 'validate' | 'publish' | 'run' | 'debug' | 'approve' | 'retry'
+type Busy = '' | 'list' | 'load' | 'create' | 'save' | 'validate' | 'publish' | 'run' | 'debug' | 'approve' | 'retry' | 'delete'
 type LinkFrom = { source: string; handle: string | null }
 
 /** 运行历史每页条数：面板不宽，10 条够看且不用滚动太久。 */
@@ -72,6 +73,11 @@ export default function WorkflowPage() {
   const [agents, setAgents] = useState<BackendAgent[]>([])
   const [presets, setPresets] = useState<WorkflowPreset[]>([])
   const [newName, setNewName] = useState('')
+  /** 工作流切换面板：列表里带状态与删除入口，比光秃秃的 select 更能管理 */
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const pickerRef = useRef<HTMLDivElement>(null)
+  /** 模板库弹窗：改掉原来的 select，卡片能看到流程长什么样再决定用哪个 */
+  const [galleryOpen, setGalleryOpen] = useState(false)
 
   /** 把服务端返回的图灌进画布。 */
   const hydrate = useCallback((wf: Workflow) => {
@@ -147,6 +153,21 @@ export default function WorkflowPage() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [linkFrom])
+
+  /* 工作流切换面板：点面板外面或按 Esc 关闭（select 的行为，不能点一下就永远挂着） */
+  useEffect(() => {
+    if (!pickerOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setPickerOpen(false)
+    }
+    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setPickerOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onEsc)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onEsc)
+    }
+  }, [pickerOpen])
 
   /** 运行历史。返回本次取到的列表，便于「请求失败」后自动选中最新的那条。 */
   const loadRuns = useCallback(async (workflowId: string, page: number): Promise<WorkflowRun[]> => {
@@ -454,6 +475,7 @@ export default function WorkflowPage() {
       setWorkflows((list) => [wf, ...list])
       hydrate(wf)
       setListState('ready')
+      setGalleryOpen(false)
       toast.success(c.presetCreated, wf.name)
     } catch (e) {
       toast.error(c.presetFailed, errMessage(e))
@@ -462,8 +484,42 @@ export default function WorkflowPage() {
     }
   }
 
-  /* ---------------- 渲染 ---------------- */
+  /**
+   * 删除工作流。后端是软删（wf_workflow.deleted），运行历史与版本快照都留着——
+   * 所以文案只说「从列表消失」，不说「记录被一起删掉」。删掉当前这条后自动打开列表里的下一个。
+   */
+  const doDelete = async (target: Workflow) => {
+    if (!window.confirm(c.deleteConfirm(target.name))) return
+    setBusy('delete')
+    try {
+      await api.workflows.remove(target.id)
+      const rest = workflows.filter((w) => w.id !== target.id)
+      setWorkflows(rest)
+      /* 面板保持打开，方便连着删几条；一条都不剩时再收起来 */
+      if (rest.length === 0) setPickerOpen(false)
+      if (current?.id === target.id) {
+        if (rest.length > 0) {
+          hydrate(await api.workflows.get(rest[0].id))
+        } else {
+          /* 一个都不剩：清空画布，不要让用户对着已删工作流的节点继续编辑 */
+          setCurrent(null)
+          setNodes([])
+          setEdges([])
+          setSelected(null)
+          setValidation(null)
+          setRun(null)
+          setNodeRuns([])
+        }
+      }
+      toast.success(c.deleted, target.name)
+    } catch (e) {
+      toast.error(c.deleteFailed, errMessage(e))
+    } finally {
+      setBusy('')
+    }
+  }
 
+  /* ---------------- 渲染 ---------------- */
   if (listState === 'error') {
     return (
       <div className="page">
@@ -519,31 +575,66 @@ export default function WorkflowPage() {
       </div>
 
       <div className="wf-bar">
-        <label className="wf-bar__label" htmlFor="wf-pick">{c.pickerLabel}</label>
-        <select
-          id="wf-pick"
-          className="input wf-bar__select"
-          value={current?.id ?? ''}
-          onChange={(e) => { if (e.target.value) void open(e.target.value) }}
-          disabled={busy !== '' || workflows.length === 0}
-        >
-          {workflows.length === 0 && <option value="">{c.emptyList}</option>}
-          {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-        </select>
-        {/* 内置模板入口：选中即实例化（受控 value 固定为 ""，选完自动回到提示项） */}
-        <select
-          className="input wf-bar__select"
-          value=""
-          aria-label={c.presetPick}
-          onChange={(e) => { const code = e.target.value; if (code) void createFromPreset(code) }}
+        <span className="wf-bar__label" id="wf-pick-label">{c.pickerLabel}</span>
+        {/* 切换面板：一个工作流一行，带发布状态与删除入口；原生的 select 只能“选”，不能管理 */}
+        <div className="wf-picker" ref={pickerRef}>
+          <button
+            type="button"
+            id="wf-pick"
+            className="input wf-picker__btn"
+            aria-haspopup="dialog"
+            aria-expanded={pickerOpen}
+            aria-labelledby="wf-pick-label wf-pick"
+            disabled={busy !== '' || workflows.length === 0}
+            onClick={() => setPickerOpen((v) => !v)}
+          >
+            <span className="wf-picker__name">{current ? current.name : c.emptyList}</span>
+            <span className="wf-picker__chip" data-tone={current?.status === 'PUBLISHED' ? 'ok' : 'draft'}>
+              {current ? (current.status === 'PUBLISHED' ? c.statusPublished : c.statusDraft) : '—'}
+            </span>
+            <ChevronDown size={14} aria-hidden="true" />
+          </button>
+          {pickerOpen && (
+            <div className="wf-picker__menu" role="dialog" aria-label={c.pickerMenu}>
+              {workflows.length === 0 && <p className="wf-picker__empty">{c.pickerEmpty}</p>}
+              {workflows.map((w) => (
+                <div key={w.id} className={`wf-picker__row${w.id === current?.id ? ' is-active' : ''}`}>
+                  <button
+                    type="button"
+                    className="wf-picker__item"
+                    onClick={() => { setPickerOpen(false); if (w.id !== current?.id) void open(w.id) }}
+                  >
+                    <span className="wf-picker__name">{w.name}</span>
+                    <span className="wf-picker__meta">
+                      {w.status === 'PUBLISHED' ? c.statusPublished : c.statusDraft}
+                      {' · '}{w.nodes?.length ?? 0} {c.nodesCount}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="wf-picker__del"
+                    title={c.delete}
+                    aria-label={`${c.delete} ${w.name}`}
+                    onClick={() => void doDelete(w)}
+                    disabled={busy !== ''}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        {/* 模板库入口：卡片按用途分组，选中一个就实例化成草稿 */}
+        <button
+          className="btn btn-ghost wf-bar__preset"
+          type="button"
+          onClick={() => setGalleryOpen(true)}
           disabled={busy !== '' || presets.length === 0}
         >
-          <option value="">{c.presetPick}</option>
-          {presets.map((p) => <option key={p.code} value={p.code}>{presetNameOf(c, p.code, p.name)}</option>)}
-        </select>
-        <span className="wf-chip" data-tone={current?.status === 'PUBLISHED' ? 'ok' : 'draft'}>
-          {current ? (current.status === 'PUBLISHED' ? c.published : 'DRAFT') : '—'}
-        </span>
+          <LayoutTemplate size={15} /> {c.presetOpen}
+        </button>
+        {/* 发布状态已经在切换按钮上显示了，这里不再重复一颗 chip */}
         {current && (
           <span className="wf-bar__meta">
             {`${c.publishedAs}: ${current.publishedVersionNo ?? c.noVersion} · ${c.draftAs}: ${current.draftVersionNo ?? c.noVersion}`}
@@ -700,6 +791,16 @@ export default function WorkflowPage() {
             actionBusy={busy === 'approve' || busy === 'retry'}
           />
         </>
+      )}
+
+      {galleryOpen && (
+        <PresetGallery
+          presets={presets}
+          copy={c}
+          busy={busy === 'create'}
+          onUse={(code) => { void createFromPreset(code) }}
+          onClose={() => setGalleryOpen(false)}
+        />
       )}
     </div>
   )

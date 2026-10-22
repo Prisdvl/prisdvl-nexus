@@ -1106,7 +1106,15 @@ curl -s -X POST localhost:8080/mcp \
 >    且检索节点的 `kbIds` 刻意留空，所以要用户先选知识库才能发布。
 
 **预置工作流**（`GET /api/workflows/presets` 列出，`POST /api/workflows/presets/{code}` 实例化）：
-`knowledge-gap-analysis`（知识缺口分析）、`study-plan-7d`（7 天学习计划，带人工审批闸门）、`knowledge-report`（知识报告生成）。
+八个模板、四类用途，列表项是 `{ code, name, category, description, tags: string[], nodeCount }`（`category` 与 `tags` 都是给前端卡片用的 code/短语，展示名由前端字典翻译）：
+
+- `qa` 知识问答：`knowledge-gap-analysis`（知识缺口分析）、`kb-qa-bot`（知识库问答机器人，检索为空时走兜底话术分支）
+- `content` 内容生产：`study-plan-7d`（7 天学习计划，带人工审批闸门）、`knowledge-report`（知识报告生成）、`weekly-report`（周报生成）、`meeting-notes`（会议纪要结构化）
+- `ops` 分流与运营：`support-triage`（工单分流，按分类走不同回复分支）
+- `review` 审核与合规：`release-review`（对外文案审核，人工审批后才出稿）
+
+带检索节点的四个模板（`knowledge-gap-analysis` / `kb-qa-bot` / `study-plan-7d` / `knowledge-report`）的 `kbIds` 刻意留空，
+所以实例化后校验会提示先选知识库才能发布；纯生成型的四个模板实例化后校验直接通过。
 ⚠️ 它们是**用现有 8 种节点写出的顺序版**，不是 `architecture.md` §12 设计稿里那张带 `PARALLEL` 扇出的图——
 那套枚举没有实现，所以没有并行分析，也没有工具节点。
 

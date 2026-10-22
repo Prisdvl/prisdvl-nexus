@@ -45,13 +45,18 @@ const KIND_ICON: Record<ActivityKind, typeof Upload> = {
 const DEFAULT_WIDGETS: WidgetItem[] = [
   { id: 'stats', size: 'wide' },
   { id: 'trend', size: 'lg' },
+  /* 列表类磁贴给 2 行高：1 行只有约 150px 正文，5 条活动根本放不下，
+     用户看到的就是「总览显示不全」——卡片里只露两行半，还得在卡片内再滚一次。
+     文档处理只有 3 条 + 一个入口，1 行高刚好，不再撑成一大片空白 */
   { id: 'imports', size: 'wide' },
-  { id: 'timeline', size: 'wide' },
+  { id: 'timeline', size: 'lg' },
   { id: 'heat', size: 'wide' },
   { id: 'recent', size: 'lg' },
 ]
 
-const GRID_KEY = 'nx-workbench-widgets-v1'
+/* 布局键跟着默认尺寸一起升版：只改 DEFAULT_WIDGETS 的话，凡是打开过工作台的人
+   localStorage 里都有旧布局，新默认值永远不生效（这正是一堆用户看到「显示不全」的原因） */
+const GRID_KEY = 'nx-workbench-widgets-v2'
 
 type WbCopy = ReturnType<typeof pagesCopy>['workbench']
 
@@ -353,10 +358,14 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
   ) : importsError ? (
     <p className="form-error active" role="alert">{importsError}</p>
   ) : !importRows?.length ? (
-    <p className="wbw-hint">{w.importsEmpty}</p>
+    /* 列表磁贴现在是 2 行高，空态只剩一行字会看着空；顺手把入口放到空态里 */
+    <div className="wbw-empty">
+      <p className="wbw-hint">{w.importsEmpty}</p>
+      <button className="btn btn-ghost btn-sm" type="button" onClick={goKb}>{w.openKb}</button>
+    </div>
   ) : (
     <div className="wbw-list">
-      {importRows.map((item) => (
+      {importRows.slice(0, 3).map((item) => (
         <div className="task-row" key={item.id}>
           <StatusMark status={item.status} size={18} label={item.status === 'done' ? w.statusReady : item.status === 'failed' ? w.statusFailed : w.statusProcessing} fontSize={12} strike={false} />
           <span className="names"><span className="t">{item.name}</span><span className="d">{item.detail} · {item.updated}</span></span>
@@ -366,27 +375,25 @@ export default function WorkbenchPage({ theme, palette, goChat, goKb, goAgents, 
     </div>
   )
 
-  const timelineBody = (
-    <>
-      {activity.length === 0 && !statsLoading && !statsError && (
-        <p className="wbw-hint">{w.timelineEmpty}</p>
-      )}
-      <ul className="wb-timeline">
-        {activity.map((a, i) => {
-          const Icon = KIND_ICON[a.kind]
-          return (
-            <li key={`${a.kind}-${a.time}-${i}`}>
-              <span className="wb-tl-ic"><Icon size={13} /></span>
-              <div>
-                <div className="wb-tl-t">{a.title}</div>
-                <div className="wb-tl-d">{a.detail}</div>
-              </div>
-              <span className="wb-tl-time">{a.time}</span>
-            </li>
-          )
-        })}
-      </ul>
-    </>
+  const timelineBody = activity.length === 0 ? (
+    !statsLoading && !statsError ? <div className="wbw-empty"><p className="wbw-hint">{w.timelineEmpty}</p></div> : null
+  ) : (
+    <ul className="wb-timeline">
+      {/* 右上角写的是「最近 5 条」，就真的只画 5 条：多出来的会在卡片内滚动 */}
+      {activity.slice(0, 5).map((a, i) => {
+        const Icon = KIND_ICON[a.kind]
+        return (
+          <li key={`${a.kind}-${a.time}-${i}`}>
+            <span className="wb-tl-ic"><Icon size={13} /></span>
+            <div>
+              <div className="wb-tl-t">{a.title}</div>
+              <div className="wb-tl-d">{a.detail}</div>
+            </div>
+            <span className="wb-tl-time">{a.time}</span>
+          </li>
+        )
+      })}
+    </ul>
   )
 
   const heatBody = (

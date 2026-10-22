@@ -485,10 +485,21 @@ class WorkflowResourceTest {
         mockMvc.perform(get("/api/workflows/presets")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(3))
+                // 四类模板（知识问答 / 内容生产 / 分流与运营 / 审核与合规）共 8 个
+                .andExpect(jsonPath("$.data.length()").value(8))
                 .andExpect(jsonPath("$.data[0].code").value("knowledge-gap-analysis"))
-                .andExpect(jsonPath("$.data[1].code").value("study-plan-7d"))
-                .andExpect(jsonPath("$.data[2].code").value("knowledge-report"));
+                .andExpect(jsonPath("$.data[1].code").value("kb-qa-bot"))
+                .andExpect(jsonPath("$.data[2].code").value("study-plan-7d"))
+                .andExpect(jsonPath("$.data[3].code").value("knowledge-report"))
+                .andExpect(jsonPath("$.data[4].code").value("weekly-report"))
+                .andExpect(jsonPath("$.data[5].code").value("meeting-notes"))
+                .andExpect(jsonPath("$.data[6].code").value("support-triage"))
+                .andExpect(jsonPath("$.data[7].code").value("release-review"))
+                // 分类与看点由接口直接给出，前端只负责翻译分类名
+                .andExpect(jsonPath("$.data[0].category").value("qa"))
+                .andExpect(jsonPath("$.data[6].category").value("ops"))
+                .andExpect(jsonPath("$.data[0].tags.length()").value(3))
+                .andExpect(jsonPath("$.data[0].nodeCount").value(5));
 
         String created = mockMvc.perform(post("/api/workflows/presets/study-plan-7d")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
@@ -513,6 +524,38 @@ class WorkflowResourceTest {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(1001));
+    }
+
+    @Test
+    @DisplayName("八个预置模板的图结构都通过校验，唯一错误是故意留空的 kbIds")
+    void everyPresetGraphIsStructurallyValid() throws Exception {
+        String token = registerAndLogin("workflow-preset-graphs");
+        for (String code : List.of("knowledge-gap-analysis", "kb-qa-bot", "study-plan-7d",
+                "knowledge-report", "weekly-report", "meeting-notes", "support-triage", "release-review")) {
+            String created = mockMvc.perform(post("/api/workflows/presets/" + code)
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+            String workflowId = JsonPath.read(created, "$.data.id");
+
+            String validated = mockMvc.perform(post("/api/workflows/" + workflowId + "/validate")
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+            List<String> errors = JsonPath.read(validated, "$.data.errors");
+            // 模板是脚手架：kbIds 空是预期错误；出现任何别的错误都是模板图写错了（分支缺端口、变量不可达、成环等）
+            for (String error : errors) {
+                check(error.contains("kbIds"), "模板 " + code + " 的图有与知识库无关的错误: " + error);
+            }
+            // 带检索节点的模板必须因 kbIds 未配置而被拦下；纯生成型模板（周报 / 会议纪要）本身就该直接可用
+            boolean hasRetrieval = List.of("knowledge-gap-analysis", "kb-qa-bot", "study-plan-7d", "knowledge-report").contains(code);
+            if (hasRetrieval) {
+                check(errors.stream().anyMatch(error -> error.contains("kbIds")),
+                        "模板 " + code + " 应因 kbIds 未配置而不通过校验，实际 errors=" + errors);
+            } else {
+                check(errors.isEmpty(), "模板 " + code + " 不依赖知识库，应直接通过校验，实际 errors=" + errors);
+            }
+        }
     }
 
     private void check(boolean condition, String message) {

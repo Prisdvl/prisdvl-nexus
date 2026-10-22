@@ -637,6 +637,8 @@ export const api = {
     /** 改元信息（名称 / 描述）：局部更新，只传要改的字段；description 传空串清空。不产生新版本。 */
     update: (id: string, body: { name?: string; description?: string | null }) =>
       http.put<Result<Workflow>>(`/workflows/${id}`, body).then((r) => r.data.data),
+    /** 删除工作流：后端软删，已有运行记录与版本快照保留（历史仍可查）。 */
+    remove: (id: string) => http.delete<Result<null>>(`/workflows/${id}`).then((r) => r.data.data),
     saveDraft: (id: string, body: { nodes: WorkflowNode[]; edges: WorkflowEdge[] }) =>
       http.put<Result<Workflow>>(`/workflows/${id}/draft`, body).then((r) => r.data.data),
     validate: (id: string) =>
@@ -754,7 +756,11 @@ export interface WorkflowEdge {
 export interface WorkflowPreset {
   code: string
   name: string
+  /** 分类 code（qa / content / ops / review）——展示名由前端字典翻译 */
+  category: string
   description: string
+  /** 卡片上的一句话看点 */
+  tags: string[]
   nodeCount: number
 }
 
