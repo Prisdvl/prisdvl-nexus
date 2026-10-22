@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -99,6 +100,8 @@ public class ChunkIndexServiceImpl implements ChunkIndexService {
             List<Long> doneIds = chunks.stream().map(ChunkPO::getId).toList();
             chunkMapper.update(null, Wrappers.<ChunkPO>lambdaUpdate()
                     .set(ChunkPO::getEsStatus, "DONE")
+                    /* 建索引时间单独记：updated_at 会被任何字段更新带跑，不能当"什么时候建的索引" */
+                    .set(ChunkPO::getIndexedAt, LocalDateTime.now())
                     .in(ChunkPO::getId, doneIds));
 
             if (chunks.size() < fetch) {
@@ -132,6 +135,8 @@ public class ChunkIndexServiceImpl implements ChunkIndexService {
         // 重建后本库所有切片都需要重新写入
         chunkMapper.update(null, Wrappers.<ChunkPO>lambdaUpdate()
                 .set(ChunkPO::getEsStatus, "PENDING")
+                /* 旧索引已经作废，时间戳必须跟着清掉，否则详情会显示「上次建索引」却检索不到 */
+                .set(ChunkPO::getIndexedAt, null)
                 .eq(ChunkPO::getKbId, knowledgeBaseId));
         chunkIndex.recreateIndex(knowledgeBaseId);
         log.info("知识库 {} 索引已重建，切片状态重置为 PENDING", knowledgeBaseId);

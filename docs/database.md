@@ -376,6 +376,7 @@ CREATE TABLE kb_chunk (
   vector_id     VARCHAR(64)          DEFAULT NULL,-- pgvector 行 id（UUID）
   vector_status VARCHAR(16) NOT NULL DEFAULT 'PENDING', -- PENDING|DONE|FAILED|STALE
   es_status     VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+  indexed_at    DATETIME(3)          DEFAULT NULL, -- V29：最近一次成功写入检索索引的时间（NULL = 从未写入）
   created_at    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   UNIQUE KEY uk_chunk_doc_index (document_id, chunk_index),
@@ -384,6 +385,8 @@ CREATE TABLE kb_chunk (
   KEY idx_chunk_hash (content_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
+
+> **为什么 `indexed_at` 不复用 `updated_at`**：`updated_at` 是 `ON UPDATE CURRENT_TIMESTAMP(3)`，这行任何字段被改（重新分块、改标题、清回 `PENDING`）都会刷新它。拿它当「最后建索引时间」，会把「刚改过但没重建索引」的库显示成已索引——用户点检索却查不到。`indexed_at` 只在写入索引成功时更新，重建索引时清 `NULL`。
 
 > **为什么 `content_hash` 单独一列**：Embedding 是按内容计费的。相同内容（重复笔记片段、模板段落）在全局缓存里命中即可复用向量，见 Redis `nexus:embed:v1:{sha256}`。
 

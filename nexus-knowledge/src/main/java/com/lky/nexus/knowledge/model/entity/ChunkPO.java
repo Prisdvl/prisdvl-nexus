@@ -63,6 +63,14 @@ public class ChunkPO {
 
     private String esStatus;
 
+    /**
+     * 最近一次成功写入检索索引的时间（V29）；{@code null} = 从未成功写入。
+     *
+     * <p>为什么不复用 {@code updated_at}：后者被任何字段更新（重新分块、改标签）带跑，
+     * 拿它当"建索引时间"会把「刚改过但没建索引」的库显示成已索引。
+     */
+    private LocalDateTime indexedAt;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

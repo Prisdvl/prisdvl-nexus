@@ -72,11 +72,10 @@ public interface ChunkMapper extends BaseMapper<ChunkPO> {
     /**
      * 最近一次把切片写进索引的时间；该库从未建过索引时返回 {@code null}。
      *
-     * <p>用切片的 {@code updated_at} 近似：写索引会更新这些行，而
-     * {@code kb_chunk.updated_at} 是 {@code ON UPDATE CURRENT_TIMESTAMP(3)}。
-     * 再单开一列「索引时间」只会让「最近一次建索引」和「最后一次改切片」互相打架，
-     * 而这里要回答的问题只有一个——「它到底建过没有」。
+     * <p>用专用的 {@code indexed_at}（V29）而不是 {@code updated_at}：后者会被任何字段更新带跑
+     * （重新分块、改标签、甚至清空 PENDING），拿它当「建索引时间」会把「刚改过但没重建索引」
+     * 的库显示成已索引。这里仍带 {@code es_status = 'DONE'} 过滤，PENDING 期间喂不进假时间。
      */
-    @Select("SELECT MAX(updated_at) FROM kb_chunk WHERE kb_id = #{kbId} AND es_status = 'DONE'")
+    @Select("SELECT MAX(indexed_at) FROM kb_chunk WHERE kb_id = #{kbId} AND es_status = 'DONE'")
     java.time.LocalDateTime lastIndexedAt(@Param("kbId") Long kbId);
 }
