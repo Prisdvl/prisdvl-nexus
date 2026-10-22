@@ -296,6 +296,8 @@
 .wf-errors__single { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 12px; color: var(--danger); }
 .wf-run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0 0; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .wf-details { margin-top: 8px; font-size: 11.5px; color: var(--text-3); }
+.wf-output { margin-top: 12px; }
+.wf-output__title { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--text-2); }
 .wf-pre {
   max-height: 180px;
   overflow: auto;
@@ -305,6 +307,16 @@
   background: var(--surface);
   font-size: 11px;
   line-height: 1.5;
+}
+/* 纯文本结果（{text} 形状）按段落折行读，不强制横向滚动 */
+.wf-pre--text {
+  max-height: 220px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text);
 }
 
 .wf-log li[data-state='failed'] { color: var(--danger); }

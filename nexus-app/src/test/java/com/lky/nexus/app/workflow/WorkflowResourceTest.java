@@ -478,6 +478,34 @@ class WorkflowResourceTest {
     }
 
     @Test
+    @DisplayName("END 没配模板时，运行结果退回到上游输出，不再是空对象")
+    void endNodeFallsBackToUpstreamOutput() throws Exception {
+        String token = registerAndLogin("workflow-end-fallback");
+        String workflowId = createWorkflow(token, "结束节点兜底");
+        saveGraph(token, workflowId, """
+                {"nodes":[
+                  {"id":"start","type":"START","version":1,"config":{},
+                   "position":{"x":0,"y":0}},
+                  {"id":"tpl","type":"TEMPLATE","version":1,
+                   "config":{"template":"你好 {{ input.question }}"},
+                   "position":{"x":200,"y":0}},
+                  {"id":"end","type":"END","version":1,"config":{},
+                   "position":{"x":400,"y":0}}
+                ],
+                "edges":[
+                  {"id":"e1","source":"start","target":"tpl","sourceHandle":null},
+                  {"id":"e2","source":"tpl","target":"end","sourceHandle":null}
+                ]}
+                """);
+
+        /* 没配模板的 END 交给执行器只能产出 {}；兜底后运行结果应该是上游 TEMPLATE 的 {text} */
+        debugRun(token, workflowId)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.data.output.text").value("你好 hello"));
+    }
+
+    @Test
     @DisplayName("预置模板：清单可查、可实例化为草稿，配置知识库前校验不通过")
     void listsAndInstantiatesPresets() throws Exception {
         String token = registerAndLogin("workflow-presets");

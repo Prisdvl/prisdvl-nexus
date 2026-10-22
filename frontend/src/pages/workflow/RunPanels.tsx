@@ -47,6 +47,23 @@ function runTone(status: string): string {
   return 'muted'
 }
 
+/**
+ * 运行结果常是 {@code {text}}（LLM / TEMPLATE 节点的输出形状）：能直接读的就不甩 JSON。
+ * 空串也算「没有可读文本」，交给原始 JSON 展示。
+ */
+function outputText(output: unknown): string | null {
+  if (typeof output === 'string') {
+    return output.trim() ? output : null
+  }
+  if (output && typeof output === 'object' && 'text' in output) {
+    const text = (output as { text?: unknown }).text
+    if (typeof text === 'string' && text.trim()) {
+      return text
+    }
+  }
+  return null
+}
+
 /** 画布下方四块：校验结果 / 运行输入与状态 / 运行历史 / 节点轨迹。 */
 export default function RunPanels({
   c, validation, inputsText, onInputsChange,
@@ -98,10 +115,20 @@ export default function RunPanels({
           </>
         )}
         {run?.output != null && (
-          <details className="wf-details">
-            <summary>output</summary>
-            <pre className="wf-pre">{JSON.stringify(run.output, null, 2)}</pre>
-          </details>
+          <div className="wf-output">
+            <h3 className="wf-output__title">{c.outputTitle}</h3>
+            {outputText(run.output) !== null ? (
+              <>
+                <pre className="wf-pre wf-pre--text">{outputText(run.output)}</pre>
+                <details className="wf-details">
+                  <summary>{c.outputRaw}</summary>
+                  <pre className="wf-pre">{JSON.stringify(run.output, null, 2)}</pre>
+                </details>
+              </>
+            ) : (
+              <pre className="wf-pre">{JSON.stringify(run.output, null, 2)}</pre>
+            )}
+          </div>
         )}
       </section>
 

@@ -512,14 +512,64 @@ public class WorkflowRuntimeService {
         return new GraphOutcome(endOutput(graph, outputs), null);
     }
 
-    /** 结束节点的输出；没有 END 时返回空对象（与改造前同一语义：reduce 取最后一个 END）。 */
+    /**
+     * 结束节点的输出；没有 END 时返回空对象（与改造前同一语义：reduce 取最后一个 END）。
+     *
+     * <p>END 配了 {@code template} 就渲染模板，没配时执行器只能交出 {@code {}}——那样 run.output
+     * 永远是空的，「这次跑出了什么」只能去翻节点轨迹。这里退一步：END 不产出内容时，
+     * 取它上游最近的**非空**输出当作运行结果（「END 不做转换，原样交出上一步」的直觉），
+     * 一路都空才返回空对象。
+     */
     private Object endOutput(WorkflowGraph graph, Map<String, Object> outputs) {
-        return outputs.entrySet().stream()
-                .filter(entry -> graph.nodes().stream()
-                        .anyMatch(node -> "END".equals(node.type()) && node.id().equals(entry.getKey())))
+        WorkflowNode end = graph.nodes().stream()
+                .filter(node -> "END".equals(node.type()))
                 .reduce((first, second) -> second)
-                .map(Map.Entry::getValue)
-                .orElse(Map.of());
+                .orElse(null);
+        if (end == null) {
+            return Map.of();
+        }
+        Object own = outputs.get(end.id());
+        if (!isEmptyOutput(own)) {
+            return own;
+        }
+        Object upstream = upstreamOutput(graph, end.id(), outputs, new HashSet<>());
+        return upstream == null ? Map.of() : upstream;
+    }
+
+    /** 从 {@code nodeId} 沿入边往回找第一个非空输出；找不到返回 null。 */
+    private Object upstreamOutput(WorkflowGraph graph, String nodeId, Map<String, Object> outputs, Set<String> seen) {
+        /* 一条边都没走通的图不该在这里递归爆炸：seen 让每个节点最多进一次 */
+        if (!seen.add(nodeId)) {
+            return null;
+        }
+        for (WorkflowEdge edge : graph.edges()) {
+            if (!nodeId.equals(edge.target())) {
+                continue;
+            }
+            Object output = outputs.get(edge.source());
+            if (!isEmptyOutput(output)) {
+                return output;
+            }
+            Object deeper = upstreamOutput(graph, edge.source(), outputs, seen);
+            if (!isEmptyOutput(deeper)) {
+                return deeper;
+            }
+        }
+        return null;
+    }
+
+    /** 输出算不算"没有内容"：null / 空 Map / 空 List / 空白字符串都算。 */
+    private static boolean isEmptyOutput(Object output) {
+        if (output == null) {
+            return true;
+        }
+        if (output instanceof Map<?, ?> map) {
+            return map.isEmpty();
+        }
+        if (output instanceof java.util.Collection<?> collection) {
+            return collection.isEmpty();
+        }
+        return output instanceof CharSequence text && text.toString().isBlank();
     }
 
     private void activateOutgoing(WorkflowGraph graph,
