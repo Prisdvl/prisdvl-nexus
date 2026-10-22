@@ -107,6 +107,13 @@ function toRunContext(retrieval: BackendMessage['retrieval']): ChatMsg['context'
     hits.map((hit) => hit.documentTitle).filter((v): v is string => typeof v === 'string' && !!v),
   ).size
   const truncated = typeof retrieval.truncated === 'number' ? retrieval.truncated : 0
+  /* 回放历史时也要带上「为什么 0 命中」，否则同一条消息刷新前后提示消失 */
+  const emptyReason = typeof retrieval.emptyReason === 'string'
+    ? (retrieval.emptyReason as 'NO_KB' | 'NO_INDEX' | 'NO_RESULTS')
+    : null
+  const kbIds = Array.isArray(retrieval.knowledgeBaseIds)
+    ? (retrieval.knowledgeBaseIds as unknown[]).map((v) => String(v)).filter((v) => v && v !== 'null' && v !== 'undefined')
+    : []
   return {
     kbs: [],
     retrieved: count,
@@ -115,6 +122,8 @@ function toRunContext(retrieval: BackendMessage['retrieval']): ChatMsg['context'
     historyTurns: 0,
     web: false,
     ...(truncated > 0 ? { truncated } : {}),
+    ...(emptyReason ? { emptyReason } : {}),
+    ...(kbIds.length ? { kbIds } : {}),
   }
 }
 

@@ -11,6 +11,8 @@ import com.lky.nexus.common.security.UserContextKeys;
 import com.lky.nexus.knowledge.rag.PreparedAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswerService;
+import com.lky.nexus.knowledge.search.EmptyReason;
+import com.lky.nexus.knowledge.service.ChunkIndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -52,10 +54,14 @@ public class RagStreamServiceImpl implements RagStreamService {
 
     private final RagAnswerService ragAnswerService;
     private final ChatClientFactory chatClientFactory;
+    /** 0 命中时判断「没建索引」还是「确实没有相关内容」；判断只影响推给前端的一句话。 */
+    private final ChunkIndexService chunkIndexService;
 
-    public RagStreamServiceImpl(RagAnswerService ragAnswerService, ChatClientFactory chatClientFactory) {
+    public RagStreamServiceImpl(RagAnswerService ragAnswerService, ChatClientFactory chatClientFactory,
+                                ChunkIndexService chunkIndexService) {
         this.ragAnswerService = ragAnswerService;
         this.chatClientFactory = chatClientFactory;
+        this.chunkIndexService = chunkIndexService;
     }
 
     /**
@@ -67,6 +73,29 @@ public class RagStreamServiceImpl implements RagStreamService {
      */
     protected SseEmitter newEmitter() {
         return new SseEmitter(SSE_TIMEOUT_MILLIS);
+    }
+
+    /**
+     * 0 命中时判断「为什么没有」：有切片但没建索引，还是索引正常却没有相关内容。
+     *
+     * <p>与 {@code ChatStreamServiceImpl} 的同名方法同一套判定（单库版本）：
+     * 两条链路共用 {@link RetrievalEvent}，原因也必须同源，否则界面上同一个库
+     * 在会话页与知识库页会得到不同说法。
+     */
+    private EmptyReason emptyReasonOf(Long userId, Long knowledgeBaseId, PreparedAnswer prepared) {
+        if (!prepared.empty() || prepared.hasFailures()) {
+            return null;
+        }
+        try {
+            ChunkIndexService.IndexCoverage coverage = chunkIndexService.coverage(userId, knowledgeBaseId);
+            if (coverage.chunkCount() > 0 && coverage.indexedChunkCount() == 0) {
+                return EmptyReason.NO_INDEX;
+            }
+        } catch (RuntimeException ex) {
+            // 覆盖信息只是附加说明：拿不到就别猜，前端退回「没有找到相关内容」
+            return null;
+        }
+        return EmptyReason.NO_RESULTS;
     }
 
     @Override
@@ -96,7 +125,8 @@ public class RagStreamServiceImpl implements RagStreamService {
         //    empty 也照发：count=0 是要告诉用户的信息，省略事件会让前端一直等。
         // 这条链路固定单库（路径里的 {id}），所以这里永远是单元素列表——但负载形状
         // 与会话流式那条多库链路保持一致：事件有两个生产者，形状分叉就得有两套解析逻辑
-        sink.send(SseEventNames.RETRIEVAL, RetrievalEvent.of(List.of(knowledgeBaseId), prepared));
+        sink.send(SseEventNames.RETRIEVAL, RetrievalEvent.of(List.of(knowledgeBaseId), prepared,
+                emptyReasonOf(userId, knowledgeBaseId, prepared)));
 
         if (sink.aborted()) {
             // 第一个事件就没送出去 = 客户端早就走了：没有上游可停、也没有内容可留档

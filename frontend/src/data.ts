@@ -156,6 +156,14 @@ export interface RunContext {
   attachments?: string[]
   /** 因超出窗口被省略的早期轮数（>0 时要在界面上明说，否则用户以为模型忘了） */
   truncated?: number
+  /**
+   * 本轮检索 0 命中的原因（来自 `retrieval` 事件的 `emptyReason`）。
+   * `NO_INDEX` 与「确实没有相关内容」是两条相反的建议：前者要用户去建索引，
+   * 所以必须带下来，界面上才能给出可操作的提示，而不是只显示「没找到」。
+   */
+  emptyReason?: 'NO_KB' | 'NO_INDEX' | 'NO_RESULTS' | null
+  /** 参与检索的知识库 id（`NO_INDEX` 时用它直达建索引入口；名字给不了链接） */
+  kbIds?: string[]
 }
 
 export interface SessionItem {

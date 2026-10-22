@@ -234,6 +234,9 @@ export interface PagesCopy {
     stepGenerate: string
     stepRetrieve: (hit: number) => string
     stepRetrievePartial: string
+    /** 0 命中且原因是「未建索引」时的内联提示（与「没找到相关内容」是两条相反的建议） */
+    retrievalNoIndex: string
+    retrievalNoIndexCta: string
     unknownSource: string
     docFallback: string
     /* —— 空态 —— */
@@ -946,6 +949,8 @@ const ZH: PagesCopy = {
     stepGenerate: '生成回答',
     stepRetrieve: (hit) => `检索知识库 · 命中 ${hit} 个切片`,
     stepRetrievePartial: '部分知识库检索失败，已跳过',
+    retrievalNoIndex: '当前知识库尚未建索引，所以这次什么都没搜到。导入文档不等于建索引，需要先建索引。',
+    retrievalNoIndexCta: '去建索引',
     unknownSource: '未知来源',
     docFallback: '文档',
     emptyTitle: '还没有任何会话',
@@ -1634,6 +1639,8 @@ const EN: PagesCopy = {
     stepGenerate: 'Generating the answer',
     stepRetrieve: (hit) => `Searching knowledge base · ${hit} ${hit === 1 ? 'chunk' : 'chunks'} hit`,
     stepRetrievePartial: 'Some knowledge bases failed to search and were skipped',
+    retrievalNoIndex: 'This knowledge base is not indexed yet, so nothing could be found. Importing documents does not index them — build the index first.',
+    retrievalNoIndexCta: 'Build index',
     unknownSource: 'Unknown source',
     docFallback: 'Document',
     emptyTitle: 'No chats yet',

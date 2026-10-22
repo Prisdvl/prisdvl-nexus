@@ -33,6 +33,8 @@ import com.lky.nexus.knowledge.rag.Citations;
 import com.lky.nexus.knowledge.rag.PreparedAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswerService;
+import com.lky.nexus.knowledge.search.EmptyReason;
+import com.lky.nexus.knowledge.service.ChunkIndexService;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,6 +107,13 @@ public class ChatStreamServiceImpl implements ChatStreamService {
     private final ToolApprovalService approvalService;
     private final JsonMapper jsonMapper;
     private final ObservabilityRegistry observabilityRegistry;
+    /**
+     * 只用来在 0 命中时判断「是没建索引，还是确实没有相关内容」。
+     *
+     * <p>放在这一层而不是 {@code RagAnswerService}：检索服务只回答"命中了什么"，
+     * 它不知道也不该关心库的索引状态；而这个判断只影响推给前端的一句话。
+     */
+    private final ChunkIndexService chunkIndexService;
 
     public ChatStreamServiceImpl(ConversationService conversationService,
                                  ChatMessageService chatMessageService,
@@ -116,7 +125,8 @@ public class ChatStreamServiceImpl implements ChatStreamService {
                                  AgentRuntime agentRuntime,
                                  ToolApprovalService approvalService,
                                  JsonMapper jsonMapper,
-                                 ObservabilityRegistry observabilityRegistry) {
+                                 ObservabilityRegistry observabilityRegistry,
+                                 ChunkIndexService chunkIndexService) {
         this.conversationService = conversationService;
         this.chatMessageService = chatMessageService;
         this.chatClientFactory = chatClientFactory;
@@ -128,6 +138,43 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         this.approvalService = approvalService;
         this.jsonMapper = jsonMapper;
         this.observabilityRegistry = observabilityRegistry;
+        this.chunkIndexService = chunkIndexService;
+    }
+
+    /**
+     * 0 命中时判断「为什么没有」：没绑定库 / 有切片但没建索引 / 索引正常但确实没有相关内容。
+     *
+     * <p>只在 {@code prepared.empty()} 且没有检索失败时算：有失败时已有的
+     * {@link RagAnswerService#RETRIEVAL_FAILED_ANSWER} 说的是"故障，不是结论"，
+     * 再叠一个原因会让两种说法互相打架。
+     *
+     * <p>逐库查覆盖是几条 count，且只发生在"这一问什么都没搜到"时——这种请求本来就要
+     * 走到提示文案，多几次查询换一句能让人行动的话，值。
+     */
+    private EmptyReason emptyReasonOf(Long userId, List<Long> knowledgeBaseIds, PreparedAnswer prepared) {
+        if (!prepared.empty() || prepared.hasFailures()) {
+            return null;
+        }
+        if (knowledgeBaseIds == null || knowledgeBaseIds.isEmpty()) {
+            return EmptyReason.NO_KB;
+        }
+        boolean sawUnindexed = false;
+        try {
+            for (Long knowledgeBaseId : knowledgeBaseIds) {
+                ChunkIndexService.IndexCoverage coverage = chunkIndexService.coverage(userId, knowledgeBaseId);
+                if (coverage.chunkCount() > 0 && coverage.indexedChunkCount() == 0) {
+                    // 这个库一片都没进索引：换多少种问法都不可能命中
+                    sawUnindexed = true;
+                } else if (coverage.indexedChunkCount() > 0) {
+                    // 至少有一个库是可检索的，那"没搜到"就是真的没有相关内容
+                    return EmptyReason.NO_RESULTS;
+                }
+            }
+        } catch (RuntimeException ex) {
+            // 覆盖信息只是附加说明：拿不到就别猜，让前端退回「没有找到相关内容」
+            return null;
+        }
+        return sawUnindexed ? EmptyReason.NO_INDEX : EmptyReason.NO_RESULTS;
     }
 
     @Override
@@ -208,7 +255,8 @@ public class ChatStreamServiceImpl implements ChatStreamService {
         if (ragMode) {
             // 检索事件必须在第一个 delta 之前：前端据此显示"检索到 N 个片段"。
             // 这里是同步发送（flux 还没订阅），顺序由代码结构保证，不靠时序运气。
-            session.sendRetrieval(knowledgeBaseIds, prepared);
+            session.sendRetrieval(knowledgeBaseIds, prepared,
+                    emptyReasonOf(userId, knowledgeBaseIds, prepared));
             // 交给模型的那几段同时留一份：回答结束后它们要变成随消息落库的引用。
             // 顺序就是提示词里的 [1..n]，与回答正文里的编号同一套
             session.rememberRetrieval(prepared.usedHits());
@@ -414,8 +462,9 @@ public class ChatStreamServiceImpl implements ChatStreamService {
          * 检索事件（RAG 模式）：本次查了哪些库、命中哪些片段、是否重排/截断。
          * 必须在第一个 delta 之前发出。
          */
-        private void sendRetrieval(List<Long> knowledgeBaseIds, PreparedAnswer prepared) {
-            Map<String, Object> payload = RetrievalEvent.of(knowledgeBaseIds, prepared);
+        private void sendRetrieval(List<Long> knowledgeBaseIds, PreparedAnswer prepared,
+                                   EmptyReason emptyReason) {
+            Map<String, Object> payload = RetrievalEvent.of(knowledgeBaseIds, prepared, emptyReason);
             // 先记后发：落库要用的就是这一份，推流失败不该让历史回放缺一张卡片
             this.retrievalPayload = payload;
             send(SseEventNames.RETRIEVAL, payload);

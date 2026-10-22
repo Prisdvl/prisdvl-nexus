@@ -5,6 +5,8 @@ import com.lky.nexus.app.auth.security.CurrentUser;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.api.Result;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.knowledge.model.dto.SearchResponse;
+import com.lky.nexus.knowledge.search.EmptyReason;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkIndexService;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
@@ -72,7 +74,7 @@ public class KnowledgeSearchController {
      * 多值参数的写法见 {@link #splitMultiValue}。详见 {@link RetrievalFilters}。
      */
     @GetMapping("/{knowledgeBaseId}/search")
-    public Result<List<ChunkSearchService.SearchHit>> search(
+    public Result<SearchResponse> search(
             @PathVariable Long knowledgeBaseId,
             @RequestParam String q,
             @RequestParam(required = false) Integer topK,
@@ -83,8 +85,34 @@ public class KnowledgeSearchController {
         Integer limit = topK == null ? null : Math.clamp(topK, 1, MAX_TOP_K);
         RetrievalFilters filters = new RetrievalFilters(splitMultiValue(tags), folder,
                 parseDocumentIds(documentId));
-        return Result.ok(chunkSearchService.search(CurrentUser.requireId(), knowledgeBaseId, q, limit,
-                SearchMode.parse(mode), filters));
+        Long userId = CurrentUser.requireId();
+        List<ChunkSearchService.SearchHit> hits = chunkSearchService.search(userId, knowledgeBaseId, q, limit,
+                SearchMode.parse(mode), filters);
+        // 只在真的 0 命中时才去算索引覆盖：多三条 count 查询换一个能区分
+        // 「没建索引」与「没找到」的答案，值；有命中时算了也没人看。
+        return Result.ok(SearchResponse.of(hits, emptyReasonOf(userId, knowledgeBaseId, hits)));
+    }
+
+    /**
+     * 命中为空时给出原因 code（{@code NO_INDEX} / {@code NO_RESULTS}），有命中时返回 {@code null}。
+     *
+     * <p>判断放在边界上而不是检索服务里：检索服务不知道"这个库建没建过索引"，
+     * 也不该为了返回一句话去多查两次库——它只回答"命中了什么"。
+     */
+    private String emptyReasonOf(Long userId, Long knowledgeBaseId, List<ChunkSearchService.SearchHit> hits) {
+        if (!hits.isEmpty()) {
+            return null;
+        }
+        try {
+            ChunkIndexService.IndexCoverage coverage = chunkIndexService.coverage(userId, knowledgeBaseId);
+            return EmptyReason.ofEmpty(0, coverage.chunkCount(), coverage.indexedChunkCount()).name();
+        } catch (BusinessException ex) {
+            // 归属校验失败必须按原错误抛出：越权探测不能变成"看起来正常的空结果"
+            throw ex;
+        } catch (RuntimeException ex) {
+            // 其余异常不该让一次检索变成 500——原因只是附加信息，缺了不影响 hits 本身
+            return null;
+        }
     }
 
     /**

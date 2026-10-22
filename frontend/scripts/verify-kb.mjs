@@ -85,6 +85,33 @@ await settle(() => document.querySelectorAll('.chunk-table .doc-switch[aria-chec
 check('批量操作可用', (await page.locator('.chunk-table .doc-switch[aria-checked="false"]').count()) >= 1)
 await page.screenshot({ path: join(OUT, 'qa-kb-chunks.png') })
 
+/* ---------- 未建索引徽标与 0 命中解释（emptyReason） ----------
+ * 演示模式的库是「有切片、没建索引」：徽标要出现，检索要说清是没建索引，
+ * 点徽标之后徽标消失、检索真能出结果——这条因果链是静默失败的根因所在。
+ */
+/* 分块管理是弹层：先确认它关掉了，否则后面对标签页的点击会被遮罩吃掉 */
+await page.keyboard.press('Escape')
+await settle(() => document.querySelector('.chunk-view') === null)
+check('分块管理弹层可关闭', (await page.locator('.chunk-view').count()) === 0)
+check('未建索引徽标可见', (await page.locator('.kb-index-badge').count()) === 1)
+await page.locator('.kb-top__tabs button.rubber-segment__item', { hasText: '高级检索' }).click()
+await page.locator('.kb-adv__search input').waitFor({ state: 'visible', timeout: 8000 }).catch(() => {})
+await page.locator('.kb-adv__search input').fill('Redis')
+await page.locator('.kb-adv__search button[type="submit"]').click()
+/* 初始空态（「输入关键词开始检索」）本来就带 .state-empty，所以要等文案真的换成未建索引那条 */
+await settle(() => (document.querySelector('.kb-adv__results .se-title')?.textContent ?? '').includes('还没建索引'))
+const noIndexText = (await page.locator('.kb-adv__results .state-empty').count()) === 1
+  ? await page.locator('.kb-adv__results .state-empty').innerText()
+  : ''
+check('未建索引时检索说明原因', noIndexText.includes('还没建索引'), noIndexText.replace(/\s+/g, ' ').slice(0, 60))
+await page.screenshot({ path: join(OUT, 'qa-kb-no-index.png') })
+await page.locator('.kb-index-badge').click()
+await settle(() => document.querySelector('.kb-index-badge') === null)
+check('点徽标建索引后徽标消失', (await page.locator('.kb-index-badge').count()) === 0)
+await page.locator('.kb-adv__search button[type="submit"]').click()
+await settle(() => document.querySelectorAll('.kb-adv__hit').length > 0)
+check('建索引后检索能出结果', (await page.locator('.kb-adv__hit').count()) > 0)
+
 await page.setViewportSize({ width: 390, height: 844 })
 await settle(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
 check('手机端知识库页无横向溢出', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))

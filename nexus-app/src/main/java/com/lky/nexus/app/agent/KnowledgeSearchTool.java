@@ -11,6 +11,7 @@ import com.lky.nexus.knowledge.model.entity.DocumentPO;
 import com.lky.nexus.knowledge.model.entity.KnowledgeBasePO;
 import com.lky.nexus.knowledge.rag.retriever.MultiKnowledgeRetriever;
 import com.lky.nexus.knowledge.rag.retriever.RetrievalFailure;
+import com.lky.nexus.knowledge.search.EmptyReason;
 import com.lky.nexus.knowledge.search.SearchMode;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
 import org.slf4j.Logger;
@@ -217,16 +218,56 @@ public class KnowledgeSearchTool {
             out.append('\n').append(clip(hit.content(), 400)).append('\n');
         }
         if (take == 0) {
-            out.append(emptyExplanation(scoped, knowledgeBases, searchable, skipped, query));
+            EmptyReason reason = emptyReason(scoped, knowledgeBases, searchable);
+            out.append(emptyExplanation(scoped, knowledgeBases, searchable, skipped, query, reason));
             // 三种"再换关键词也没用"的情形正好是"模型可能改用自身知识回答"的触发条件，
             // 静默降级必须可数（B.27 起的规矩）；四种事实的区分在日志里留全
             observabilityRegistry.increment(ObservabilityRegistry.AGENT_SEARCH_EMPTY);
-            log.warn("知识库检索没有可引用资料：userId={} query=「{}」 绑定 {} 个库 / 可检索 {} 个 / 跳过 {}",
-                    userId, query, knowledgeBases.size(), searchable.size(), skipped);
+            log.warn("知识库检索没有可引用资料：userId={} query=「{}」 绑定 {} 个库 / 可检索 {} 个 / 跳过 {} / 原因 {}",
+                    userId, query, knowledgeBases.size(), searchable.size(), skipped, reason);
+            AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query,
+                    summary(take, scoped, knowledgeBases, searchable, skipped, reason)));
+            return out.toString();
         }
         AgentContext.record(toolContext, new AgentContext.ToolCallRecord("knowledge_search", query,
-                summary(take, scoped, knowledgeBases, searchable, skipped)));
+                summary(take, scoped, knowledgeBases, searchable, skipped, null)));
         return out.toString();
+    }
+
+    /**
+     * 一条结果都没有时，到底是「没库」「有库没建索引」还是「建了索引但没内容」。
+     *
+     * <p>三者的下一步动作完全不同：没库要去建库、没建索引要去点「建索引」、
+     * 索引正常则值得换个问法。工具把三者笼统说成「没有匹配的资料」时，
+     * 模型只能反复换关键词——实测里三次调用全烧在空库上（decisions.md B.41）。
+     *
+     * <p>用已经注入的 {@code ChunkMapper} 直接数，不再引入新的服务依赖：
+     * 这里的库都已按 {@code user_id} 查过，归属不成问题。
+     */
+    private EmptyReason emptyReason(List<Long> scoped, List<KnowledgeBasePO> knowledgeBases,
+                                    List<KnowledgeBasePO> searchable) {
+        if (searchable.isEmpty()) {
+            // 没有可检索的库：要么一个都没绑（或全被禁用），要么绑定的都已被删
+            return EmptyReason.NO_KB;
+        }
+        boolean sawUnindexed = false;
+        try {
+            for (KnowledgeBasePO kb : searchable) {
+                long chunks = chunkMapper.countByKb(kb.getId());
+                long indexed = chunkMapper.countIndexedByKb(kb.getId());
+                if (chunks > 0 && indexed == 0) {
+                    sawUnindexed = true;
+                } else if (indexed > 0) {
+                    // 至少有一个库真的可检索：那"没命中"就是没内容，换关键词仍有意义
+                    return EmptyReason.NO_RESULTS;
+                }
+            }
+        } catch (RuntimeException ex) {
+            // 数不出来就别猜：宁可退回"没有匹配"，也不要把基础设施抖动说成"你的库空的"
+            log.warn("判断检索空结果原因失败（按无匹配处理）：{}", ex.toString());
+            return EmptyReason.NO_RESULTS;
+        }
+        return sawUnindexed ? EmptyReason.NO_INDEX : EmptyReason.NO_RESULTS;
     }
 
     /**
@@ -277,9 +318,17 @@ public class KnowledgeSearchTool {
      * （见 decisions.md B.41）。
      */
     private String emptyExplanation(List<Long> scoped, List<KnowledgeBasePO> knowledgeBases,
-                                    List<KnowledgeBasePO> searchable, List<String> skipped, String query) {
+                                    List<KnowledgeBasePO> searchable, List<String> skipped, String query,
+                                    EmptyReason reason) {
         StringBuilder text = new StringBuilder("（");
-        if (!searchable.isEmpty()) {
+        if (reason == EmptyReason.NO_INDEX) {
+            // 「搜了但没命中」与「压根没索引」在模型看来都是 0 条，但它对用户是两件完全不同的事：
+            // 前者换词有用，后者要用户去点「建索引」。不说清楚，模型只会反复换关键词
+            text.append("在").append(scopeLabel(scoped)).append("检索了「").append(query)
+                    .append("」，但这些知识库还没建索引（导入文档不等于建索引，切片还没写进检索索引），")
+                    .append("所以现在任何关键词都不可能有结果。请如实告诉用户去知识库详情页点「建索引」，")
+                    .append("在建索引之前不要再调用本工具。");
+        } else if (!searchable.isEmpty()) {
             // 搜了、但没命中：与"没东西可搜"是两件事，前者换一次关键词仍然有意义
             text.append("在").append(scopeLabel(scoped)).append("检索了「").append(query)
                     .append("」，没有匹配的资料。可以换一次关键词再检索；如果仍然没有结果，就不要再调用本工具了。");
@@ -319,10 +368,14 @@ public class KnowledgeSearchTool {
      * 必须与"搜了没命中"分开写，不能都笼统成"0 条结果"。
      */
     private String summary(int take, List<Long> scoped, List<KnowledgeBasePO> knowledgeBases,
-                           List<KnowledgeBasePO> searchable, List<String> skipped) {
+                           List<KnowledgeBasePO> searchable, List<String> skipped, EmptyReason reason) {
         String suffix = skipped.isEmpty() ? "" : "（跳过 " + skipped.size() + " 个库）";
         if (take > 0) {
             return take + " 条结果" + suffix;
+        }
+        if (reason == EmptyReason.NO_INDEX) {
+            // 卡片上要让人一眼看出"该去建索引"，而不是以为检索坏了
+            return "0 条结果（知识库未建索引）" + suffix;
         }
         if (!searchable.isEmpty()) {
             return "0 条结果（无匹配）" + suffix;

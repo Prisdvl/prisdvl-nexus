@@ -9,6 +9,7 @@ import com.lky.nexus.app.infra.web.RequestIdHolder;
 import com.lky.nexus.knowledge.rag.PreparedAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswer;
 import com.lky.nexus.knowledge.rag.RagAnswerService;
+import com.lky.nexus.knowledge.service.ChunkIndexService;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,12 +67,16 @@ class RagStreamServiceImplTest {
 
     private RagAnswerService ragAnswerService;
     private ChatClientFactory chatClientFactory;
+    /* 0 命中时服务会问索引覆盖率决定 emptyReason：这里给"已建索引"的回答，避免落进 NO_INDEX 分支 */
+    private ChunkIndexService chunkIndexService;
     private ListAppender<ILoggingEvent> serviceLogs;
 
     @BeforeEach
     void setUp() {
         ragAnswerService = mock(RagAnswerService.class);
         chatClientFactory = mock(ChatClientFactory.class);
+        chunkIndexService = mock(ChunkIndexService.class);
+        when(chunkIndexService.coverage(any(), any())).thenReturn(new ChunkIndexService.IndexCoverage(3, 3, null));
         RequestIdHolder.set("test-request-id");
         when(ragAnswerService.prepare(any(), any(), anyString(), any(), any())).thenReturn(preparedWithOneHit());
         when(ragAnswerService.systemPrompt()).thenReturn("SYSTEM-PROMPT");
@@ -164,7 +169,7 @@ class RagStreamServiceImplTest {
      * 响应对象换掉——这也是 {@code RagStreamServiceImpl#newEmitter()} 这唯一一处接缝的由来。
      */
     private RagStreamServiceImpl newService(RecordingEmitter emitter) {
-        return new RagStreamServiceImpl(ragAnswerService, chatClientFactory) {
+        return new RagStreamServiceImpl(ragAnswerService, chatClientFactory, chunkIndexService) {
             @Override
             protected SseEmitter newEmitter() {
                 return emitter;

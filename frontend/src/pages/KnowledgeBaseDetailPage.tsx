@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEven
 import { useLocation } from 'react-router'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
-  ArrowLeft, BookOpen, Copy, FileSpreadsheet, FileText, Layers, Pencil, RefreshCw, Search, Trash2, Upload,
+  AlertTriangle, ArrowLeft, BookOpen, Copy, FileSpreadsheet, FileText, Layers, Pencil, RefreshCw, Search,
+  Trash2, Upload,
 } from 'lucide-react'
 import ChunkManager from '@/components/ChunkManager'
 import LatticeLoader from '@/bits/LatticeLoader/LatticeLoader'
@@ -23,7 +24,7 @@ import { toast } from '@/lib/toast'
 import { download } from '@/lib/download'
 import { EFFORT_TO_TOPK, promptEfforts, promptKbCommands } from '@/lib/promptBarPreset'
 import { DOCS, type DocItem } from '@/data'
-import { api, USE_MOCK, errMessage, type ChunkView, type DocumentLinks, type ImportTask, type KnowledgeBase, type RelatedDoc, type SearchHit } from '@/lib/api'
+import { api, USE_MOCK, errMessage, type ChunkView, type DocumentLinks, type ImportTask, type KnowledgeBase, type RelatedDoc, type SearchEmptyReason, type SearchHit } from '@/lib/api'
 import {
   barOf, isTerminalStatus, phaseOfAction, phaseOfStatus, pickItem, type ImportPhase,
 } from '@/lib/importProgress'
@@ -188,6 +189,8 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const [dragOver, setDragOver] = useState(false)
   const [searchQ, setSearchQ] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
+  /** 上一次检索为空的原因（null=有命中/还没搜）：决定空态是「换词」还是「去建索引」 */
+  const [emptyReason, setEmptyReason] = useState<SearchEmptyReason | null>(null)
   const [searching, setSearching] = useState(false)
   const [searched, setSearched] = useState(false)
   const [chunks, setChunks] = useState<ChunkView[]>([])
@@ -200,6 +203,9 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
           status: 'ENABLED',
           docCount: DOCS.length,
           chunkCount: 48,
+          /* mock 下刻意「有切片但没建索引」：让徽标与 0 命中的解释在演示/自检里真的出现 */
+          indexedChunks: 0,
+          indexedAt: null,
           totalTokens: 12000,
           createdAt: '',
           updatedAt: '',
@@ -252,6 +258,15 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const showContext = tab === 'adv' || tab === 'links'
 
   const kbTitle = kbInfo?.name ?? (USE_MOCK ? '我的 Java 笔记' : t.kb.centerFallback)
+  /**
+   * 「有切片但没建索引」——检索永远 0 命中的状态。
+   *
+   * 界面上必须显式说出来：导入成功后文档列表看起来一切正常，用户没有任何线索知道
+   * 还差一步；不断言地静默失败，最后只表现为「我明明传了资料，它却说没找到」。
+   * 列表接口和老后端没有这两个字段，此时不显示（宁缺勿误报）。
+   */
+  const notIndexed = !!kbInfo && kbInfo.chunkCount > 0
+    && ((kbInfo.indexedChunks ?? 0) === 0 || !kbInfo.indexedAt)
   const promptSources: PromptBarSource[] = [
     {
       key: `kb:${kbId}`,
@@ -429,12 +444,18 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
     if (!q || searching) return
     setSearching(true)
     setHits([])
+    setEmptyReason(null)
     try {
       if (USE_MOCK) {
         await new Promise((r) => { window.setTimeout(r, 400) })
-        setHits(MOCK_SEARCH_HITS)
+        /* 与徽标共用同一份事实：没建索引的库搜不到东西，别在演示里给出假命中 */
+        setHits(notIndexed ? [] : MOCK_SEARCH_HITS)
+        setEmptyReason(notIndexed ? 'NO_INDEX' : null)
       } else {
-        setHits(await api.knowledge.search(kbId, q, usage.mode, usage.topK))
+        const result = await api.knowledge.search(kbId, q, usage.mode, usage.topK)
+        setHits(result.hits)
+        /* 0 命中时后端会说清是「没建索引」还是「确实没有」——两者对用户是相反的指令 */
+        setEmptyReason(result.emptyReason ?? null)
       }
       setSearched(true)
       /* 真正跑过一次，当前取值才算"已生效" */
@@ -464,13 +485,26 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   }
 
   const runIndex = async (rebuild: boolean) => {
-    if (USE_MOCK) { toast.info(t.kb.indexMock); return }
+    if (USE_MOCK) {
+      /*
+       * 演示模式也把「建索引 → 徽标消失 → 检索有结果」这条因果走一遍：
+       * 否则 mock 下永远显示未建索引，自检脚本没法验证徽标是否真的会消失。
+       */
+      setIndexing(true)
+      await new Promise((r) => { window.setTimeout(r, 300) })
+      setKbInfo((prev) => (prev ? { ...prev, indexedChunks: prev.chunkCount, indexedAt: new Date().toISOString() } : prev))
+      setIndexing(false)
+      toast.success(rebuild ? t.kb.indexRebuilt : t.kb.indexQueued)
+      return
+    }
     setIndexing(true)
     try {
       if (rebuild) await api.knowledge.recreateIndex(kbId)
       else await api.knowledge.index(kbId)
       toast.success(rebuild ? t.kb.indexRebuilt : t.kb.indexQueued)
       await loadFirstDocChunks()
+      /* 索引状态变了，徽标要跟着消失：不刷新 kbInfo 的话，用户建完索引还得手动刷新页面 */
+      void api.knowledge.get(kbId).then(setKbInfo).catch(() => {})
     } catch (e) {
       toast.error(t.kb.indexFail, errMessage(e))
     } finally {
@@ -818,6 +852,19 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
             <h1 className="sr-only">{kbTitle}</h1>
             <div className="kb-top__title-row">
               <div className="chat-head__title">{kbTitle}</div>
+              {notIndexed && (
+                <button
+                  type="button"
+                  className="kb-index-badge"
+                  onClick={() => void runIndex(false)}
+                  disabled={indexing}
+                  title={t.kb.notIndexedHint}
+                >
+                  <AlertTriangle size={12} aria-hidden />
+                  <span className="kb-index-badge__text">{t.kb.notIndexed}</span>
+                  <span className="kb-index-badge__cta">{t.kb.indexNow}</span>
+                </button>
+              )}
               <motion.button
                 type="button"
                 className="btn btn-ghost btn-sm kb-top__edit"
@@ -1363,7 +1410,22 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
                   </AnimatePresence>
                   {!searching && searched && searchQ.trim() && hits.length === 0 && (
                     <div className="kb-adv__onboard">
-                      <StateEmpty icon={<Search size={20} />} title={t.kb.searchBtn} desc={t.kb.noHit} />
+                      {emptyReason === 'NO_INDEX' ? (
+                        /* 「没建索引」与「没相关内容」对用户是两条相反的指令：
+                           前者再换词也白费，唯一有用的是下面这个按钮 */
+                        <StateEmpty
+                          icon={<AlertTriangle size={20} />}
+                          title={t.kb.noIndexTitle}
+                          desc={t.kb.noIndexSearchHint}
+                          action={(
+                            <button className="btn btn-primary btn-sm" type="button" disabled={indexing} onClick={() => void runIndex(false)}>
+                              {t.kb.indexNow}
+                            </button>
+                          )}
+                        />
+                      ) : (
+                        <StateEmpty icon={<Search size={20} />} title={t.kb.searchBtn} desc={t.kb.noHit} />
+                      )}
                     </div>
                   )}
                   {!searched && (

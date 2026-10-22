@@ -850,6 +850,11 @@ let chips = await ctxInfo()
 check('回答上方有上下文胶囊', Array.isArray(chips) && chips.length >= 4, JSON.stringify(chips))
 check('含检索侧信息（命中切片 / 引用篇数）', chips.some((c) => c.t.includes('命中')) && chips.some((c) => c.t.includes('引用')), (chips ?? []).map((c) => c.t).join(' | '))
 check('含历史轮数', chips.some((c) => c.t.includes('历史')), (chips ?? []).map((c) => c.t).join(' | '))
+/*
+ * 反向断言：检索成功的一轮**不能**出现「未建索引」提示。
+ * 那条提示是给 NO_INDEX 准备的——误伤到正常回答比不显示更糟。
+ */
+check('检索成功时不出现未建索引提示', (await page.locator('.cite-hint').count()) === 0)
 
 // 点"引用 N 篇"应打开右侧引用面板（与 P0 的引用面板打通）
 await page.locator('.ctx__chip--btn').first().click()

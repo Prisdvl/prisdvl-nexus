@@ -145,6 +145,21 @@ public class ChunkIndexServiceImpl implements ChunkIndexService {
         chunkIndex.deleteByDocumentIds(List.copyOf(documentIds));
     }
 
+    /**
+     * 读一次库就把三个数拿全（切片总数 / 已入索引数 / 最近写入时间）。
+     *
+     * <p>归属校验沿用 {@code requireOwned}：这三个数本身不敏感，但「谁能看某个库的统计」
+     * 与「谁能检索它」必须是同一套判断，否则越权探测只要换个端点就能拿到库的存在性。
+     */
+    @Override
+    public IndexCoverage coverage(Long userId, Long knowledgeBaseId) {
+        knowledgeBaseService.requireOwned(userId, knowledgeBaseId);
+        return new IndexCoverage(
+                chunkMapper.countByKb(knowledgeBaseId),
+                chunkMapper.countIndexedByKb(knowledgeBaseId),
+                chunkMapper.lastIndexedAt(knowledgeBaseId));
+    }
+
     private Map<Long, DocumentPO> loadDocuments(List<ChunkPO> chunks) {
         List<Long> documentIds = chunks.stream().map(ChunkPO::getDocumentId).distinct().toList();
         Map<Long, DocumentPO> documents = new HashMap<>();

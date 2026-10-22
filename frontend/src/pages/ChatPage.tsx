@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import {
-  BookOpen, Check, ChevronDown, ChevronRight, Copy, Download, GitBranch, Maximize2, MessagesSquare, Minimize2, Pencil, Pin, Plus, RefreshCw, Search, Settings2, Square, Trash2, X,
+  AlertTriangle, BookOpen, Check, ChevronDown, ChevronRight, Copy, Download, GitBranch, Maximize2, MessagesSquare, Minimize2, Pencil, Pin, Plus, RefreshCw, Search, Settings2, Square, Trash2, X,
 } from 'lucide-react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Archive02Icon, Delete02Icon } from '@hugeicons/core-free-icons'
@@ -612,18 +612,35 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
         },
         onRetrieval: (d) => {
           if (!alive()) return
-          /* 事件契约见 RetrievalEvent：count/hits[]/failedKnowledgeBases[] */
+          /* 事件契约见 RetrievalEvent：count/hits[]/failedKnowledgeBases[]/emptyReason */
           const hit = Number(d?.count ?? 0)
           const hitsArr = Array.isArray(d?.hits) ? (d.hits as Record<string, unknown>[]) : []
           const usedDocs = new Set(
             hitsArr.map((h) => h.documentTitle).filter((v): v is string => typeof v === 'string' && !!v),
           ).size
           const failedKbs = Array.isArray(d?.failedKnowledgeBases) ? (d.failedKnowledgeBases as unknown[]) : []
+          /*
+           * 0 命中有两种截然不同的原因：没建索引（要用户去建）与确实没相关内容（换词句）。
+           * 后端已经算好了，这里只负责带下来——不带的话界面只能显示「没找到」，用户做不出下一步。
+           */
+          const emptyReason = typeof d?.emptyReason === 'string' ? (d.emptyReason as 'NO_KB' | 'NO_INDEX' | 'NO_RESULTS') : null
+          const kbIds = Array.isArray(d?.knowledgeBaseIds)
+            ? (d.knowledgeBaseIds as unknown[]).map((v) => String(v)).filter((v) => v && v !== 'null' && v !== 'undefined')
+            : []
           addThoughtStep(c.stepRetrieve(hit))
           if (failedKbs.length) addThoughtStep(c.stepRetrievePartial)
           patchMsg(sessionId, botId, (m) => ({
             ...m,
-            context: { kbs: [], retrieved: hit, usedDocs, scannedDocs: hit, historyTurns: 0, web: false },
+            context: {
+              kbs: [],
+              retrieved: hit,
+              usedDocs,
+              scannedDocs: hit,
+              historyTurns: 0,
+              web: false,
+              ...(emptyReason ? { emptyReason } : {}),
+              ...(kbIds.length ? { kbIds } : {}),
+            },
           }))
         },
         onToolCall: (d) => {
@@ -1644,6 +1661,18 @@ export default function ChatPage({ theme, onOpenDoc, initialConversationId }: Ch
                         )
                       })}
                     </div>
+                  )}
+                  {m.role === 'bot' && m.context?.emptyReason === 'NO_INDEX' && (
+                    /* 0 命中且原因是「未建索引」：给一条能直接执行的出路，而不是只报「没找到」 */
+                    <p className="cite-hint">
+                      <AlertTriangle size={13} aria-hidden="true" />
+                      <span>{c.retrievalNoIndex}</span>
+                      {m.context.kbIds?.[0] ? (
+                        <a className="cite-hint__cta" href={`#/app/kb/${m.context.kbIds[0]}`} data-clickable>
+                          {c.retrievalNoIndexCta}
+                        </a>
+                      ) : null}
+                    </p>
                   )}
                   {m.role === 'bot' && (
                     <span className="msg-state">

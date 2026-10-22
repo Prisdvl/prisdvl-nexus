@@ -3,6 +3,7 @@ package com.lky.nexus.app.knowledge;
 import com.jayway.jsonpath.JsonPath;
 import com.lky.nexus.ai.rag.retriever.RetrievalFilters;
 import com.lky.nexus.knowledge.search.SearchMode;
+import com.lky.nexus.knowledge.service.ChunkIndexService;
 import com.lky.nexus.knowledge.service.ChunkSearchService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -58,6 +59,13 @@ class KnowledgeSearchControllerFilterTest {
 
     @MockitoBean
     private ChunkSearchService chunkSearchService;
+
+    /*
+     * 0 命中时控制器会去问索引覆盖率（emptyReason）。这里 mock 掉：
+     * 本用例关心的是过滤条件绑定，不该顺带打真实 mapper 或触发归属校验。
+     */
+    @MockitoBean
+    private ChunkIndexService chunkIndexService;
 
     @Test
     @DisplayName("多值参数：逗号分隔、重复传参、两者混用，都归一成同一个列表")
@@ -175,6 +183,8 @@ class KnowledgeSearchControllerFilterTest {
                               java.util.function.Consumer<org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder> customizer,
                               RetrievalFilters expected) throws Exception {
         when(chunkSearchService.search(anyLong(), any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(chunkIndexService.coverage(anyLong(), anyLong()))
+                .thenReturn(new ChunkIndexService.IndexCoverage(3, 3, null));
         // 同一个测试方法里会连着发多次请求，而 mock 的调用记录在方法内是累积的：
         // 不清掉的话"这一次发了什么"会被前面的调用混淆（times(1) 直接失败）
         clearInvocations(chunkSearchService);

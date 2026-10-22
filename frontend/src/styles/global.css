@@ -2190,6 +2190,35 @@ button.chip:hover { background: var(--ui-hover); border-color: var(--border-stro
 
 .msg-state { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11.5px; color: var(--text-3); }
 
+/*
+ * 检索 0 命中的可操作提示（只在一个原因下出现：知识库还没建索引）。
+ * 与引用 chip 同一条视觉带：同为「这一轮到底用了什么资料」的说明。
+ */
+.cite-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warning-text, #8a5a00);
+  background: var(--warning-container, rgba(255, 176, 32, 0.14));
+  border: 1px solid var(--warning-border, rgba(255, 176, 32, 0.36));
+  border-radius: 8px;
+}
+.cite-hint > svg { flex: none; }
+.cite-hint__cta {
+  flex: none;
+  font-weight: 600;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.cite-hint__cta:hover { opacity: 0.8; }
+
 .thinking-block { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
 .thinking-head { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text-2); }
 

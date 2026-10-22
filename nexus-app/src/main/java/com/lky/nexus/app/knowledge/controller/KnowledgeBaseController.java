@@ -7,6 +7,7 @@ import com.lky.nexus.common.api.Result;
 import com.lky.nexus.knowledge.model.dto.CreateKnowledgeBaseRequest;
 import com.lky.nexus.knowledge.model.dto.KnowledgeBaseResponse;
 import com.lky.nexus.knowledge.model.dto.UpdateKnowledgeBaseRequest;
+import com.lky.nexus.knowledge.service.ChunkIndexService;
 import com.lky.nexus.knowledge.service.KnowledgeBaseService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -31,11 +32,20 @@ public class KnowledgeBaseController {
 
     private final KnowledgeBaseService knowledgeBaseService;
     private final WorkspaceService workspaceService;
+    /**
+     * 只用来给详情接口补「索引覆盖」（切片总数 / 已入索引数 / 最近建索引时间）。
+     *
+     * <p>不在 {@code KnowledgeBaseServiceImpl} 里算：那边为了避开构造器循环依赖，
+     * 刻意只依赖 {@code VectorStore} / {@code ChunkIndex} 端口，不依赖 {@code ChunkIndexService}。
+     */
+    private final ChunkIndexService chunkIndexService;
 
     public KnowledgeBaseController(KnowledgeBaseService knowledgeBaseService,
-                                   WorkspaceService workspaceService) {
+                                   WorkspaceService workspaceService,
+                                   ChunkIndexService chunkIndexService) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.workspaceService = workspaceService;
+        this.chunkIndexService = chunkIndexService;
     }
 
     /** 新建知识库；workspace 由 app 层解析为本人个人空间（knowledge 模块不依赖工作区服务）。 */
@@ -56,10 +66,15 @@ public class KnowledgeBaseController {
         return Result.ok(knowledgeBaseService.list(CurrentUser.requireId(), pageNum, pageSize));
     }
 
-    /** 查看单个知识库详情（非本人返回 404）。 */
+    /** 查看单个知识库详情（非本人返回 404）；附带索引覆盖，供界面判断是否还没建索引。 */
     @GetMapping("/{knowledgeBaseId}")
     public Result<KnowledgeBaseResponse> detail(@PathVariable Long knowledgeBaseId) {
-        return Result.ok(knowledgeBaseService.detail(CurrentUser.requireId(), knowledgeBaseId));
+        Long userId = CurrentUser.requireId();
+        KnowledgeBaseResponse detail = knowledgeBaseService.detail(userId, knowledgeBaseId);
+        ChunkIndexService.IndexCoverage coverage = chunkIndexService.coverage(userId, knowledgeBaseId);
+        return Result.ok(detail.withIndex(
+                Math.toIntExact(coverage.indexedChunkCount()),
+                coverage.lastIndexedAt()));
     }
 
     /** 更新知识库（非本人返回 404）。 */

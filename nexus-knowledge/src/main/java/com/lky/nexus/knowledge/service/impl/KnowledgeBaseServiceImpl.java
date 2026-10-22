@@ -393,6 +393,10 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                 entity.getSimilarityThreshold(),
                 entity.getDocCount(),
                 entity.getChunkCount(),
+                /* 索引覆盖只在详情接口补（KnowledgeBaseController#detail 用 withIndex），
+                   列表逐库查会变成 N+1；这里传 null 表示"没算"，不是"没有" */
+                null,
+                null,
                 entity.getTotalTokens(),
                 usedBytes,
                 entity.getCreatedAt(),

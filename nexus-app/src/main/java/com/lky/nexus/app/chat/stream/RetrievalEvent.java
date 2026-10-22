@@ -1,6 +1,7 @@
 package com.lky.nexus.app.chat.stream;
 
 import com.lky.nexus.knowledge.rag.PreparedAnswer;
+import com.lky.nexus.knowledge.search.EmptyReason;
 
 import java.util.HashMap;
 import java.util.List;
@@ -44,6 +45,20 @@ public final class RetrievalEvent {
      *                         省略事件会让前端把它当成"还没检索完"一直等下去
      */
     public static Map<String, Object> of(List<Long> knowledgeBaseIds, PreparedAnswer prepared) {
+        return of(knowledgeBaseIds, prepared, null);
+    }
+
+    /**
+     * 同上，但带上「为什么 0 命中」。
+     *
+     * <p>{@code empty=true} 只说了"没检索到"，没说"为什么"，而这两种原因的处置完全相反：
+     * 库没建索引时再换几次问法都是白费（该去点「建索引」），索引正常则值得改关键词。
+     * 所以原因与命中明细必须在同一个事件里到达——分开推，界面就可能先渲染"无结果"再补提示。
+     *
+     * @param emptyReason {@code NO_KB} / {@code NO_INDEX} / {@code NO_RESULTS}，有命中时为 {@code null}
+     */
+    public static Map<String, Object> of(List<Long> knowledgeBaseIds, PreparedAnswer prepared,
+                                         EmptyReason emptyReason) {
         List<Map<String, Object>> hits = hits(prepared);
         Map<String, Object> payload = new HashMap<>();
         payload.put("knowledgeBaseIds",
@@ -55,6 +70,8 @@ public final class RetrievalEvent {
         payload.put("reranked", prepared.reranked());
         payload.put("empty", prepared.empty());
         payload.put("failedKnowledgeBases", failedKnowledgeBases(prepared));
+        // 有命中就不发原因：两个字段同时有值，前端总得猜哪个是权威
+        payload.put("emptyReason", hits.isEmpty() && emptyReason != null ? emptyReason.name() : null);
         return payload;
     }
 

@@ -555,7 +555,7 @@ export const api = {
     remove: (id: string) => http.delete<Result<null>>(`/knowledge-bases/${id}`).then((r) => r.data.data),
     /** 检索：mode=bm25|vector|hybrid（三种都开放，便于对照融合效果）。 */
     search: (kbId: string, q: string, mode = 'hybrid', topK?: number) =>
-      http.get<Result<SearchHit[]>>(`/knowledge-bases/${kbId}/search`, {
+      http.get<Result<KnowledgeSearchResult>>(`/knowledge-bases/${kbId}/search`, {
         params: { q, mode, ...(topK ? { topK } : {}) },
       }).then((r) => r.data.data),
     /** 为待索引切片建索引（幂等，可重复调用）。 */
@@ -727,6 +727,16 @@ export interface KnowledgeBase {
   status: string
   docCount: number
   chunkCount: number
+  /**
+   * 已写进检索索引的切片数。只有详情接口（GET /knowledge-bases/{id}）会算，
+   * 列表接口为 null——判断「这个库到底建没建索引」只在详情页需要。
+   *
+   * `chunkCount > 0 && indexedChunks === 0` 就是「导入完成但没建索引」，
+   * 这种库检索永远 0 命中，界面要显式提示。
+   */
+  indexedChunks?: number | null
+  /** 最近一次建索引的时间；从未建过为 null */
+  indexedAt?: string | null
   totalTokens: string | number
   embeddingModel?: string
   /** 已入库文档的原始文件字节合计（单库配额口径）；老后端没有该字段 */
@@ -872,6 +882,23 @@ export interface RagCitation { documentId?: string; documentName?: string; chunk
 export interface RagAnswer { answer: string; citations: RagCitation[] }
 
 export interface SearchHit { chunkId?: string; id?: string; documentId?: string; documentName?: string; headingPath?: string; content?: string; score?: number }
+
+/**
+ * 检索为空的原因。
+ *
+ * - `NO_KB`：没有可检索的库（没绑定 / 全被禁用 / 绑定的都已被删）
+ * - `NO_INDEX`：库里有切片但还没建索引——换多少关键词都不可能有结果
+ * - `NO_RESULTS`：索引正常，但确实没有相关内容
+ *
+ * 有命中时后端给 `null`：没有问题就不该有答案。
+ */
+export type SearchEmptyReason = 'NO_KB' | 'NO_INDEX' | 'NO_RESULTS'
+
+/** `GET /knowledge-bases/{id}/search` 的响应：命中 + （为空时）原因。 */
+export interface KnowledgeSearchResult {
+  hits: SearchHit[]
+  emptyReason: SearchEmptyReason | null
+}
 export interface ChunkView { id: string; chunkIndex: number; chunkType: string; headingPath: string | null; content: string; tokenCount: number; charCount: number; vectorStatus: string; esStatus: string }
 
 export interface DocLink { linkId?: string; linkType?: string; target?: string; display?: string; resolvedDocumentId?: string; resolvedTitle?: string; external?: boolean }

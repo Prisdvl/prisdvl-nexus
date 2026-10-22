@@ -34,10 +34,39 @@ public interface ChunkIndexService {
     void deleteByDocumentIds(java.util.Collection<Long> documentIds);
 
     /**
+     * 该知识库的索引覆盖情况：一共多少切片、其中多少已进索引、最近一次写入的时间。
+     *
+     * <p><b>为什么单独一个方法</b>：这两个数决定的是"检索为 0 命中时该怎么解释给用户"，
+     * 而不是"索引写得好不好"。放在 {@link #indexPendingChunks} 的返回值里只能回答后者，
+     * 而且只有刚跑过建索引的人拿得到——真正需要它的是<b>没跑过</b>的那位用户。
+     */
+    IndexCoverage coverage(Long userId, Long knowledgeBaseId);
+
+    /**
      * @param total    本次取出的待索引切片数
      * @param indexed  成功写入 ES 的条数
      * @param costMillis 耗时
      */
     record IndexResult(int total, int indexed, long costMillis) {
+    }
+
+    /**
+     * 索引覆盖快照。
+     *
+     * @param chunkCount      切片总数（有内容才有得索引）
+     * @param indexedChunkCount 已写入索引的切片数（{@code es_status = 'DONE'}）
+     * @param lastIndexedAt   最近一次写入索引的时间；从未建过索引时是 {@code null}
+     */
+    record IndexCoverage(long chunkCount, long indexedChunkCount, java.time.LocalDateTime lastIndexedAt) {
+
+        /** 有切片但一条都没进索引：这个库现在检索不到任何东西，且换关键词也没用。 */
+        public boolean notIndexed() {
+            return chunkCount > 0 && indexedChunkCount == 0;
+        }
+
+        /** 一条切片都没有：库是空的，谈不上"没建索引"。 */
+        public boolean empty() {
+            return chunkCount == 0;
+        }
     }
 }

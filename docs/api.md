@@ -534,7 +534,7 @@ GET /api/import-tasks/9001
 | --- | --- | --- |
 | POST | `/api/knowledge-bases/{id}/index` | 为待索引切片建索引（幂等，`batchLimit` 默认 500） |
 | POST | `/api/knowledge-bases/{id}/index/recreate` | 重建索引：新建物理索引 → 原子切别名 |
-| GET | `/api/knowledge-bases/{id}/search` | 检索：`q`（必填）、`mode`、`topK`、`tags`、`folder`、`documentId` |
+| GET | `/api/knowledge-bases/{id}/search` | 检索：`q`（必填）、`mode`、`topK`、`tags`、`folder`、`documentId`。返回 `{ hits, emptyReason }`，0 命中时 `emptyReason` 说明原因 |
 
 查询参数语义（Phase 3.3）：
 
@@ -555,10 +555,30 @@ GET /api/import-tasks/9001
 GET /api/knowledge-bases/1/search?q=缓存击穿&mode=hybrid&tags=Redis,缓存&folder=Redis
 
 200 OK
-{ "code": 0, "data": [
-  { "chunkId": 20001, "documentId": 100, "documentTitle": "缓存击穿.md",
-    "headingPath": "Redis > 缓存 > 缓存击穿", "content": "……互斥锁方案……",
-    "score": 0.0324, "source": "hybrid", "matchedBy": ["BM25 #2", "向量 #1"] } ] }
+{ "code": 0, "data": {
+  "hits": [
+    { "chunkId": 20001, "documentId": 100, "documentTitle": "缓存击穿.md",
+      "headingPath": "Redis > 缓存 > 缓存击穿", "content": "……互斥锁方案……",
+      "score": 0.0324, "source": "hybrid", "matchedBy": ["BM25 #2", "向量 #1"] } ],
+  "emptyReason": null } }
+```
+
+`emptyReason`（**只在 `hits` 为空时有值**，有命中一律 `null`）：
+
+| 值 | 含义 | 用户该做什么 |
+| --- | --- | --- |
+| `NO_INDEX` | 库里有切片，但**没有一片进了检索索引**（导入文档 ≠ 建索引） | 去知识库详情页点「建索引」，在此之前任何关键词都不可能命中 |
+| `NO_RESULTS` | 索引存在，但这次查询确实没命中 | 换关键词 / 放宽 `tags`、`folder`、`documentId` |
+| `NO_KB` | 会话或 Agent 没绑定可检索的知识库 | 给会话/Agent 选一个知识库 |
+
+> 这三种事实对用户的下一步是**相反**的指令，所以不能都压成一个空数组。
+> 覆盖率的判定成本只在 0 命中时付（多几条 `count`），有命中时不查。
+
+```http
+GET /api/knowledge-bases/1/search?q=不存在的词
+
+200 OK
+{ "code": 0, "data": { "hits": [], "emptyReason": "NO_INDEX" } }
 ```
 
 ### 4.2 规划中（尚未实现）

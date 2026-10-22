@@ -207,6 +207,14 @@ export interface AppCopy {
     emptySearchTitle: string
     emptySearchDesc: string
     noHit: string
+    /** 「未建索引」徽标（只在详情页：有切片但一片都没进索引） */
+    notIndexed: string
+    notIndexedHint: string
+    /** 徽标上的按钮：一键建索引 */
+    indexNow: string
+    /** 检索 0 命中且原因为 NO_INDEX 时的空态 */
+    noIndexTitle: string
+    noIndexSearchHint: string
     resultsCount: (n: number) => string
     score: string
     linksAria: string
@@ -674,6 +682,11 @@ const ZH: AppCopy = {
     emptySearchTitle: '切片检索',
     emptySearchDesc: '输入关键词，直接在本库的解析切片里做 BM25 / 向量 / 混合检索，不调用模型。',
     noHit: '没有命中。若左侧提示有未建索引切片，先建立索引再检索。',
+    notIndexed: '未建索引',
+    notIndexedHint: '这个库有切片但还没写进检索索引：现在检索一定 0 命中。点这里立即建索引。',
+    indexNow: '立即建索引',
+    noIndexTitle: '这个知识库还没建索引',
+    noIndexSearchHint: '文档已经导入，但切片还没写进检索索引，所以任何关键词都搜不到。点下面的按钮建索引，完成后再检索一次。',
     resultsCount: (n) => `命中 ${n} 条切片`,
     score: '相似度',
     linksAria: '关联图谱',
@@ -1096,6 +1109,11 @@ const EN: AppCopy = {
     emptySearchTitle: 'Chunk search',
     emptySearchDesc: 'Enter keywords to run BM25 / vector / hybrid search directly over parsed chunks — no model involved.',
     noHit: 'No hits. If the index panel shows pending chunks, build the index first.',
+    notIndexed: 'Not indexed',
+    notIndexedHint: 'This base has chunks but none of them are in the search index yet — every search will return 0 hits. Click to build the index now.',
+    indexNow: 'Build index',
+    noIndexTitle: 'This knowledge base is not indexed yet',
+    noIndexSearchHint: 'Documents are imported, but their chunks are not in the search index, so no keyword can match. Build the index, then search again.',
     resultsCount: (n) => `${n} ${n === 1 ? 'chunk' : 'chunks'} hit`,
     score: 'Score',
     linksAria: 'Link graph',

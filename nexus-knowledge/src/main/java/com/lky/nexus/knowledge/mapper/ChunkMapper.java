@@ -54,4 +54,29 @@ public interface ChunkMapper extends BaseMapper<ChunkPO> {
      */
     @Select("SELECT COALESCE(SUM(token_count), 0) FROM kb_chunk WHERE kb_id = #{kbId}")
     long sumTokenCount(@Param("kbId") Long kbId);
+
+    /**
+     * 该知识库的切片总数。
+     *
+     * <p>与 {@link #countIndexedByKb} 成对使用才表达得清「导入 ≠ 建索引」：
+     * 前者大于 0 而后者等于 0，就是这个库还没建过索引——检索永远不可能命中，
+     * 而界面上只显示「0 条结果」，用户会以为检索坏了。
+     */
+    @Select("SELECT COUNT(*) FROM kb_chunk WHERE kb_id = #{kbId}")
+    long countByKb(@Param("kbId") Long kbId);
+
+    /** 已写入检索索引（{@code es_status = 'DONE'}）的切片数。 */
+    @Select("SELECT COUNT(*) FROM kb_chunk WHERE kb_id = #{kbId} AND es_status = 'DONE'")
+    long countIndexedByKb(@Param("kbId") Long kbId);
+
+    /**
+     * 最近一次把切片写进索引的时间；该库从未建过索引时返回 {@code null}。
+     *
+     * <p>用切片的 {@code updated_at} 近似：写索引会更新这些行，而
+     * {@code kb_chunk.updated_at} 是 {@code ON UPDATE CURRENT_TIMESTAMP(3)}。
+     * 再单开一列「索引时间」只会让「最近一次建索引」和「最后一次改切片」互相打架，
+     * 而这里要回答的问题只有一个——「它到底建过没有」。
+     */
+    @Select("SELECT MAX(updated_at) FROM kb_chunk WHERE kb_id = #{kbId} AND es_status = 'DONE'")
+    java.time.LocalDateTime lastIndexedAt(@Param("kbId") Long kbId);
 }
