@@ -47,9 +47,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
       # 纯逻辑测试：不启浏览器、不连后端，node:test + --experimental-strip-types 直接跑 .mts。
-      # 这两个文件是导入进度与欢迎区示例问题的规则模块，属于"改错了就该红"的最小防线。
+      # 这三个文件是导入进度、欢迎区示例问题、Markdown 围栏规整的规则模块，属于"改错了就该红"的最小防线。
       - name: Pure logic tests (node:test, no browser, no backend)
-        run: node --experimental-strip-types --test scripts/import-progress.test.mts scripts/kb-starters.test.mts
+        run: node --experimental-strip-types --test scripts/import-progress.test.mts scripts/kb-starters.test.mts scripts/markdown-fences.test.mts
       - name: Typecheck + production build
         run: npm run build
 

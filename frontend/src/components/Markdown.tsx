@@ -3,6 +3,7 @@ import { marked } from 'marked'
 import type { ThemeMode } from '@/lib/types'
 import { appCopy } from '@/lib/appCopy'
 import { useLocale } from '@/lib/locale'
+import { normalizeFences } from '@/lib/markdown-fences'
 
 interface MarkdownProps {
   text: string
@@ -20,7 +21,11 @@ const loadMermaid = () => {
 /** Markdown 正文渲染：标题 / 列表 / 表格 / 行内代码 / 代码块 / Mermaid 图 */
 export default function Markdown({ text, theme, className = '' }: MarkdownProps) {
   const mermaidFail = appCopy(useLocale().locale).shell.mermaidFail
-  const html = useMemo(() => marked.parse(text, { async: false, gfm: true, breaks: true }) as string, [text])
+  /* 先规整围栏：模型把收尾 ``` 粘在代码行尾时，marked 会把后面整段正文当成代码块 */
+  const html = useMemo(
+    () => marked.parse(normalizeFences(text), { async: false, gfm: true, breaks: true }) as string,
+    [text],
+  )
   const ref = useRef<HTMLDivElement>(null)
   const [mermaidErr, setMermaidErr] = useState<string | null>(null)
 
