@@ -3,6 +3,7 @@ package com.lky.nexus.app.agent.tool;
 import com.lky.nexus.ai.agent.AgentDefinition;
 import com.lky.nexus.app.agent.approval.ToolApprovalService;
 import com.lky.nexus.app.agent.approval.ToolInvocationAuditService;
+import com.lky.nexus.app.plugin.mcp.McpToolInjector;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +11,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -38,17 +40,20 @@ public class AgentToolFactory {
     private static final Logger log = LoggerFactory.getLogger(AgentToolFactory.class);
 
     private final ToolRegistry registry;
+    private final McpToolInjector mcpInjector;
     private final ObservabilityRegistry observability;
     private final ToolAuthorizationService authorization;
     private final ToolApprovalService approvalService;
     private final ToolInvocationAuditService auditService;
 
     public AgentToolFactory(ToolRegistry registry,
+                            McpToolInjector mcpInjector,
                             ObservabilityRegistry observability,
                             ToolAuthorizationService authorization,
                             ToolApprovalService approvalService,
                             ToolInvocationAuditService auditService) {
         this.registry = registry;
+        this.mcpInjector = mcpInjector;
         this.observability = observability;
         this.authorization = authorization;
         this.approvalService = approvalService;
@@ -57,10 +62,14 @@ public class AgentToolFactory {
 
     /** 装配出带执行壳的回调数组；顺序即工具登记顺序（提示词里给模型的顺序稳定，行为才可复现）。 */
     public ToolCallback[] assemble(Long userId, AgentDefinition definition) {
-        List<ToolCatalog.Registered> tools = registry.resolveFor(userId, definition);
+        // 内置工具在前、外部 MCP 工具在后：内置的是这个平台的"自己的手"，
+        // 顺序变了会让模型的选择倾向跟着变，而这不该由"用户接了几个 server"决定
+        List<ToolCatalog.Registered> tools = new ArrayList<>(registry.resolveFor(userId, definition));
+        tools.addAll(mcpInjector.toolsFor(userId, definition));
         ToolCallback[] callbacks = tools.stream()
                 // 装配点永远带上授权闸门（P0）：模型的每一次工具调用都经过统一执行入口，
-                // 不存在"某个 provider 的工具绕过审批"这条路——因为回调是这里造出来的
+                // 不存在"某个 provider 的工具绕过审批"这条路——因为回调是这里造出来的。
+                // 外部 MCP 工具同样走这里，于是它们与内置工具共享同一套审批与留痕。
                 .map(tool -> (ToolCallback) new ExecutingToolCallback(
                         tool, observability, authorization, approvalService, auditService))
                 .toArray(ToolCallback[]::new);

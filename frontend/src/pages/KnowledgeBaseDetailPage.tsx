@@ -24,7 +24,7 @@ import { toast } from '@/lib/toast'
 import { download } from '@/lib/download'
 import { EFFORT_TO_TOPK, promptEfforts, promptKbCommands } from '@/lib/promptBarPreset'
 import { DOCS, type DocItem } from '@/data'
-import { api, USE_MOCK, errMessage, type ChunkView, type DocumentLinks, type ImportTask, type KnowledgeBase, type RelatedDoc, type SearchEmptyReason, type SearchHit } from '@/lib/api'
+import { api, USE_MOCK, errMessage, type ChunkView, type DocumentLinks, type ImportTask, type KnowledgeBase, type RelatedDoc, type SearchEmptyReason, type SearchHit, type SearchModeInput } from '@/lib/api'
 import {
   barOf, isTerminalStatus, phaseOfAction, phaseOfStatus, pickItem, type ImportPhase,
 } from '@/lib/importProgress'
@@ -191,6 +191,14 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const [hits, setHits] = useState<SearchHit[]>([])
   /** 上一次检索为空的原因（null=有命中/还没搜）：决定空态是「换词」还是「去建索引」 */
   const [emptyReason, setEmptyReason] = useState<SearchEmptyReason | null>(null)
+  /**
+   * 上次检索里「有库没参与」的说明（跨库检索才会出现）。
+   *
+   * <p>单库检索会整批失败（一个库就是全部），跨库检索则允许部分失败——
+   * 此时列表里可能有结果，但用户必须知道"还有几个库没搜到"，否则会把
+   * "某个库挂了"误读成"那个库里没有"。
+   */
+  const [degradedKbs, setDegradedKbs] = useState<string[]>([])
   const [searching, setSearching] = useState(false)
   const [searched, setSearched] = useState(false)
   const [chunks, setChunks] = useState<ChunkView[]>([])
@@ -445,6 +453,7 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
     setSearching(true)
     setHits([])
     setEmptyReason(null)
+    setDegradedKbs([])
     try {
       if (USE_MOCK) {
         await new Promise((r) => { window.setTimeout(r, 400) })
@@ -452,10 +461,31 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
         setHits(notIndexed ? [] : MOCK_SEARCH_HITS)
         setEmptyReason(notIndexed ? 'NO_INDEX' : null)
       } else {
-        const result = await api.knowledge.search(kbId, q, usage.mode, usage.topK)
-        setHits(result.hits)
+        /*
+         * 走 §4.2 的跨库统一检索（这里只点名一个库）：它比单库端点多两件真实信息——
+         * 命中带上来源库、失败的库进 degradedKbs；rerank 打开是因为「高级检索」这一页
+         * 本来就是给愿意多等一次模型调用的场景用的。
+         */
+        const result = await api.search.run({
+          q,
+          kbIds: [kbId],
+          /* usage.mode 的取值就是页面那三个 chip（bm25/vector/hybrid），后端大小写不敏感 */
+          mode: usage.mode as SearchModeInput,
+          topK: usage.topK,
+          rerank: true,
+        })
+        /* 统一检索的字段名（snippet/documentTitle）翻译回本页的视图模型，模板不必分叉 */
+        setHits(result.hits.map((h) => ({
+          chunkId: h.chunkId,
+          documentId: h.documentId ?? undefined,
+          documentName: h.documentTitle ?? undefined,
+          headingPath: h.headingPath ?? undefined,
+          content: h.snippet ?? undefined,
+          score: h.score,
+        })))
         /* 0 命中时后端会说清是「没建索引」还是「确实没有」——两者对用户是相反的指令 */
         setEmptyReason(result.emptyReason ?? null)
+        setDegradedKbs(result.degradedKbs.map((d) => `${d.kbName}：${d.reason}`))
       }
       setSearched(true)
       /* 真正跑过一次，当前取值才算"已生效" */
@@ -1383,6 +1413,12 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
                 <div className="kb-adv__results">
                   {searched && hits.length > 0 && (
                     <p className="kb-adv__count">{t.kb.resultsCount(hits.length)}</p>
+                  )}
+                  {/* 有结果时的降级最容易被忽略：不提一句，用户会把"某个库挂了"读成"那个库里没有" */}
+                  {degradedKbs.length > 0 && (
+                    <p className="kb-adv__degraded" role="status">
+                      {t.kb.searchFail}：{degradedKbs.join('；')}
+                    </p>
                   )}
                   <AnimatePresence mode="popLayout">
                     {hits.map((h, i) => {

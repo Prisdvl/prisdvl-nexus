@@ -2,6 +2,7 @@ package com.lky.nexus.app.agent.tool;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.lky.nexus.ai.agent.ToolDefinition;
+import com.lky.nexus.ai.agent.ToolCategory;
 import com.lky.nexus.ai.agent.ToolPermission;
 import com.lky.nexus.app.agent.mapper.ToolRegistryMapper;
 import com.lky.nexus.app.agent.model.entity.ToolRegistryPO;
@@ -72,6 +73,60 @@ public class ToolRegistrationService {
         }
         log.info("工具注册表同步完成：新增 {} 条，刷新描述 {} 条（permission 与 enabled 保留库中原值）",
                 created, refreshed);
+    }
+
+    /**
+     * 登记一个<b>运行时才发现</b>的工具（外部 MCP server 的工具）。
+     *
+     * <p>为什么非要落库：{@link ToolAuthorizationService} 执行前会先
+     * {@code requireRegistered(code)}，查不到就是「工具未注册，拒绝执行」。
+     * 不登记的话，模型能看见这个工具、但一调就被自己的授权闸门拒掉——
+     * 那种"看得见点不动"的失败最难排查。
+     *
+     * <p>规则与启动同步一致：不存在则按传入值插入；已存在<b>只刷新描述性字段</b>，
+     * 绝不覆盖 permission / enabled。否则用户手动把某个 MCP 工具停用，
+     * 下次 probe 又会被悄悄启用回来。
+     */
+    @Transactional
+    public void registerExternal(String code, String name, String description,
+                                 ToolCategory category, ToolPermission permission, String source) {
+        if (code == null || code.isBlank()) {
+            return;
+        }
+        String normalizedCode = code.trim();
+        ToolRegistryPO existing = findByCode(normalizedCode).orElse(null);
+        if (existing == null) {
+            ToolRegistryPO row = new ToolRegistryPO();
+            row.setCode(normalizedCode);
+            row.setName(name == null || name.isBlank() ? normalizedCode : name);
+            row.setDescription(description);
+            row.setSource(source == null || source.isBlank() ? "MCP" : source);
+            row.setCategory((category == null ? ToolCategory.OTHER : category).name());
+            row.setPermission((permission == null ? ToolPermission.READ : permission).name());
+            row.setEnabled(true);
+            LocalDateTime now = LocalDateTime.now();
+            row.setCreatedAt(now);
+            row.setUpdatedAt(now);
+            mapper.insert(row);
+            return;
+        }
+        boolean changed = false;
+        if (name != null && !name.isBlank() && !Objects.equals(existing.getName(), name)) {
+            existing.setName(name);
+            changed = true;
+        }
+        if (!Objects.equals(existing.getDescription(), description)) {
+            existing.setDescription(description);
+            changed = true;
+        }
+        if (category != null && !Objects.equals(existing.getCategory(), category.name())) {
+            existing.setCategory(category.name());
+            changed = true;
+        }
+        if (changed) {
+            existing.setUpdatedAt(LocalDateTime.now());
+            mapper.updateById(existing);
+        }
     }
 
     public Optional<ToolRegistryPO> findByCode(String code) {

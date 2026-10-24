@@ -1,6 +1,7 @@
 package com.lky.nexus.knowledge.rag;
 
 import com.lky.nexus.common.observe.ObservabilityRegistry;
+import com.lky.nexus.common.observe.ObserveScenes;
 import com.lky.nexus.common.security.UserContextKeys;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -364,7 +365,13 @@ public class RagAnswerServiceImpl implements RagAnswerService {
                     .user(userMessage(question, prepared, history))
                     // token 记账归属（5.6）：注意这里拿的是 .content()，调用方手上没有 usage 对象；
                     // 记账由 UsageMeteringAdvisor 在 ChatResponse 那一层完成，与本行拿什么无关
-                    .advisors(a -> a.param(UserContextKeys.USER_ID, userId))
+                    //
+                    // 观测（§10.1）：只带 scene，不带 requestId——requestId 的持有者在
+                    // nexus-app 的请求线程上（RequestIdHolder），nexus-knowledge 不依赖应用层。
+                    // 于是同步 RAG 的明细按调用各自成行；这是可接受的取舍，好过为一行埋点
+                    // 把模块依赖反转过来（那会让知识库单独可测的边界消失）
+                    .advisors(a -> a.param(UserContextKeys.USER_ID, userId)
+                            .param(UserContextKeys.SCENE, ObserveScenes.RAG))
                     .call()
                     .content();
         } catch (Exception ex) {

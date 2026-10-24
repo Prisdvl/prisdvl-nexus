@@ -1,21 +1,24 @@
-import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import {
   BadgeCheck, Blocks, BookOpen, Check, CircleDot, Download, FileUp, MoreHorizontal,
-  Package, Plus, Puzzle, Search, Server, Settings2, Sparkles, Star, X,
+  Package, Plus, Puzzle, Search, Server, Settings2, Sparkles, Star, Trash2, X, Zap,
 } from 'lucide-react'
 import Modal from '@/components/Modal'
-import { StateEmpty } from '@/components/Skeleton'
+import { SkeletonRows, StateEmpty } from '@/components/Skeleton'
 import { toast } from '@/lib/toast'
 import { appCopy } from '@/lib/appCopy'
 import { pagesCopy } from '@/lib/pagesCopy'
 import { useLocale } from '@/lib/locale'
 import {
   MCP_SERVERS, PLUGIN_CATALOG, parseSkillContent,
-  readInstalledPlugins, readMcpState, readSkills,
-  writeInstalledPlugins, writeMcpState, writeSkills,
+  readSkills, writeSkills,
   type PluginCategory, type PluginMeta, type SkillPack,
 } from '@/lib/plugins'
+import {
+  api, errMessage, USE_MOCK,
+  type BackendMcpServer, type McpProbeResult, type McpServerPayload, type McpTransport,
+} from '@/lib/api'
 import '@/styles/plugins.css'
 
 type Tab = 'installed' | 'market' | 'mcp'
@@ -30,6 +33,51 @@ const CATEGORY_ICONS: Record<PluginCategory, typeof Puzzle> = {
   skill: Package,
 }
 
+/** 页面里的 MCP 视图：把后端的 `BackendMcpServer` 与 mock 的 `McpServerMeta` 收敛成一种形状。 */
+interface McpView {
+  id: string
+  name: string
+  transport: McpTransport
+  url: string
+  command: string
+  enabled: boolean
+  tools: { name: string; description: string }[]
+  lastOkAt: string | null
+  lastError: string | null
+  hasAuthHeader: boolean
+}
+
+function fromBackend(server: BackendMcpServer): McpView {
+  return {
+    id: server.id,
+    name: server.name,
+    transport: server.transport === 'stdio' ? 'stdio' : 'http',
+    url: server.url ?? '',
+    command: server.command ?? '',
+    enabled: server.enabled,
+    tools: server.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+    lastOkAt: server.lastOkAt,
+    lastError: server.lastError,
+    hasAuthHeader: server.hasAuthHeader,
+  }
+}
+
+/** 演示数据：房间里的四个假服务，让 mock 模式与 `verify-market.mjs` 有东西可渲染。 */
+function mockServers(): McpView[] {
+  return MCP_SERVERS.map((server) => ({
+    id: server.id,
+    name: server.name,
+    transport: 'http' as const,
+    url: server.endpoint,
+    command: '',
+    enabled: server.connected,
+    tools: server.tools.map((name) => ({ name, description: '' })),
+    lastOkAt: null,
+    lastError: null,
+    hasAuthHeader: false,
+  }))
+}
+
 export default function PluginsPage() {
   const { locale } = useLocale()
   const common = appCopy(locale).common
@@ -38,25 +86,54 @@ export default function PluginsPage() {
   const [tab, setTab] = useState<Tab>('market')
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<PluginCategory | 'all'>('all')
-  const [installed, setInstalled] = useState<string[]>(() => readInstalledPlugins())
+  const [installed, setInstalled] = useState<string[]>(USE_MOCK ? ['nexus-mcp-bridge', 'web-fetch'] : [])
   const [skills, setSkills] = useState<SkillPack[]>(() => readSkills())
-  const [mcpState, setMcpState] = useState<Record<string, boolean>>(() => readMcpState())
-  const [mcpConfigs, setMcpConfigs] = useState<Record<string, { name: string; endpoint: string }>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('nx-plugins-mcp-config') ?? '{}') as Record<string, { name: string; endpoint: string }>
-    } catch {
-      return {}
-    }
-  })
+  const [servers, setServers] = useState<McpView[]>(USE_MOCK ? mockServers() : [])
+  const [loading, setLoading] = useState(!USE_MOCK)
   const [detail, setDetail] = useState<PluginMeta | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [importFileName, setImportFileName] = useState('')
-  const [mcpTarget, setMcpTarget] = useState<string | null>(null)
-  const [mcpName, setMcpName] = useState('')
-  const [mcpEndpoint, setMcpEndpoint] = useState('')
-  const [mcpToken, setMcpToken] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+
+  /* MCP 编辑弹窗：editing 为 null 表示新建 */
+  const [mcpOpen, setMcpOpen] = useState(false)
+  const [editing, setEditing] = useState<McpView | null>(null)
+  const [mcpName, setMcpName] = useState('')
+  const [mcpTransport, setMcpTransport] = useState<McpTransport>('http')
+  const [mcpUrl, setMcpUrl] = useState('')
+  const [mcpCommand, setMcpCommand] = useState('')
+  const [mcpToken, setMcpToken] = useState('')
+  const [probing, setProbing] = useState(false)
+  const [probe, setProbe] = useState<McpProbeResult | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  const when = useCallback((iso: string | null) => (
+    iso ? new Date(iso).toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
+  ), [locale])
+
+  /* 真实模式：插件状态与 MCP server 都从后端来；mock 模式用本地演示数据 */
+  useEffect(() => {
+    if (USE_MOCK) return
+    let alive = true
+    setLoading(true)
+    Promise.all([api.plugins.list(), api.mcpServers.list()])
+      .then(([plugins, mcpList]) => {
+        if (!alive) return
+        setInstalled(plugins.filter((item) => item.enabled).map((item) => item.code))
+        setServers(mcpList.map(fromBackend))
+      })
+      .catch((error: unknown) => {
+        if (alive) toast.error(p.loadFailed, errMessage(error))
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const categories = useMemo(() => ['all', ...new Set(PLUGIN_CATALOG.map((x) => x.category))], [])
   const marketList = useMemo(() => {
@@ -77,10 +154,10 @@ export default function PluginsPage() {
     const q = query.trim().toLowerCase()
     return skills.filter((s) => !q || [s.name, s.description].join(' ').toLowerCase().includes(q))
   }, [query, skills])
-  const mcpServers = useMemo(() => MCP_SERVERS.map((s) => ({
-    ...s,
-    connected: mcpState[s.id] ?? s.connected,
-  })), [mcpState])
+  const visibleServers = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return servers.filter((s) => !q || [s.name, s.url, s.command].join(' ').toLowerCase().includes(q))
+  }, [query, servers])
 
   /* Codex 式分组：推荐在前，其余按能力类别归组，行内不再用卡片包裹 */
   const pluginGroups = useMemo(() => {
@@ -138,15 +215,26 @@ export default function PluginsPage() {
     )
   }
 
-  const persistInstalled = (ids: string[]) => {
-    setInstalled(ids)
-    writeInstalledPlugins(ids)
-  }
-
+  /**
+   * 安装 / 卸载 = 把 `user_plugin.enabled` 写成 true / false。
+   *
+   * 目录在前端，服务端只记"这个用户对这个 code 做了什么"，所以没有"新增一行"这种操作，
+   * 也就没有卸载后配置丢失的问题（重装回来配置还在）。
+   */
   const toggleInstall = (plugin: PluginMeta) => {
     const on = installed.includes(plugin.id)
-    persistInstalled(on ? installed.filter((id) => id !== plugin.id) : [...installed, plugin.id])
-    toast[on ? 'info' : 'success'](on ? p.uninstall : p.install, `${plugin.name} ${plugin.version}`)
+    const next = on ? installed.filter((id) => id !== plugin.id) : [...installed, plugin.id]
+    setInstalled(next)
+    if (USE_MOCK) {
+      toast[on ? 'info' : 'success'](on ? p.uninstall : p.install, `${plugin.name} ${plugin.version}`)
+      return
+    }
+    api.plugins.update(plugin.id, { enabled: !on })
+      .then(() => toast[on ? 'info' : 'success'](on ? p.uninstall : p.install, `${plugin.name} ${plugin.version}`))
+      .catch((error: unknown) => {
+        setInstalled(installed) // 回滚：开关留在原状，比"看起来装上了其实没写进库"诚实
+        toast.error(p.saveFailed, errMessage(error))
+      })
   }
 
   const onImportFile = (e: ChangeEvent<HTMLInputElement>) => {
@@ -182,32 +270,156 @@ export default function PluginsPage() {
     toast.success(p.importDone, `${name} ${item.version}`)
   }
 
-  const openMcp = (id: string) => {
-    const server = MCP_SERVERS.find((s) => s.id === id)
-    setMcpTarget(id)
-    setMcpName(mcpConfigs[id]?.name ?? server?.name ?? '')
-    setMcpEndpoint(mcpConfigs[id]?.endpoint ?? server?.endpoint ?? '')
+  /* ---------- MCP ---------- */
+
+  const openMcpCreate = () => {
+    setEditing(null)
+    setMcpName('')
+    setMcpTransport('http')
+    setMcpUrl('')
+    setMcpCommand('')
     setMcpToken('')
+    setProbe(null)
+    setMcpOpen(true)
   }
 
-  const saveMcp = () => {
-    if (!mcpTarget) return
-    const nextConfigs = { ...mcpConfigs, [mcpTarget]: { name: mcpName, endpoint: mcpEndpoint } }
-    setMcpConfigs(nextConfigs)
-    localStorage.setItem('nx-plugins-mcp-config', JSON.stringify(nextConfigs))
-    const nextState = { ...mcpState, [mcpTarget]: true }
-    setMcpState(nextState)
-    writeMcpState(nextState)
-    setMcpTarget(null)
-    toast.success(p.mcpSavedTitle, p.mcpSavedBody)
+  const openMcpEdit = (server: McpView) => {
+    setEditing(server)
+    setMcpName(server.name)
+    setMcpTransport(server.transport)
+    setMcpUrl(server.url)
+    setMcpCommand(server.command)
+    setMcpToken('')
+    setProbe(null)
+    setMcpOpen(true)
   }
 
-  const toggleMcp = (id: string, connected: boolean) => {
-    const next = { ...mcpState, [id]: !connected }
-    setMcpState(next)
-    writeMcpState(next)
-    toast.success(!connected ? p.mcpConnectedTitle : p.mcpDisconnectedTitle, MCP_SERVERS.find((s) => s.id === id)?.name)
+  const payloadOf = (): McpServerPayload => ({
+    name: mcpName.trim(),
+    transport: mcpTransport,
+    ...(mcpTransport === 'http' ? { url: mcpUrl.trim() } : { command: mcpCommand.trim() }),
+    // 只在真的填了新令牌时才上行：空串会被后端当成"清除凭据"
+    ...(mcpToken.trim() ? { authHeader: mcpToken.trim() } : {}),
+  })
+
+  const applySaved = (saved: BackendMcpServer) => {
+    const view = fromBackend(saved)
+    setServers((prev) => {
+      const exists = prev.some((item) => item.id === view.id)
+      return exists ? prev.map((item) => (item.id === view.id ? view : item)) : [...prev, view]
+    })
+    setEditing(view)
+    return view
   }
+
+  /** 保存；`thenProbe` 为 true 时保存成功后立刻探测一次（新建服务最常用的路径）。 */
+  const saveMcp = async (thenProbe = false) => {
+    setSaving(true)
+    try {
+      if (USE_MOCK) {
+        const view: McpView = {
+          id: editing?.id ?? `mcp-${Date.now()}`,
+          name: mcpName.trim(),
+          transport: mcpTransport,
+          url: mcpTransport === 'http' ? mcpUrl.trim() : '',
+          command: mcpTransport === 'stdio' ? mcpCommand.trim() : '',
+          enabled: editing?.enabled ?? true,
+          tools: editing?.tools ?? [],
+          lastOkAt: editing?.lastOkAt ?? null,
+          lastError: null,
+          hasAuthHeader: Boolean(mcpToken.trim()) || Boolean(editing?.hasAuthHeader),
+        }
+        setServers((prev) => (editing ? prev.map((item) => (item.id === view.id ? view : item)) : [...prev, view]))
+        setEditing(view)
+        toast.success(editing ? p.mcpUpdatedTitle : p.mcpCreatedTitle, view.name)
+        if (thenProbe) await probeMock(view)
+        return
+      }
+      const body = payloadOf()
+      const saved = editing
+        ? await api.mcpServers.update(editing.id, body)
+        : await api.mcpServers.create(body)
+      applySaved(saved)
+      setMcpToken('')
+      toast.success(editing ? p.mcpUpdatedTitle : p.mcpCreatedTitle, saved.name)
+      if (thenProbe) await probeServer(saved.id)
+    } catch (error) {
+      toast.error(p.saveFailed, errMessage(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const probeMock = async (view: McpView) => {
+    setProbing(true)
+    setProbe({
+      ok: true,
+      error: null,
+      tools: view.tools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: null })),
+      tookMs: 12,
+      lastOkAt: new Date().toISOString(),
+    })
+    setProbing(false)
+  }
+
+  /**
+   * 探测 = 真连一次 `tools/list`。
+   *
+   * 失败**不是**异常：后端恒 200，结果在 `ok/error` 里。这里必须把 `error` 原样显示出来，
+   * 否则用户只会看到"没有工具"，然后把好好的服务反复删了重配。
+   */
+  const probeServer = async (id: string) => {
+    setProbing(true)
+    setProbe(null)
+    try {
+      const result = await api.mcpServers.probe(id)
+      setProbe(result)
+      if (result.ok) {
+        const list = await api.mcpServers.list()
+        setServers(list.map(fromBackend))
+      }
+    } catch (error) {
+      setProbe({ ok: false, error: errMessage(error), tools: [], tookMs: 0, lastOkAt: null })
+    } finally {
+      setProbing(false)
+    }
+  }
+
+  const removeMcp = (server: McpView) => {
+    if (!window.confirm(p.mcpDeleteConfirm(server.name))) return
+    setServers((prev) => prev.filter((item) => item.id !== server.id))
+    setMcpOpen(false)
+    if (USE_MOCK) {
+      toast.success(p.mcpDeletedTitle, server.name)
+      return
+    }
+    api.mcpServers.remove(server.id)
+      .then(() => toast.success(p.mcpDeletedTitle, server.name))
+      .catch((error: unknown) => {
+        toast.error(p.saveFailed, errMessage(error))
+        void api.mcpServers.list().then((list) => setServers(list.map(fromBackend))).catch(() => undefined)
+      })
+  }
+
+  const toggleMcp = (server: McpView) => {
+    const next = servers.map((item) => (item.id === server.id ? { ...item, enabled: !item.enabled } : item))
+    setServers(next)
+    if (USE_MOCK) {
+      toast.success(!server.enabled ? p.mcpConnectedTitle : p.mcpDisconnectedTitle, server.name)
+      return
+    }
+    api.mcpServers.update(server.id, { enabled: !server.enabled })
+      .then((saved) => {
+        setServers((prev) => prev.map((item) => (item.id === saved.id ? fromBackend(saved) : item)))
+        toast.success(!server.enabled ? p.mcpConnectedTitle : p.mcpDisconnectedTitle, server.name)
+      })
+      .catch((error: unknown) => {
+        setServers(servers)
+        toast.error(p.saveFailed, errMessage(error))
+      })
+  }
+
+  const canSave = Boolean(mcpName.trim()) && (mcpTransport === 'http' ? Boolean(mcpUrl.trim()) : Boolean(mcpCommand.trim()))
 
   return (
     <div className="page">
@@ -281,7 +493,9 @@ export default function PluginsPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={reduce ? { duration: 0 } : { duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
       >
-        {tab === 'installed' && (
+        {loading && <SkeletonRows rows={4} />}
+
+        {!loading && tab === 'installed' && (
           <>
             {installedList.length === 0 && filteredSkills.length === 0 && (
               <StateEmpty
@@ -317,7 +531,7 @@ export default function PluginsPage() {
           </>
         )}
 
-        {tab === 'market' && (
+        {!loading && tab === 'market' && (
           marketList.length === 0 ? (
             <StateEmpty
               icon={<Search size={20} />}
@@ -341,47 +555,58 @@ export default function PluginsPage() {
           )
         )}
 
-        {tab === 'mcp' && (
+        {!loading && tab === 'mcp' && (
           <section className="mcp-section">
             <div className="section-head">
               <div>
                 <h2 className="market-section-title">MCP</h2>
                 <p className="page-sub">{p.mcpSub}</p>
               </div>
+              <button className="btn btn-ghost btn-sm" type="button" onClick={openMcpCreate}>
+                <Plus size={14} /> {p.mcpNew}
+              </button>
             </div>
-            <div className="mcp-list">
-              {mcpServers.map((server) => (
-                <article className="mcp-row" key={server.id}>
-                  <span className="mcp-row__icon"><Server size={18} /></span>
-                  <div className="mcp-row__main">
-                    <div className="mcp-row__name">
-                      <strong>{mcpConfigs[server.id]?.name ?? server.name}</strong>
-                      <span className="badge" data-tone={server.connected ? 'success' : 'warning'}>
-                        {server.connected ? p.mcpConnected : p.mcpOffline}
-                      </span>
+            {visibleServers.length === 0 ? (
+              <StateEmpty icon={<Server size={20} />} title={p.mcpEmptyTitle} desc={p.mcpEmptyDesc} />
+            ) : (
+              <div className="mcp-list">
+                {visibleServers.map((server) => (
+                  <article className="mcp-row" key={server.id}>
+                    <span className="mcp-row__icon"><Server size={18} /></span>
+                    <div className="mcp-row__main">
+                      <div className="mcp-row__name">
+                        <strong>{server.name}</strong>
+                        <span className="badge" data-tone={server.enabled ? 'success' : 'warning'}>
+                          {server.enabled ? p.mcpConnected : p.mcpOffline}
+                        </span>
+                        <span className="badge">{server.transport === 'stdio' ? p.mcpTransportStdio : p.mcpTransportHttp}</span>
+                      </div>
+                      <code>{server.transport === 'stdio' ? server.command : server.url}</code>
+                      {server.lastError && (
+                        <p className="mcp-row__error" role="alert">
+                          {p.mcpLastError}：{server.lastError}
+                        </p>
+                      )}
+                      {!server.lastError && server.lastOkAt && (
+                        <p className="mcp-row__ok">{p.mcpLastOk(when(server.lastOkAt))}</p>
+                      )}
                     </div>
-                    <p>{server.description}</p>
-                    <code>{mcpConfigs[server.id]?.endpoint ?? server.endpoint}</code>
-                  </div>
-                  <div className="mcp-row__tools">
-                    <span className="meta-inline__item">{server.tools.slice(0, 3).join(' · ')}</span>
-                    <span className="mcp-row__count">{p.mcpTools(server.tools.length)}</span>
-                  </div>
-                  <div className="mcp-row__actions">
-                    <button className="btn btn-ghost btn-sm" type="button" onClick={() => openMcp(server.id)}>
-                      <Settings2 size={13} /> {p.mcpConfigure}
-                    </button>
-                    <button
-                      className={`btn ${server.connected ? 'btn-ghost' : 'btn-primary'} btn-sm`}
-                      type="button"
-                      onClick={() => toggleMcp(server.id, server.connected)}
-                    >
-                      {server.connected ? p.mcpDisconnect : p.mcpConnect}
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
+                    <div className="mcp-row__tools">
+                      <span className="meta-inline__item">{server.tools.slice(0, 3).map((tool) => tool.name).join(' · ') || p.mcpNoTools}</span>
+                      <span className="mcp-row__count">{p.mcpTools(server.tools.length)}</span>
+                    </div>
+                    <div className="mcp-row__actions">
+                      <button className="btn btn-ghost btn-sm" type="button" onClick={() => openMcpEdit(server)}>
+                        <Settings2 size={13} /> {p.mcpConfigure}
+                      </button>
+                      <button className="btn btn-ghost btn-sm" type="button" onClick={() => toggleMcp(server)}>
+                        {server.enabled ? p.mcpDisconnect : p.mcpConnect}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
         )}
       </motion.div>
@@ -476,32 +701,93 @@ export default function PluginsPage() {
       </Modal>
 
       <Modal
-        open={mcpTarget !== null}
-        title={p.mcpModalTitle}
+        open={mcpOpen}
+        title={editing ? p.mcpModalTitle : `${p.mcpModalTitle} · ${p.mcpNew}`}
         width={620}
-        onClose={() => setMcpTarget(null)}
+        onClose={() => setMcpOpen(false)}
         footer={
           <>
+            {editing && (
+              <button className="btn btn-ghost" type="button" onClick={() => removeMcp(editing)}>
+                <Trash2 size={14} /> {p.mcpDelete}
+              </button>
+            )}
             <span style={{ flex: 1 }} />
-            <button className="btn btn-ghost" type="button" onClick={() => setMcpTarget(null)}>{common.cancel}</button>
-            <button className="btn btn-primary" type="button" disabled={!mcpName.trim() || !mcpEndpoint.trim()} onClick={saveMcp}>
+            <button className="btn btn-ghost" type="button" onClick={() => setMcpOpen(false)}>{common.cancel}</button>
+            <button
+              className="btn btn-ghost"
+              type="button"
+              disabled={!canSave || probing || saving}
+              onClick={() => void saveMcp(true)}
+            >
+              <Zap size={14} /> {probing ? p.mcpProbing : p.mcpProbe}
+            </button>
+            <button
+              className="btn btn-primary"
+              type="button"
+              disabled={!canSave || saving}
+              onClick={() => void saveMcp(false)}
+            >
               {p.mcpSave}
             </button>
           </>
         }
       >
         <div className="form-stack">
-          <div className="field"><label htmlFor="mcp-name">{p.mcpNameLabel}</label><input id="mcp-name" className="input" value={mcpName} autoFocus onChange={(e) => setMcpName(e.target.value)} /></div>
-          <div className="field"><label htmlFor="mcp-endpoint">{p.mcpEndpointLabel}</label><input id="mcp-endpoint" className="input" value={mcpEndpoint} onChange={(e) => setMcpEndpoint(e.target.value)} /></div>
-          <div className="field"><label htmlFor="mcp-token">{p.mcpTokenLabel}</label><input id="mcp-token" className="input" value={mcpToken} placeholder={p.mcpTokenPh} onChange={(e) => setMcpToken(e.target.value)} /></div>
+          <div className="field">
+            <label htmlFor="mcp-name">{p.mcpNameLabel}</label>
+            <input id="mcp-name" className="input" value={mcpName} autoFocus onChange={(e) => setMcpName(e.target.value)} />
+          </div>
+          <div className="field">
+            <label htmlFor="mcp-transport">{p.mcpTransportLabel}</label>
+            <select
+              id="mcp-transport"
+              className="input"
+              value={mcpTransport}
+              onChange={(e) => setMcpTransport(e.target.value === 'stdio' ? 'stdio' : 'http')}
+            >
+              <option value="http">{p.mcpTransportHttp}</option>
+              <option value="stdio">{p.mcpTransportStdio}</option>
+            </select>
+          </div>
+          {mcpTransport === 'http' ? (
+            <div className="field">
+              <label htmlFor="mcp-endpoint">{p.mcpUrlLabel}</label>
+              <input id="mcp-endpoint" className="input" value={mcpUrl} placeholder="https://example.com/mcp" onChange={(e) => setMcpUrl(e.target.value)} />
+            </div>
+          ) : (
+            <div className="field">
+              <label htmlFor="mcp-command">{p.mcpCommandLabel}</label>
+              <input id="mcp-command" className="input" value={mcpCommand} placeholder={p.mcpCommandPh} onChange={(e) => setMcpCommand(e.target.value)} />
+              <p className="hint">{p.mcpStdioHint}</p>
+            </div>
+          )}
+          <div className="field">
+            <label htmlFor="mcp-token">{p.mcpTokenLabel}</label>
+            <input
+              id="mcp-token"
+              className="input"
+              value={mcpToken}
+              placeholder={editing?.hasAuthHeader ? '••••••••' : p.mcpTokenPh}
+              onChange={(e) => setMcpToken(e.target.value)}
+            />
+          </div>
+          {probe && (
+            probe.ok
+              ? <p className="mcp-probe mcp-probe--ok" role="status">{p.mcpProbeOk(probe.tools.length)}</p>
+              : <p className="mcp-probe mcp-probe--fail" role="alert">{p.mcpProbeFail}：{probe.error ?? '—'}</p>
+          )}
           <div className="field">
             <label>{p.mcpToolsLabel}</label>
             <div className="meta-list">
-              {MCP_SERVERS.find((s) => s.id === mcpTarget)?.tools.map((tool) => (
-                <span className="meta-list__row" key={tool}><Check size={13} aria-hidden="true" /> {tool}</span>
+              {(probe?.ok ? probe.tools : editing?.tools ?? []).map((tool) => (
+                <span className="meta-list__row" key={tool.name}>
+                  <Check size={13} aria-hidden="true" /> {tool.name}
+                  {tool.description ? <span className="hint">{tool.description}</span> : null}
+                </span>
               ))}
+              {(probe?.ok ? probe.tools : editing?.tools ?? []).length === 0 && <span className="hint">{p.mcpNoTools}</span>}
             </div>
-            <p className="hint">{p.mcpToolsLabel}</p>
           </div>
         </div>
       </Modal>

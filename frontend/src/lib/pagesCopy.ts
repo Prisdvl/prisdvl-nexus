@@ -520,6 +520,30 @@ export interface PagesCopy {
     mcpSavedBody: string
     mcpConnectedTitle: string
     mcpDisconnectedTitle: string
+    mcpNew: string
+    mcpTransportLabel: string
+    mcpTransportHttp: string
+    mcpTransportStdio: string
+    mcpUrlLabel: string
+    mcpCommandLabel: string
+    mcpCommandPh: string
+    mcpStdioHint: string
+    mcpProbe: string
+    mcpProbing: string
+    mcpProbeOk: (n: number) => string
+    mcpProbeFail: string
+    mcpNoTools: string
+    mcpLastOk: (when: string) => string
+    mcpLastError: string
+    mcpDelete: string
+    mcpDeleteConfirm: (name: string) => string
+    mcpCreatedTitle: string
+    mcpUpdatedTitle: string
+    mcpDeletedTitle: string
+    mcpEmptyTitle: string
+    mcpEmptyDesc: string
+    loadFailed: string
+    saveFailed: string
     detailOverview: string
     detailTools: string
     detailCompat: string
@@ -665,6 +689,17 @@ export interface PagesCopy {
     statusDone: string
     statusFailed: string
     statusQueued: string
+    loadFailed: string
+    saveFailed: string
+    runOk: string
+    runFailed: string
+    tokensLabel: string
+    triggerManual: string
+    triggerScheduled: string
+    defaultAgent: string
+    anyKb: string
+    cronLabel: string
+    cronPh: string
   }
   trace: {
     viewChat: string
@@ -1212,6 +1247,30 @@ const ZH: PagesCopy = {
     mcpSavedBody: '更改会立即应用到新会话。',
     mcpConnectedTitle: '已连接 MCP 服务',
     mcpDisconnectedTitle: '已断开 MCP 服务',
+    mcpNew: '接入服务',
+    mcpTransportLabel: '传输方式',
+    mcpTransportHttp: 'Streamable HTTP',
+    mcpTransportStdio: '本机 stdio',
+    mcpUrlLabel: '服务地址',
+    mcpCommandLabel: '启动命令',
+    mcpCommandPh: 'npx -y @modelcontextprotocol/server-filesystem /path',
+    mcpStdioHint: 'stdio 会在服务器上真的执行这条命令；服务端未开启时必须换 HTTP。',
+    mcpProbe: '探测',
+    mcpProbing: '探测中…',
+    mcpProbeOk: (n) => `探测成功，${n} 个工具已注册进工具箱`,
+    mcpProbeFail: '探测失败',
+    mcpNoTools: '这个服务没有声明任何工具。',
+    mcpLastOk: (when) => `上次成功：${when}`,
+    mcpLastError: '上次失败',
+    mcpDelete: '删除',
+    mcpDeleteConfirm: (name) => `删除「${name}」？它的工具会立刻从 Agent 工具箱移除。`,
+    mcpCreatedTitle: 'MCP 服务已添加',
+    mcpUpdatedTitle: 'MCP 服务已更新',
+    mcpDeletedTitle: 'MCP 服务已删除',
+    mcpEmptyTitle: '还没有接入外部服务',
+    mcpEmptyDesc: '添加一个 MCP server，把它的工具注册进 Agent 工具箱。',
+    loadFailed: '加载失败',
+    saveFailed: '保存失败',
     detailOverview: '概览',
     detailTools: '工具清单',
     detailCompat: '兼容性',
@@ -1369,6 +1428,17 @@ const ZH: PagesCopy = {
     statusDone: '成功',
     statusFailed: '失败',
     statusQueued: '排队中',
+    loadFailed: '自动化任务加载失败',
+    saveFailed: '自动化任务保存失败',
+    runOk: '运行已完成',
+    runFailed: '运行失败',
+    tokensLabel: 'Token',
+    triggerManual: '手动',
+    triggerScheduled: '定时',
+    defaultAgent: '默认 Agent',
+    anyKb: '不限定知识库',
+    cronLabel: 'cron 表达式',
+    cronPh: '例如 0 9 * * 1（分 时 日 月 周）',
   },
   trace: {
     viewChat: '对话',
@@ -1907,6 +1977,30 @@ const EN: PagesCopy = {
     mcpSavedBody: 'Changes apply to new sessions.',
     mcpConnectedTitle: 'MCP server connected',
     mcpDisconnectedTitle: 'MCP server disconnected',
+    mcpNew: 'Add server',
+    mcpTransportLabel: 'Transport',
+    mcpTransportHttp: 'Streamable HTTP',
+    mcpTransportStdio: 'Local stdio',
+    mcpUrlLabel: 'Endpoint',
+    mcpCommandLabel: 'Command',
+    mcpCommandPh: 'npx -y @modelcontextprotocol/server-filesystem /path',
+    mcpStdioHint: 'stdio really runs this command on the server; switch to HTTP when it is disabled.',
+    mcpProbe: 'Probe',
+    mcpProbing: 'Probing…',
+    mcpProbeOk: (n) => `Probe succeeded, ${n} tools registered`,
+    mcpProbeFail: 'Probe failed',
+    mcpNoTools: 'This server declares no tools.',
+    mcpLastOk: (when) => `Last success: ${when}`,
+    mcpLastError: 'Last failure',
+    mcpDelete: 'Delete',
+    mcpDeleteConfirm: (name) => `Delete "${name}"? Its tools leave the toolbox immediately.`,
+    mcpCreatedTitle: 'MCP server added',
+    mcpUpdatedTitle: 'MCP server updated',
+    mcpDeletedTitle: 'MCP server removed',
+    mcpEmptyTitle: 'No external server yet',
+    mcpEmptyDesc: 'Add an MCP server to expose its tools to agents.',
+    loadFailed: 'Failed to load',
+    saveFailed: 'Failed to save',
     detailOverview: 'Overview',
     detailTools: 'Tool list',
     detailCompat: 'Compatibility',
@@ -2064,6 +2158,17 @@ const EN: PagesCopy = {
     statusDone: 'Done',
     statusFailed: 'Failed',
     statusQueued: 'Queued',
+    loadFailed: 'Could not load automations',
+    saveFailed: 'Could not save the automation',
+    runOk: 'Run finished',
+    runFailed: 'Run failed',
+    tokensLabel: 'Tokens',
+    triggerManual: 'Manual',
+    triggerScheduled: 'Scheduled',
+    defaultAgent: 'Default agent',
+    anyKb: 'Any knowledge base',
+    cronLabel: 'cron expression',
+    cronPh: 'e.g. 0 9 * * 1 (min hour day month weekday)',
   },
   trace: {
     viewChat: 'Chat',

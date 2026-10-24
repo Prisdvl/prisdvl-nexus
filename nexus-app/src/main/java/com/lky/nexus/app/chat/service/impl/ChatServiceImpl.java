@@ -23,6 +23,7 @@ import com.lky.nexus.app.infra.web.RequestIdHolder;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
+import com.lky.nexus.common.observe.ObserveScenes;
 import com.lky.nexus.common.security.UserContextKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -162,7 +163,12 @@ public class ChatServiceImpl implements ChatService {
                             .param(ChatMemory.CONVERSATION_ID, memoryKey)
                             // token 记账归属（5.6）：UsageMeteringAdvisor 靠它把用量记到具体用户头上。
                             // 少这一行不会报错，只会把这次对话的消耗记成 quota.usage.unattributed
-                            .param(UserContextKeys.USER_ID, userId));
+                            .param(UserContextKeys.USER_ID, userId)
+                            // 观测（§10.1）：requestId 用于把多轮调用聚成一次请求；
+                            // scene 区分"普通对话"与"Agent 运行"，两者延迟量级不同
+                            .param(UserContextKeys.REQUEST_ID, requestId)
+                            .param(UserContextKeys.SCENE, agentDefinition != null
+                                    ? ObserveScenes.AGENT : ObserveScenes.CHAT));
             if (agentDefinition != null) {
                 // 提示词 + 工具 + ToolContext 的组装交给 AgentRuntime.configure：流式链路
                 // 走的是同一个方法。两处各写一份的话，将来给 Agent 加第二个工具时只改一处，

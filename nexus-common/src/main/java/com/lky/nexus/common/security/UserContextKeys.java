@@ -36,6 +36,26 @@ public final class UserContextKeys {
      */
     public static final String SYSTEM_CALL = "nexus.systemCall";
 
+    /**
+     * 这次模型调用属于哪个请求（{@link String}，与响应头 {@code X-Request-Id} 同源）。
+     *
+     * <p>用途：把一次对话里的多轮模型调用（工具循环可能调 3 次）聚成"一次请求"。
+     * 缺了它，观测页的请求列表就会把一次问答拆成互相没有关系的几行。
+     *
+     * <p>为什么不能从 MDC 里捞：流式的真正调用在 {@code boundedElastic} 线程上，
+     * 那里没有请求线程的 MDC，与 {@link #USER_ID} 是同一个原因。
+     */
+    public static final String REQUEST_ID = "nexus.requestId";
+
+    /**
+     * 这次模型调用属于哪个业务场景（{@link String}，取值见 {@code ObserveScenes}）。
+     *
+     * <p>场景只能由<b>调用点</b>声明：{@code UsageMeteringAdvisor} 处在一条通用管线上，
+     * 它分不清这次是知识库问答还是 Agent 运行。写成字符串常量而不是猜模型名或 URL 路径——
+     * 猜出来的维度，报表看着有、排查时对不上。
+     */
+    public static final String SCENE = "nexus.scene";
+
     private UserContextKeys() {
     }
 }

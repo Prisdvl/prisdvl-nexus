@@ -1,5 +1,6 @@
 package com.lky.nexus.app.infra;
 
+import com.lky.nexus.app.automation.AutomationUsageRecorder;
 import com.lky.nexus.app.security.QuotaChatUsageRecorder;
 import com.lky.nexus.app.security.QuotaService;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
@@ -41,6 +42,10 @@ public class AppConfig {
      */
     @Bean
     public ChatUsageRecorder chatUsageRecorder(QuotaService quotaService) {
-        return new QuotaChatUsageRecorder(quotaService);
+        // 外面套一层自动化用的旁路采集：自动化运行要往 automation_run 落 token，
+        // 而用量只在这一条链路上经过。装饰器透传记账语义，只在记账前顺手抄一份到
+        // AutomationUsageBridge（同线程、非自动化调用时收集器不存在，等于空操作）。
+        // 不能另加一个 ChatUsageRecorder bean——AiConfiguration 用 getIfAvailable() 取，多一个就 NoUniqueBean。
+        return new AutomationUsageRecorder(new QuotaChatUsageRecorder(quotaService));
     }
 }

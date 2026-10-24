@@ -3,6 +3,7 @@ package com.lky.nexus.ai.model;
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.common.api.ErrorCode;
 import com.lky.nexus.common.exception.BusinessException;
+import com.lky.nexus.common.observe.CallTraceRecorder;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.ChatUsageRecorder;
 import org.slf4j.Logger;
@@ -49,6 +50,13 @@ public class ChatClientFactory {
     private final AiModelRegistry registry;
     private final ChatUsageRecorder usageRecorder;
     private final ObservabilityRegistry observability;
+    /**
+     * 调用明细端口（{@code observability_call}）；缺省为 {@link CallTraceRecorder#NOOP}。
+     *
+     * <p>与 {@code usageRecorder} 同一套"允许缺省"的理由：纯 AI 层的单测不该为了跑起来
+     * 而拖进一个数据源。
+     */
+    private final CallTraceRecorder traceRecorder;
     private final Map<String, ChatClient> clientsByRole = new ConcurrentHashMap<>();
     /**
      * 用户自定义凭据查询端口；纯 AI 层 / 无此 bean 时为 {@code null}，全部走服务端全局模型。
@@ -80,11 +88,20 @@ public class ChatClientFactory {
     public ChatClientFactory(AiModelProperties properties, AiModelRegistry registry,
                              ChatUsageRecorder usageRecorder, ObservabilityRegistry observability,
                              UserChatCredentialsProvider credentialsProvider) {
+        this(properties, registry, usageRecorder, observability, credentialsProvider, CallTraceRecorder.NOOP);
+    }
+
+    /** 全参构造：再带上调用明细端口（本项目的装配走这一个）。 */
+    public ChatClientFactory(AiModelProperties properties, AiModelRegistry registry,
+                             ChatUsageRecorder usageRecorder, ObservabilityRegistry observability,
+                             UserChatCredentialsProvider credentialsProvider,
+                             CallTraceRecorder traceRecorder) {
         this.properties = properties;
         this.registry = registry;
         this.usageRecorder = usageRecorder == null ? ChatUsageRecorder.NOOP : usageRecorder;
         this.observability = observability == null ? new ObservabilityRegistry() : observability;
         this.credentialsProvider = credentialsProvider;
+        this.traceRecorder = traceRecorder == null ? CallTraceRecorder.NOOP : traceRecorder;
     }
 
     /**
@@ -127,7 +144,7 @@ public class ChatClientFactory {
         ChatModel model = registry.buildOpenAiChatModel(creds.baseUrl(), creds.apiKey(), creds.model());
         log.info("使用用户自定义对话模型：baseUrl={}, model={}", creds.baseUrl(), creds.model());
         return ChatClient.builder(model)
-                .defaultAdvisors(new UsageMeteringAdvisor(usageRecorder, observability))
+                .defaultAdvisors(new UsageMeteringAdvisor(usageRecorder, observability, traceRecorder))
                 .build();
     }
 
@@ -148,7 +165,7 @@ public class ChatClientFactory {
                 // defaultAdvisors 与业务代码在请求上追加的 advisors 是**合并**关系
                 // （DefaultChatClient.prompt() 复制的是含默认顾问的模板 spec，链按 order 排序），
                 // 所以聊天记忆顾问与本顾问可以共存，互不挤掉对方
-                .defaultAdvisors(new UsageMeteringAdvisor(usageRecorder, observability))
+                .defaultAdvisors(new UsageMeteringAdvisor(usageRecorder, observability, traceRecorder))
                 .build();
     }
 }

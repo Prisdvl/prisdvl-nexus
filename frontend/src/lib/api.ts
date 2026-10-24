@@ -563,6 +563,22 @@ export const api = {
     /** 重建索引：新建物理索引 → 原子切换别名 → 旧索引转待重建。 */
     recreateIndex: (kbId: string) => http.post<Result<null>>(`/knowledge-bases/${kbId}/index/recreate`).then((r) => r.data.data),
   },
+  /**
+   * 跨库统一检索（§4.2）。
+   *
+   * <p>与 `knowledge.search` 的区别：那个是"某个库里的检索"（库在路径里），
+   * 这个是"在我的全部库里检索"——`kbIds` 省略就搜全部。
+   *
+   * <p>`run` 永远是 200：某个库失败会落在 `degradedKbs` 里，
+   * 所以调用方要**看 `degradedKbs` 和 `emptyReason`**，而不是只靠 catch。
+   */
+  search: {
+    run: (body: SearchRequestPayload) =>
+      http.post<Result<UnifiedSearchResult>>('/search', body).then((r) => r.data.data),
+    /** 同入参，返回两路原始名次 + 融合分 + 重排分（调参用，只读不落库）。 */
+    explain: (body: SearchRequestPayload) =>
+      http.post<Result<SearchExplainResult>>('/search/explain', body).then((r) => r.data.data),
+  },
   documents: {
     list: (kbId: string, pageNum = 1, pageSize = 100) =>
       http.get<Result<PageResult<KbDocument>>>(`/knowledge-bases/${kbId}/documents`, { params: { pageNum, pageSize } })
@@ -677,6 +693,69 @@ export const api = {
     ask: (kbId: string, question: string, topK = 5) =>
       http.post<Result<RagAnswer>>(`/knowledge-bases/${kbId}/ask`, { question, topK }).then((r) => r.data.data),
   },
+  /**
+   * 自动化任务（V30）。
+   *
+   * 语义与工作流不同：`run` 是**同步**的，请求返回时这一跑已经结束，
+   * 成功/失败都体现在响应体的 `status` 上（HTTP 恒 200）——
+   * 失败不是异常，所以页面必须读 `status` 而不是只 catch。
+   */
+  automations: {
+    list: (pageNum = 1, pageSize = 50) =>
+      http.get<Result<PageResult<BackendAutomation>>>('/automations', { params: { pageNum, pageSize } })
+        .then((r) => r.data.data),
+    create: (body: AutomationPayload) =>
+      http.post<Result<BackendAutomation>>('/automations', body).then((r) => r.data.data),
+    /**
+     * 局部更新：省略的字段不改。
+     *
+     * 两个坑和会话更新同源：`agentId` 缺省 = 不改，想解绑回默认 Agent 必须传
+     * `useDefaultAgent: true`；`kbIds: []` = 清空绑定（不是"不改"）。
+     */
+    update: (id: string, body: Partial<AutomationPayload> & { useDefaultAgent?: boolean }) =>
+      http.put<Result<BackendAutomation>>(`/automations/${id}`, body).then((r) => r.data.data),
+    /** 软删：任务不再被调度，已有运行记录保留。 */
+    remove: (id: string) => http.delete<Result<null>>(`/automations/${id}`).then((r) => r.data.data),
+    /** 立即跑一次（同步执行，返回这次的运行记录）。 */
+    run: (id: string) =>
+      http.post<Result<BackendAutomationRun>>(`/automations/${id}/run`, {}).then((r) => r.data.data),
+    /** 最近 N 条运行记录（状态 / 耗时 / token / 错误）。 */
+    runs: (id: string, limit = 20) =>
+      http.get<Result<BackendAutomationRun[]>>(`/automations/${id}/runs`, { params: { limit } })
+        .then((r) => r.data.data),
+  },
+  /**
+   * 插件开关与配置（V32）。
+   *
+   * 目录活在前端（`PLUGIN_CATALOG`），后端只记"这个用户对这个 code 做了什么"：
+   * `GET /{code}` 在没有任何记录时返回默认值（启用、空配置），不会 404 ——
+   * 因此**安装/卸载就是 enabled 的 true/false**，不是增删目录项。
+   */
+  plugins: {
+    list: () => http.get<Result<BackendPlugin[]>>('/plugins').then((r) => r.data.data),
+    get: (code: string) => http.get<Result<BackendPlugin>>(`/plugins/${code}`).then((r) => r.data.data),
+    /** 局部更新：`enabled` 缺省 = 不改；`config` 传 `{}` 才清空（不传 = 保留）。 */
+    update: (code: string, body: { enabled?: boolean; config?: Record<string, unknown> }) =>
+      http.put<Result<BackendPlugin>>(`/plugins/${code}`, body).then((r) => r.data.data),
+  },
+  /**
+   * 外部 MCP server（V32）。
+   *
+   * `probe` 是**同步连一次 tools/list**：成功会刷新 `tools` 并把工具注册进 Agent 工具箱；
+   * 失败依然 200，但 `ok=false` 且 `error` 里带原因 —— 页面必须把它显示出来，
+   * 否则用户会以为"这个服务本来就没有工具"。
+   */
+  mcpServers: {
+    list: () => http.get<Result<BackendMcpServer[]>>('/mcp-servers').then((r) => r.data.data),
+    create: (body: McpServerPayload) =>
+      http.post<Result<BackendMcpServer>>('/mcp-servers', body).then((r) => r.data.data),
+    /** 局部更新：省略的字段不改；`authHeader` 传空串 = 清除已存凭据。 */
+    update: (id: string, body: Partial<McpServerPayload>) =>
+      http.put<Result<BackendMcpServer>>(`/mcp-servers/${id}`, body).then((r) => r.data.data),
+    remove: (id: string) => http.delete<Result<null>>(`/mcp-servers/${id}`).then((r) => r.data.data),
+    probe: (id: string) =>
+      http.post<Result<McpProbeResult>>(`/mcp-servers/${id}/probe`, {}).then((r) => r.data.data),
+  },
 }
 
 /* ------------------------------------------------------------------ *
@@ -707,6 +786,59 @@ export interface AgentPayload {
   status: string
   kbIds: string[]
   toolCodes: string[]
+}
+
+/** 自动化任务（GET /api/automations）。`schedule` 是 hourly|daily|weekly|custom。 */
+export interface BackendAutomation {
+  id: string
+  name: string
+  prompt: string
+  agentId: string | null
+  /** 绑定的 Agent 显示名；Agent 被删则回落 null */
+  agentName: string | null
+  kbIds: string[]
+  kbNames: string[]
+  schedule: string
+  /** 真实生效的 cron（固定频率由服务端用预设覆盖，自定义才是用户填的那串） */
+  cron: string | null
+  enabled: boolean
+  nextRunAt: string | null
+  lastRunAt: string | null
+  /** RUNNING / SUCCEEDED / FAILED；从未跑过为 null */
+  lastStatus: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AutomationPayload {
+  name: string
+  prompt: string
+  /** 省略 / null = 用账户默认 Agent */
+  agentId?: string | null
+  /** 空数组 = 不限定检索范围 */
+  kbIds?: string[]
+  schedule: string
+  /** 只有 schedule === 'custom' 时才需要；其余频率由服务端用预设覆盖 */
+  cron?: string
+  enabled?: boolean
+}
+
+/** 一次自动化运行。失败原因在 errorMessage，不是靠 HTTP 状态码。 */
+export interface BackendAutomationRun {
+  id: string
+  automationId: string
+  /** MANUAL（点了立即运行）/ SCHEDULED（到点触发） */
+  triggerType: string
+  status: string
+  answer: string | null
+  errorCode: number | null
+  errorMessage: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  startedAt: string | null
+  finishedAt: string | null
+  durationMs: number | null
 }
 
 /** GET /api/tools 的工具视图（对应用户级启用状态） */
@@ -899,6 +1031,97 @@ export interface KnowledgeSearchResult {
   hits: SearchHit[]
   emptyReason: SearchEmptyReason | null
 }
+
+/**
+ * 跨库检索入参（`POST /api/search` 与 `POST /api/search/explain` 共用）。
+ *
+ * <p>`kbIds` 省略或为空数组 = **当前用户的全部可检索库**。界面上"在全部知识库里搜"
+ * 不该由前端把 id 全捞一遍再传回来：多一次往返、多一份"用户有哪些库"的知识，
+ * 还容易传进别人的库 id（服务端会挡，但那是兜底不是设计）。
+ */
+/** 检索模式：后端 `SearchMode.parse` 大小写不敏感，非法的会以 1001 回来。 */
+export type SearchModeInput = 'VECTOR' | 'BM25' | 'HYBRID' | 'vector' | 'bm25' | 'hybrid'
+
+export interface SearchRequestPayload {
+  q: string
+  kbIds?: string[]
+  /** 省略 = HYBRID */
+  mode?: SearchModeInput
+  /** 1..100；省略 = 每库自己的 retrievalTopK */
+  topK?: number
+  /** 对归并后的前 8 条做重排（多一次模型调用，但同分/跨库时明显更准） */
+  rerank?: boolean
+  filters?: { tags?: string[]; folder?: string; documentId?: string }
+}
+
+/** 一条跨库命中：比单库命中多了来源库（`kbId` / `kbName`）。 */
+export interface UnifiedSearchHit {
+  kbId: string
+  kbName: string | null
+  chunkId: string
+  /** 打开原文预览用；切片已被删除时可能为 null */
+  documentId: string | null
+  documentTitle: string | null
+  headingPath: string | null
+  snippet: string | null
+  /** 单路时是该路原始分，融合时是 RRF 分，重排后是模型分 */
+  score: number
+  source: string
+  matchedBy: string[]
+}
+
+/** 本次检索里失败的库：它有原因，但没有贡献命中。 */
+export interface DegradedKnowledgeBase {
+  kbId: string
+  kbName: string
+  reason: string
+}
+
+export interface UnifiedSearchResult {
+  hits: UnifiedSearchHit[]
+  emptyReason: SearchEmptyReason | null
+  tookMs: number
+  degradedKbs: DegradedKnowledgeBase[]
+}
+
+export interface ExplainPathHit {
+  kbId: string
+  chunkId: string
+  documentId: string | null
+  documentTitle: string | null
+  headingPath: string | null
+  snippet: string | null
+  /** 该路原始分（余弦相似度 / BM25 分） */
+  score: number
+  /** 库内名次，从 1 开始 */
+  rank: number
+}
+
+export interface ExplainFusedHit {
+  kbId: string
+  chunkId: string
+  documentId: string | null
+  documentTitle: string | null
+  headingPath: string | null
+  snippet: string | null
+  rank: number
+  /** 1/(60+bm25Rank) + 1/(60+vectorRank) */
+  fusedScore: number
+  bm25Rank: number | null
+  vectorRank: number | null
+  matchedBy: string[]
+}
+
+export interface ExplainRerankHit { kbId: string; chunkId: string; rank: number; rerankScore: number }
+
+export interface SearchExplainResult {
+  vector: ExplainPathHit[]
+  bm25: ExplainPathHit[]
+  fused: ExplainFusedHit[]
+  rerank: ExplainRerankHit[]
+  tookMs: number
+  degradedKbs: DegradedKnowledgeBase[]
+}
 export interface ChunkView { id: string; chunkIndex: number; chunkType: string; headingPath: string | null; content: string; tokenCount: number; charCount: number; vectorStatus: string; esStatus: string }
 
 export interface DocLink { linkId?: string; linkType?: string; target?: string; display?: string; resolvedDocumentId?: string; resolvedTitle?: string; external?: boolean }
@@ -1046,4 +1269,57 @@ export interface DocumentDetail {
   chunkCount: number
   tokenCount: number
   updatedAt: string
+}
+
+/* --------------------------- 插件与 MCP（V32） --------------------------- */
+
+/** 插件的一个用户级状态；没有记录时后端返回 `{enabled: true, config: {}}`。 */
+export interface BackendPlugin {
+  code: string
+  enabled: boolean
+  config: Record<string, unknown>
+}
+
+/** MCP `tools/list` 里的一个工具；`inputSchema` 是原样 JSON 文本（不是对象）。 */
+export interface McpToolInfo {
+  name: string
+  description: string
+  inputSchema: string | null
+}
+
+export type McpTransport = 'http' | 'stdio'
+
+/** 外部 MCP server。注意**永远没有凭据回显**，只有 `hasAuthHeader`。 */
+export interface BackendMcpServer {
+  id: string
+  name: string
+  slug: string
+  transport: McpTransport
+  url: string | null
+  command: string | null
+  hasAuthHeader: boolean
+  enabled: boolean
+  lastOkAt: string | null
+  lastError: string | null
+  tools: McpToolInfo[]
+}
+
+export interface McpServerPayload {
+  name: string
+  transport?: McpTransport
+  url?: string
+  command?: string
+  /** 明文 Authorization 头；只在写入时上行，读接口不会返回它。 */
+  authHeader?: string
+  enabled?: boolean
+}
+
+/** `probe` 的结果：HTTP 恒 200，成没成看 `ok`。 */
+export interface McpProbeResult {
+  ok: boolean
+  /** 失败原因（成功时为 null）。页面必须展示它。 */
+  error: string | null
+  tools: McpToolInfo[]
+  tookMs: number
+  lastOkAt: string | null
 }

@@ -635,6 +635,17 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 > 但那条运行上下文已经没了——此时提交审批会落定审批记录、同时把运行标成 `FAILED`
 > （"运行上下文已丢失"），**不会**假装恢复执行。
 
+### 6.0.5 已实现：`user_plugin` / `mcp_server`（迁移 V32）
+
+| 表 | 关键列 |
+| --- | --- |
+| `user_plugin` | `id`、`user_id`、`plugin_code`（插件目录里的 id）、`enabled`、`config_json`、`created_at`、`updated_at`、`deleted`；`KEY idx_user_plugin_user (user_id, deleted)` |
+| `mcp_server` | `id`、`user_id`、`name`、`slug`（工具名前缀 `mcp__<slug>__<tool>`）、`transport`（`http` / `stdio`）、`url`、`command`、`auth_header_cipher`（`CredentialCipher` 密文，`VARCHAR(500)`）、`enabled`、`last_ok_at`、`last_error`、`tools_json`、`created_at`、`updated_at`、`deleted`；`KEY idx_mcp_server_user (user_id, deleted)` |
+
+> 「安装插件」= `user_plugin.enabled = 1`：插件目录仍在前端（`frontend/src/lib/plugins.ts` 的静态清单），后端只存每个用户的启用状态与配置——这样加一个新插件不必等后端发版。
+> `tools_json` 只在 probe **成功**时覆盖：上游删掉的工具会随之消失，但一次探测失败不会把已知工具清空（否则网络抖一下等于把所有工具注销），失败原因进 `last_error`。
+> `mcp_server.slug` 每用户唯一：工具名要拼成 `mcp__<slug>__<tool>`，两个 server 撞 slug 会让两边的同名工具互相覆盖。
+
 ### 6.1 设计稿（未实现的部分）
 
 | 表 | 关键列 | 说明 |
@@ -678,6 +689,19 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 
 ---
 
+### 7.1 已实现：`automation` / `automation_run`（迁移 V30）
+
+| 表 | 关键列 |
+| --- | --- |
+| `automation` | `id`、`user_id`、`name`、`prompt`、`agent_id`（NULL = 用户默认 Agent）、`kb_ids`（逗号分隔，空 = 不覆盖 Agent 自身绑定）、`schedule_type`（`HOURLY`/`DAILY`/`WEEKLY`/`CUSTOM`）、`cron`（5 段；固定频率由 `schedule_type` 派生）、`enabled`、`next_run_at`、`last_run_at`、`last_status`、`retry_count`、`created_at`、`updated_at`、`deleted`；`KEY idx_automation_due (enabled, deleted, next_run_at)`、`KEY idx_automation_user (user_id, deleted, updated_at)` |
+| `automation_run` | `id`、`automation_id`、`user_id`、`trigger_type`（`MANUAL`/`SCHEDULED`）、`status`（`RUNNING`/`SUCCEEDED`/`FAILED`）、`answer`、`error_code`、`error_message`（截断 1000）、`duration_ms`、`created_at`、`updated_at`；`KEY idx_automation_run_task (automation_id, created_at)`、`KEY idx_automation_run_user (user_id, created_at)` |
+
+> 定义与运行拆两张表：改定义不该改写历史，查历史要能按任务取最近 N 条而不是扫全表。
+> `next_run_at` 是独立列而不是每次从 `cron` 现算——多实例调度靠它做 CAS 抢占：先读 `next_run_at <= now()` 的行，再用 `WHERE next_run_at = 读到的值` 抢一次，抢不到的直接跳过；「读状态再写状态」的两步会让两个实例同时看到「该跑了」。
+> 运行记录先落 `RUNNING` 再真正执行：模型调用可能挂几十秒，先落库才看得见「正在跑」；进程崩了也留得下现场，而不是什么都没发生。
+
+---
+
 ## 8. 评测（Phase 9 预留）
 
 | 表 | 关键列 |
@@ -700,6 +724,16 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 
 索引：`idx_obs_user_time (user_id, created_at)`、`idx_obs_scene_time (scene, created_at)`、`uk_obs_request (request_id)`
 数据量大时的演进：按月分区或归档到 ClickHouse（第一版不做，写在 ADR 里说明）。
+
+### 9.1 已实现：`observability_call`（迁移 V31）
+
+| 表 | 关键列 |
+| --- | --- |
+| `observability_call` | `id`、`request_id`（与响应头 `X-Request-Id` 同源）、`user_id`（系统调用为 NULL，例如 rerank）、`scene`（`chat`/`chat.stream`/`rag`/`rag.stream`/`agent`/`agent.stream`/`rerank`）、`model`（供应商返回的模型名，不是角色名）、`tokens_in`、`tokens_out`、`latency_ms`、`first_token_ms`、`success`、`error_code`、`created_at`；`KEY idx_obs_call_user_time (user_id, created_at)`、`KEY idx_obs_call_request (request_id)`、`KEY idx_obs_call_user_scene (user_id, scene, created_at)` |
+
+> 与上面的设计稿是**有意偏差**：按「一次模型调用一行」落库，而不是「一次请求一行」——工具循环会让一次请求穿过模型 3~5 次，只有逐轮落库才算得出真实花费；「一次请求」是查询侧按 `request_id` 聚合出来的视图，不需要在写时决定粒度。
+> 设计稿的 `obs_daily_stat`（日汇总表）没有建：现在由 `/api/observability/trend` 直接对 `observability_call` 聚合；量级没到需要预聚合的时候，多一张表就多一处对不上的风险。
+> `tokens_in` / `tokens_out` 允许 NULL：供应商没回传用量时留空而不是写 0，否则平均成本会被系统性地拉低。
 
 ---
 

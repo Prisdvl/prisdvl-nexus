@@ -47,6 +47,25 @@ nexus:
     # 测试环境没有 broker：默认走同步执行，保证测试的确定性
     # （异步契约由 ImportTaskAsyncTest 通过替换 ImportTaskPublisher 单独验证）
     mode: sync
+  automation:
+    # 测试里关掉 @Scheduled：到点触发用例自己调 automationScheduler.sweepOnce()，
+    # 否则后台线程会在断言中间插一脚，跑出"偶发多一条运行记录"这种不可复现的失败。
+    scheduler-enabled: false
+    # 重试零延迟：用例要验证"失败 → 排下一跳 → 再扫一次命中"，延迟为 0 才不用 sleep。
+    retry-delay-ms: 0
+  pricing:
+    # 观测成本估算的单价（元 / 1M token）。用例要断言具体金额，所以这里必须给出真实数值；
+    # 生产 application.yml 默认留空（没配价格的模型成本返回 null 而不是 0）。
+    # 2.0 / 8.0 只是用例里的算术锚点，不代表任何供应商的实际报价。
+    deepseek-chat:
+      input: 2.0
+      output: 8.0
+  mcp:
+    # 用例只验证 http 传输（本地起一个 HttpServer 假 server）；stdio 会在测试机上真的执行命令，
+    # 所以显式关掉——顺便钉住"关闭时必须给出明确原因"这条契约。
+    stdio-enabled: false
+    # 3 秒足够本地假 server 应答，又能在"连不上"的用例里快速失败（不会卡满 15 秒）。
+    timeout-ms: 3000
   vector:
     # 测试环境不启动 PostgreSQL：向量库关闭（相关用例用 DisabledVectorStore 验证报错行为，
     # 真实 pgvector 读写由 AI_VECTOR_LIVE=true 的守卫测试覆盖）

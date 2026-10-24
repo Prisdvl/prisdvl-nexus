@@ -1,5 +1,8 @@
 package com.lky.nexus.ai.model;
 
+import com.lky.nexus.ai.error.FailureClassifier;
+import com.lky.nexus.common.observe.CallTrace;
+import com.lky.nexus.common.observe.CallTraceRecorder;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.ChatUsageRecorder;
 import com.lky.nexus.common.security.UserContextKeys;
@@ -16,6 +19,7 @@ import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.core.Ordered;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.SignalType;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -63,6 +67,17 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@code UsageMeteringAdvisorTest#factoryRegistersTheAdvisorAsADefaultAdvisor} 钉住）。
  *
  * <p>不做任何缓存或本地累加：账一旦记进 {@code QuotaService}，就是当天的真相。
+ *
+ * <p><b>第二件事：调用明细</b>（{@code observability_call}）。同一个"唯一收口"顺手把
+ * 每次调用的 requestId / 场景 / 模型 / token / 延迟 / 首 Token / 成败交给
+ * {@link CallTraceRecorder}。之所以仍然在这里而不是去业务层撒点：
+ * <ul>
+ *   <li>业务层只知道自己那一层（{@code .content()} 拿不到 usage），也拿不到失败的模型名；</li>
+ *   <li>散点一旦漏一处，报表就长期少一截，而且没人会去核对；</li>
+ *   <li>这里天然能看到"失败的调用"（异常从这条链上抛过），而失败恰恰是观测最想看的。</li>
+ * </ul>
+ * 明细必须<b>逐轮</b>记（工具循环的每一轮都是一次真金白银的调用），
+ * 与后端按 {@code request_id} 聚合成"一次请求"是两件事。
  */
 public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
 
@@ -76,6 +91,7 @@ public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
 
     private final ChatUsageRecorder recorder;
     private final ObservabilityRegistry observability;
+    private final CallTraceRecorder traceRecorder;
 
     /**
      * 不带观测注册表：指标记录退化为空操作。
@@ -88,8 +104,14 @@ public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
     }
 
     public UsageMeteringAdvisor(ChatUsageRecorder recorder, ObservabilityRegistry observability) {
+        this(recorder, observability, CallTraceRecorder.NOOP);
+    }
+
+    public UsageMeteringAdvisor(ChatUsageRecorder recorder, ObservabilityRegistry observability,
+                                CallTraceRecorder traceRecorder) {
         this.recorder = recorder == null ? ChatUsageRecorder.NOOP : recorder;
         this.observability = observability == null ? new ObservabilityRegistry() : observability;
+        this.traceRecorder = traceRecorder == null ? CallTraceRecorder.NOOP : traceRecorder;
     }
 
     @Override
@@ -105,11 +127,22 @@ public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
     @Override
     public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
         long startedNanos = System.nanoTime();
-        ChatClientResponse response = chain.nextCall(request);
-        Metrics.of(observability, request, response == null ? null : response.chatResponse())
-                .record(elapsedMillis(startedNanos));
-        recordUsage(request, response == null ? null : response.chatResponse());
-        return response;
+        try {
+            ChatClientResponse response = chain.nextCall(request);
+            ChatResponse chatResponse = response == null ? null : response.chatResponse();
+            long latencyMillis = elapsedMillis(startedNanos);
+            Metrics.of(observability, request, chatResponse).record(latencyMillis);
+            recordUsage(request, chatResponse);
+            // 非流式没有"首 Token"这个概念，显式给 null 而不是 0——
+            // 报表上的 0ms 会被读成"极快"，null 才能被读成"没有这项"
+            recordTrace(request, chatResponse, latencyMillis, null, true, null);
+            return response;
+        } catch (RuntimeException ex) {
+            // 失败的调用也要留档：报错的那些请求恰恰是观测最想看的；
+            // 只记成功调用等于把需要排查的那部分擦掉
+            recordTrace(request, null, elapsedMillis(startedNanos), null, false, errorCodeOf(ex));
+            throw ex;
+        }
     }
 
     @Override
@@ -121,11 +154,18 @@ public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
         // 计时从「订阅那一刻」起，而不是本方法被调用时：返回 Flux 到真正订阅之间可能隔着
         // 线程调度（本项目的流式链路正是如此），算进来会把排队时间记成模型耗时。
         AtomicLong startedNanos = new AtomicLong();
+        // 首 Token 延迟：只有真的吐出文字的那一帧才算数。有些供应商会先发一两帧
+        // 只带 role 的空 delta，把那种帧算成"首 Token"会让这项指标永远偏小。
+        AtomicLong firstTokenNanos = new AtomicLong();
 
         return chain.nextStream(request)
                 .doOnSubscribe(subscription -> startedNanos.set(System.nanoTime()))
                 .doOnNext(response -> {
                     ChatResponse chatResponse = response == null ? null : response.chatResponse();
+                    if (hasText(chatResponse)) {
+                        // compareAndSet：多线程下只留第一帧，后到的不能覆盖
+                        firstTokenNanos.compareAndSet(0, System.nanoTime());
+                    }
                     if (hasTokens(chatResponse)) {
                         lastWithTokens.set(chatResponse);
                     }
@@ -138,11 +178,31 @@ public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
                     if (recorded.compareAndSet(false, true)) {
                         ChatResponse last = lastWithTokens.get();
                         long started = startedNanos.get();
-                        Metrics.of(observability, request, last)
-                                .record(started == 0 ? -1 : elapsedMillis(started));
+                        long latencyMillis = started == 0 ? -1 : elapsedMillis(started);
+                        Metrics.of(observability, request, last).record(latencyMillis);
                         recordUsage(request, last);
+                        recordTrace(request, last, latencyMillis, firstTokenMillis(started, firstTokenNanos.get()),
+                                // 用户主动断开不是模型失败：它正常产出过内容，
+                                // 记成 failed 会把"我们自己的错误率"算高
+                                signal != SignalType.ON_ERROR, null);
                     }
                 });
+    }
+
+    private static Long firstTokenMillis(long startedNanos, long firstTokenNanos) {
+        if (startedNanos == 0 || firstTokenNanos == 0) {
+            return null;
+        }
+        return Math.max(0, (firstTokenNanos - startedNanos) / 1_000_000);
+    }
+
+    private static Integer errorCodeOf(RuntimeException ex) {
+        try {
+            return FailureClassifier.toBusinessException(ex).getCode();
+        } catch (RuntimeException classifierFailure) {
+            // 分类器自己挂了也不能把原始异常吞掉：观测是附加价值
+            return null;
+        }
     }
 
     private static long elapsedMillis(long startedNanos) {
@@ -209,6 +269,76 @@ public class UsageMeteringAdvisor implements CallAdvisor, StreamAdvisor {
             log.warn("token 记账失败，本次用量未能计入配额 model={} promptTokens={} completionTokens={}",
                     model, promptTokens, completionTokens, ex);
         }
+    }
+
+    /**
+     * 记一条调用明细（{@code observability_call}）。
+     *
+     * <p>与 token 记账不同，这里<b>没有 usage 也照记</b>：一次调用有没有发生、花了多久、
+     * 成没成功，都是本地就能观测的事实。丢了它，供应商不回传 usage 的那些请求
+     * 在观测页上就完全不存在——看起来像没人用过。
+     *
+     * <p>失败时 model 只能从请求里拿（没有响应可读），拿不到就留 null，
+     * 不拿角色名顶替：角色会随配置改，模型名才是账单上的那个。
+     */
+    private void recordTrace(ChatClientRequest request, ChatResponse response, long latencyMillis,
+                             Long firstTokenMs, boolean success, Integer errorCode) {
+        try {
+            Integer promptTokens = null;
+            Integer completionTokens = null;
+            if (hasTokens(response)) {
+                Usage usage = response.getMetadata().getUsage();
+                promptTokens = usage.getPromptTokens();
+                completionTokens = usage.getCompletionTokens();
+            }
+            traceRecorder.record(new CallTrace(
+                    stringContextValue(request, UserContextKeys.REQUEST_ID),
+                    userIdOf(request),
+                    stringContextValue(request, UserContextKeys.SCENE),
+                    modelOf(request, response),
+                    promptTokens,
+                    completionTokens,
+                    // 没订阅成功时 latency 是 -1（见上面 started == 0 的分支），
+                    // 落库前归零：负数时长会污染 AVG()
+                    Math.max(latencyMillis, 0),
+                    firstTokenMs,
+                    success,
+                    errorCode));
+        } catch (RuntimeException ex) {
+            log.warn("调用明细留档失败，本次调用未进入观测 requestId={} scene={}",
+                    stringContextValue(request, UserContextKeys.REQUEST_ID),
+                    stringContextValue(request, UserContextKeys.SCENE), ex);
+        }
+    }
+
+    private static String modelOf(ChatClientRequest request, ChatResponse response) {
+        if (response != null && response.getMetadata() != null) {
+            String model = response.getMetadata().getModel();
+            if (model != null && !model.isBlank()) {
+                return model;
+            }
+        }
+        try {
+            if (request != null && request.prompt() != null && request.prompt().getOptions() != null) {
+                return request.prompt().getOptions().getModel();
+            }
+        } catch (RuntimeException ignored) {
+            // 有些自定义 ChatOptions 实现在这里会抛：观测不该因此丢一条记录
+        }
+        return null;
+    }
+
+    private static boolean hasText(ChatResponse response) {
+        if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
+            return false;
+        }
+        String text = response.getResult().getOutput().getText();
+        return text != null && !text.isEmpty();
+    }
+
+    private static String stringContextValue(ChatClientRequest request, String key) {
+        Object value = contextValue(request, key);
+        return value == null ? null : value.toString();
     }
 
     private static boolean isSystemCall(ChatClientRequest request) {

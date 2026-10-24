@@ -106,6 +106,19 @@ public final class ErrorCodeHttpStatusMapper {
             // 审批 / 重试打到状态不对的运行 → 409（请求格式对，是资源当前状态不允许；
             // 与 AGENT_RUN_STATE_INVALID / APPROVAL_NOT_PENDING 同一条理由）
             case WORKFLOW_APPROVAL_NOT_PENDING, WORKFLOW_RETRY_NOT_ALLOWED -> HttpStatus.CONFLICT;
+
+            // 9xxx 自动化：任务/运行不存在（含越权）→ 404，与上面同一条防枚举理由；
+            // 排期非法是"用户填的值不对"→ 400，用户可以改 cron 重试
+            case AUTOMATION_NOT_FOUND, AUTOMATION_RUN_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case AUTOMATION_SCHEDULE_INVALID -> HttpStatus.BAD_REQUEST;
+            // 9101：与 9001 同理，不存在与不属于你必须是同一个状态码
+            case OBSERVABILITY_REQUEST_NOT_FOUND -> HttpStatus.NOT_FOUND;
+
+            // 92xx 插件与 MCP：server 不存在（含越权）→ 404；
+            // 传输方式不认识 / stdio 被关闭 → 400（都是"你填的配置不对"，改一下就能重试）——
+            // 刻意不用 503：那会把"配置写错"说成"我们的服务坏了"，排查方向就错了
+            case MCP_SERVER_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case MCP_TRANSPORT_UNSUPPORTED, MCP_STDIO_DISABLED -> HttpStatus.BAD_REQUEST;
         };
     }
 }

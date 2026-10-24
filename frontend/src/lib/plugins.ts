@@ -1,4 +1,11 @@
-/** 插件 / 技能 / MCP 市场的前端数据模型（本轮只做界面，数据存本地） */
+/**
+ * 插件 / 技能 / MCP 市场的前端数据模型。
+ *
+ * 目录（`PLUGIN_CATALOG`）与演示用的 MCP 列表（`MCP_SERVERS`）留在前端：
+ * 它们的"已安装 / 已连接"状态现在都存在后端（`/api/plugins`、`/api/mcp-servers`），
+ * 这里只描述"市场里有哪些东西"。唯一还走 localStorage 的是导入的 SKILL.md 技能包——
+ * 它没有服务端承载，仍是纯本地文件。
+ */
 
 export type PluginCategory = 'agent' | 'knowledge' | 'search' | 'automation' | 'productivity' | 'data' | 'skill'
 
@@ -136,6 +143,12 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
 ]
 
+/**
+ * 演示用的 MCP 列表：**只在 `VITE_USE_MOCK` 下渲染**。
+ *
+ * 真实模式下列表来自 `GET /api/mcp-servers`（用户自己接的那些），
+ * 这里四条只是让离线演示与 `verify-market.mjs` 有东西可看。
+ */
 export const MCP_SERVERS: McpServerMeta[] = [
   {
     id: 'filesystem',
@@ -179,9 +192,7 @@ export const MCP_SERVERS: McpServerMeta[] = [
   },
 ]
 
-const INSTALLED_KEY = 'nx-plugins-installed'
 const SKILLS_KEY = 'nx-plugins-skills'
-const MCP_STATE_KEY = 'nx-plugins-mcp'
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -192,28 +203,12 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-export function readInstalledPlugins(): string[] {
-  return readJson<string[]>(INSTALLED_KEY, ['nexus-mcp-bridge', 'web-fetch'])
-}
-
-export function writeInstalledPlugins(ids: string[]) {
-  localStorage.setItem(INSTALLED_KEY, JSON.stringify(ids))
-}
-
 export function readSkills(): SkillPack[] {
   return readJson<SkillPack[]>(SKILLS_KEY, [])
 }
 
 export function writeSkills(skills: SkillPack[]) {
   localStorage.setItem(SKILLS_KEY, JSON.stringify(skills))
-}
-
-export function readMcpState(): Record<string, boolean> {
-  return readJson<Record<string, boolean>>(MCP_STATE_KEY, { filesystem: true })
-}
-
-export function writeMcpState(state: Record<string, boolean>) {
-  localStorage.setItem(MCP_STATE_KEY, JSON.stringify(state))
 }
 
 export function parseSkillContent(raw: string): { name?: string; version?: string; description?: string } {

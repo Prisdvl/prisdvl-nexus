@@ -4,8 +4,10 @@ import com.lky.nexus.ai.agent.AgentDefinition;
 import com.lky.nexus.ai.error.FailureClassifier;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.app.agent.tool.AgentToolFactory;
+import com.lky.nexus.app.infra.web.RequestIdHolder;
 import com.lky.nexus.common.exception.BusinessException;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
+import com.lky.nexus.common.observe.ObserveScenes;
 import com.lky.nexus.common.security.UserContextKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -137,7 +139,12 @@ public class AgentRuntime {
                     .user(question)
                     // token 记账归属（5.6）。Agent 会跑多轮工具循环，而 UsageMeteringAdvisor
                     // 位于工具循环内侧 ⇒ 每一轮各记一笔。这不是重复：每一轮都真的调了一次模型
-                    .advisors(a -> a.param(UserContextKeys.USER_ID, userId))
+                    //
+                    // 观测（§10.1）：一次 Agent 运行 = 一次请求。requestId 来自请求线程，
+                    // 定时任务里没有它（RequestIdHolder 返回 null），那些明细会按调用各自成行
+                    .advisors(a -> a.param(UserContextKeys.USER_ID, userId)
+                            .param(UserContextKeys.REQUEST_ID, RequestIdHolder.current())
+                            .param(UserContextKeys.SCENE, ObserveScenes.AGENT))
                     .call()
                     .content();
         } catch (BusinessException ex) {

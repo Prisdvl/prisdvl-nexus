@@ -680,6 +680,23 @@
   letter-spacing: 0.02em;
   color: var(--text-3);
 }
+/*
+ * 部分库没参与检索（跨库检索的降级提示）。
+ *
+ * 用警示色而不是灰色：有结果时的降级最容易被忽略——用户看到下面一串命中，
+ * 不会想到"还有两个库压根没搜到"，而那个结论恰恰是错的。
+ */
+.kb-adv__degraded {
+  flex: 0 0 auto;
+  margin: 2px 2px 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--warn-ink, #8a5a00);
+  background: var(--warn-bg, rgba(255, 193, 7, 0.12));
+  border: 1px solid var(--warn-line, rgba(255, 193, 7, 0.32));
+}
 /* 未检索 / 无命中：正式居中空态，不把文字裸放在白底上 */
 .kb-adv__onboard {
   flex: 1 1 auto;

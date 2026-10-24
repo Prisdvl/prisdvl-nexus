@@ -107,9 +107,9 @@ class AgentRuntimeFailureTest {
 
         // 工具装配与本次要验的事无关（失败发生在模型调用上），换成空实现，
         // 免得测试还得拉起 ToolRegistry、授权服务与观测注册表。
-        // applyTo 被整个覆盖掉，因此这五个依赖一个都不会被解引用——
+        // applyTo 被整个覆盖掉，因此这六个依赖一个都不会被解引用——
         // 这正是"AgentRuntime 只认值对象"换来的好处：失败路径不需要数据库。
-        AgentToolFactory noTools = new AgentToolFactory(null, null, null, null, null) {
+        AgentToolFactory noTools = new AgentToolFactory(null, null, null, null, null, null) {
             @Override
             public ChatClient.ChatClientRequestSpec applyTo(ChatClient.ChatClientRequestSpec request,
                                                             Long userId,

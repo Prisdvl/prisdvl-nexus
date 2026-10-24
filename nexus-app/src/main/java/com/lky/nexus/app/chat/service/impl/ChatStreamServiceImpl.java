@@ -26,6 +26,7 @@ import com.lky.nexus.app.chat.stream.SseEventNames;
 import com.lky.nexus.app.chat.stream.StreamCancellationRegistry;
 import com.lky.nexus.app.infra.web.RequestIdHolder;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
+import com.lky.nexus.common.observe.ObserveScenes;
 import com.lky.nexus.common.security.UserContextKeys;
 import com.lky.nexus.knowledge.rag.Citations;
 import com.lky.nexus.knowledge.rag.PreparedAnswer;
@@ -324,7 +325,14 @@ public class ChatStreamServiceImpl implements ChatStreamService {
             // token 记账归属（5.6）：放在 if/else 之外，是因为两个分支都要记账。
             // RAG 分支不挂记忆 advisor，但它照样要花 token——只在非 RAG 分支里传 userId
             // 会让"用 RAG 对话永远不扣额度"，而且这种漏记没有任何报错
-            request = request.advisors(a -> a.param(UserContextKeys.USER_ID, userId));
+            //
+            // 观测（§10.1）：requestId 让一次问答的每一轮模型调用聚成"一次请求"；
+            // scene 必须是流式专属值——流式与同步的延迟差一个数量级，混在一起平均没有意义
+            request = request.advisors(a -> a.param(UserContextKeys.USER_ID, userId)
+                    .param(UserContextKeys.REQUEST_ID, session.requestId)
+                    .param(UserContextKeys.SCENE, ragMode
+                            ? ObserveScenes.RAG_STREAM
+                            : agentMode ? ObserveScenes.AGENT_STREAM : ObserveScenes.CHAT_STREAM));
             if (agentMode) {
                 // 提示词 + 工具 + ToolContext 的组装交给 AgentRuntime.configure：一次性调用
                 // （AgentRuntime.ask）走的是同一个方法。两条链路各写一份的话，将来给 Agent

@@ -581,27 +581,79 @@ GET /api/knowledge-bases/1/search?q=不存在的词
 { "code": 0, "data": { "hits": [], "emptyReason": "NO_INDEX" } }
 ```
 
-### 4.2 规划中（尚未实现）
-
-下表是目标形态，当前代码里**没有**这两个端点（`/api/knowledge-bases/{id}/search` 是今天的实际入口）：
+### 4.2 跨库统一检索（已实现）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/search` | 统一检索（跨库 `kbIds`）：`mode=VECTOR\|BM25\|HYBRID`、`topK`、`rerank`、filters（kbIds/tags/folder/documentId） |
-| POST | `/api/search/explain` | 调试接口：返回两路原始结果、融合后的排名、重排分数（用于调参与面试演示） |
+| POST | `/api/search` | 跨库检索：`q` + 可选 `kbIds[]`，`mode` ∈ `VECTOR` / `BM25` / `HYBRID`（大小写不敏感），`topK`，`rerank`，`filters{tags,folder,documentId}` |
+| POST | `/api/search/explain` | 同入参；返回两路原始结果、RRF 融合名次与重排分数（只读，不落库，用于调参与演示） |
+
+> ✅ **本表均已实现**。入口是 `SearchController`，检索本身复用 `ChunkSearchService` /
+> `MultiKnowledgeRetriever`——没有第二套召回逻辑，§4.1 的库内入口同时保留（库在路径里，
+> 一次只搜一个库）。`requestId` / `request_id` 不参与检索，这里的"跨库"是**同一用户**的多个库。
 
 ```http
 POST /api/search
-{ "query": "Redis 缓存击穿", "mode": "HYBRID", "topK": 10, "rerank": true,
-  "filters": { "kbIds": [1], "tags": ["Redis"], "folder": "Redis" } }
+{ "q": "Redis 缓存击穿", "kbIds": ["1800000000000000001"], "mode": "HYBRID", "topK": 10,
+  "rerank": true, "filters": { "tags": ["Redis"], "folder": "Redis" } }
 
 200 OK
-{ "code": 0, "data": { "took": 78, "results": [
-  { "chunkId": 20001, "documentId": 100, "documentName": "缓存击穿.md",
-    "sourcePath": "Redis/缓存击穿.md", "headingPath": "Redis > 缓存 > 缓存击穿",
-    "snippet": "……互斥锁方案……", "vectorScore": 0.83, "bm25Score": 12.4,
-    "rrfScore": 0.032, "rerankScore": 8.7, "finalRank": 1 } ] } }
+{ "code": 0, "data": {
+  "hits": [
+    { "kbId": "1800000000000000001", "kbName": "Redis 源码阅读", "chunkId": "20001",
+      "documentId": "100", "documentTitle": "缓存击穿.md",
+      "headingPath": "Redis > 缓存 > 缓存击穿", "snippet": "……互斥锁方案……",
+      "score": 0.0325, "source": "hybrid", "matchedBy": ["BM25 #1", "向量 #2"] } ],
+  "emptyReason": null,
+  "tookMs": 78,
+  "degradedKbs": [ { "kbId": "1800000000000000002", "kbName": "面试八股合集", "reason": "索引不可用" } ] } }
 ```
+
+```http
+POST /api/search/explain
+{ "q": "Redis 缓存击穿", "topK": 10, "rerank": true }
+
+200 OK
+{ "code": 0, "data": {
+  "vector": [ { "kbId": "1800000000000000001", "chunkId": "20001", "documentId": "100",
+                "documentTitle": "缓存击穿.md", "headingPath": "Redis > 缓存 > 缓存击穿",
+                "snippet": "……互斥锁方案……", "score": 0.83, "rank": 2 } ],
+  "bm25":   [ { "kbId": "1800000000000000001", "chunkId": "20001", "documentId": "100",
+                "documentTitle": "缓存击穿.md", "headingPath": "Redis > 缓存 > 缓存击穿",
+                "snippet": "……互斥锁方案……", "score": 12.4, "rank": 1 } ],
+  "fused":  [ { "kbId": "1800000000000000001", "chunkId": "20001", "documentId": "100",
+                "documentTitle": "缓存击穿.md", "headingPath": "Redis > 缓存 > 缓存击穿",
+                "snippet": "……互斥锁方案……", "rank": 1, "fusedScore": 0.0325,
+                "bm25Rank": 1, "vectorRank": 2, "matchedBy": ["BM25 #1", "向量 #2"] } ],
+  "rerank": [ { "kbId": "1800000000000000001", "chunkId": "20001", "rank": 1, "rerankScore": 8.7 } ],
+  "tookMs": 78,
+  "degradedKbs": [] } }
+```
+
+**五条容易搞错的契约事实**
+
+1. **`kbIds` 省略或空数组 = 当前用户的全部可检索库**（`status = ENABLED` 的库），上限 20 个。
+   显式传了不属于自己的库不会"悄悄剔除"，而是整批 `404 / 3001`；显式传了自己已禁用的库
+   不参与检索，但会出现在 `degradedKbs` 里说明原因。
+2. **单个库崩了不会整体失败**：该库进 `degradedKbs`，其余库的命中照常返回，HTTP 仍是 200。
+   所以调用方必须看 `degradedKbs`，不能只 `catch`——`catch` 到的东西只有"全挂"这一种。
+   全部库都失败时才由底层抛出（`4005` / `503`）。
+3. `emptyReason` 仍是三态：`NO_KB`（一个可检索库都没有）/ `NO_INDEX`（有切片但没建索引）/
+   `NO_RESULTS`（索引正常、确实没有相关内容）；**有命中时一定是 `null`**。命中为空且部分库
+   降级时 `emptyReason` 照给——它说的是"能搜的库确实没有"，"还有库没搜到"由 `degradedKbs` 说。
+4. `topK` 只决定**归并后保留多少条**，每个库仍按自己的 `retrieval_top_k` 召回；`rerank: true`
+   只对归并后的**前 8 条**调模型，重排失败按原序返回（不丢结果），重排成功的条目
+   `source = "rerank"`、`score` 换成模型分、`matchedBy` 追加 `重排 #n`。
+5. `/explain` 只读、不落库；**两路原始结果不裁剪**（召回多少条回多少条），`fusedScore`
+   就是 RRF：`1/(60+bm25Rank) + 1/(60+vectorRank)`（k=60），`rank` 从 1 连续；
+   `rerank[]` 只含参与重排的前 8 条且不带正文（避免响应翻倍）。
+
+| 业务码 | HTTP | 触发条件 |
+| --- | --- | --- |
+| 1001 | 400 | `q` 为空、`mode` 非法、`topK` 越界、`filters.documentId` 非数字、`kbIds` 超过 20 个 |
+| 3001 | 404 | `kbIds` 里有不存在或不属于当前用户的库 |
+| 4006 | 400 | 有库的嵌入模型未配置（整批失败，不降级——降级会让"配置错误"伪装成"这个库没内容"） |
+| 4005 | 503 | 向量库不可用导致**全部**库失败 |
 
 ### 4.3 RAG 问答（已实现）
 
@@ -1030,6 +1082,10 @@ POST /api/agent/runs/9/approval
 | POST | `/api/mcp/servers/{name}/refresh` | 重新拉取工具清单（MCP 工具可动态变化） |
 | GET | `/api/mcp/servers/{name}/tools` | 该 Server 暴露的工具与 Schema |
 
+> ⚠️ 上面这张表（`/api/mcp/servers`，带斜杠）是**目标态、尚未实现**。
+> 2026-10-24 起真正可用的外部 server 管理接口是 §7.2 的 `/api/mcp-servers`（复数 + 连字符），
+> 两者路径不同、语义也不同，不要照这张表写客户端。
+
 MCP Server 进程自身暴露（Streamable HTTP）：
 
 | 能力 | 名称 | 权限 |
@@ -1094,6 +1150,95 @@ curl -s -X POST localhost:8080/mcp \
 `qa_ask` 不受这个开关影响（它不是 `@Tool`，而是"跑一次默认 Agent"的入口）：
 它内部的检索同样按用户启停过滤，因此停用检索工具后它仍会回答、只是不再检索
 （这一点由 `AGENT_TOOLS_EMPTY` 计数与 WARN 留痕，不静默）。
+
+### 7.2 已实现：接入外部 MCP Server（迁移 V32）
+
+§7.1 是 Nexus **作为** MCP Server；这一节是反方向：让 Nexus **作为客户端**去连别人家的
+MCP server，把它的工具挂进 Agent 工具箱。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/mcp-servers` | 我接的 server 列表（含上次探测到的工具、上次成功/失败时间） |
+| POST | `/api/mcp-servers` | 新建（`name` 必填；`transport` 为 `http` 或 `stdio`） |
+| PUT | `/api/mcp-servers/{id}` | 局部更新（每个字段都可省略 = 不改那一项） |
+| DELETE | `/api/mcp-servers/{id}` | 删除（它的工具同时从工具箱移除） |
+| POST | `/api/mcp-servers/{id}/probe` | 真连一次 `tools/list`，成功则落库并注册工具 |
+
+> ✅ **本表均已实现**（`McpServerController` + `McpServerService`，迁移 `V32__plugin_and_mcp_server.sql`）。
+> 上一节（§7.1）的进程内 Server 与这里的外部客户端是两套东西，互不影响。
+
+请求体（POST）：
+
+```json
+{ "name": "Fake Echo", "transport": "http", "url": "http://127.0.0.1:9000/mcp",
+  "authHeader": "Bearer xxx", "enabled": true }
+```
+
+`stdio` 时把 `url` 换成 `command`，例如
+`"command": "npx -y @modelcontextprotocol/server-filesystem /data"`。
+
+响应（GET / POST / PUT 同一个形状）：
+
+```json
+{ "id": "1", "name": "Fake Echo", "slug": "fake-echo", "transport": "http",
+  "url": "http://127.0.0.1:9000/mcp", "command": null,
+  "hasAuthHeader": true, "enabled": true,
+  "lastOkAt": "2026-10-24T23:10:00", "lastError": null,
+  "tools": [ { "name": "echo", "description": "回声", "inputSchema": "{\"type\":\"object\"}" } ] }
+```
+
+`probe` 的响应：
+
+```json
+{ "ok": false, "error": "MCP server 返回 HTTP 500：…", "tools": [], "tookMs": 12, "lastOkAt": null }
+```
+
+五条容易搞错的契约事实：
+
+1. **`probe` 失败也是 HTTP 200**，成没成看 `ok`。探测失败是**业务结果**（上游 500、连不上、
+   stdio 被服务端关掉），不是 Nexus 自己的故障；用 5xx 表示只会让前端弹一个没有信息的
+   "请求失败"。`error` 里的原因**必须显示**，不能静默当成"这个服务本来就没什么工具"。
+2. **`authHeader` 只进不出**。写入时经 `CredentialCipher`（AES-GCM，`v1:` 前缀）加密存进
+   `auth_header_cipher`，读接口只回 `hasAuthHeader`，永不回显明文。PUT 时 `authHeader`
+   缺省 = 不改，空串 = 清除。
+3. **工具 code 是 `mcp__<slug>__<tool>`**。`slug` 由 `name` 生成且**全库唯一**（第二个用户
+   也叫 github 会拿到 `github-2`）——因为 `ai_tool_registry` 没有 user_id 维度。改名**不会**
+   改 slug：它已经刻在工具 code 里了。
+4. **stdio 默认关闭**（`nexus.mcp.stdio-enabled=false`）。打开它意味着网页上填的"命令"会被
+   服务器**真的执行**——这是 stdio 传输固有的语义，只能由部署者决定要不要给这个能力；
+   关闭时 probe 明确回报「本机 stdio 传输已关闭」，而不是一个看不懂的连接失败。
+5. **probe 成功才注册工具；失败只写 `last_error`，并保留旧的 `tools_json`**——一次网络抖动
+   不该把已经能用的工具全撤掉。上游真的删掉的工具会被置为停用，但**用户手动停用的工具
+   不会被"复活"**。
+
+运行时注入：`AgentToolFactory.assemble` 在内置 `@Tool` 之后追加
+`McpToolInjector.toolsFor(userId, definition)`，因此 MCP 工具与内置工具走**同一套**授权闸门
+（`ToolAuthorizationService`）、审批与留痕（`ExecutingToolCallback`）；0 个工具时仍然不调用
+`.tools()`。真正的调用走 JSON-RPC `tools/call`，Streamable HTTP 与 stdio 两种传输由
+`McpClientFactory` 按 `transport` 选择。
+
+错误码：`9201`（server 不存在；越权同样回 404，不暴露存在性）、`9203`（不支持的传输方式，400）、
+`9204`（stdio 已被服务端关闭，400）。
+
+### 7.3 已实现：插件开关与配置（迁移 V32）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/plugins` | 我显式改过的插件（没动过的不出现在列表里） |
+| GET | `/api/plugins/{code}` | 单个插件状态；**没有记录时返回默认值，不是 404** |
+| PUT | `/api/plugins/{code}` | 启停 + 配置（即 upsert，没有 POST） |
+
+```json
+{ "code": "web-fetch", "enabled": false, "config": { "endpoint": "https://example.com" } }
+```
+
+三条契约事实：
+
+1. 插件目录在前端（`PLUGIN_CATALOG`），服务端只记"这个用户对这个 code 做了什么"。
+   所以 `GET /{code}` 在一条记录都没有时返回 `{"enabled": true, "config": {}}`，**不会 404**；
+   `PUT` 就是 upsert，安装/卸载等价于 `enabled` 的 true/false。
+2. `config` 传 `null`/缺省 = 不改，传 `{}` = 清空。两者混为一谈，用户就永远清不掉自己的配置。
+3. `code` 必须匹配 `^[a-z0-9][a-z0-9._-]{0,63}$`，否则 400 / `1001`——它同时是 URL 注入的边界。
 
 ---
 
@@ -1174,7 +1319,9 @@ POST /api/eval/datasets/1/import
 
 > ⚠️ **部分已移除（2026-10-08）**：`/api/observability/summary` 与 `/api/observability/agents` 两个只读接口已删除
 > （原型无对应界面）。底层的 `ObservabilityRegistry`（`nexus-common`）与 Micrometer / Actuator 指标**保留**。
-> 下表后半部分（`overview` / `trend` / `models` / `requests` …）**从未实现**，属于当初的规划。
+> 本节曾有"规划中"的后半部分（`overview` / `trend` / `models` / `requests` …），现已实现，见 **10.1**
+> （明细表 `observability_call`，迁移 `V31`）。10.0 保留原样作为历史记录：它描述的是**进程内**计数，
+> 与 10.1 的**落库**明细是两套数据源，数字对不上是正常的。
 
 ### 10.0 已实现（两个端点，**数据来源不同，不要混着看**）
 
@@ -1223,15 +1370,160 @@ POST /api/eval/datasets/1/import
 token 记不到，但"调了几次、花了多久"仍然记——把它一起丢掉会让指标整片为空，
 看起来像"没人在用"。
 
-### 10.1 规划中
+### 10.1 已实现（五个只读端点，迁移 V31）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/observability/overview` | 总览：调用次数、Token 消耗、平均延迟、首 Token 延迟、RAG 次数、工具次数、失败数、错误率、估算成本 |
-| GET | `/api/observability/trend` | 时间趋势（按小时/天，scene/model 维度） |
-| GET | `/api/observability/models` | 模型维度统计（调用数、Token、延迟、成本、错误率） |
-| GET | `/api/observability/requests` | 调用明细（按 requestId/会话/场景/成功与否过滤） |
-| GET | `/api/observability/requests/{requestId}` | 单次调用全链路（检索文档、工具调用、Token、延迟、错误） |
+| GET | `/api/observability/overview` | 窗口总览：调用次数、Token 消耗、平均延迟、首 Token 延迟、RAG 次数、工具次数、失败数、错误率、估算成本 |
+| GET | `/api/observability/trend` | 时间趋势（按小时 / 天分桶，空桶补零，可按 scene / model 过滤） |
+| GET | `/api/observability/models` | 模型维度统计（调用数、Token、延迟、失败数、成本、出现过的场景），按调用数倒序 |
+| GET | `/api/observability/requests` | 请求列表（**一行一个 `requestId`**，分页） |
+| GET | `/api/observability/requests/{requestId}` | 单次请求全链路（逐轮调用、检索文档、工具调用、Token、延迟、错误） |
+
+> ✅ **本表均已实现**（迁移 `V31__observability_call.sql`）。全部需要登录、且只返回**当前用户**的数据：
+> 归属取自 JWT，**不接受任何 `userId` 入参**——没有可以填错的参数，也就没有越权查询的入口。
+
+**公共参数**（`overview` / `trend` / `models` / `requests`）
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `hours` | `24` | 回看窗口，单位小时；`< 1` 夹到 `1`，`> 720` 夹到 `720`（30 天） |
+| `scene` | — | 可选，场景过滤：`chat` / `chat.stream` / `rag` / `rag.stream` / `agent` / `agent.stream` / `rerank` |
+| `model` | — | 可选，模型名过滤（仅 `trend`） |
+| `by` | `hour` | `trend` 的桶粒度；`day` 以外的任何值都按 `hour` |
+| `pageNum` | `1` | `requests` 分页，越界自动归一 |
+| `pageSize` | `20` | `requests` 每页条数，上限 `100` |
+| `success` | — | `requests` 可选，`true` / `false` |
+
+**`GET /api/observability/overview`**
+
+```json
+{
+  "windowHours": 24,
+  "from": "2026-02-11T09:00:00",
+  "to": "2026-02-12T09:00:00",
+  "calls": 128,
+  "tokensIn": 48120,
+  "tokensOut": 9310,
+  "tokens": 57430,
+  "avgLatencyMs": 642,
+  "firstTokenMs": 186,
+  "ragCalls": 44,
+  "toolCalls": 17,
+  "failures": 3,
+  "errorRate": 0.0234,
+  "estimatedCost": 0.171660,
+  "costComplete": true,
+  "unpricedModels": []
+}
+```
+
+**`GET /api/observability/requests`**
+
+```json
+{
+  "list": [
+    {
+      "requestId": "a1b2c3d4",
+      "scene": "agent",
+      "model": "deepseek-chat",
+      "startedAt": "2026-02-12T08:41:02",
+      "endedAt": "2026-02-12T08:41:09",
+      "calls": 3,
+      "tokens": 2140,
+      "latencyMs": 6900,
+      "firstTokenMs": 240,
+      "success": false,
+      "errorCode": 4002,
+      "scenes": ["agent"]
+    }
+  ],
+  "total": 37,
+  "pageNum": 1,
+  "pageSize": 20,
+  "pages": 2
+}
+```
+
+**`GET /api/observability/requests/{requestId}`** 在上面那些汇总字段之外，多了三段：
+
+```json
+{
+  "requestId": "a1b2c3d4",
+  "callCount": 3,
+  "calls": [
+    {"id": "9001", "scene": "agent", "model": "deepseek-chat", "tokensIn": 1200, "tokensOut": 210,
+     "latencyMs": 2400, "firstTokenMs": 240, "success": true, "errorCode": null,
+     "createdAt": "2026-02-12T08:41:02"}
+  ],
+  "retrieval": {
+    "found": true,
+    "knowledgeBaseIds": [9],
+    "count": 2,
+    "contextTokens": 1234,
+    "truncated": false,
+    "reranked": true,
+    "empty": false,
+    "hits": [
+      {"knowledgeBaseId": 9, "documentName": "部署笔记.md", "headingPath": "# 部署",
+       "score": 0.91, "snippet": "用 docker compose 起…"}
+    ]
+  },
+  "toolCalls": [
+    {"tool": "kb.search", "input": "{\"query\":\"部署\"}", "resultSummary": "3 条命中"}
+  ]
+}
+```
+
+（为省篇幅示例里省略了 `scene` / `model` / `startedAt` / `endedAt` / `tokensIn` / `tokensOut` / `tokens` /
+`latencyMs` / `firstTokenMs` / `success` / `errorCode`，它们的含义与 `requests` 列表完全一致。）
+
+**五条容易搞错的契约事实**
+
+1. **`requests` 一行一个 `requestId`，不是一行一次调用。** 一次 Agent 运行会打多轮模型（工具循环每轮各一行明细），
+   `calls` 才是"打了几轮"。没有 `requestId` 的调用（定时任务、同步 RAG）**各自成行**，`requestId` 形如
+   `call-<明细主键>`——不对它们编造一个假的 `requestId`，否则两个不相干的请求会被并成一条。
+2. **`scene` / `success` 过滤发生在聚合之前（按调用过滤）。** 于是 `success=false` 得到的是"**含**失败调用的请求"，
+   `success=true` 得到的是"**全部**调用都成功的请求"；两者相加可能小于总数，因为"又成功又失败"的请求两次都会出现。
+3. **`estimatedCost` 在任一模型缺价格时是 `null`**（同时 `costComplete=false`、`unpricedModels` 列出缺价格的模型），
+   **不会**返回一个偏小的数字。成本永远只是"按配置单价算出来的估值"，不是账单。
+4. **`firstTokenMs` 只对有首 Token 记录的调用求平均**（非流式调用没有这个概念，记的是 `null`），一条都没有时为 `null`；
+   `avgLatencyMs` 是整数毫秒、向下取整。`toolCalls` 取 `ai_tool_invocation` 在窗口内的行数，与模型调用次数无关。
+5. **详情里的检索 / 工具摘要来自 `chat_message.metadata`**（`retrieval` / `toolCalls` / `citations`），
+   不看 `kb_qa_record`——那张表没有 `request_id`，无法与请求关联。请求存在但助手消息还没落库时，
+   返回 `retrieval.found=false`、`toolCalls=[]`，**不是 404**。
+
+**成本配置（`nexus.pricing.<model>.input/output`，元 / 每 100 万 token）**
+
+```yaml
+nexus:
+  pricing:
+    deepseek-chat:
+      input: 2.0
+      output: 8.0
+```
+
+- 键是**供应商返回的模型名**（响应元数据里的 `model`），不是 `chat.default` / `chat.agent` 这类**角色名**——
+  角色会随配置改，模型名才是账单上的那个；
+- 默认留空：宁可在观测页看到"未配价格"，也不编一个数字。没配的模型成本一律 `null`；
+- 模型名本身带点时（如 `gpt-4.1`），`nexus.pricing.gpt-4.1.input` 会被当成层级；请用中括号写法
+  `nexus.pricing.[gpt-4.1].input`。
+
+**数据来源与写入点**
+
+明细表 `observability_call` 的**唯一写入点**是 `UsageMeteringAdvisor`（`nexus-ai`），也就是模型调用真实发生、
+拿到了 `ChatResponse` 的那一层；业务代码里**没有**任何一处手动埋点。好处是"漏记一条"不可能发生，
+代价是只有真的发出了调用才有行——被限流、被审批拦住、模型没配的请求**不会**在这里留痕，
+它们的失败在 `ai_agent_run` / `chat_message` 里。
+
+**查询上限**：单个窗口最多扫 `20000` 行（`MAX_SCAN_ROWS`），超出时按时间倒序截断并打 WARN。
+报表会**偏小**而不是把库拖死——这是刻意选的失败方向。
+
+**错误码**
+
+| 业务码 | HTTP | 含义 |
+| --- | --- | --- |
+| `9101` `OBSERVABILITY_REQUEST_NOT_FOUND` | 404 | 该 `requestId` 不存在，或不属于当前用户（两种情况不区分，避免探测他人是否存在某次请求） |
 
 ---
 
@@ -1347,11 +1639,128 @@ nexus:auth:tv:{userId}               用户令牌版本（缓存，DB 是事实�
 | `/api/auth/**`、`/api/users/**` | Phase 0 |
 | `/api/chat/**`（含 SSE） | Phase 1（RAG 部分 Phase 3） |
 | `/api/knowledge-bases/**`、`/api/documents/**`、`/api/import-tasks/**` | Phase 2 |
-| `/api/search/**` | Phase 3 |
+| `/api/search/**`（跨库检索与 explain，§4.2） | Phase 3（已实现） |
 | `/api/tools/**` | Phase 5 |
 | `/api/agents/**`、`/api/agent/runs/**`、`/api/tool-invocations` | Phase 6 |
-| `/api/mcp/**` | Phase 7 |
+| `/api/mcp/**` | Phase 7（目标态，尚未实现） |
 | `POST /mcp`（进程内 MCP Server，见 §7.1） | 已实现（4.3 起；身份 5.1 起改为 JWT） |
+| `/api/mcp-servers/**`（外部 MCP server 客户端，§7.2） | 已实现（迁移 V32） |
+| `/api/plugins/**`（插件开关与配置，§7.3） | 已实现（迁移 V32） |
 | `/api/workflows/**`、`/api/workflow-runs/**` | Phase 8 |
 | ~~`/api/eval/**`~~（已移除）、`/api/prompts/**` | Phase 9 |
-| ~~`/api/observability/**`~~（只读接口已移除，指标仍在 `/actuator/metrics`） | Phase 10 |
+| `/api/observability/{overview,trend,models,requests,requests/{id}}`（§10.1） | 已实现（迁移 V31）；~~`summary`/`agents`~~ 已移除 |
+| `/api/automations/**`（§14） | 已实现（迁移 V30） |
+
+---
+
+## 14. 自动化（迁移 V30）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/automations` | 新建定时任务 |
+| `GET` | `/api/automations` | 我的任务列表（分页，按 `updatedAt` 倒序） |
+| `PUT` | `/api/automations/{id}` | 局部更新（省略的字段不改） |
+| `DELETE` | `/api/automations/{id}` | 删除任务（逻辑删，运行记录保留） |
+| `POST` | `/api/automations/{id}/run` | 立即运行一次 |
+| `GET` | `/api/automations/{id}/runs` | 最近 N 条运行记录（默认 20，上限 100） |
+
+> ✅ **本表均已实现**（`AutomationController` + `AutomationService` + `AutomationRunner`）。
+> 表结构见 `database.md` 的 `automation` / `automation_run`；调度见本节末。
+
+**请求体（`POST`）**
+
+```json
+{
+  "name": "每日知识库简报",
+  "prompt": "汇总知识库中今天新增的文档，按主题给出 5 条要点。",
+  "agentId": null,
+  "kbIds": [],
+  "schedule": "daily",
+  "cron": null,
+  "enabled": true
+}
+```
+
+- `name` 必填（≤128），`prompt` 必填（≤4000），`schedule` 必填且只接受 `hourly|daily|weekly|custom`。
+- `agentId` 省略 = 用账户默认 Agent（服务端幂等补齐内置默认 Agent）。
+- `kbIds` 省略/空数组 = 不限定检索范围。
+- `enabled` 省略默认 `true`。
+
+**响应体（`AutomationResponse`）**
+
+```json
+{
+  "id": "1800000000000000001",
+  "name": "每日知识库简报",
+  "prompt": "汇总知识库中今天新增的文档…",
+  "agentId": null,
+  "agentName": "默认助手",
+  "kbIds": [],
+  "kbNames": [],
+  "schedule": "daily",
+  "cron": "0 9 * * *",
+  "enabled": true,
+  "nextRunAt": "2026-10-25T09:00:00",
+  "lastRunAt": "2026-10-24T09:00:03.512",
+  "lastStatus": "SUCCEEDED",
+  "createdAt": "2026-10-20T11:02:41.003",
+  "updatedAt": "2026-10-24T09:00:03.512"
+}
+```
+
+**运行记录（`AutomationRunResponse`）**
+
+```json
+{
+  "id": "1800000000000000009",
+  "automationId": "1800000000000000001",
+  "triggerType": "SCHEDULED",
+  "status": "FAILED",
+  "answer": null,
+  "errorCode": 4002,
+  "errorMessage": "模型响应超时",
+  "promptTokens": 812,
+  "completionTokens": 0,
+  "totalTokens": 812,
+  "startedAt": "2026-10-24T09:00:00.120",
+  "finishedAt": "2026-10-24T09:00:31.884",
+  "durationMs": 31764
+}
+```
+
+`status` 只有 `RUNNING / SUCCEEDED / FAILED`；`triggerType` 为 `MANUAL`（点了立即运行）或 `SCHEDULED`（到点触发）。
+
+**五条容易搞错的契约事实**
+
+1. **`POST /{id}/run` 是同步的，且失败也返回 200**。请求返回时这一跑已经结束，
+   成败看响应体的 `status`；`FAILED` 时 `errorCode`/`errorMessage` 一定有值（不是只写日志）。
+   前端不要写成"触发后轮询"，也不要用 try/catch 判断失败。
+2. **`schedule` 决定 `cron`**。`hourly/daily/weekly` 三个固定频率由服务端用预设覆盖
+   （`0 * * * *` / `0 9 * * *` / `0 10 * * 1`），请求里传的 `cron` 会被忽略；
+   只有 `schedule=custom` 才使用请求里的 `cron`（5 段或 6 段都接受，6 段时第 1 段是秒）。
+   `cron` 非法 → `400` + `9003`。
+3. **`PUT` 的"不改"和"清空"是两种信号**：字段省略 = 不改；`kbIds: []` = 解绑全部知识库；
+   想解绑回默认 Agent 必须显式传 `useDefaultAgent: true`（`agentId` 省略只表示不改）。
+4. **`lastStatus` 可能是 `null`**（建好还没跑过），别把它渲染成"排队中"。
+5. **`{id}/runs` 只返回最近 N 条**（默认 20、上限 100），不做全量分页——
+   任务级历史是展示用途，需要长期审计请查 `automation_run` 表。
+
+**错误码**
+
+| 码 | HTTP | 场景 |
+| --- | --- | --- |
+| `9001` | 404 | 任务不存在或不属于当前用户（不区分，防枚举） |
+| `9002` | 404 | 运行记录不存在 |
+| `9003` | 400 | `schedule` 不在枚举内，或 `cron` 解析失败 |
+| `3001` | 404 | `kbIds` 里有不属于当前用户的知识库 |
+
+**调度（多实例安全）**
+
+- `@Scheduled(fixedDelay = 30s)` 扫 `enabled = 1 AND next_run_at <= now()` 的任务（每批 20 条），
+  逐条用 `UPDATE automation SET next_run_at = ? WHERE id = ? AND next_run_at = ?` 做 CAS 抢占：
+  抢到（影响行数 1）才执行，抢不到说明别的实例已经推进过这一轮，直接跳过。
+- 一次到点触发 = 一条 `automation_run`；先插 `RUNNING` 再执行，结束写终态、耗时与 token。
+- 到点触发失败会按 `nexus.automation.max-retries`（默认 2）重排重试，延迟
+  `nexus.automation.retry-delay-ms`（默认 60s）；**手动运行不重试、不消耗重试预算**。
+- `nexus.automation.scheduler-enabled=false` 可整体关掉调度（测试 profile 就是这么跑的）。
+

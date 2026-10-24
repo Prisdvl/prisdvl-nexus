@@ -3,6 +3,7 @@ package com.lky.nexus.ai.config;
 import com.lky.nexus.ai.model.AiModelRegistry;
 import com.lky.nexus.ai.model.ChatClientFactory;
 import com.lky.nexus.ai.rag.retriever.RetrievalDefaults;
+import com.lky.nexus.common.observe.CallTraceRecorder;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import com.lky.nexus.common.security.ChatUsageRecorder;
 import org.springframework.beans.factory.ObjectProvider;
@@ -46,10 +47,12 @@ public class AiConfiguration {
     public ChatClientFactory chatClientFactory(AiModelProperties properties, AiModelRegistry registry,
                                                ObjectProvider<ChatUsageRecorder> usageRecorder,
                                                ObjectProvider<ObservabilityRegistry> observability,
+                                               ObjectProvider<CallTraceRecorder> callTraceRecorder,
                                                ObjectProvider<com.lky.nexus.ai.model.UserChatCredentialsProvider> credentialsProvider) {
         return new ChatClientFactory(properties, registry,
                 usageRecorder.getIfAvailable(() -> ChatUsageRecorder.NOOP),
                 observability.getIfAvailable(ObservabilityRegistry::new),
-                credentialsProvider.getIfAvailable());
+                credentialsProvider.getIfAvailable(),
+                callTraceRecorder.getIfAvailable(() -> CallTraceRecorder.NOOP));
     }
 }

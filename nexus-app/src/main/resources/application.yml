@@ -273,6 +273,42 @@ nexus:
       # 是否允许回调地址指向本机/内网。默认 false（Webhook 地址由用户输入，指内网等于 SSRF）；
       # standalone / test 打开，否则本地没法验证投递。
       allow-private-endpoints: ${NEXUS_NOTIFY_ALLOW_PRIVATE:false}
+  automation:
+    # 自动化调度：@Scheduled 扫 next_run_at <= now 且 enabled 的任务，
+    # 用 UPDATE ... WHERE next_run_at = 期望值 做 CAS 抢占，多实例部署时同一时刻
+    # 只有一个实例能抢到同一条任务（抢不到的那条 UPDATE 影响 0 行，直接跳过）。
+    scheduler-enabled: ${NEXUS_AUTOMATION_SCHEDULER:true}
+    # 扫描间隔。默认 30s：小时级任务对 30s 抖动不敏感，再密只是空转。
+    sweep-interval-ms: ${NEXUS_AUTOMATION_SWEEP_INTERVAL_MS:30000}
+    # 首次扫描延迟：等 Flyway / 缓存都就绪，避免启动瞬间抢跑。
+    sweep-initial-delay-ms: ${NEXUS_AUTOMATION_SWEEP_INITIAL_DELAY_MS:15000}
+    # 单次扫描最多抢几个：停机一天后不该把积压一次性全打出去（配额与模型都受不了）。
+    sweep-batch-size: ${NEXUS_AUTOMATION_SWEEP_BATCH:20}
+    # 失败重试只针对调度触发：手动触发时用户就在屏幕前，重试会让"立即运行"不可预期。
+    max-retries: ${NEXUS_AUTOMATION_MAX_RETRIES:2}
+    retry-delay-ms: ${NEXUS_AUTOMATION_RETRY_DELAY_MS:60000}
+  # 模型价格（元 / 每 100 万 token），只服务于 /api/observability 的成本估算。
+  # 键就是供应商返回的模型名（不是角色名：角色会随配置改，模型名才是账单上的那个）。
+  # 没配的模型成本一律返回 null 而不是 0——0 会让报表看起来像"这个模型免费"，
+  # null 才会被读成"缺配置"，这是本配置存在的唯一理由。
+  # 模型名里带点（如 gpt-4.1）时，中括号写法才不会被当成层级分隔符：
+  #   nexus.pricing.[gpt-4.1].input
+  #
+  # 默认留空：宁可在观测页看到"—（未配价格）"，也不编一个数字。
+  # 示例（按供应商当前价填写，单位：元 / 1M token）：
+  #   deepseek-chat:
+  #     input: 2.0
+  #     output: 8.0
+  pricing: {}
+  mcp:
+    # 连接外部 MCP server 的单次超时（毫秒）。它同时是 probe 与工具调用的上限：
+    # 一次 tools/call 卡住不该把整个对话回合拖死，超时要明确报错，而不是无限等。
+    timeout-ms: ${NEXUS_MCP_TIMEOUT_MS:15000}
+    # 本机 stdio 传输的开关，默认关闭。
+    # 打开它意味着：用户填在网页上的"命令行"会被服务器真的执行。
+    # 这是 stdio 传输本身固有的语义（它没有别的形态），所以只能由部署者决定要不要给这个能力；
+    # 关闭时对应用户的配置会明确收到"stdio 已被服务端关闭"，而不是一个看不懂的连接失败。
+    stdio-enabled: ${NEXUS_MCP_STDIO_ENABLED:false}
   vector:
     # 向量库（PostgreSQL + pgvector）。standalone / 测试环境没有它，会被关掉；
     # 关闭时写入与检索会明确报 4003，而不是静默失败。

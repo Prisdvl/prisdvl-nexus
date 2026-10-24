@@ -2,6 +2,7 @@ package com.lky.nexus.knowledge.rag;
 
 import com.lky.nexus.ai.config.AiModelProperties;
 import com.lky.nexus.ai.model.ChatClientFactory;
+import com.lky.nexus.common.observe.ObserveScenes;
 import com.lky.nexus.common.security.UserContextKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -100,7 +101,11 @@ public class LlmReranker implements Reranker {
                 // 不属于任何用户的额度。没有这一行，UsageMeteringAdvisor 会把它当成
                 // "调用方忘了传 userId"，于是每次检索都往 quota.usage.unattributed 上记一笔——
                 // 一个给"漏传"报警用的计数器被正常流程刷满，就再没人看得懂它了
-                .advisors(a -> a.param(UserContextKeys.SYSTEM_CALL, Boolean.TRUE))
+                //
+                // 观测（§10.1）：scene=rerank 让"重排花了多少钱"能从对话成本里单独切出来。
+                // 没有 userId 的调用不进任何用户的报表，只在 models 视图里占一行
+                .advisors(a -> a.param(UserContextKeys.SYSTEM_CALL, Boolean.TRUE)
+                        .param(UserContextKeys.SCENE, ObserveScenes.RERANK))
                 .call()
                 .content();
     }
