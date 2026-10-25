@@ -18,6 +18,7 @@ import Markdown from '@/components/Markdown'
 import Loc from '@/components/Loc'
 import { appCopy } from '@/lib/appCopy'
 import { buildStarters } from '@/lib/kbStarters'
+import { chunkStatusCounts } from '@/lib/chunk-status'
 import { pagesCopy } from '@/lib/pagesCopy'
 import { useLocale } from '@/lib/locale'
 import { toast } from '@/lib/toast'
@@ -202,6 +203,8 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const [searching, setSearching] = useState(false)
   const [searched, setSearched] = useState(false)
   const [chunks, setChunks] = useState<ChunkView[]>([])
+  /* 索引状态面板的三个数字（切片 / 向量 / 全文）只在这里算一次 */
+  const chunkStats = useMemo(() => chunkStatusCounts(chunks), [chunks])
   const [kbInfo, setKbInfo] = useState<KnowledgeBase | null>(() => (
     USE_MOCK
       ? {
@@ -1406,12 +1409,12 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
                   <div className="panel kb-adv__status">
                     <h3 className="col-title">{t.kb.indexStatus}</h3>
                     <p className="hint" style={{ margin: '0 0 10px' }}>
-                      {chunks.length
-                        ? t.kb.indexChunks(chunks.length, chunks.filter((c) => c.vectorStatus === 'DONE').length, chunks.filter((c) => c.esStatus === 'DONE').length)
+                      {chunkStats.total
+                        ? t.kb.indexChunks(chunkStats.total, chunkStats.vectors, chunkStats.fullText)
                         : t.kb.indexNone}
-                      {chunks.some((c) => c.vectorStatus === 'PENDING' || c.esStatus === 'PENDING') ? t.kb.indexPending : ''}
+                      {chunkStats.pending ? t.kb.indexPending : ''}
                     </p>
-                    {chunks.length > 0 && chunks.every((c) => c.vectorStatus !== 'DONE') && (
+                    {chunkStats.notVectorized && (
                       <p className="hint" style={{ margin: '0 0 10px' }}>{t.kb.embedHint}</p>
                     )}
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
