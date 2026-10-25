@@ -142,9 +142,17 @@ public class AgentRuntime {
                     //
                     // 观测（§10.1）：一次 Agent 运行 = 一次请求。requestId 来自请求线程，
                     // 定时任务里没有它（RequestIdHolder 返回 null），那些明细会按调用各自成行
-                    .advisors(a -> a.param(UserContextKeys.USER_ID, userId)
-                            .param(UserContextKeys.REQUEST_ID, RequestIdHolder.current())
-                            .param(UserContextKeys.SCENE, ObserveScenes.AGENT))
+                    .advisors(a -> {
+                        a.param(UserContextKeys.USER_ID, userId);
+                        // 定时任务 / MCP / 评测这些没有 HTTP 请求上下文的入口，requestId 是 null。
+                        // 不能照传：Spring AI 的 param() 对 null 直接 Assert 失败，整次调用会变成
+                        // 「模型调用失败，请稍后重试」——排查时完全看不出真实原因。
+                        String requestId = RequestIdHolder.current();
+                        if (requestId != null && !requestId.isBlank()) {
+                            a.param(UserContextKeys.REQUEST_ID, requestId);
+                        }
+                        a.param(UserContextKeys.SCENE, ObserveScenes.AGENT);
+                    })
                     .call()
                     .content();
         } catch (BusinessException ex) {
