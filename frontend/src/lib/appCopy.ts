@@ -200,6 +200,12 @@ export interface AppCopy {
     indexPending: string
     buildIndex: string
     rebuildIndex: string
+    /** 向量化：把切片写进向量库。和「建索引」（全文检索）是两条腿 */
+    embed: string
+    embedding: string
+    embedHint: string
+    embedDone: (embedded: number, total: number) => string
+    embedFail: string
     searchAria: string
     searchPlaceholder: string
     searchBtn: string
@@ -675,6 +681,11 @@ const ZH: AppCopy = {
     indexPending: '（有未建索引切片）',
     buildIndex: '建立索引',
     rebuildIndex: '重建',
+    embed: '向量化',
+    embedding: '向量化中…',
+    embedHint: '向量为 0 时，向量检索恒 0 命中（混合检索会静默退回关键词）。点「向量化」补齐。',
+    embedDone: (embedded, total) => `已向量化 ${embedded} 片${embedded < total ? `，还有 ${total - embedded} 片` : ''}`,
+    embedFail: '向量化失败',
     searchAria: '在知识库内检索切片',
     searchPlaceholder: '输入关键词，直接检索切片（不调用模型）',
     searchBtn: '检索',
@@ -1102,6 +1113,11 @@ const EN: AppCopy = {
     indexPending: ' (some chunks are not indexed)',
     buildIndex: 'Build index',
     rebuildIndex: 'Rebuild',
+    embed: 'Embed',
+    embedding: 'Embedding…',
+    embedHint: 'With zero vectors, semantic search always returns nothing (hybrid silently falls back to keywords). Click "Embed" to fill them.',
+    embedDone: (embedded, total) => `${embedded} chunk${embedded === 1 ? '' : 's'} embedded${embedded < total ? `, ${total - embedded} left` : ''}`,
+    embedFail: 'Embedding failed',
     searchAria: 'Search chunks in this knowledge base',
     searchPlaceholder: 'Search chunks directly with keywords (no model involved)',
     searchBtn: 'Search',

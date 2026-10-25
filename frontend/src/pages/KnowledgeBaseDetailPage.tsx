@@ -223,6 +223,8 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
   const [linkData, setLinkData] = useState<DocumentLinks | null>(null)
   const [related, setRelated] = useState<RelatedDoc[]>([])
   const [indexing, setIndexing] = useState(false)
+  /* 向量化与建索引是两条腿：一个走 pgvector，一个走 elasticsearch，按钮要能各自 busy */
+  const [embedding, setEmbedding] = useState(false)
   const [contextDocId, setContextDocId] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
@@ -542,6 +544,27 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
     }
   }
 
+  /**
+   * 向量化：把切片写进 pgvector。
+   *
+   * 这一条以前只有后端接口、没有界面入口，于是「建索引」之后的库向量数为 0，
+   * VECTOR 模式永远搜不到、HYBRID 静默退回关键词——用户看到的是"这个库搜不出东西"。
+   */
+  const runEmbed = async () => {
+    if (embedding) return
+    setEmbedding(true)
+    try {
+      const result = await api.knowledge.embed(kbId)
+      if (result.failed > 0) toast.error(t.kb.embedFail, `${result.failed}/${result.total}`)
+      else toast.success(t.kb.embedDone(result.embedded, result.total))
+      await loadFirstDocChunks()
+    } catch (e) {
+      toast.error(t.kb.embedFail, errMessage(e))
+    } finally {
+      setEmbedding(false)
+    }
+  }
+
   useEffect(() => {
     if (USE_MOCK) return
     let alive = true
@@ -599,8 +622,10 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
         content: chunk.text,
         tokenCount: 0,
         charCount: chunk.text.length,
-        vectorStatus: 'READY',
-        esStatus: 'READY',
+        /* 后端的终态是 DONE（PENDING / DONE / FAILED / STALE），不是 READY：
+           写成 READY 的话状态面板永远显示"向量 0 · 全文 0" */
+        vectorStatus: 'DONE',
+        esStatus: 'DONE',
       })))
       return
     }
@@ -1382,13 +1407,17 @@ export default function KnowledgeBaseDetailPage({ kbId, theme, onBack, highlight
                     <h3 className="col-title">{t.kb.indexStatus}</h3>
                     <p className="hint" style={{ margin: '0 0 10px' }}>
                       {chunks.length
-                        ? t.kb.indexChunks(chunks.length, chunks.filter((c) => c.vectorStatus === 'READY').length, chunks.filter((c) => c.esStatus === 'READY').length)
+                        ? t.kb.indexChunks(chunks.length, chunks.filter((c) => c.vectorStatus === 'DONE').length, chunks.filter((c) => c.esStatus === 'DONE').length)
                         : t.kb.indexNone}
                       {chunks.some((c) => c.vectorStatus === 'PENDING' || c.esStatus === 'PENDING') ? t.kb.indexPending : ''}
                     </p>
+                    {chunks.length > 0 && chunks.every((c) => c.vectorStatus !== 'DONE') && (
+                      <p className="hint" style={{ margin: '0 0 10px' }}>{t.kb.embedHint}</p>
+                    )}
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      <button className="btn btn-ghost btn-sm" type="button" disabled={indexing} onClick={() => void runIndex(false)}>{t.kb.buildIndex}</button>
-                      <button className="btn btn-ghost btn-sm" type="button" disabled={indexing} onClick={() => void runIndex(true)}>{t.kb.rebuildIndex}</button>
+                      <button className="btn btn-ghost btn-sm" type="button" disabled={indexing || embedding} onClick={() => void runIndex(false)}>{t.kb.buildIndex}</button>
+                      <button className="btn btn-ghost btn-sm" type="button" disabled={indexing || embedding} onClick={() => void runIndex(true)}>{t.kb.rebuildIndex}</button>
+                      <button className="btn btn-ghost btn-sm" type="button" disabled={indexing || embedding} onClick={() => void runEmbed()}>{embedding ? t.kb.embedding : t.kb.embed}</button>
                     </div>
                   </div>
                 )}

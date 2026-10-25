@@ -562,6 +562,14 @@ export const api = {
     index: (kbId: string) => http.post<Result<unknown>>(`/knowledge-bases/${kbId}/index`).then((r) => r.data.data),
     /** 重建索引：新建物理索引 → 原子切换别名 → 旧索引转待重建。 */
     recreateIndex: (kbId: string) => http.post<Result<null>>(`/knowledge-bases/${kbId}/index/recreate`).then((r) => r.data.data),
+    /**
+     * 向量化：把还没进 pgvector 的切片批量嵌入。
+     *
+     * <p>它和「建索引」是两条腿——建索引只写全文索引（BM25）。只建索引不向量化时，
+     * VECTOR 模式恒 0 命中、HYBRID 静默退回关键词，用户在界面上只会看到"搜不到"。
+     */
+    embed: (kbId: string) =>
+      http.post<Result<EmbeddingResult>>(`/knowledge-bases/${kbId}/embed`).then((r) => r.data.data),
   },
   /**
    * 跨库统一检索（§4.2）。
@@ -1123,6 +1131,12 @@ export interface SearchExplainResult {
   degradedKbs: DegradedKnowledgeBase[]
 }
 export interface ChunkView { id: string; chunkIndex: number; chunkType: string; headingPath: string | null; content: string; tokenCount: number; charCount: number; vectorStatus: string; esStatus: string }
+
+/**
+ * 一次向量化的结果。`total` 是本次待处理切片数、`embedded` 是新嵌入的、`cacheHits` 命中缓存
+ * （同样的文本以前算过）、`failed` 是这一轮失败的——失败不为 0 时界面要说清，否则用户以为全好了。
+ */
+export interface EmbeddingResult { total: number; embedded: number; cacheHits: number; failed: number; costMillis: number }
 
 export interface DocLink { linkId?: string; linkType?: string; target?: string; display?: string; resolvedDocumentId?: string; resolvedTitle?: string; external?: boolean }
 export interface DocumentLinks { outlinks: DocLink[]; backlinks: DocLink[]; dangling: number }
