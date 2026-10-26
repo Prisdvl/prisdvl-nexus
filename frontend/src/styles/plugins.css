@@ -554,6 +554,22 @@
   line-height: 1.7;
   color: var(--text-2);
 }
+/* 插件配置：自由 JSON，用等宽字体，键值对齐才好读 */
+.plugin-config__text {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.plugin-config__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.plugin-config__foot .hint {
+  flex: 1;
+  min-width: 0;
+}
 .plugin-detail h4,
 .agent-detail h4 {
   margin: 0;

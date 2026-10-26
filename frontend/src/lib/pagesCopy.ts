@@ -565,6 +565,11 @@ export interface PagesCopy {
     detailCompat: string
     detailCompatBody: string
     detailTags: string
+    configTitle: string
+    configHint: string
+    configSave: string
+    configSaved: string
+    configInvalid: string
   }
   community: {
     eyebrow: string
@@ -1308,6 +1313,11 @@ const ZH: PagesCopy = {
     detailCompat: '兼容性',
     detailCompatBody: '适用于 Nexus 工作台与知识库问答；MCP 插件需要网络可达的服务端点。',
     detailTags: '标签',
+    configTitle: '插件配置',
+    configHint: '一段 JSON 对象（键值），例如端点、超时、开关。留 {} 表示清空。',
+    configSave: '保存配置',
+    configSaved: '配置已保存',
+    configInvalid: '配置必须是 JSON 对象',
   },
   community: {
     eyebrow: 'Agent Hub',
@@ -2054,6 +2064,11 @@ const EN: PagesCopy = {
     detailCompat: 'Compatibility',
     detailCompatBody: 'Works with the Nexus workbench and Knowledge Q&A; MCP plugins need a reachable server endpoint.',
     detailTags: 'Tags',
+    configTitle: 'Plugin config',
+    configHint: 'A JSON object of key/value pairs (endpoint, timeout, flags…). Use {} to clear it.',
+    configSave: 'Save config',
+    configSaved: 'Config saved',
+    configInvalid: 'Config must be a JSON object',
   },
   community: {
     eyebrow: 'Agent Hub',

@@ -75,6 +75,8 @@ interface PluginView {
   official: boolean
   updated: string
   enabled: boolean
+  /** 用户在 `PUT /api/plugins/{code}` 里存的键值配置；没配过就是空对象。 */
+  config: Record<string, unknown>
 }
 
 /** 一份 SKILL.md 的列表视图：列表不带正文，只带"多大"；正文在打开编辑时按需取。 */
@@ -112,6 +114,7 @@ function fromPlugin(item: BackendPlugin): PluginView {
     official: item.official,
     updated: item.updated ?? '',
     enabled: item.enabled,
+    config: item.config ?? {},
   }
 }
 
@@ -134,6 +137,7 @@ function mockPlugins(): PluginView[] {
     official: Boolean(item.official),
     updated: item.updated,
     enabled: installed.has(item.id),
+    config: {},
   }))
 }
 
@@ -222,6 +226,9 @@ export default function PluginsPage() {
   const [servers, setServers] = useState<McpView[]>(USE_MOCK ? mockServers() : [])
   const [loading, setLoading] = useState(!USE_MOCK)
   const [detail, setDetail] = useState<PluginView | null>(null)
+  /** 详情弹窗里的配置编辑器：JSON 文本 + 保存中状态。 */
+  const [configText, setConfigText] = useState('')
+  const [configSaving, setConfigSaving] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [importFileName, setImportFileName] = useState('')
@@ -313,6 +320,52 @@ export default function PluginsPage() {
     return groups
   }, [marketList, p])
 
+  /**
+   * 打开详情时把配置摊成 JSON 文本。
+   *
+   * <p>配置是自由结构（端点、超时、开关……），没有表单可自动生成；
+   * 直接给一个 JSON 编辑器，比猜一套字段出来更诚实。
+   */
+  const openPluginDetail = (plugin: PluginView) => {
+    setDetail(plugin)
+    setConfigText(JSON.stringify(plugin.config ?? {}, null, 2))
+  }
+
+  const applyConfig = (code: string, config: Record<string, unknown>) => {
+    setCatalog((prev) => prev.map((item) => (item.id === code ? { ...item, config } : item)))
+    setDetail((prev) => (prev && prev.id === code ? { ...prev, config } : prev))
+  }
+
+  /** 保存配置：只接受 JSON 对象；传 `{}` 等于清空（后端语义）。 */
+  const saveConfig = () => {
+    if (!detail) return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(configText.trim() || '{}')
+    } catch {
+      toast.error(p.configInvalid, p.configHint)
+      return
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      toast.error(p.configInvalid, p.configHint)
+      return
+    }
+    const config = parsed as Record<string, unknown>
+    if (USE_MOCK) {
+      applyConfig(detail.id, config)
+      toast.success(p.configSaved, detail.name)
+      return
+    }
+    setConfigSaving(true)
+    api.plugins.update(detail.id, { config })
+      .then((saved) => {
+        applyConfig(saved.code, saved.config)
+        toast.success(p.configSaved, saved.name)
+      })
+      .catch((error: unknown) => toast.error(p.saveFailed, errMessage(error)))
+      .finally(() => setConfigSaving(false))
+  }
+
   const renderPluginRow = (plugin: PluginView) => {
     const on = plugin.enabled
     return (
@@ -362,7 +415,7 @@ export default function PluginsPage() {
             type="button"
             aria-label={`${p.details}: ${plugin.name}`}
             title={p.details}
-            onClick={() => setDetail(plugin)}
+            onClick={() => openPluginDetail(plugin)}
           >
             <MoreHorizontal size={16} />
           </button>
@@ -947,6 +1000,27 @@ export default function PluginsPage() {
             <h4>{p.detailTags}</h4>
             <div className="meta-inline">
               {detail.tags.map((tag) => <span className="meta-inline__item" key={tag}>{tag}</span>)}
+            </div>
+            {/* 配置：后端从 V32 起就支持装/卸时带 config，这里补上唯一的编辑入口 */}
+            <h4>{p.configTitle}</h4>
+            <textarea
+              className="input plugin-config__text"
+              rows={6}
+              value={configText}
+              onChange={(e) => setConfigText(e.target.value)}
+              aria-label={p.configTitle}
+              spellCheck={false}
+            />
+            <div className="plugin-config__foot">
+              <span className="hint">{p.configHint}</span>
+              <button
+                className="btn btn-ghost btn-sm"
+                type="button"
+                disabled={configSaving}
+                onClick={saveConfig}
+              >
+                {p.configSave}
+              </button>
             </div>
           </div>
         )}
