@@ -60,10 +60,41 @@ public class McpServerPO {
     /** 最近一次 tools/list 的原始 JSON。 */
     private String toolsJson;
 
+    /**
+     * 1 = 用户显式允许在本机启动这个子进程（V33）。
+     *
+     * <p>和全局开关 {@code nexus.mcp.stdio-enabled} 是两道门：全局那个是部署者的决定，
+     * 这一个是"用户为这一条命令签字"。没有它，任何能建 server 的人都能让服务器执行任意命令。
+     */
+    private Integer stdioAllowed;
+
+    /** 最近一次<b>工具调用</b>（不是 probe）的时间。 */
+    private LocalDateTime lastCallAt;
+
+    /** 最近一次调用的工具名（页面显示"最近调用了谁"）。 */
+    private String lastCallTool;
+
+    /** 最近一次调用是否成功：1 成功 / 0 失败。失败原因在 {@link #lastCallError}。 */
+    private Integer lastCallOk;
+
+    /** 最近一次调用失败的原因（含错误码）。与 {@link #lastError}（probe 失败）分开，两者故障不同。 */
+    private String lastCallError;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
 
     @TableLogic
     private Integer deleted;
+
+    /**
+     * 是否为这条命令签过字；历史行（V33 之前建的）为 null，按"没签"算。
+     *
+     * <p>刻意不叫 {@code isStdioAllowed()}：Lombok 会给 {@code Integer stdioAllowed} 生成
+     * {@code getStdioAllowed()}，再加一个同名 {@code isStdioAllowed()} 会让 MyBatis 判成
+     * "overloaded getter with ambiguous type" 而整条 insert 失败。
+     */
+    public boolean allowsStdio() {
+        return stdioAllowed != null && stdioAllowed == 1;
+    }
 }

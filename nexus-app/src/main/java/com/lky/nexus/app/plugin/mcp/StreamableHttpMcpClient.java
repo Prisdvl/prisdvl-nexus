@@ -1,6 +1,7 @@
 package com.lky.nexus.app.plugin.mcp;
 
 import com.lky.nexus.app.plugin.model.dto.McpToolInfo;
+import com.lky.nexus.common.api.ErrorCode;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -8,8 +9,10 @@ import tools.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,24 +43,27 @@ public final class StreamableHttpMcpClient implements McpClient {
     private final String endpoint;
     private final String authorization;
     private final Duration timeout;
+    private final Duration startupTimeout;
     private final HttpClient http;
     private final AtomicLong ids = new AtomicLong(1);
 
     private String sessionId;
     private boolean initialized;
 
-    public StreamableHttpMcpClient(JsonMapper json, String endpoint, String authorization, Duration timeout) {
+    public StreamableHttpMcpClient(JsonMapper json, String endpoint, String authorization, Duration timeout,
+                                   Duration startupTimeout) {
         this.json = json;
         this.endpoint = endpoint;
         this.authorization = authorization;
         this.timeout = timeout;
+        this.startupTimeout = startupTimeout;
         this.http = HttpClient.newBuilder().connectTimeout(timeout).build();
     }
 
     @Override
     public List<McpToolInfo> listTools() {
         initializeIfNeeded();
-        JsonNode result = roundTrip("tools/list", null);
+        JsonNode result = roundTrip("tools/list", null, timeout);
         return parseTools(result);
     }
 
@@ -67,7 +73,7 @@ public final class StreamableHttpMcpClient implements McpClient {
         ObjectNode params = json.createObjectNode();
         params.put("name", toolName);
         params.set("arguments", parseArguments(argumentsJson));
-        JsonNode result = roundTrip("tools/call", params);
+        JsonNode result = roundTrip("tools/call", params, timeout);
         return McpToolOutput.text(result);
     }
 
@@ -87,14 +93,14 @@ public final class StreamableHttpMcpClient implements McpClient {
         clientInfo.put("name", "nexus");
         clientInfo.put("version", "1.0");
         params.set("clientInfo", clientInfo);
-        roundTrip("initialize", params);
+        roundTrip("initialize", params, startupTimeout);
         // 握手完成的确认是通知（没有 id、没有响应体）；server 不接受也继续，
         // 因为 true 的判定是后面的 tools/list 能不能通
         notify("notifications/initialized");
         initialized = true;
     }
 
-    private JsonNode roundTrip(String method, ObjectNode params) {
+    private JsonNode roundTrip(String method, ObjectNode params, Duration perCall) {
         ObjectNode request = json.createObjectNode();
         request.put("jsonrpc", "2.0");
         request.put("id", ids.getAndIncrement());
@@ -103,7 +109,7 @@ public final class StreamableHttpMcpClient implements McpClient {
             request.set("params", params);
         }
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(endpoint))
-                .timeout(timeout)
+                .timeout(perCall)
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json, text/event-stream")
                 .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(request)));
@@ -116,24 +122,37 @@ public final class StreamableHttpMcpClient implements McpClient {
         HttpResponse<String> response;
         try {
             response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        } catch (HttpConnectTimeoutException ex) {
+            // 连都连不上：这是"server 不可用"，不是"这次调用慢"
+            throw new McpException(ErrorCode.MCP_SERVER_UNAVAILABLE,
+                    "连不上 MCP server（%s）：%s".formatted(endpoint, rootMessage(ex)), ex);
+        } catch (HttpTimeoutException ex) {
+            // 连上了但 %d ms 内没给完响应：与"连不上"分开，用户该做的是调大超时或让上游提速
+            throw new McpException(ErrorCode.MCP_CALL_TIMEOUT,
+                    "MCP server 在 %d ms 内没有响应（%s）".formatted(perCall.toMillis(), method), ex);
         } catch (IOException ex) {
-            throw new McpException("连不上 MCP server（%s）：%s".formatted(endpoint, rootMessage(ex)), ex);
+            throw new McpException(ErrorCode.MCP_SERVER_UNAVAILABLE,
+                    "连不上 MCP server（%s）：%s".formatted(endpoint, rootMessage(ex)), ex);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            throw new McpException("访问 MCP server 被中断");
+            throw new McpException(ErrorCode.MCP_CALL_TIMEOUT, "访问 MCP server 被中断（%s）".formatted(method), ex);
         }
         response.headers().firstValue("Mcp-Session-Id").ifPresent(id -> this.sessionId = id);
         if (response.statusCode() / 100 != 2) {
-            throw new McpException("MCP server 返回 HTTP %d%s".formatted(response.statusCode(),
-                    snippet(response.body())));
+            // 非 2xx 是"上游拒绝了/坏了"，不是我们自己的错，所以仍是 5005 而不是 500
+            throw new McpException(ErrorCode.MCP_SERVER_UNAVAILABLE,
+                    "MCP server 返回 HTTP %d%s".formatted(response.statusCode(), snippet(response.body())));
         }
         JsonNode payload = extractPayload(response);
         if (payload == null) {
-            throw new McpException("MCP server 的响应不是可解析的 JSON-RPC 消息%s".formatted(snippet(response.body())));
+            throw new McpException(ErrorCode.MCP_SERVER_UNAVAILABLE,
+                    "MCP server 的响应不是可解析的 JSON-RPC 消息%s".formatted(snippet(response.body())));
         }
         JsonNode error = payload.get("error");
         if (error != null && !error.isNull()) {
-            throw new McpException("MCP server 报错：" + errorMessage(error));
+            // server 收到并明确拒绝了：改参数才有用，重试/调超时都没用 → 9207
+            throw new McpException(ErrorCode.MCP_JSONRPC_ERROR,
+                    "MCP server 拒绝了这次调用（%s）：%s".formatted(method, errorMessage(error)));
         }
         JsonNode result = payload.get("result");
         return result == null ? json.createObjectNode() : result;

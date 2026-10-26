@@ -9,6 +9,7 @@ import com.lky.nexus.app.agent.tool.ToolRegistrationService;
 import com.lky.nexus.app.plugin.mapper.McpServerMapper;
 import com.lky.nexus.app.plugin.mcp.McpClient;
 import com.lky.nexus.app.plugin.mcp.McpClientFactory;
+import com.lky.nexus.app.plugin.mcp.McpException;
 import com.lky.nexus.app.plugin.model.dto.McpProbeResponse;
 import com.lky.nexus.app.plugin.model.dto.McpServerRequest;
 import com.lky.nexus.app.plugin.model.dto.McpServerResponse;
@@ -34,17 +35,17 @@ import java.util.Objects;
 /**
  * 外部 MCP server 的登记与探测（{@code mcp_server}）。
  *
- * <p>这个类只做四件事：记住配置、把凭据加密、连一次 tools/list、把结果落成
- * {@code tools_json} 与工具注册行。它<b>不</b>负责执行工具调用（那在
+ * <p>这个类只做四件事：记住配置、把凭据加密、连一次 {@code tools/list}、把结果落成
+ * {@code tools_json} 与工具注册行。它<b>不</b>负责执行工具调用（那是
  * {@link com.lky.nexus.app.plugin.mcp.McpToolCallback}）。
  *
  * <p>三条容易做错的地方，写在这里：
  * <ul>
- *   <li><b>probe 失败不是 4xx/5xx</b>：那是"上游连不上"而不是"你的请求写错了"，
- *       所以照常 200，把原因放进 {@code error}。相反，传输方式不认识才是 400——
- *       两者混成一个码，用户就分不清该改配置还是该查网络。</li>
+ *   <li><b>probe 失败不是 4xx/5xx</b>：那是上游连不上，而不是你的请求写错了，
+ *       所以照样 200，把原因放进 {@code error}。相反，传输方式不认识才是 400——
+ *       两者混成一个码，用户就分不清该改配置还是该查网络；</li>
  *   <li><b>probe 成功必须写工具注册表</b>：执行前的授权闸门会 {@code requireRegistered(code)}，
- *       不登记的表现是"模型看得见、一调就被拒"。</li>
+ *       不登记的表现是"模型看得见、一调就被拒"；</li>
  *   <li><b>工具 code 全局唯一</b>：{@code ai_tool_registry} 没有 user_id 维度，
  *       所以 slug 在生成时按<b>全库</b>唯一处理。两个用户都叫 "github" 时，第二个会拿到
  *       "github-2"——这比让两个用户的工具互相覆盖要好得多。</li>
@@ -100,6 +101,8 @@ public class McpServerService {
         server.setCommand(blankToNull(request.command()));
         server.setAuthHeaderCipher(encrypt(request.authHeader()));
         server.setEnabled(request.enabled() == null || request.enabled() ? 1 : 0);
+        // 默认是 0：stdio 会在服务器上执行命令，"用户什么都没说"绝不能当成"用户同意了"
+        server.setStdioAllowed(Boolean.TRUE.equals(request.allowStdio()) ? 1 : 0);
         LocalDateTime now = LocalDateTime.now();
         server.setCreatedAt(now);
         server.setUpdatedAt(now);
@@ -112,7 +115,7 @@ public class McpServerService {
         McpServerPO server = requireOwned(userId, serverId);
         if (request.name() != null && !request.name().isBlank()) {
             server.setName(request.name().trim());
-            // 刻意<b>不改 slug</b>：它已经刻在工具 code（mcp__slug__tool）与调用记录里，
+            // 刻意不改 slug：它已经刻在工具 code（mcp__slug__tool）与调用记录里，
             // 改个显示名就把历史工具名改断了，而用户只是改了个名字
         }
         if (request.transport() != null && !request.transport().isBlank()) {
@@ -130,6 +133,10 @@ public class McpServerService {
         }
         if (request.enabled() != null) {
             server.setEnabled(request.enabled() ? 1 : 0);
+        }
+        if (request.allowStdio() != null) {
+            // 取消勾选必须显式传 false：和 authHeader 一样，null 是"别动"
+            server.setStdioAllowed(request.allowStdio() ? 1 : 0);
         }
         server.setUpdatedAt(LocalDateTime.now());
         serverMapper.updateById(server);
@@ -155,15 +162,13 @@ public class McpServerService {
         List<McpToolInfo> tools;
         try (McpClient client = clientFactory.create(server)) {
             tools = client.listTools();
+        } catch (McpException ex) {
+            // McpException 自带错误码：9205 超时 / 9206 子进程退出 / 9207 JSON-RPC 拒绝 /
+            // 9204 stdio 未允许 / 5005 连不上。前端按码分支、按文案展示
+            return recordProbeFailure(server, ex.getCode().getCode(), ex.getMessage(), startedNanos);
         } catch (RuntimeException ex) {
-            String reason = rootMessage(ex);
-            LocalDateTime now = LocalDateTime.now();
-            serverMapper.update(null, Wrappers.<McpServerPO>lambdaUpdate()
-                    .eq(McpServerPO::getId, server.getId())
-                    .set(McpServerPO::getLastError, clip(reason))
-                    .set(McpServerPO::getUpdatedAt, now));
-            log.warn("MCP server 探测失败 id={} name={}：{}", server.getId(), server.getName(), reason);
-            return new McpProbeResponse(false, reason, List.of(), elapsedMillis(startedNanos), server.getLastOkAt());
+            // 不是通信失败（例如解密凭据失败）：不谎报成 5005，把原文交给用户
+            return recordProbeFailure(server, null, rootMessage(ex), startedNanos);
         }
         LocalDateTime now = LocalDateTime.now();
         String toolsJson = json.writeValueAsString(tools);
@@ -175,7 +180,22 @@ public class McpServerService {
                 .set(McpServerPO::getUpdatedAt, now));
         syncToolRegistry(server, tools, now);
         log.info("MCP server 探测成功 id={} name={}，发现 {} 个工具", server.getId(), server.getName(), tools.size());
-        return new McpProbeResponse(true, null, tools, elapsedMillis(startedNanos), now);
+        return new McpProbeResponse(true, null, null, tools, elapsedMillis(startedNanos), now);
+    }
+
+    /** 探测失败的唯一落点：写 {@code last_error}、保留旧 {@code tools_json}、把原因与码一起回给前端。 */
+    private McpProbeResponse recordProbeFailure(McpServerPO server, Integer errorCode, String reason,
+                                                long startedNanos) {
+        LocalDateTime now = LocalDateTime.now();
+        String detail = errorCode == null ? reason : "[%d] %s".formatted(errorCode, reason);
+        serverMapper.update(null, Wrappers.<McpServerPO>lambdaUpdate()
+                .eq(McpServerPO::getId, server.getId())
+                .set(McpServerPO::getLastError, clip(detail))
+                .set(McpServerPO::getUpdatedAt, now));
+        log.warn("MCP server 探测失败 id={} name={} code={}：{}", server.getId(), server.getName(), errorCode, reason);
+        // 刻意不动 tools_json：上一次拉到的工具有效，只是现在连不上
+        return new McpProbeResponse(false, reason, errorCode, List.of(), elapsedMillis(startedNanos),
+                server.getLastOkAt());
     }
 
     /** 工具 code 对某个 slug 的前缀，注入与清理两侧共用同一段拼法。 */
@@ -197,7 +217,10 @@ public class McpServerService {
                     "%s · %s".formatted(server.getName(), tool.name()),
                     tool.description(),
                     ToolCategory.OTHER,
-                    ToolPermission.READ,
+                    // 外部工具一律按写操作处理：它的行为不归我们控制（可能删库、可能发邮件），
+                    // 所以"默认不经审批就执行外部指令"是这次改动最不能留的口子。
+                    // 用户真要免审批，走 ToolGrantController 的 always 授权——那是显式、可撤销的
+                    ToolPermission.WRITE,
                     "MCP");
         }
         // 上游删掉的工具要跟着失效，否则模型还能看到并调用一个已经不存在的工具。
@@ -310,7 +333,12 @@ public class McpServerService {
                 server.getEnabled() == null || server.getEnabled() != 0,
                 server.getLastOkAt(),
                 server.getLastError(),
-                readTools(server.getToolsJson()));
+                readTools(server.getToolsJson()),
+                server.allowsStdio(),
+                server.getLastCallAt(),
+                server.getLastCallTool(),
+                server.getLastCallOk() == null ? null : server.getLastCallOk() == 1,
+                server.getLastCallError());
     }
 
     private List<McpToolInfo> readTools(String raw) {

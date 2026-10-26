@@ -9,9 +9,10 @@ import jakarta.validation.constraints.Size;
  * 而"只把一个 server 停用"这种更新根本不会带 name —— 用创建 DTO 接更新，
  * 前端每次改开关都得把整份配置回传一遍，漏一个字段就是一个 400。
  *
- * <p>两条特殊语义（详见 {@code McpServerService.update}）：
+ * <p>三条特殊语义（详见 {@code McpServerService.update}）：
  * {@code authHeader} 为 {@code null} = 别动凭据、空串 = 清除凭据；
- * {@code name} 改名不会改 {@code slug}（它已经刻在工具 code 里）。
+ * {@code name} 改名不会改 {@code slug}（它已经刻在工具 code 里）；
+ * {@code allowStdio} 为 {@code null} = 别动，"取消勾选"必须显式传 false。
  */
 public record UpdateMcpServerRequest(
         @Size(max = 64) String name,
@@ -19,5 +20,6 @@ public record UpdateMcpServerRequest(
         @Size(max = 512) String url,
         @Size(max = 512) String command,
         @Size(max = 400) String authHeader,
-        Boolean enabled) {
+        Boolean enabled,
+        Boolean allowStdio) {
 }

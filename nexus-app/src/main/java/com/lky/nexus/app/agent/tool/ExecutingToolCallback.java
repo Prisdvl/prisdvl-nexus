@@ -8,6 +8,7 @@ import com.lky.nexus.app.agent.approval.ToolInvocationAuditService;
 import com.lky.nexus.app.agent.model.ApprovalStatus;
 import com.lky.nexus.app.agent.model.RunStepStatus;
 import com.lky.nexus.app.agent.model.ToolInvocationStatus;
+import com.lky.nexus.app.plugin.mcp.McpException;
 import com.lky.nexus.common.exception.BusinessException;
 import com.lky.nexus.common.observe.ObservabilityRegistry;
 import org.slf4j.Logger;
@@ -156,7 +157,7 @@ public class ExecutingToolCallback implements ToolCallback {
             observability.increment(ObservabilityRegistry.TOOL_CALL_FAILED);
             String reason = ex.getMessage() == null || ex.getMessage().isBlank()
                     ? ex.getClass().getSimpleName() : ex.getMessage();
-            finishAudit(gate.invocationId(), ToolInvocationStatus.FAILED, "执行失败：" + reason, null);
+            finishAudit(gate.invocationId(), ToolInvocationStatus.FAILED, "执行失败：" + reason, errorCodeOf(ex));
             // warn 而不是 error：这不是系统故障，是"这一次调用没成功"，而且已经被如实回灌
             log.warn("工具 {} 执行失败（{} ms）：{}", tool.code(), System.currentTimeMillis() - start, reason);
             if (backstop) {
@@ -244,6 +245,17 @@ public class ExecutingToolCallback implements ToolCallback {
         if (invocationId != null) {
             auditService.finish(invocationId, status, AgentTraceGuards.digest(result), errorCode, null);
         }
+    }
+
+    /**
+     * 失败落库用哪个错误码。
+     *
+     * <p>MCP 的三类失败（9205 超时 / 9206 子进程退出 / 9207 JSON-RPC 拒绝）必须原样带下去：
+     * 它们是三种不同的自救动作（调大超时、重启本机进程、改参数），在审计行里
+     * 塌成同一个数就等于事后也分不清刚才到底出了哪种事。其余工具失败保持 null（沿用旧语义）。
+     */
+    private Integer errorCodeOf(Exception ex) {
+        return ex instanceof McpException mcp ? mcp.getCode().getCode() : null;
     }
 
     private String observationFor(String template, String detail) {

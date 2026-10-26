@@ -46,15 +46,18 @@ public class McpToolInjector {
     private final McpServerMapper serverMapper;
     private final ToolMapper toolMapper;
     private final McpClientFactory clientFactory;
+    private final McpCallRecorder recorder;
     private final JsonMapper json;
 
     public McpToolInjector(McpServerMapper serverMapper,
                            ToolMapper toolMapper,
                            McpClientFactory clientFactory,
+                           McpCallRecorder recorder,
                            JsonMapper json) {
         this.serverMapper = serverMapper;
         this.toolMapper = toolMapper;
         this.clientFactory = clientFactory;
+        this.recorder = recorder;
         this.json = json;
     }
 
@@ -91,7 +94,7 @@ public class McpToolInjector {
         return List.copyOf(tools);
     }
 
-    /** MCP 工具一律 READ：外部 server 的风险等级我们无从判断，交给用户用启停去管。 */
+    /** MCP 工具一律 WRITE：外部 server 的行为不归我们控制，默认必须经过人工确认。 */
     private ToolCatalog.Registered toRegistered(McpServerPO server, JsonNode tool, String code) {
         String toolName = tool.get("name").asString();
         JsonNode description = tool.get("description");
@@ -99,8 +102,8 @@ public class McpToolInjector {
         String displayName = "%s · %s".formatted(server.getName(), toolName);
         McpToolCallback callback = new McpToolCallback(clientFactory, server, code, toolName, displayName,
                 description == null || description.isNull() ? null : description.asString(),
-                schema == null || schema.isNull() ? null : schema.asString());
-        return new ToolCatalog.Registered(code, displayName, ToolCategory.OTHER, ToolPermission.READ,
+                schema == null || schema.isNull() ? null : schema.asString(), recorder);
+        return new ToolCatalog.Registered(code, displayName, ToolCategory.OTHER, ToolPermission.WRITE,
                 callback.getToolDefinition().description(), callback.getToolDefinition().inputSchema(),
                 callback, false);
     }

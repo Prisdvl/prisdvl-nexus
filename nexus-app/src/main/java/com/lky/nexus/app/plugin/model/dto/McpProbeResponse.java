@@ -13,12 +13,16 @@ import java.util.List;
  *
  * @param ok      probe 是否成功
  * @param error   失败原因（成功时为 null）：连不上 / 401 / 协议不兼容 / 超时，都要能读出是哪一种
+ * @param errorCode 失败原因对应的业务错误码（9205 超时 / 9206 子进程退出 / 9207 JSON-RPC 拒绝 /
+ *                  5005 连不上 / 9204 stdio 未允许）；成功时为 null。<b>前端按码分支，按文案展示</b>——
+ *                  只有文案没有码，界面就只能把五种故障写成同一句话
  * @param tools   成功时拉到的工具列表；失败时为空列表
  * @param tookMs  本次探测耗时
  * @param lastOkAt 该 server 最近一次成功时间（失败时保留历史值，便于判断"是不是刚坏"）
  */
 public record McpProbeResponse(boolean ok,
                                String error,
+                               Integer errorCode,
                                List<McpToolInfo> tools,
                                long tookMs,
                                LocalDateTime lastOkAt) {

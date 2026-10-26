@@ -119,6 +119,14 @@ public final class ErrorCodeHttpStatusMapper {
             // 刻意不用 503：那会把"配置写错"说成"我们的服务坏了"，排查方向就错了
             case MCP_SERVER_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case MCP_TRANSPORT_UNSUPPORTED, MCP_STDIO_DISABLED -> HttpStatus.BAD_REQUEST;
+            // 9205/9206/9207 是「调 MCP 工具时上游出的三种事」，三者都不是 500：
+            // 500 会让监控把它算成我们自己写错了。超时 → 504（稍后重试有意义）；
+            // 子进程退出 / JSON-RPC 拒绝 → 502（上游给了明确答案，只是这个答案不是成功）
+            case MCP_CALL_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            case MCP_PROCESS_EXITED, MCP_JSONRPC_ERROR -> HttpStatus.BAD_GATEWAY;
+            // 93xx 插件目录 / 技能正文：不存在（含不属于你）→ 404，与 9201 同一条防枚举理由。
+            // 正文超 200 KB 不单开码：那是"你传的值不对"，1001 已经说明了这件事，改小了就能过。
+            case PLUGIN_NOT_FOUND, SKILL_NOT_FOUND -> HttpStatus.NOT_FOUND;
         };
     }
 }
