@@ -176,6 +176,21 @@
   border-radius: var(--radius-md);
   background: var(--surface-muted);
   color: var(--primary);
+  overflow: hidden;
+}
+/* 目录还没有真实图标资源：有 URL 就贴图，没有就用首字母占位（不留空洞） */
+.plugin-row__icon img,
+.market-card__icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.plugin-row__initial {
+  font-weight: 650;
+  font-size: 15px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 .plugin-row__main {
   min-width: 0;
@@ -405,6 +420,13 @@
   flex: none;
   font-size: 11.5px;
   color: var(--text-3);
+}
+/* 技能行的操作（编辑正文 / 删除）：与插件行的图标按钮同一套观感 */
+.skill-row__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
 }
 
 .mcp-list {

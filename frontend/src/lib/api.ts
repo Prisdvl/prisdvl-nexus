@@ -733,18 +733,35 @@ export const api = {
         .then((r) => r.data.data),
   },
   /**
-   * 插件开关与配置（V32）。
+   * 插件市场与安装状态（V34：目录也来自服务端）。
    *
-   * 目录活在前端（`PLUGIN_CATALOG`），后端只记"这个用户对这个 code 做了什么"：
-   * `GET /{code}` 在没有任何记录时返回默认值（启用、空配置），不会 404 ——
-   * 因此**安装/卸载就是 enabled 的 true/false**，不是增删目录项。
+   * `list` 返回的是"目录 + 当前用户装没装"，前端不再自带 `PLUGIN_CATALOG`。
+   * 新用户拿到 `enabled: false`（没有行 = 未安装）——所以换设备、换账号都不会
+   * 继承别人的安装状态，也不会凭空满屏已安装。
+   *
+   * 不在目录里的 code → 404（9301）：目录由服务端 seed，前端不能自造。
    */
   plugins: {
     list: () => http.get<Result<BackendPlugin[]>>('/plugins').then((r) => r.data.data),
     get: (code: string) => http.get<Result<BackendPlugin>>(`/plugins/${code}`).then((r) => r.data.data),
-    /** 局部更新：`enabled` 缺省 = 不改；`config` 传 `{}` 才清空（不传 = 保留）。 */
+    /** 装/卸/改配置：`enabled` 缺省 = 不改；`config` 传 `{}` 才清空（不传 = 保留）。 */
     update: (code: string, body: { enabled?: boolean; config?: Record<string, unknown> }) =>
       http.put<Result<BackendPlugin>>(`/plugins/${code}`, body).then((r) => r.data.data),
+  },
+  /**
+   * SKILL.md 正文（V34：从 localStorage 搬到服务端）。
+   *
+   * 正文是用户的资产，不是界面偏好：换设备、换浏览器、清缓存都该还在。
+   * 写入侧有 200 KB 闸门（超过 → 400/1001，当场告诉你，而不是等提问时变成 4006）。
+   */
+  skills: {
+    list: () => http.get<Result<BackendSkill[]>>('/skills').then((r) => r.data.data),
+    get: (code: string) => http.get<Result<BackendSkill>>(`/skills/${code}`).then((r) => r.data.data),
+    /** 导入/覆盖：同名同 code 再写一次就是更新，不会多出一份。 */
+    save: (code: string, body: { name: string; version?: string; description?: string; contentMd: string }) =>
+      http.put<Result<BackendSkill>>(`/skills/${code}`, body).then((r) => r.data.data),
+    /** 删除（软删）：之后按 code 取会 404 / 9302，列表里也消失。 */
+    remove: (code: string) => http.delete<Result<null>>(`/skills/${code}`).then((r) => r.data.data),
   },
   /**
    * 外部 MCP server（V32）。
@@ -1285,13 +1302,53 @@ export interface DocumentDetail {
   updatedAt: string
 }
 
-/* --------------------------- 插件与 MCP（V32） --------------------------- */
+/* --------------------------- 插件与 MCP（V32 / V34） --------------------------- */
 
-/** 插件的一个用户级状态；没有记录时后端返回 `{enabled: true, config: {}}`。 */
+/**
+ * 市场里的一条插件：目录字段（服务端 `plugin_catalog`）+ 当前用户的安装状态。
+ *
+ * V34 起目录在服务端，前端不再自带清单 —— 所以这个响应必须够画一个市场条目，
+ * 否则列表就得为每个 code 再查一次目录（N+1）。
+ *
+ * `enabled` 就是"装没装"：后端没有"装了但停用"的中间态。
+ * 新用户拿到的是 `enabled: false`（没有行 = 未安装），不是默认全开。
+ */
 export interface BackendPlugin {
   code: string
+  name: string
+  author: string | null
+  version: string | null
+  category: string
+  description: string | null
+  /** 图标 URL；为空时页面用首字母占位（现在没有真实图标资源） */
+  icon: string | null
+  rating: number | null
+  downloads: string | null
+  tools: string[]
+  tags: string[]
+  verified: boolean
+  official: boolean
+  updated: string | null
   enabled: boolean
   config: Record<string, unknown>
+}
+
+/**
+ * 一份 SKILL.md（`/api/skills`）。
+ *
+ * 列表接口不带正文（`contentMd` 为 null）——200 KB 一份的正文乘上几十份，
+ * 只为画一个列表就把响应撑到几 MB。要看正文按 code 单独取。
+ */
+export interface BackendSkill {
+  code: string
+  name: string
+  version: string | null
+  description: string | null
+  enabled: boolean
+  contentMd: string | null
+  /** 正文的 UTF-8 字节数（列表里也能显示"多大"） */
+  sizeBytes: number
+  updatedAt: string
 }
 
 /** MCP `tools/list` 里的一个工具；`inputSchema` 是原样 JSON 文本（不是对象）。 */
@@ -1316,6 +1373,14 @@ export interface BackendMcpServer {
   lastOkAt: string | null
   lastError: string | null
   tools: McpToolInfo[]
+  /** 是否已显式允许在这台机器上执行 `command`（stdio 专用，默认 false）。 */
+  allowStdio: boolean
+  /** 最近一次**工具调用**（与 probe 无关）；从未调用过时 `lastCallOk` 为 null。 */
+  lastCallAt: string | null
+  lastCallTool: string | null
+  lastCallOk: boolean | null
+  /** 失败原因，含错误码：9205 超时 / 9206 子进程退出 / 9207 JSON-RPC 拒绝。 */
+  lastCallError: string | null
 }
 
 export interface McpServerPayload {
@@ -1326,6 +1391,8 @@ export interface McpServerPayload {
   /** 明文 Authorization 头；只在写入时上行，读接口不会返回它。 */
   authHeader?: string
   enabled?: boolean
+  /** 必须显式传 true 才会起子进程：null 是"别动"，false 是"收回允许"。 */
+  allowStdio?: boolean
 }
 
 /** `probe` 的结果：HTTP 恒 200，成没成看 `ok`。 */
@@ -1333,6 +1400,8 @@ export interface McpProbeResult {
   ok: boolean
   /** 失败原因（成功时为 null）。页面必须展示它。 */
   error: string | null
+  /** 失败原因对应的业务错误码（9205/9206/9207/5005/9204），成功为 null。 */
+  errorCode: number | null
   tools: McpToolInfo[]
   tookMs: number
   lastOkAt: string | null

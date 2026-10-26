@@ -1164,7 +1164,8 @@ MCP server，把它的工具挂进 Agent 工具箱。
 | DELETE | `/api/mcp-servers/{id}` | 删除（它的工具同时从工具箱移除） |
 | POST | `/api/mcp-servers/{id}/probe` | 真连一次 `tools/list`，成功则落库并注册工具 |
 
-> ✅ **本表均已实现**（`McpServerController` + `McpServerService`，迁移 `V32__plugin_and_mcp_server.sql`）。
+> ✅ **本表均已实现**（`McpServerController` + `McpServerService`，迁移 `V32__plugin_and_mcp_server.sql`；
+> V33 补了 `stdio_allowed` 与 `last_call_*` 四列）。
 > 上一节（§7.1）的进程内 Server 与这里的外部客户端是两套东西，互不影响。
 
 请求体（POST）：
@@ -1175,25 +1176,29 @@ MCP server，把它的工具挂进 Agent 工具箱。
 ```
 
 `stdio` 时把 `url` 换成 `command`，例如
-`"command": "npx -y @modelcontextprotocol/server-filesystem /data"`。
+`"command": "npx -y @modelcontextprotocol/server-everything"`，并加 `"allowStdio": true`
+（见下面第 6 条：这是每个 server 各自的开关，不是全局开关的替代品）。
 
 响应（GET / POST / PUT 同一个形状）：
 
 ```json
 { "id": "1", "name": "Fake Echo", "slug": "fake-echo", "transport": "http",
-  "url": "http://127.0.0.1:9000/mcp", "command": null,
+  "url": "http://127.0.0.1:9000/mcp", "command": null, "allowStdio": false,
   "hasAuthHeader": true, "enabled": true,
   "lastOkAt": "2026-10-24T23:10:00", "lastError": null,
+  "lastCallAt": "2026-10-25T10:29:05", "lastCallTool": "echo", "lastCallOk": true,
+  "lastCallError": null,
   "tools": [ { "name": "echo", "description": "回声", "inputSchema": "{\"type\":\"object\"}" } ] }
 ```
 
-`probe` 的响应：
+`probe` 的响应（`errorCode` 对齐 `ErrorCode` 的 9xxx 段，前端直接显示它 + `error`）：
 
 ```json
-{ "ok": false, "error": "MCP server 返回 HTTP 500：…", "tools": [], "tookMs": 12, "lastOkAt": null }
+{ "ok": false, "errorCode": 5005, "error": "连不上 MCP server（http://127.0.0.1:9/mcp）：…",
+  "tools": [], "tookMs": 12, "lastOkAt": null }
 ```
 
-五条容易搞错的契约事实：
+八条容易搞错的契约事实：
 
 1. **`probe` 失败也是 HTTP 200**，成没成看 `ok`。探测失败是**业务结果**（上游 500、连不上、
    stdio 被服务端关掉），不是 Nexus 自己的故障；用 5xx 表示只会让前端弹一个没有信息的
@@ -1210,35 +1215,87 @@ MCP server，把它的工具挂进 Agent 工具箱。
 5. **probe 成功才注册工具；失败只写 `last_error`，并保留旧的 `tools_json`**——一次网络抖动
    不该把已经能用的工具全撤掉。上游真的删掉的工具会被置为停用，但**用户手动停用的工具
    不会被"复活"**。
+6. **stdio 要两道许可**：服务端开关 `nexus.mcp.stdio-enabled`（默认 false）**和**该 server 的
+   `allowStdio`（默认 false）。少任何一道都回 `9204`，`error` 里写明缺的是哪一道。
+   双闸门不是冗余：全局开关是部署者的能力授权（页面能执行服务器上的任意命令，只能由部署者决定），
+   逐 server 许可是用户在"我真的知道这条命令干什么"时的确认。
+7. **MCP 工具一律注册成 `WRITE`**（`requiresApproval=true`）。外部工具的副作用 Nexus 无法判断，
+   当成读操作直接跑等于把审批闸门让给第三方；默认需要人工确认，用户可用
+   `POST /api/users/me/tool-grants`（`scope=always`）显式豁免某一条。
+8. **调用结果落在 server 行上**：`ExecutingToolCallback` 成功/失败都记 `last_call_at/tool/ok/error`，
+   插件页据此显示"上次调用成没成"，不必翻运行记录。
 
 运行时注入：`AgentToolFactory.assemble` 在内置 `@Tool` 之后追加
 `McpToolInjector.toolsFor(userId, definition)`，因此 MCP 工具与内置工具走**同一套**授权闸门
 （`ToolAuthorizationService`）、审批与留痕（`ExecutingToolCallback`）；0 个工具时仍然不调用
 `.tools()`。真正的调用走 JSON-RPC `tools/call`，Streamable HTTP 与 stdio 两种传输由
-`McpClientFactory` 按 `transport` 选择。
+`McpClientFactory` 按 `transport` 选择；stdio 的启动单独有 20s 预算（`nexus.mcp.startup-timeout-ms`），
+进程退出/超时都会连带回收子进程树。
 
 错误码：`9201`（server 不存在；越权同样回 404，不暴露存在性）、`9203`（不支持的传输方式，400）、
-`9204`（stdio 已被服务端关闭，400）。
+`9204`（stdio 未被允许：服务端关闭或该 server 没勾许可，400）。
+**调用期失败码**（出现在工具回灌文本与 `last_call_error` 里，不是 HTTP 状态）：
+`9205`（超时）、`9206`（子进程已退出，附 stderr 尾部）、`9207`（JSON-RPC error，附上游 code/message）。
+这三类刻意不合并成"模型调用失败"——超时该重试、进程退出该修命令、JSON-RPC error 该修参数，
+三种完全不同的下一步。
 
-### 7.3 已实现：插件开关与配置（迁移 V32）
+### 7.3 已实现：插件目录与安装状态（迁移 V32 → V34）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/plugins` | 我显式改过的插件（没动过的不出现在列表里） |
-| GET | `/api/plugins/{code}` | 单个插件状态；**没有记录时返回默认值，不是 404** |
-| PUT | `/api/plugins/{code}` | 启停 + 配置（即 upsert，没有 POST） |
+| GET | `/api/plugins` | **目录全集** + 我的安装状态（V34 起目录也在服务端） |
+| GET | `/api/plugins/{code}` | 单个插件；不在目录里 → 404 / `9301` |
+| PUT | `/api/plugins/{code}` | 装/卸 + 配置（即 upsert，没有 POST） |
 
 ```json
-{ "code": "web-fetch", "enabled": false, "config": { "endpoint": "https://example.com" } }
+{ "code": "web-fetch", "name": "Web Fetch", "author": "Prisdvl", "version": "2.0.1",
+  "category": "search", "description": "抓取网页正文与元信息…", "icon": null,
+  "rating": 4.8, "downloads": "12.7k", "tools": ["web.fetch", "web.extract_links"],
+  "tags": ["Web", "Search"], "verified": true, "official": true,
+  "updated": "2026-10-08", "enabled": false, "config": {} }
 ```
 
-三条契约事实：
+五条契约事实：
 
-1. 插件目录在前端（`PLUGIN_CATALOG`），服务端只记"这个用户对这个 code 做了什么"。
-   所以 `GET /{code}` 在一条记录都没有时返回 `{"enabled": true, "config": {}}`，**不会 404**；
-   `PUT` 就是 upsert，安装/卸载等价于 `enabled` 的 true/false。
-2. `config` 传 `null`/缺省 = 不改，传 `{}` = 清空。两者混为一谈，用户就永远清不掉自己的配置。
-3. `code` 必须匹配 `^[a-z0-9][a-z0-9._-]{0,63}$`，否则 400 / `1001`——它同时是 URL 注入的边界。
+1. 目录在服务端（`plugin_catalog`，启动时按 `PluginCatalogService.SEED_VERSION` 幂等 seed）：
+   `GET /api/plugins` 返回**全部在架插件** + 当前用户的安装状态，前端不再自带 `PLUGIN_CATALOG`。
+2. **`enabled` 就是"装没装"**；**没有行 = 未安装**（V34 改的语义，之前是"没有行 = 启用"——
+   那时目录在前端只能这么办）。换账号/换设备拿到的是 `false`，不继承别人的安装状态。
+3. 目录外的 `code` → 404 / `9301`（与"存在但无权限"不做区分，防枚举）。
+4. `config` 传 `null`/缺省 = 不改，传 `{}` = 清空；`code` 必须匹配
+   `^[a-z0-9][a-z0-9._-]{0,63}$`，否则 400 / `1001`。
+5. `config` 序列化后上限 **16 KB**（超限 → 400 / `1001`，且不写库）。这一列是给
+   "端点 / 超时 / 开关"这类键值用的；没有上限时客户端能把整份文件塞进来，
+   没人读它，却会随每次列表接口一起被序列化出去。
+
+> 文档缺口：`plugin_catalog` 的 seed 内容（7 条）以 `PluginCatalogService.SEEDS` 为准，本文不复制清单。
+
+### 7.4 已实现：SKILL.md 正文（迁移 V34 → V35）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/skills` | 我的技能列表；**不含正文**，带 `sizeBytes`（来自 `size_bytes` 列） |
+| GET | `/api/skills/{code}` | 含正文；没有 → 404 / `9302` |
+| PUT | `/api/skills/{code}` | 导入/覆盖（upsert），正文上限 200 KB |
+| DELETE | `/api/skills/{code}` | 软删；重复删与"从没导入过"一样 → 404 / `9302` |
+
+七条契约事实：
+
+1. 正文是用户的资产，存在 `user_skill.content_md`（`MEDIUMTEXT`），**不再写 localStorage**：
+   换设备 / 换浏览器 / 清缓存都该还在。
+2. 200 KB 上限按 **UTF-8 字节**算（`SkillService.LIMIT_BYTES`）：超限 → 400 / `1001`，
+   消息里带"200 KB"和当前大小；**正好 200 KB 可以存**（闸门只在超出时关）。
+3. 列表不回正文：一份 200 KB × 几十份只为画列表就把响应撑到几 MB；要正文按 `code` 单独取。
+4. 列表也**不读**正文（V35）：`sizeBytes` 来自写入时算好的 `size_bytes` 列。
+   老数据（该列为 0）在按 `code` 取正文时自动回填，列表里先显示 0——宁可显示 0，
+   也不为了补一个数字把整篇正文读进内存。
+5. 每用户隔离：别人的技能与不存在的一样 → 404 / `9302`。删除是**物理删除**——
+   `user_skill` 上有 `UNIQUE (user_id, code)`，软删的行仍占唯一键，
+   "删掉再用同名导入"会撞键变成 500，而那是用户最自然的动作。
+6. `name` 空 / 正文空 → 400 / `1001`；`version` 缺省 `0.1.0`，`description` 截断 512。
+7. 编辑正在用同一个 `PUT`：`code` 是身份、`name` 只是展示字段，改名不会造出第二条。
+
+
 
 ---
 

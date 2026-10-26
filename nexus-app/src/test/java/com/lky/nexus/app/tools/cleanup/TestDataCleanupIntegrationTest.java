@@ -166,6 +166,7 @@ class TestDataCleanupIntegrationTest {
         seedAgent(userId, workspaceId, "内置助手", 1);
         seedImportTask(userId, kbId);
         seedQaRecord(userId, kbId);
+        seedPluginMcpSkillRows(userId);
 
         Path original = writeOriginalFile(kbId);
 
@@ -211,6 +212,13 @@ class TestDataCleanupIntegrationTest {
         assertThat(scalar("SELECT COUNT(*) FROM kb_import_task WHERE user_id = ?", userId)).isZero();
         assertThat(scalar("SELECT COUNT(*) FROM kb_import_task_item WHERE kb_id = ?", kbId)).isZero();
         assertThat(scalar("SELECT COUNT(*) FROM kb_qa_record WHERE user_id = ?", userId)).isZero();
+        // V32/V34 的三张用户级表：不清就会留无主行，唯一键还会挡住同名账号的重新安装
+        assertThat(scalar("SELECT COUNT(*) FROM user_plugin WHERE user_id = ?", userId))
+                .as("插件行物理清空").isZero();
+        assertThat(scalar("SELECT COUNT(*) FROM mcp_server WHERE user_id = ?", userId))
+                .as("MCP server 物理清空").isZero();
+        assertThat(scalar("SELECT COUNT(*) FROM user_skill WHERE user_id = ?", userId))
+                .as("技能行物理清空").isZero();
         assertThat(scalar("SELECT COUNT(*) FROM sys_user_role WHERE user_id = ?", userId)).isZero();
         assertThat(Files.exists(original)).as("磁盘原文随库一起消失").isFalse();
     }
@@ -433,6 +441,25 @@ class TestDataCleanupIntegrationTest {
                 INSERT INTO kb_import_task_item (id, task_id, kb_id, source_path, action)
                 VALUES (?,?,?,?,?)
                 """, ID.incrementAndGet(), taskId, kbId, "note.md", "CREATED");
+    }
+
+    /**
+     * V32 / V34 之后新增的三张用户级表：早期清理清单里没有它们，
+     * 删账号会留下无主行（而且 user_plugin / user_skill 的唯一键还会挡住同名账号重装）。
+     */
+    private void seedPluginMcpSkillRows(Long userId) {
+        jdbc.update("""
+                INSERT INTO user_plugin (id, user_id, plugin_code, enabled)
+                VALUES (?,?,?,?)
+                """, ID.incrementAndGet(), userId, "web-fetch", 1);
+        jdbc.update("""
+                INSERT INTO mcp_server (id, user_id, name, slug, transport, enabled)
+                VALUES (?,?,?,?,?,?)
+                """, ID.incrementAndGet(), userId, "测试 MCP", "test-mcp", "http", 1);
+        jdbc.update("""
+                INSERT INTO user_skill (id, user_id, code, name, content_md, enabled)
+                VALUES (?,?,?,?,?,?)
+                """, ID.incrementAndGet(), userId, "skill-test", "测试技能", "---\nname: skill-test\n---\n", 1);
     }
 
     private void seedQaRecord(Long userId, long kbId) {

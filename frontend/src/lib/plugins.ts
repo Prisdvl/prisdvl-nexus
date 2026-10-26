@@ -1,10 +1,11 @@
 /**
- * 插件 / 技能 / MCP 市场的前端数据模型。
+ * 插件 / 技能 / MCP 市场的前端**演示数据**与解析工具。
  *
- * 目录（`PLUGIN_CATALOG`）与演示用的 MCP 列表（`MCP_SERVERS`）留在前端：
- * 它们的"已安装 / 已连接"状态现在都存在后端（`/api/plugins`、`/api/mcp-servers`），
- * 这里只描述"市场里有哪些东西"。唯一还走 localStorage 的是导入的 SKILL.md 技能包——
- * 它没有服务端承载，仍是纯本地文件。
+ * V34 起真实数据全在服务端：目录（`plugin_catalog`）、安装状态（`user_plugin`）、
+ * SKILL.md 正文（`user_skill`）、MCP server。这里只剩两样东西——
+ * mock 模式（`VITE_USE_MOCK=true`）用的演示清单，以及 SKILL.md frontmatter 解析器。
+ *
+ * 真实模式一条都不读这份清单：市场 tab 画什么由 `GET /api/plugins` 决定。
  */
 
 export type PluginCategory = 'agent' | 'knowledge' | 'search' | 'automation' | 'productivity' | 'data' | 'skill'
@@ -192,24 +193,13 @@ export const MCP_SERVERS: McpServerMeta[] = [
   },
 ]
 
-const SKILLS_KEY = 'nx-plugins-skills'
-
-function readJson<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key)
-    return raw ? (JSON.parse(raw) as T) : fallback
-  } catch {
-    return fallback
-  }
-}
-
-export function readSkills(): SkillPack[] {
-  return readJson<SkillPack[]>(SKILLS_KEY, [])
-}
-
-export function writeSkills(skills: SkillPack[]) {
-  localStorage.setItem(SKILLS_KEY, JSON.stringify(skills))
-}
+/*
+ * 这里只剩两样东西：mock 模式的演示目录，以及 SKILL.md 的解析器。
+ *
+ * 安装状态、技能正文、MCP server 全都在服务端（V34 起）——`readSkills/writeSkills`
+ * 那套 localStorage 读写已经删掉了：正文是用户的资产，换设备/换浏览器/清缓存都该还在，
+ * 塞在 localStorage 里等于换个浏览器就丢。
+ */
 
 export function parseSkillContent(raw: string): { name?: string; version?: string; description?: string } {
   const trimmed = raw.trim()

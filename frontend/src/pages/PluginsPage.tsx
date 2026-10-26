@@ -12,12 +12,12 @@ import { pagesCopy } from '@/lib/pagesCopy'
 import { useLocale } from '@/lib/locale'
 import {
   MCP_SERVERS, PLUGIN_CATALOG, parseSkillContent,
-  readSkills, writeSkills,
-  type PluginCategory, type PluginMeta, type SkillPack,
+  type PluginCategory, type PluginMeta,
 } from '@/lib/plugins'
 import {
   api, errMessage, USE_MOCK,
-  type BackendMcpServer, type McpProbeResult, type McpServerPayload, type McpTransport,
+  type BackendMcpServer, type BackendPlugin, type BackendSkill,
+  type McpProbeResult, type McpServerPayload, type McpTransport,
 } from '@/lib/api'
 import '@/styles/plugins.css'
 
@@ -45,6 +45,127 @@ interface McpView {
   lastOkAt: string | null
   lastError: string | null
   hasAuthHeader: boolean
+  /** 是否已显式允许在这台机器上跑 `command`（stdio 专用）。 */
+  allowStdio: boolean
+  /** 最近一次工具调用（与 probe 分开：一个是"配置通不通"，一个是"工具跑没跑成"）。 */
+  lastCallAt: string | null
+  lastCallTool: string | null
+  lastCallOk: boolean | null
+  lastCallError: string | null
+}
+
+/**
+ * 插件页里的统一形状：目录字段（服务端 `plugin_catalog`）+ 当前用户装没装。
+ *
+ * mock 与真实模式都收敛到这一种，渲染层就不用到处判 `USE_MOCK`。
+ */
+interface PluginView {
+  id: string
+  name: string
+  author: string
+  version: string
+  category: PluginCategory
+  description: string
+  icon: string | null
+  rating: number | null
+  downloads: string
+  tools: string[]
+  tags: string[]
+  verified: boolean
+  official: boolean
+  updated: string
+  enabled: boolean
+}
+
+/** 一份 SKILL.md 的列表视图：列表不带正文，只带"多大"；正文在打开编辑时按需取。 */
+interface SkillView {
+  code: string
+  name: string
+  version: string
+  description: string
+  sizeLabel: string
+  updated: string
+  /** 正文。列表接口不回，编辑时用 `GET /api/skills/{code}` 补上；mock 模式下直接带着。 */
+  body: string
+  /** 停用的技能仍在列表里，但不参与后续的注入（`PUT` 带 `enabled=false`）。 */
+  enabled: boolean
+}
+
+function categoryOf(raw: string): PluginCategory {
+  return (raw in CATEGORY_ICONS ? raw : 'agent') as PluginCategory
+}
+
+function fromPlugin(item: BackendPlugin): PluginView {
+  return {
+    id: item.code,
+    name: item.name,
+    author: item.author ?? '',
+    version: item.version ?? '',
+    category: categoryOf(item.category),
+    description: item.description ?? '',
+    icon: item.icon,
+    rating: item.rating,
+    downloads: item.downloads ?? '',
+    tools: item.tools,
+    tags: item.tags,
+    verified: item.verified,
+    official: item.official,
+    updated: item.updated ?? '',
+    enabled: item.enabled,
+  }
+}
+
+/** mock 目录：只在 `USE_MOCK` 时用；真实模式一条都不读前端清单。 */
+function mockPlugins(): PluginView[] {
+  const installed = new Set(['nexus-mcp-bridge', 'web-fetch'])
+  return PLUGIN_CATALOG.map((item: PluginMeta) => ({
+    id: item.id,
+    name: item.name,
+    author: item.author,
+    version: item.version,
+    category: item.category,
+    description: item.description,
+    icon: null,
+    rating: item.rating,
+    downloads: item.downloads,
+    tools: item.tools,
+    tags: item.tags,
+    verified: Boolean(item.verified),
+    official: Boolean(item.official),
+    updated: item.updated,
+    enabled: installed.has(item.id),
+  }))
+}
+
+function fromSkill(item: BackendSkill): SkillView {
+  return {
+    code: item.code,
+    name: item.name,
+    version: item.version ?? '',
+    description: item.description ?? '',
+    sizeLabel: `${Math.max(1, Math.round(item.sizeBytes / 1024))} KB`,
+    updated: item.updatedAt,
+    body: item.contentMd ?? '',
+    enabled: item.enabled,
+  }
+}
+
+/** mock 的两份技能：保证"导入后立刻出现在已安装"这条演示路径不依赖后端。 */
+function mockSkills(): SkillView[] {
+  return [
+    {
+      code: 'skill-rag-checklist', name: 'RAG 上线检查单', version: '1.0.0',
+      description: '检索质量、切分与回落策略的逐项核对。', sizeLabel: '4 KB', updated: '2026-10-02',
+      body: '---\nname: RAG 上线检查单\nversion: 1.0.0\ndescription: 检索质量、切分与回落策略的逐项核对。\n---\n\n- [ ] 切分粒度是否覆盖最长段落\n- [ ] 混合检索权重是否跑过 A/B\n',
+      enabled: true,
+    },
+    {
+      code: 'skill-review-copy', name: '评审话术', version: '0.3.1',
+      description: '把 diff 讲成对方能接受的修改建议。', sizeLabel: '2 KB', updated: '2026-09-21',
+      body: '---\nname: 评审话术\nversion: 0.3.1\ndescription: 把 diff 讲成对方能接受的修改建议。\n---\n\n先说结论，再说依据，最后给替代方案。\n',
+      enabled: true,
+    },
+  ]
 }
 
 function fromBackend(server: BackendMcpServer): McpView {
@@ -59,6 +180,11 @@ function fromBackend(server: BackendMcpServer): McpView {
     lastOkAt: server.lastOkAt,
     lastError: server.lastError,
     hasAuthHeader: server.hasAuthHeader,
+    allowStdio: server.allowStdio ?? false,
+    lastCallAt: server.lastCallAt ?? null,
+    lastCallTool: server.lastCallTool ?? null,
+    lastCallOk: server.lastCallOk ?? null,
+    lastCallError: server.lastCallError ?? null,
   }
 }
 
@@ -75,6 +201,11 @@ function mockServers(): McpView[] {
     lastOkAt: null,
     lastError: null,
     hasAuthHeader: false,
+    allowStdio: false,
+    lastCallAt: null,
+    lastCallTool: null,
+    lastCallOk: null,
+    lastCallError: null,
   }))
 }
 
@@ -86,14 +217,18 @@ export default function PluginsPage() {
   const [tab, setTab] = useState<Tab>('market')
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<PluginCategory | 'all'>('all')
-  const [installed, setInstalled] = useState<string[]>(USE_MOCK ? ['nexus-mcp-bridge', 'web-fetch'] : [])
-  const [skills, setSkills] = useState<SkillPack[]>(() => readSkills())
+  const [catalog, setCatalog] = useState<PluginView[]>(USE_MOCK ? mockPlugins() : [])
+  const [skills, setSkills] = useState<SkillView[]>(USE_MOCK ? mockSkills() : [])
   const [servers, setServers] = useState<McpView[]>(USE_MOCK ? mockServers() : [])
   const [loading, setLoading] = useState(!USE_MOCK)
-  const [detail, setDetail] = useState<PluginMeta | null>(null)
+  const [detail, setDetail] = useState<PluginView | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [importFileName, setImportFileName] = useState('')
+  /** 非 null = 这个弹窗在编辑已有技能（code 固定，改名不会造出第二条）。 */
+  const [editingSkill, setEditingSkill] = useState<SkillView | null>(null)
+  /** 编辑时的停用开关：停用的技能仍在列表里，但不参与后续注入。 */
+  const [skillEnabled, setSkillEnabled] = useState(true)
   const fileRef = useRef<HTMLInputElement>(null)
 
   /* MCP 编辑弹窗：editing 为 null 表示新建 */
@@ -104,6 +239,8 @@ export default function PluginsPage() {
   const [mcpUrl, setMcpUrl] = useState('')
   const [mcpCommand, setMcpCommand] = useState('')
   const [mcpToken, setMcpToken] = useState('')
+  /* 起子进程的许可：默认 false，必须用户在这条 server 上明确勾一次 */
+  const [mcpAllowStdio, setMcpAllowStdio] = useState(false)
   const [probing, setProbing] = useState(false)
   const [probe, setProbe] = useState<McpProbeResult | null>(null)
   const [saving, setSaving] = useState(false)
@@ -112,15 +249,16 @@ export default function PluginsPage() {
     iso ? new Date(iso).toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
   ), [locale])
 
-  /* 真实模式：插件状态与 MCP server 都从后端来；mock 模式用本地演示数据 */
+  /* 真实模式：目录、装没装、技能正文、MCP server 都从后端来；mock 模式用本地演示数据 */
   useEffect(() => {
     if (USE_MOCK) return
     let alive = true
     setLoading(true)
-    Promise.all([api.plugins.list(), api.mcpServers.list()])
-      .then(([plugins, mcpList]) => {
+    Promise.all([api.plugins.list(), api.skills.list(), api.mcpServers.list()])
+      .then(([plugins, skillList, mcpList]) => {
         if (!alive) return
-        setInstalled(plugins.filter((item) => item.enabled).map((item) => item.code))
+        setCatalog(plugins.map(fromPlugin))
+        setSkills(skillList.map(fromSkill))
         setServers(mcpList.map(fromBackend))
       })
       .catch((error: unknown) => {
@@ -135,21 +273,24 @@ export default function PluginsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const categories = useMemo(() => ['all', ...new Set(PLUGIN_CATALOG.map((x) => x.category))], [])
+  const categories = useMemo(
+    () => ['all', ...new Set(catalog.map((x) => x.category))] as (PluginCategory | 'all')[],
+    [catalog],
+  )
   const marketList = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return PLUGIN_CATALOG.filter((x) => {
+    return catalog.filter((x) => {
       if (category !== 'all' && x.category !== category) return false
       if (!q) return true
       return [x.name, x.author, x.description, ...x.tags].join(' ').toLowerCase().includes(q)
     })
-  }, [category, query])
+  }, [catalog, category, query])
   const installedList = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return PLUGIN_CATALOG
-      .filter((x) => installed.includes(x.id))
+    return catalog
+      .filter((x) => x.enabled)
       .filter((x) => !q || [x.name, x.author, x.description, ...x.tags].join(' ').toLowerCase().includes(q))
-  }, [installed, query])
+  }, [catalog, query])
   const filteredSkills = useMemo(() => {
     const q = query.trim().toLowerCase()
     return skills.filter((s) => !q || [s.name, s.description].join(' ').toLowerCase().includes(q))
@@ -163,21 +304,25 @@ export default function PluginsPage() {
   const pluginGroups = useMemo(() => {
     const featured = marketList.filter((x) => x.official || x.verified)
     const featuredIds = new Set(featured.map((x) => x.id))
-    const groups: { key: string; title: string; items: PluginMeta[] }[] = []
+    const groups: { key: string; title: string; items: PluginView[] }[] = []
     if (featured.length) groups.push({ key: 'featured', title: p.featured, items: featured })
     for (const c of [...new Set(marketList.map((x) => x.category))]) {
       const items = marketList.filter((x) => x.category === c && !featuredIds.has(x.id))
-      if (items.length) groups.push({ key: c, title: p.categoryLabels[c], items })
+      if (items.length) groups.push({ key: c, title: p.categoryLabels[c] ?? c, items })
     }
     return groups
   }, [marketList, p])
 
-  const renderPluginRow = (plugin: PluginMeta) => {
-    const Icon = CATEGORY_ICONS[plugin.category]
-    const on = installed.includes(plugin.id)
+  const renderPluginRow = (plugin: PluginView) => {
+    const on = plugin.enabled
     return (
       <article className="plugin-row" key={plugin.id}>
-        <span className="plugin-row__icon"><Icon size={18} /></span>
+        {/* 目录里没有真实图标资源：有 `icon` 就显示，没有就用首字母占位 */}
+        <span className="plugin-row__icon">
+          {plugin.icon
+            ? <img src={plugin.icon} alt="" loading="lazy" />
+            : <span className="plugin-row__initial" aria-hidden="true">{plugin.name.trim().charAt(0).toUpperCase()}</span>}
+        </span>
         <div className="plugin-row__main">
           <div className="plugin-row__name">
             <strong>{plugin.name}</strong>
@@ -190,7 +335,18 @@ export default function PluginsPage() {
           <span>{plugin.rating}</span>
         </div>
         <div className="plugin-row__actions">
-          {!on && (
+          {on ? (
+            // 已安装的行必须有卸载入口：只在详情弹窗里能卸，等于"装了以后找不到出口"
+            <button
+              className="plugin-icon-btn"
+              type="button"
+              aria-label={`${p.uninstall}: ${plugin.name}`}
+              title={p.uninstall}
+              onClick={() => toggleInstall(plugin)}
+            >
+              <X size={16} />
+            </button>
+          ) : (
             <button
               className="plugin-icon-btn"
               type="button"
@@ -218,13 +374,13 @@ export default function PluginsPage() {
   /**
    * 安装 / 卸载 = 把 `user_plugin.enabled` 写成 true / false。
    *
-   * 目录在前端，服务端只记"这个用户对这个 code 做了什么"，所以没有"新增一行"这种操作，
-   * 也就没有卸载后配置丢失的问题（重装回来配置还在）。
+   * 目录在服务端，这里只翻这一行：没有"新增目录项"这种操作，也就没有卸载后配置
+   * 丢失的问题（重装回来配置还在）。乐观更新失败必须回滚——开关留在原状，
+   * 比"看起来装上了其实没写进库"诚实。
    */
-  const toggleInstall = (plugin: PluginMeta) => {
-    const on = installed.includes(plugin.id)
-    const next = on ? installed.filter((id) => id !== plugin.id) : [...installed, plugin.id]
-    setInstalled(next)
+  const toggleInstall = (plugin: PluginView) => {
+    const on = plugin.enabled
+    setCatalog(catalog.map((item) => (item.id === plugin.id ? { ...item, enabled: !on } : item)))
     if (USE_MOCK) {
       toast[on ? 'info' : 'success'](on ? p.uninstall : p.install, `${plugin.name} ${plugin.version}`)
       return
@@ -232,7 +388,7 @@ export default function PluginsPage() {
     api.plugins.update(plugin.id, { enabled: !on })
       .then(() => toast[on ? 'info' : 'success'](on ? p.uninstall : p.install, `${plugin.name} ${plugin.version}`))
       .catch((error: unknown) => {
-        setInstalled(installed) // 回滚：开关留在原状，比"看起来装上了其实没写进库"诚实
+        setCatalog(catalog) // 回滚
         toast.error(p.saveFailed, errMessage(error))
       })
   }
@@ -246,6 +402,78 @@ export default function PluginsPage() {
     reader.readAsText(file)
   }
 
+  /** 把名字折成后端认的 code：小写、非 `[a-z0-9._-]` 折成 `-`。 */
+  const codeOf = (name: string) => {
+    const slug = name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '')
+    return `skill-${slug || 'imported'}`.slice(0, 64)
+  }
+
+  const closeImport = () => {
+    setImportOpen(false)
+    setImportText('')
+    setImportFileName('')
+    setEditingSkill(null)
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
+  /** 打开"导入"弹窗（新建）。 */
+  const openImport = () => {
+    setEditingSkill(null)
+    setSkillEnabled(true)
+    setImportText('')
+    setImportFileName('')
+    setImportOpen(true)
+  }
+
+  /**
+   * 打开编辑：正文按需取（`GET /api/skills/{code}`）。
+   *
+   * <p>列表为了轻不携带正文，所以这里必须补一次请求——否则编辑框会是空的，
+   * 用户一保存就把正文清空了，那是最坏的一种"功能不完善"。
+   */
+  const openSkillEdit = (skill: SkillView) => {
+    setEditingSkill(skill)
+    setSkillEnabled(skill.enabled)
+    setImportFileName('')
+    setImportOpen(true)
+    if (skill.body) {
+      setImportText(skill.body)
+      return
+    }
+    setImportText('')
+    if (USE_MOCK) return
+    void api.skills.get(skill.code)
+      .then((full) => {
+        setImportText(full.contentMd ?? '')
+        setSkillEnabled(full.enabled)
+      })
+      .catch((error: unknown) => toast.error(p.skillLoadFail, errMessage(error)))
+  }
+
+  const deleteSkill = (skill: SkillView) => {
+    if (!window.confirm(p.skillDeleteConfirm(skill.name))) return
+    const remove = () => {
+      setSkills((prev) => prev.filter((s) => s.code !== skill.code))
+      if (editingSkill?.code === skill.code) closeImport()
+      toast.success(p.skillDeletedTitle, skill.name)
+    }
+    if (USE_MOCK) {
+      remove()
+      return
+    }
+    api.skills.remove(skill.code)
+      .then(remove)
+      .catch((error: unknown) => toast.error(p.saveFailed, errMessage(error)))
+  }
+
+  /**
+   * 导入 / 保存 SKILL.md = 把正文写到服务端（`PUT /api/skills/{code}`），不是写 localStorage。
+   *
+   * <p>编辑已有技能时 code 固定：改名不会造出第二条——名字是展示字段，code 是身份。
+   *
+   * <p>正文超过 200 KB 会被后端挡下来（400/1001），这里把原话透出去：
+   * 前端自己算大小容易和后端算得不一样（UTF-8 字节 vs 字符）。
+   */
   const commitImport = () => {
     const parsed = parseSkillContent(importText)
     const name = parsed.name?.trim()
@@ -253,21 +481,44 @@ export default function PluginsPage() {
       toast.error(p.importFail, p.importInvalid)
       return
     }
-    const item: SkillPack = {
-      id: `skill-${Date.now()}`,
-      name,
-      version: parsed.version ?? '0.1.0',
-      description: parsed.description ?? '',
-      source: importFileName || 'manual',
-      importedAt: new Date().toLocaleDateString(locale === 'en' ? 'en-US' : 'zh-CN'),
+    const version = parsed.version ?? '0.1.0'
+    const description = parsed.description ?? ''
+    const code = editingSkill?.code ?? codeOf(name)
+    if (USE_MOCK) {
+      const sizeBytes = new TextEncoder().encode(importText).length
+      const item: SkillView = {
+        code,
+        name,
+        version,
+        description,
+        sizeLabel: `${Math.max(1, Math.round(sizeBytes / 1024))} KB`,
+        updated: new Date().toISOString(),
+        body: importText,
+        enabled: skillEnabled,
+      }
+      setSkills((prev) => [item, ...prev.filter((s) => s.code !== code)])
+      closeImport()
+      toast.success(editingSkill ? p.skillSavedTitle : p.importDone, `${name} ${version}`)
+      return
     }
-    const next = [item, ...skills].slice(0, 50)
-    setSkills(next)
-    writeSkills(next)
-    setImportOpen(false)
-    setImportText('')
-    setImportFileName('')
-    toast.success(p.importDone, `${name} ${item.version}`)
+    void (async () => {
+      try {
+        const saved = await api.skills.save(code, {
+          name,
+          version,
+          description,
+          contentMd: importText,
+          // 新建一律启用；编辑时把开关一起写回去（否则"停用"在界面上永远改不掉）
+          ...(editingSkill ? { enabled: skillEnabled } : {}),
+        })
+        const view = fromSkill(saved)
+        setSkills((prev) => [view, ...prev.filter((s) => s.code !== view.code)])
+        closeImport()
+        toast.success(editingSkill ? p.skillSavedTitle : p.importDone, `${name} ${view.version}`)
+      } catch (error) {
+        toast.error(p.importFail, errMessage(error))
+      }
+    })()
   }
 
   /* ---------- MCP ---------- */
@@ -279,6 +530,7 @@ export default function PluginsPage() {
     setMcpUrl('')
     setMcpCommand('')
     setMcpToken('')
+    setMcpAllowStdio(false)
     setProbe(null)
     setMcpOpen(true)
   }
@@ -290,6 +542,7 @@ export default function PluginsPage() {
     setMcpUrl(server.url)
     setMcpCommand(server.command)
     setMcpToken('')
+    setMcpAllowStdio(server.allowStdio)
     setProbe(null)
     setMcpOpen(true)
   }
@@ -300,6 +553,8 @@ export default function PluginsPage() {
     ...(mcpTransport === 'http' ? { url: mcpUrl.trim() } : { command: mcpCommand.trim() }),
     // 只在真的填了新令牌时才上行：空串会被后端当成"清除凭据"
     ...(mcpToken.trim() ? { authHeader: mcpToken.trim() } : {}),
+    // stdio 才带这个开关；http 传上去没意义，反而会让"这条 server 被许可执行命令"变得含糊
+    ...(mcpTransport === 'stdio' ? { allowStdio: mcpAllowStdio } : {}),
   })
 
   const applySaved = (saved: BackendMcpServer) => {
@@ -328,6 +583,11 @@ export default function PluginsPage() {
           lastOkAt: editing?.lastOkAt ?? null,
           lastError: null,
           hasAuthHeader: Boolean(mcpToken.trim()) || Boolean(editing?.hasAuthHeader),
+          allowStdio: mcpAllowStdio,
+          lastCallAt: editing?.lastCallAt ?? null,
+          lastCallTool: editing?.lastCallTool ?? null,
+          lastCallOk: editing?.lastCallOk ?? null,
+          lastCallError: editing?.lastCallError ?? null,
         }
         setServers((prev) => (editing ? prev.map((item) => (item.id === view.id ? view : item)) : [...prev, view]))
         setEditing(view)
@@ -355,6 +615,7 @@ export default function PluginsPage() {
     setProbe({
       ok: true,
       error: null,
+      errorCode: null,
       tools: view.tools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: null })),
       tookMs: 12,
       lastOkAt: new Date().toISOString(),
@@ -379,7 +640,7 @@ export default function PluginsPage() {
         setServers(list.map(fromBackend))
       }
     } catch (error) {
-      setProbe({ ok: false, error: errMessage(error), tools: [], tookMs: 0, lastOkAt: null })
+      setProbe({ ok: false, error: errMessage(error), errorCode: null, tools: [], tookMs: 0, lastOkAt: null })
     } finally {
       setProbing(false)
     }
@@ -429,7 +690,7 @@ export default function PluginsPage() {
           <h1 className="page-title">{p.title}</h1>
           <p className="page-sub">{p.sub}</p>
         </div>
-        <button className="btn btn-primary" type="button" onClick={() => setImportOpen(true)}>
+        <button className="btn btn-primary" type="button" onClick={openImport}>
           <FileUp size={16} /> {p.importSkill}
         </button>
       </div>
@@ -515,14 +776,37 @@ export default function PluginsPage() {
                 <h2 className="market-section-title">{p.tabInstalled} · Skills</h2>
                 <div className="skill-list">
                   {filteredSkills.map((skill) => (
-                    <article className="skill-row" key={skill.id}>
+                    <article className="skill-row" key={skill.code}>
                       <span className="skill-row__icon"><Package size={16} /></span>
                       <div className="skill-row__main">
-                        <strong>{skill.name}</strong>
-                        <span>{skill.version} · {skill.source}</span>
+                        <strong>
+                          {skill.name}
+                          {!skill.enabled && <span className="badge" data-tone="warning" style={{ marginLeft: 6 }}>{p.skillDisabled}</span>}
+                        </strong>
+                        <span>{skill.version} · {skill.sizeLabel}</span>
                       </div>
                       <p>{skill.description || p.importDropHint}</p>
-                      <time>{skill.importedAt}</time>
+                      <time>{when(skill.updated)}</time>
+                      <div className="skill-row__actions">
+                        <button
+                          className="plugin-icon-btn"
+                          type="button"
+                          aria-label={`${p.skillEdit}: ${skill.name}`}
+                          title={p.skillEdit}
+                          onClick={() => openSkillEdit(skill)}
+                        >
+                          <Settings2 size={15} />
+                        </button>
+                        <button
+                          className="plugin-icon-btn"
+                          type="button"
+                          aria-label={`${p.skillDelete}: ${skill.name}`}
+                          title={p.skillDelete}
+                          onClick={() => deleteSkill(skill)}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -590,6 +874,15 @@ export default function PluginsPage() {
                       {!server.lastError && server.lastOkAt && (
                         <p className="mcp-row__ok">{p.mcpLastOk(when(server.lastOkAt))}</p>
                       )}
+                      {/* 最近一次工具调用：探测通 ≠ 工具能跑，这两件事必须分开看得见 */}
+                      {server.lastCallTool ? (
+                        <p className={server.lastCallOk ? 'mcp-row__ok' : 'mcp-row__error'} role={server.lastCallOk ? 'status' : 'alert'}>
+                          {p.mcpLastCall(server.lastCallTool, when(server.lastCallAt))} · {server.lastCallOk ? p.mcpCallOk : p.mcpCallFail}
+                          {server.lastCallOk || !server.lastCallError ? '' : `：${server.lastCallError}`}
+                        </p>
+                      ) : (
+                        <p className="mcp-row__call">{p.mcpNoCall}</p>
+                      )}
                     </div>
                     <div className="mcp-row__tools">
                       <span className="meta-inline__item">{server.tools.slice(0, 3).map((tool) => tool.name).join(' · ') || p.mcpNoTools}</span>
@@ -625,7 +918,7 @@ export default function PluginsPage() {
               type="button"
               onClick={() => { toggleInstall(detail); setDetail(null) }}
             >
-              {installed.includes(detail.id) ? p.uninstall : p.install}
+              {detail.enabled ? p.uninstall : p.install}
             </button>
           </>
         )}
@@ -661,15 +954,20 @@ export default function PluginsPage() {
 
       <Modal
         open={importOpen}
-        title={p.importTitle}
+        title={editingSkill ? p.skillEditTitle : p.importTitle}
         width={620}
-        onClose={() => setImportOpen(false)}
+        onClose={closeImport}
         footer={
           <>
+            {editingSkill && (
+              <button className="btn btn-ghost" type="button" onClick={() => deleteSkill(editingSkill)}>
+                <Trash2 size={14} /> {p.skillDelete}
+              </button>
+            )}
             <span style={{ flex: 1 }} />
-            <button className="btn btn-ghost" type="button" onClick={() => setImportOpen(false)}>{common.cancel}</button>
+            <button className="btn btn-ghost" type="button" onClick={closeImport}>{common.cancel}</button>
             <button className="btn btn-primary" type="button" disabled={!importText.trim()} onClick={commitImport}>
-              <FileUp size={15} /> {p.importBtn}
+              <FileUp size={15} /> {editingSkill ? p.skillSave : p.importBtn}
             </button>
           </>
         }
@@ -697,6 +995,18 @@ export default function PluginsPage() {
           </button>
           {importFileName && <span className="hint">{importFileName}</span>}
           <p className="hint">{p.importDropHint}</p>
+          {/* 停用开关只在编辑时给：新建的技能一律先启用，再决定要不要关掉 */}
+          {editingSkill && (
+            <label htmlFor="skill-enabled" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <input
+                id="skill-enabled"
+                type="checkbox"
+                checked={skillEnabled}
+                onChange={(e) => setSkillEnabled(e.target.checked)}
+              />
+              <span>{p.skillEnabledLabel}</span>
+            </label>
+          )}
         </div>
       </Modal>
 
@@ -760,6 +1070,17 @@ export default function PluginsPage() {
               <label htmlFor="mcp-command">{p.mcpCommandLabel}</label>
               <input id="mcp-command" className="input" value={mcpCommand} placeholder={p.mcpCommandPh} onChange={(e) => setMcpCommand(e.target.value)} />
               <p className="hint">{p.mcpStdioHint}</p>
+              {/* 子进程的许可单独一个勾：不勾就一条命令都不跑，探测也只会说"没被允许" */}
+              <label htmlFor="mcp-allow-stdio" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                <input
+                  id="mcp-allow-stdio"
+                  type="checkbox"
+                  checked={mcpAllowStdio}
+                  onChange={(e) => setMcpAllowStdio(e.target.checked)}
+                />
+                <span>{p.mcpAllowStdio}</span>
+              </label>
+              <p className="hint">{p.mcpAllowStdioHint}</p>
             </div>
           )}
           <div className="field">
@@ -775,7 +1096,7 @@ export default function PluginsPage() {
           {probe && (
             probe.ok
               ? <p className="mcp-probe mcp-probe--ok" role="status">{p.mcpProbeOk(probe.tools.length)}</p>
-              : <p className="mcp-probe mcp-probe--fail" role="alert">{p.mcpProbeFail}：{probe.error ?? '—'}</p>
+              : <p className="mcp-probe mcp-probe--fail" role="alert">{p.mcpProbeFail}{probe.errorCode ? `（${probe.errorCode}）` : ''}：{probe.error ?? '—'}</p>
           )}
           <div className="field">
             <label>{p.mcpToolsLabel}</label>

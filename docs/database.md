@@ -642,9 +642,26 @@ ZIP 导入的答案是"暂存包"，单文件上传的答案只能是文件名�
 | `user_plugin` | `id`、`user_id`、`plugin_code`（插件目录里的 id）、`enabled`、`config_json`、`created_at`、`updated_at`、`deleted`；`KEY idx_user_plugin_user (user_id, deleted)` |
 | `mcp_server` | `id`、`user_id`、`name`、`slug`（工具名前缀 `mcp__<slug>__<tool>`）、`transport`（`http` / `stdio`）、`url`、`command`、`auth_header_cipher`（`CredentialCipher` 密文，`VARCHAR(500)`）、`enabled`、`last_ok_at`、`last_error`、`tools_json`、`created_at`、`updated_at`、`deleted`；`KEY idx_mcp_server_user (user_id, deleted)` |
 
-> 「安装插件」= `user_plugin.enabled = 1`：插件目录仍在前端（`frontend/src/lib/plugins.ts` 的静态清单），后端只存每个用户的启用状态与配置——这样加一个新插件不必等后端发版。
+> 「安装插件」= `user_plugin.enabled = 1`，**没有行 = 未安装**（V34 起：目录也搬到服务端了，
+> 所以不再有"没有行就默认启用"的理由——那会让新用户一进市场就满屏已安装）。
 > `tools_json` 只在 probe **成功**时覆盖：上游删掉的工具会随之消失，但一次探测失败不会把已知工具清空（否则网络抖一下等于把所有工具注销），失败原因进 `last_error`。
 > `mcp_server.slug` 每用户唯一：工具名要拼成 `mcp__<slug>__<tool>`，两个 server 撞 slug 会让两边的同名工具互相覆盖。
+
+### 6.0.6 已实现：`plugin_catalog` / `user_skill`（迁移 V34 → V35）
+
+| 表 | 关键列 |
+| --- | --- |
+| `plugin_catalog` | `code`（主键，`IdType.INPUT`）、`name`、`author`、`version`、`category`、`description`、`icon`（空 = 前端首字母占位）、`rating`、`downloads`、`tools_json`、`tags_json`、`verified`、`official`、`updated_label`、`sort_order`、`enabled`（0 = 下架）、`seed_version`、`created_at`、`updated_at` |
+| `user_skill` | `id`、`user_id`、`code`、`name`、`version`、`description`、`content_md`（`MEDIUMTEXT`）、`size_bytes`（V35，正文 UTF-8 字节数）、`enabled`、`created_at`、`updated_at`、`deleted`；`UNIQUE uk_user_skill (user_id, code)`、`KEY idx_user_skill_user (user_id, deleted)` |
+
+> `plugin_catalog` 由 `PluginCatalogService.SEEDS` 在启动时幂等 seed（`PluginCatalogSeeder`，`ApplicationRunner`，跑在 Flyway 之后、失败只 warn 不阻断启动）：
+> 缺行插入；`seed_version` 变了才重写展示字段；seed 里已经没有的 code 置 `enabled = 0`（不 DELETE，留着用户已有的 `user_plugin` 行）。
+> `user_skill.content_md` 是唯一一份正文：列表接口**不回也不读**正文（V35 起），大小来自写入时算好的 `size_bytes`；
+> 老数据该列为 0，按 `code` 取正文时自动回填（列表里先显示 0，不为了补数字去读整篇）。
+> 删除是**物理删除**（{@code UserSkillPO} 刻意不加 {@code @TableLogic}）：`UNIQUE (user_id, code)` 下
+> 软删的行会一直占着唯一键，"删掉再用同名导入"就会撞键变成 500。`deleted` 列保留（迁移历史），恒为 0。
+
+
 
 ### 6.1 设计稿（未实现的部分）
 

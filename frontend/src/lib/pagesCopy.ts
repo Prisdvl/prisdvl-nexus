@@ -501,6 +501,16 @@ export interface PagesCopy {
     importFail: string
     importInvalid: string
     skillNameUnknown: string
+    skillEdit: string
+    skillEditTitle: string
+    skillSave: string
+    skillDelete: string
+    skillDeleteConfirm: (name: string) => string
+    skillDeletedTitle: string
+    skillSavedTitle: string
+    skillLoadFail: string
+    skillDisabled: string
+    skillEnabledLabel: string
     mcpSub: string
     mcpConnect: string
     mcpDisconnect: string
@@ -535,6 +545,12 @@ export interface PagesCopy {
     mcpNoTools: string
     mcpLastOk: (when: string) => string
     mcpLastError: string
+    mcpLastCall: (tool: string, when: string) => string
+    mcpCallOk: string
+    mcpCallFail: string
+    mcpNoCall: string
+    mcpAllowStdio: string
+    mcpAllowStdioHint: string
     mcpDelete: string
     mcpDeleteConfirm: (name: string) => string
     mcpCreatedTitle: string
@@ -1228,6 +1244,16 @@ const ZH: PagesCopy = {
     importFail: '导入失败',
     importInvalid: '没有识别到技能名称，请检查 frontmatter 或 JSON 结构。',
     skillNameUnknown: '未命名技能',
+    skillEdit: '编辑',
+    skillEditTitle: '编辑技能正文',
+    skillSave: '保存',
+    skillDelete: '删除',
+    skillDeleteConfirm: (name) => `删除「${name}」？正文会从服务端移除，之后可以重新导入。`,
+    skillDeletedTitle: '技能已删除',
+    skillSavedTitle: '技能已保存',
+    skillLoadFail: '读取正文失败',
+    skillDisabled: '已停用',
+    skillEnabledLabel: '启用这个技能',
     mcpSub: '连接 MCP 服务器，把外部工具注册进 Agent 工具箱。',
     mcpConnect: '连接',
     mcpDisconnect: '断开',
@@ -1262,6 +1288,12 @@ const ZH: PagesCopy = {
     mcpNoTools: '这个服务没有声明任何工具。',
     mcpLastOk: (when) => `上次成功：${when}`,
     mcpLastError: '上次失败',
+    mcpLastCall: (tool, when) => `上次调用 ${tool} · ${when}`,
+    mcpCallOk: '成功',
+    mcpCallFail: '失败',
+    mcpNoCall: '还没有调用过',
+    mcpAllowStdio: '允许在这台机器上执行上面的命令',
+    mcpAllowStdioHint: '不勾选就不会启动子进程；这条命令会以服务端身份运行，只填你信得过的。',
     mcpDelete: '删除',
     mcpDeleteConfirm: (name) => `删除「${name}」？它的工具会立刻从 Agent 工具箱移除。`,
     mcpCreatedTitle: 'MCP 服务已添加',
@@ -1958,6 +1990,16 @@ const EN: PagesCopy = {
     importFail: 'Import failed',
     importInvalid: 'No skill name was found. Check the frontmatter or JSON manifest.',
     skillNameUnknown: 'Unnamed skill',
+    skillEdit: 'Edit',
+    skillEditTitle: 'Edit skill body',
+    skillSave: 'Save',
+    skillDelete: 'Delete',
+    skillDeleteConfirm: (name) => `Delete "${name}"? The body is removed from the server; you can import it again later.`,
+    skillDeletedTitle: 'Skill deleted',
+    skillSavedTitle: 'Skill saved',
+    skillLoadFail: 'Could not load the body',
+    skillDisabled: 'Disabled',
+    skillEnabledLabel: 'Enable this skill',
     mcpSub: 'Connect MCP servers to register external tools in the agent toolbox.',
     mcpConnect: 'Connect',
     mcpDisconnect: 'Disconnect',
@@ -1992,6 +2034,12 @@ const EN: PagesCopy = {
     mcpNoTools: 'This server declares no tools.',
     mcpLastOk: (when) => `Last success: ${when}`,
     mcpLastError: 'Last failure',
+    mcpLastCall: (tool, when) => `Last call ${tool} · ${when}`,
+    mcpCallOk: 'succeeded',
+    mcpCallFail: 'failed',
+    mcpNoCall: 'Never called yet',
+    mcpAllowStdio: 'Allow running the command above on this machine',
+    mcpAllowStdioHint: 'Without it no child process is started; the command runs as the server, so only paste what you trust.',
     mcpDelete: 'Delete',
     mcpDeleteConfirm: (name) => `Delete "${name}"? Its tools leave the toolbox immediately.`,
     mcpCreatedTitle: 'MCP server added',

@@ -398,6 +398,15 @@ public class TestDataCleanupService {
             result.workspaces++;
         }
 
+        // ⑤b 插件 / 技能 / 外部 MCP 的所属行（V32 / V34 之后新增的用户级表）
+        //     这三张表不在早期清理清单里：删账号会留下无主行，而 user_plugin 与 user_skill
+        //     都带 (user_id, code) 唯一键——无主行占着键，同名账号重新注册后连"装同一个插件"都会撞键。
+        //     都是纯附属数据、无审计价值，所以一律物理删（裸 SQL，绕开可能存在的逻辑删除改写）。
+        int pluginRows = update("DELETE FROM user_plugin WHERE user_id = ?", userId);
+        int mcpRows = update("DELETE FROM mcp_server WHERE user_id = ?", userId);
+        int skillRows = update("DELETE FROM user_skill WHERE user_id = ?", userId);
+        log.info("    ├─ 插件行 {} 条；MCP server {} 条；技能行 {} 条", pluginRows, mcpRows, skillRows);
+
         // ⑥ 角色关联 + 账号本身
         //    默认走逻辑删除（SysUserPO 标了 @TableLogic，deleteById 会改写成 UPDATE deleted=1）。
         //    purgeAccountRows=true 时改为**物理删除**：软删行会永久累积（实测 140+ 条），
